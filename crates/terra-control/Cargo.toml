@@ -1,0 +1,8 @@
+[package]
+name = "terra-control"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+terra-types.workspace = true
+terra-state.workspace = true

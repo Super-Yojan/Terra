@@ -21,6 +21,7 @@ impl Plugin for TerraPlugin {
             .add_systems(
                 FixedPostUpdate,
                 drive
+                    .run_if(crate::velocity_controller::ideal_drive_enabled)
                     .after(PhysicsSystems::Prepare)
                     .before(PhysicsSystems::StepSimulation),
             );
@@ -128,7 +129,7 @@ pub struct Odometry {
 }
 
 impl Odometry {
-    fn integrate(&mut self, v: f32, w: f32, dt: f32) {
+    pub(crate) fn integrate(&mut self, v: f32, w: f32, dt: f32) {
         let angle = w * dt;
         // Exact constant-twist arc, stable for straight and near-straight travel.
         let half = angle / 2.0;

@@ -6325,6 +6325,9 @@ dependencies = [
  "fastrand",
  "serde",
  "serde_json",
+ "terra-control",
+ "terra-state",
+ "terra-types",
  "zenoh",
 ]
 
@@ -6634,6 +6637,25 @@ checksum = "06794f8f6c5c898b3275aebefa6b8a1cb24cd2c6c79397ab15774837a0bc5755"
 dependencies = [
  "winapi-util",
 ]
+
+[[package]]
+name = "terra-control"
+version = "0.1.0"
+dependencies = [
+ "terra-state",
+ "terra-types",
+]
+
+[[package]]
+name = "terra-state"
+version = "0.1.0"
+dependencies = [
+ "terra-types",
+]
+
+[[package]]
+name = "terra-types"
+version = "0.1.0"
 
 [[package]]
 name = "thiserror"

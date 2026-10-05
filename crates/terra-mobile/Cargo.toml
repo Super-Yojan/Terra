@@ -1,0 +1,18 @@
+[package]
+name = "terra-mobile"
+version.workspace = true
+edition.workspace = true
+[lib]
+crate-type = ["lib", "staticlib", "cdylib"]
+[dependencies]
+terra-types.workspace = true
+terra-state.workspace = true
+terra-control.workspace = true
+uniffi.workspace = true
+thiserror = "2"
+[features]
+bindgen = ["uniffi/cli"]
+[[bin]]
+name = "terra-bindgen"
+path = "src/bin/bindgen.rs"
+required-features = ["bindgen"]

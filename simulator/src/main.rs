@@ -3,6 +3,7 @@ mod landscape;
 mod physics;
 mod rgb_camera;
 mod terra;
+mod velocity_controller;
 mod voxel_terrain;
 mod world;
 mod zenoh_bridge;
@@ -21,6 +22,7 @@ fn main() {
             TerraPhysicsPlugin,
             TerraWorldPlugin::default(),
             TerraPlugin::default(),
+            velocity_controller::TerraVelocityControlPlugin,
             TerraDepthCameraPlugin::default(),
             rgb_camera::TerraRgbCameraPlugin,
             zenoh_bridge::TerraZenohPlugin {

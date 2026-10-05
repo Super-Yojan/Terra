@@ -75,8 +75,8 @@ impl RoverBody {
             locked_axes: LockedAxes::new().lock_rotation_x().lock_rotation_z(),
             linear_velocity: LinearVelocity::ZERO,
             angular_velocity: AngularVelocity::ZERO,
-            // Chassis contact is not wheel traction; drive velocity models traction.
-            friction: Friction::ZERO,
+            // Wheel forces and lateral damping model traction, rather than chassis sliding friction.
+            friction: Friction::ZERO.with_combine_rule(CoefficientCombine::Multiply),
             restitution: Restitution::ZERO,
             sleeping_disabled: SleepingDisabled,
             ccd: SweptCcd::default(),

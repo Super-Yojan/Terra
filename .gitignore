@@ -1,3 +1,9 @@
 simulator/target/
 .DS_Store
 *.swp
+
+/target/
+/mobile/ios/Generated/
+/mobile/ios/build/
+/mobile/ios/DerivedData/
+**/xcuserdata/
