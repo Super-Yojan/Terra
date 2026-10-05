@@ -1,6 +1,6 @@
 # Phone velocity controller
 
-The reusable pipeline is IMU + VIO → estimated body velocity → velocity controller → signed left/right motor effort. Both efforts are normalized to [-1, 1]; positive effort drives forward. Hardware must translate magnitude to PWM and sign to direction. This project currently displays the output; it does not send PWM to hardware or implement an iOS Zenoh transport.
+The reusable pipeline is IMU + VIO → estimated body velocity → velocity controller → signed left/right motor effort. Both efforts are normalized to [-1, 1]; positive effort drives forward. The `terra-motors` adapter maps magnitude to PWM duty and sign to direction, after a hardware enable gate and an independent command watchdog. It does not toggle GPIO itself. The iOS app displays effort only. This project does not implement an iOS Zenoh transport.
 
 ## Build and run
 
@@ -20,7 +20,45 @@ The estimator anchors velocity to VIO and integrates IMU only between fresh VIO 
 
 The starter app assumes the phone lies flat, screen upward, with its top edge pointing forward. Core Motion phone axes are converted to rover axes; ARKit poses are converted into a Z-up world and the same body frame. The app treats the sensor origin as the rover origin. Before physical motor integration, calibrate the mount rotation and sensor offset, account for offset-induced rotational velocity, and tune gains, feedforward, limits and sensor filtering for the actual rover. Defaults are tuned for the included simulated motor plant.
 
-Zero effort means neutral motor output, not guaranteed mechanical braking. A hardware enable switch and independent motor-command watchdog belong in the motor adapter. Physical phone sensing and hardware actuation have not been validated on a rover.
+Zero effort means coast, not a mechanical brake. The motor adapter, enable switch, and command watchdog are specified in [Motor adapter](#motor-adapter). Physical phone sensing and hardware actuation have not been validated on a rover.
+
+## Motor adapter
+
+`terra-motors` sits behind `MotorOutput`. `map_effort` converts one signed effort to a PWM duty in `[0, 1]` and a direction. `MotorAdapter` applies that to both wheels and returns a `ChassisPwm` to write to the driver. The iOS UI does not call it. The simulator still turns controller effort into Avian forces rather than PWM. Run `cargo test -p terra-motors` for the mapping, enable gate, and watchdog tests. Crate details and the bench checklist are in [crates/terra-motors/README.md](../crates/terra-motors/README.md).
+
+### PWM
+
+Positive effort is forward. `WheelPwm::sign_magnitude` is `(DIR, duty)` with DIR asserted for forward. `WheelPwm::in1_in2` is `(in1, in2)` with at most one input nonzero. `duty_counts` quantizes a duty onto a timer period such as 255. Efforts outside `[-1, 1]`, or non-finite efforts, coast both wheels and drop driver enable.
+
+### Enable switch
+
+The adapter boots as if the switch is open. `set_hardware_enable(false, now)` coasts both wheels and sets `drive_enabled` false. Closing the switch does not replay a previous effort; hold stays `AwaitCommand` until `apply` runs while the switch remains closed. The returned `ChassisPwm` is the software gate in front of PWM.
+
+The physical switch also has to be able to remove motor power or the driver enable pin when this process is not running. Sample it every motor tick and write the returned `drive_enabled` level. A driver that brakes when disabled is a property of that chip; this adapter never commands brake mode.
+
+### Watchdog
+
+`MotorWatchdog` is separate from the controller's 500 ms target timeout. The default motor `command_timeout` is 200 ms (config allows up to 1 s). Age is `now - commanded_at`, where `commanded_at` is when the effort was produced. `poll` uses the latched stamp. Applying the same stamp again does not extend the window. On expiry, hold is `Watchdog`, both duties are 0, and `drive_enabled` is false. A newer fresh command may drive again without recycling the switch.
+
+`apply_effort_now` stamps the sample at the call time. Use it only for an effort computed on that tick. A bridge that repeats the last packet must keep the original `commanded_at` and call `poll` when nothing new arrived.
+
+### Fail-safe
+
+Zero effort is coast: duty 0, no direction, IN1 and IN2 both low. It is not a mechanical brake and not an electrical short across the motor. A fresh stream of controller zeros (phone backgrounded, tracking lost, or a stale velocity target) keeps the watchdog kicked, so `drive_enabled` stays true while the switch is closed and the wheels coast. The chassis can roll.
+
+If commands stop arriving, or the last producer stamp ages out, the watchdog coasts and deasserts `drive_enabled`. That is still not a brake. Loss of the phone link only drops driver enable when the robot stops refreshing `commanded_at`. Open the hardware switch before the wheels are on the ground. An invalid effort, a backwards adapter clock, a producer time in the future, or an older stamp than the one already latched also coast and drop enable.
+
+### Bench
+
+Wheels off the ground. No autonomy stack. Logic power until the enable path is confirmed.
+
+1. Switch open. Apply `+1` / `-1`. Duties stay 0 and `drive_enabled` is false.
+2. Close the switch without a new command. Outputs stay in coast (`AwaitCommand`).
+3. Apply left `+0.5`, right `-0.25`. Left half-scale forward, right quarter-scale reverse, enable asserted.
+4. Apply `0, 0`. Duties go to 0. Enable may stay asserted. Wheels coast; they do not brake. Confirm both H-bridge inputs are low.
+5. Stop new stamps. Within the watchdog window, enable drops and duties stay 0. A wheel turned by hand coasts.
+6. A new stamp may drive again. Opening the switch drops PWM immediately.
+7. Stopping the phone link or the control process follows step 5 when stamps stop advancing. The chassis is not braked.
 
 ## Simulation
 

@@ -63,7 +63,7 @@ struct ContentView: View {
                     LabeledContent("Measured turn", value: String(format: "%.2f rad/s", brain.measuredYaw))
                     LabeledContent("Left motor", value: String(format: "%+.3f", brain.leftEffort))
                     LabeledContent("Right motor", value: String(format: "%+.3f", brain.rightEffort))
-                    Text("Motor effort is signed from −1 to +1. This starter app displays output; no motor hardware is connected.")
+                    Text("Motor effort is signed from −1 to +1. This phone displays that effort only; no motor hardware is connected. Robot-side PWM, the enable switch, and the command watchdog are in the terra-motors adapter. Zero effort coasts and is not a brake.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 Section("Shared Rust test") {

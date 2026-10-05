@@ -2044,6 +2044,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "terra-motors"
+version = "0.1.0"
+dependencies = [
+ "terra-types",
+]
+
+[[package]]
 name = "terra-state"
 version = "0.1.0"
 dependencies = [
