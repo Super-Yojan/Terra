@@ -91,15 +91,19 @@ A frame packet is a UTF-8 JSON header, a single newline byte, then contiguous
 pixel bytes. The header contains:
 
 ```json
-{"rover_id":0,"version":1,"width":256,"height":192,"sequence":12,"received_at":2.5,"encoding":"32FC1_LE","vertical_fov":1.0471976,"near":0.05,"far":30.0}
+{"rover_id":0,"version":1,"width":256,"height":192,"sequence":12,"received_at":2.5,"encoding":"32FC1_LE","vertical_fov":1.0471976,"near":0.05,"far":30.0,"exposure_time":2.4,"camera":{"x":0.3,"y":0.0,"z":0.4,"qx":0.0,"qy":0.0,"qz":0.0,"qw":1.0},"body":{"x":0.0,"y":0.0,"yaw":0.0}}
 ```
+
+`exposure_time`, `camera`, and `body` are present on depth packets that were paired with a GPU exposure. They are omitted otherwise, including every RGB packet. Version stays 1; older clients ignore the extra fields. `camera` is the optical pose (X right, Y down, Z forward) in the robotics world, Z up, using the same Bevy conversion as the simulator’s local occupancy map. `body` is the rover origin in that frame and the yaw of body forward, sampled with the camera at exposure time. This is not an occupancy-grid topic. A phone or other client integrates the depth image itself.
 
 Pixels are row-major, starting at the top left, without GPU row padding. Depth
 uses one little-endian float32 per pixel. RGB uses four uint8 channels per pixel.
 Dimensions and lens parameters come from each rover's depth-camera configuration.
 For pixel centres `(u + 0.5, v + 0.5)`, the pinhole focal length in pixels is
 `fx = fy = height / (2 * tan(vertical_fov / 2))`, with principal point
-`(width / 2, height / 2)`.
+`(width / 2, height / 2)`. `terra-mapping` addresses integer pixels, so the phone
+decoder passes principal point `(width / 2 - 0.5, height / 2 - 0.5)`, matching
+the simulator’s own occupancy integration.
 
 RGB and depth cameras share their pose, resolution, and projection, but GPU
 readbacks complete independently. Sequences are per-camera readback counters;
@@ -158,4 +162,4 @@ cleanup after a rover is removed.
 
 ## iOS client
 
-TerraPhone can publish velocity commands directly to this bridge. Configure the endpoint and rover ID in the app’s **Bevy simulator · Zenoh** section. Use localhost in iOS Simulator or the Mac’s LAN address on a physical phone; for LAN access bind this simulator to `tcp/0.0.0.0:7447`. See [phone demo and verification](../docs/MOBILE_CONTROL.md#drive-bevy-from-terraphone-over-zenoh). The app refreshes a leased Rust publisher, sends at 20 Hz, and sends zero when stopped or backgrounded. Fleet/state and camera subscriptions are follow-ups.
+TerraPhone can publish velocity commands directly to this bridge and build a local occupancy map from the depth stream. Configure the endpoint and rover ID in the app’s **Bevy simulator · Zenoh** section. Use localhost in iOS Simulator or the Mac’s LAN address on a physical phone; for LAN access bind this simulator to `tcp/0.0.0.0:7447`. See [phone demo and verification](../docs/MOBILE_CONTROL.md#drive-bevy-from-terraphone-over-zenoh). The app refreshes a leased Rust publisher, sends at 20 Hz, and sends zero when stopped or backgrounded. While connected it subscribes to `terra/rover/<id>/camera/depth`, keeps the latest posed frame, and integrates it with `MobileOccupancyMap`. The on-screen grid is phone-local. Fleet/state, RGB, and a Zenoh occupancy snapshot for other operators are follow-ups.

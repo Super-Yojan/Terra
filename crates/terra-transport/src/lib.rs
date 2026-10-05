@@ -27,6 +27,7 @@ struct State {
 }
 pub struct RoverConnection {
     state: Arc<Mutex<State>>,
+    depth: Arc<Mutex<DepthInbox>>,
     worker: Mutex<Option<JoinHandle<()>>>,
 }
 fn validate(endpoint: &str, prefix: &str) -> Result<(), TransportError> {
@@ -47,6 +48,134 @@ fn payload(linear: f64, angular: f64) -> Result<String, TransportError> {
         return Err(TransportError::InvalidTarget);
     }
     Ok(serde_json::json!({"linear":linear,"angular":angular}).to_string())
+}
+/// Latest simulator depth frame whose header carries an exposure-aligned pose.
+/// Intrinsics use terra-mapping's integer-pixel principal point: documented
+/// pixel-centre `(width/2, height/2)` minus 0.5.
+#[derive(Clone, Debug)]
+pub struct RemoteDepthFrame {
+    pub sequence: u64,
+    pub timestamp: f64,
+    pub width: u32,
+    pub height: u32,
+    pub fx: f64,
+    pub fy: f64,
+    pub cx: f64,
+    pub cy: f64,
+    pub camera_x: f64,
+    pub camera_y: f64,
+    pub camera_z: f64,
+    pub quaternion_x: f64,
+    pub quaternion_y: f64,
+    pub quaternion_z: f64,
+    pub quaternion_w: f64,
+    pub body_x: f64,
+    pub body_y: f64,
+    pub body_yaw: f64,
+    pub depth_metres: Vec<f32>,
+}
+struct DepthInbox {
+    latest: Option<RemoteDepthFrame>,
+    accepted: u64,
+}
+fn json_finite(value: Option<&serde_json::Value>) -> Option<f64> {
+    let number = value?.as_f64()?;
+    number.is_finite().then_some(number)
+}
+/// Yaw of optical +Z after `terra_types::Quaternion::rotate`. Used when a packet has no body pose.
+fn optical_forward_yaw(x: f64, y: f64, z: f64, w: f64) -> Option<f64> {
+    let norm = x.hypot(y).hypot(z).hypot(w);
+    if !norm.is_finite() || norm < 1e-12 {
+        return None;
+    }
+    let (x, y, z, w) = (x / norm, y / norm, z / norm, w / norm);
+    // t = 2 * cross(q, (0,0,1)) = (2y, -2x, 0); result = v + w*t + cross(q, t).
+    let tx = 2.0 * y;
+    let ty = -2.0 * x;
+    let fx = w * tx + 2.0 * x * z;
+    let fy = w * ty + 2.0 * y * z;
+    (fx.is_finite() && fy.is_finite()).then_some(fy.atan2(fx))
+}
+/// Decode a Terra depth packet. Frames without an exposure camera pose return `None`.
+pub fn decode_depth_frame(bytes: &[u8]) -> Option<RemoteDepthFrame> {
+    let split = bytes.iter().position(|byte| *byte == b'\n')?;
+    let header: serde_json::Value = serde_json::from_slice(&bytes[..split]).ok()?;
+    if header.get("version").and_then(serde_json::Value::as_u64) != Some(1)
+        || header.get("encoding").and_then(serde_json::Value::as_str) != Some("32FC1_LE")
+    {
+        return None;
+    }
+    let width = u32::try_from(header.get("width")?.as_u64()?).ok()?;
+    let height = u32::try_from(header.get("height")?.as_u64()?).ok()?;
+    if width == 0 || height == 0 || width > 2048 || height > 2048 {
+        return None;
+    }
+    let count = width as usize * height as usize;
+    if count > 4_194_304 {
+        return None;
+    }
+    let pixels = &bytes[split + 1..];
+    if pixels.len() != count * 4 {
+        return None;
+    }
+    let timestamp = json_finite(header.get("exposure_time"))?;
+    if timestamp < 0.0 {
+        return None;
+    }
+    let vertical_fov = json_finite(header.get("vertical_fov"))?;
+    if vertical_fov <= 0.0 || vertical_fov >= std::f64::consts::PI {
+        return None;
+    }
+    let camera = header.get("camera")?;
+    let camera_x = json_finite(camera.get("x"))?;
+    let camera_y = json_finite(camera.get("y"))?;
+    let camera_z = json_finite(camera.get("z"))?;
+    let quaternion_x = json_finite(camera.get("qx"))?;
+    let quaternion_y = json_finite(camera.get("qy"))?;
+    let quaternion_z = json_finite(camera.get("qz"))?;
+    let quaternion_w = json_finite(camera.get("qw"))?;
+    let (body_x, body_y, body_yaw) = if let Some(body) = header.get("body") {
+        (
+            json_finite(body.get("x"))?,
+            json_finite(body.get("y"))?,
+            json_finite(body.get("yaw"))?,
+        )
+    } else {
+        (
+            camera_x,
+            camera_y,
+            optical_forward_yaw(quaternion_x, quaternion_y, quaternion_z, quaternion_w)?,
+        )
+    };
+    let fy = height as f64 / (2.0 * (vertical_fov / 2.0).tan());
+    if !fy.is_finite() || fy < 1e-6 {
+        return None;
+    }
+    let mut depth_metres = Vec::with_capacity(count);
+    for chunk in pixels.as_chunks::<4>().0 {
+        depth_metres.push(f32::from_le_bytes(*chunk));
+    }
+    Some(RemoteDepthFrame {
+        sequence: header.get("sequence")?.as_u64()?,
+        timestamp,
+        width,
+        height,
+        fx: fy,
+        fy,
+        cx: width as f64 / 2.0 - 0.5,
+        cy: height as f64 / 2.0 - 0.5,
+        camera_x,
+        camera_y,
+        camera_z,
+        quaternion_x,
+        quaternion_y,
+        quaternion_z,
+        quaternion_w,
+        body_x,
+        body_y,
+        body_yaw,
+        depth_metres,
+    })
 }
 impl RoverConnection {
     /// Opens a direct TCP client. Run off the UI thread; connection timeout is 2 seconds.
@@ -73,10 +202,41 @@ impl RoverConnection {
             .map_err(|e| TransportError::Network(e.to_string()))?;
         let state = Arc::new(Mutex::new(State::default()));
         let shared = state.clone();
+        let depth = Arc::new(Mutex::new(DepthInbox {
+            latest: None,
+            accepted: 0,
+        }));
+        let inbox = depth.clone();
         let key = format!("{prefix}/{rover_id}/cmd_vel");
+        let depth_key = format!("{prefix}/{rover_id}/camera/depth");
         let worker = thread::Builder::new()
             .name("terra-mobile-zenoh".into())
             .spawn(move || {
+                let subscriber = session
+                    .declare_subscriber(depth_key)
+                    .callback(move |sample| {
+                        if let Some(frame) = decode_depth_frame(&sample.payload().to_bytes()) {
+                            let mut inbox = inbox.lock().unwrap();
+                            if inbox
+                                .latest
+                                .as_ref()
+                                .is_none_or(|previous| frame.sequence > previous.sequence)
+                            {
+                                inbox.latest = Some(frame);
+                                inbox.accepted += 1;
+                            }
+                        }
+                    })
+                    .wait();
+                let subscriber = match subscriber {
+                    Ok(subscriber) => subscriber,
+                    Err(error) => {
+                        shared.lock().unwrap().error = Some(error.to_string());
+                        shared.lock().unwrap().shutdown = true;
+                        let _ = session.close().wait();
+                        return;
+                    }
+                };
                 loop {
                     let (shutdown, linear, angular) = {
                         let state = shared.lock().unwrap();
@@ -102,14 +262,20 @@ impl RoverConnection {
                     }
                     thread::sleep(Duration::from_millis(50));
                 }
+                drop(subscriber);
                 let _ = session.close().wait();
                 shared.lock().unwrap().shutdown = true;
             })
             .map_err(|e| TransportError::Network(e.to_string()))?;
         Ok(Self {
             state,
+            depth,
             worker: Mutex::new(Some(worker)),
         })
+    }
+    /// Consumes the newest posed depth frame. Older unconsumed frames are dropped.
+    pub fn take_depth(&self) -> Option<RemoteDepthFrame> {
+        self.depth.lock().unwrap().latest.take()
     }
     /// Refresh the 250 ms command lease. Targets are limited to ±2 m/s and ±2 rad/s.
     pub fn set_target(&self, linear: f64, angular: f64) -> Result<(), TransportError> {
@@ -132,7 +298,8 @@ impl RoverConnection {
         } else if state.shutdown {
             "Disconnected".into()
         } else {
-            "Zenoh session open · commands at 20 Hz".into()
+            let frames = self.depth.lock().unwrap().accepted;
+            format!("Zenoh session open · commands at 20 Hz · depth frames {frames}")
         }
     }
     /// Worker sends zero before closing. Rover-side 500 ms watchdog remains independent.
@@ -217,6 +384,117 @@ mod tests {
             );
         }
         assert_eq!(last.unwrap()["linear"], 0.0);
+        server.close().wait().unwrap();
+    }
+    fn posed_depth_packet(sequence: u64, metres: f32) -> Vec<u8> {
+        let header = serde_json::json!({
+            "rover_id": 9,
+            "version": 1,
+            "width": 1,
+            "height": 1,
+            "sequence": sequence,
+            "received_at": 1.0,
+            "encoding": "32FC1_LE",
+            "vertical_fov": 60.0_f64.to_radians(),
+            "near": 0.05,
+            "far": 30.0,
+            "exposure_time": 0.5,
+            "camera": {"x": 0.0, "y": 0.0, "z": 0.5, "qx": -0.5, "qy": 0.5, "qz": -0.5, "qw": 0.5},
+            "body": {"x": 0.0, "y": 0.0, "yaw": 0.0}
+        });
+        let mut bytes = serde_json::to_vec(&header).unwrap();
+        bytes.push(b'\n');
+        bytes.extend_from_slice(&metres.to_le_bytes());
+        bytes
+    }
+    #[test]
+    fn decodes_exposure_pose_and_rejects_frames_without_it() {
+        let frame = decode_depth_frame(&posed_depth_packet(3, 2.0)).unwrap();
+        assert_eq!(frame.sequence, 3);
+        assert!((frame.timestamp - 0.5).abs() < 1e-9);
+        assert!((frame.camera_z - 0.5).abs() < 1e-9);
+        assert!(frame.body_yaw.abs() < 1e-9);
+        assert!((frame.cx).abs() < 1e-9 && frame.cy.abs() < 1e-9);
+        let expected_fy = 1.0 / (2.0 * (60.0_f64.to_radians() / 2.0).tan());
+        assert!((frame.fy - expected_fy).abs() < 1e-9);
+        assert_eq!(frame.depth_metres, vec![2.0]);
+        let bare = posed_depth_packet(1, 2.0);
+        let split = bare.iter().position(|byte| *byte == b'\n').unwrap();
+        let mut header: serde_json::Value = serde_json::from_slice(&bare[..split]).unwrap();
+        header.as_object_mut().unwrap().remove("camera");
+        header.as_object_mut().unwrap().remove("body");
+        header.as_object_mut().unwrap().remove("exposure_time");
+        let mut without_pose = serde_json::to_vec(&header).unwrap();
+        without_pose.push(b'\n');
+        without_pose.extend_from_slice(&bare[split + 1..]);
+        assert!(decode_depth_frame(&without_pose).is_none());
+        let mut no_body = posed_depth_packet(2, f32::NAN);
+        let split = no_body.iter().position(|byte| *byte == b'\n').unwrap();
+        let mut header: serde_json::Value = serde_json::from_slice(&no_body[..split]).unwrap();
+        header.as_object_mut().unwrap().remove("body");
+        no_body = serde_json::to_vec(&header).unwrap();
+        no_body.push(b'\n');
+        no_body.extend_from_slice(&f32::NAN.to_le_bytes());
+        let fallback = decode_depth_frame(&no_body).unwrap();
+        assert!(
+            fallback.body_yaw.abs() < 1e-6,
+            "optical +Z yaw {}",
+            fallback.body_yaw
+        );
+        assert!(fallback.depth_metres[0].is_nan());
+    }
+    #[test]
+    #[ignore = "requires local TCP sockets"]
+    fn returns_each_posed_depth_frame_once() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("tcp/127.0.0.1:{}", listener.local_addr().unwrap().port());
+        drop(listener);
+        let mut config = zenoh::Config::default();
+        config.insert_json5("mode", "\"peer\"").unwrap();
+        config
+            .insert_json5(
+                "listen/endpoints",
+                &serde_json::json!([endpoint]).to_string(),
+            )
+            .unwrap();
+        config
+            .insert_json5("scouting/multicast/enabled", "false")
+            .unwrap();
+        let server = zenoh::open(config).wait().unwrap();
+        let client = RoverConnection::connect(&endpoint, "terra/rover", 9).unwrap();
+        // The subscriber is declared on the worker thread after connect returns, so publish until it is live.
+        let wait_for = |sequence: u64, metres: f32| {
+            let deadline = Instant::now() + Duration::from_secs(3);
+            while Instant::now() < deadline {
+                server
+                    .put(
+                        "terra/rover/9/camera/depth",
+                        posed_depth_packet(sequence, metres),
+                    )
+                    .congestion_control(zenoh::qos::CongestionControl::Drop)
+                    .wait()
+                    .unwrap();
+                if let Some(frame) = client.take_depth()
+                    && frame.sequence == sequence
+                {
+                    return frame;
+                }
+                thread::sleep(Duration::from_millis(20));
+            }
+            panic!(
+                "timed out waiting for depth sequence {sequence}: {}",
+                client.status()
+            );
+        };
+        let first = wait_for(1, 2.0);
+        assert_eq!(first.depth_metres, vec![2.0]);
+        assert!(client.take_depth().is_none());
+        let second = wait_for(2, 3.5);
+        assert_eq!(second.depth_metres, vec![3.5]);
+        assert!((second.camera_z - 0.5).abs() < 1e-6);
+        assert!(client.take_depth().is_none());
+        assert!(client.status().contains("depth frames"));
+        client.disconnect();
         server.close().wait().unwrap();
     }
 }

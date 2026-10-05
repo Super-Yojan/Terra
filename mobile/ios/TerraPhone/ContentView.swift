@@ -31,7 +31,7 @@ struct ContentView: View {
                         forward = 0; yaw = 0
                         brain.startBevy(endpoint: zenohEndpoint, roverID: zenohRoverID)
                     }.disabled(brain.zenohConnecting)
-                    Text("Use localhost in iOS Simulator. On an iPhone, enter the Mac’s LAN address. Connect starts at zero; use the velocity sliders to drive. Stop or leaving the app disconnects.")
+                    Text("Use localhost in iOS Simulator. On an iPhone, enter the Mac’s LAN address. Connect starts at zero and subscribes to that rover’s depth camera. The occupancy map below fills in from simulator depth and the exposure pose published with each frame. Stop or leaving the app disconnects.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 Section("Local occupancy map") {
@@ -47,7 +47,7 @@ struct ContentView: View {
                         Text(String(format: "%.0f × %.0f m · %.0f cm cells · world +X right, +Y up", Double(grid.width) * grid.resolution, Double(grid.height) * grid.resolution, grid.resolution * 100)).font(.caption)
                     }
                     Button("Clear map") { brain.clearMap() }
-                    Text("Phone mapping uses scene depth when available. Initial camera height is assumed 0.5 m above flat ground; calibrate before using the map for navigation.").font(.footnote).foregroundStyle(.secondary)
+                    Text("Phone mapping uses scene depth when available. Initial camera height is assumed 0.5 m above flat ground; calibrate before using the map for navigation. Bevy Zenoh mode uses the simulator’s exposure-aligned camera pose instead, with ground at robotics Z = 0.").font(.footnote).foregroundStyle(.secondary)
                 }
                 Section("Velocity target") {
                     LabeledContent("Forward", value: String(format: "%.2f m/s", forward))
@@ -123,7 +123,7 @@ struct OccupancyMapView: View {
             }
         }
         .overlay {
-            if grid == nil { ContentUnavailableView("No map yet", systemImage: "map", description: Text("Start a rover to collect depth observations.")) }
+            if grid == nil { ContentUnavailableView("No map yet", systemImage: "map", description: Text("Start a rover or connect to Bevy to collect depth.")) }
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Local occupancy map")

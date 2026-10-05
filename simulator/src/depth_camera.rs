@@ -150,7 +150,7 @@ pub struct DepthFrame {
     pub sequence: u64,
     /// CPU receipt time in Bevy elapsed seconds, not exposure time.
     pub received_at: f64,
-    /// Simulation exposure time and optical-camera-to-world pose, paired with this GPU copy.
+    /// Simulation exposure time, optical-camera pose, and rover body pose, paired with this GPU copy.
     pub exposure: Option<DepthExposure>,
 }
 
@@ -161,7 +161,10 @@ pub(crate) struct DepthCapture;
 pub struct DepthExposure {
     pub sensor: Entity,
     pub timestamp: f64,
+    /// Optical camera pose in Bevy world at `timestamp`.
     pub camera_transform: GlobalTransform,
+    /// Rover body pose in Bevy world at `timestamp`. Falls back to the camera when unparented.
+    pub body_transform: GlobalTransform,
 }
 struct CompletedCapture {
     exposure: DepthExposure,
@@ -174,13 +177,19 @@ struct PendingCaptures(Vec<(Buffer, DepthExposure)>);
 fn stamp_exposures(
     mut commands: Commands,
     time: Res<Time>,
-    sensors: Query<(Entity, &GlobalTransform), With<DepthCamera>>,
+    sensors: Query<(Entity, &GlobalTransform, Option<&ChildOf>), With<DepthCamera>>,
+    bodies: Query<&GlobalTransform, With<Rover>>,
 ) {
-    for (sensor, transform) in &sensors {
+    for (sensor, transform, parent) in &sensors {
+        let body_transform = parent
+            .and_then(|child| bodies.get(child.parent()).ok())
+            .copied()
+            .unwrap_or(*transform);
         commands.entity(sensor).insert(DepthExposure {
             sensor,
             timestamp: time.elapsed_secs_f64(),
             camera_transform: *transform,
+            body_transform,
         });
     }
 }
