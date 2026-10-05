@@ -1,5 +1,6 @@
 mod depth_camera;
 mod landscape;
+mod occupancy_map;
 mod physics;
 mod rgb_camera;
 mod terra;
@@ -24,6 +25,7 @@ fn main() {
             TerraPlugin::default(),
             velocity_controller::TerraVelocityControlPlugin,
             TerraDepthCameraPlugin::default(),
+            occupancy_map::TerraOccupancyMapPlugin,
             rgb_camera::TerraRgbCameraPlugin,
             zenoh_bridge::TerraZenohPlugin {
                 config: zenoh_bridge::ZenohBridgeConfig::from_env(),

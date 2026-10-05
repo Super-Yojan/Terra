@@ -1,0 +1,7 @@
+[package]
+name = "terra-mapping"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+terra-types.workspace = true

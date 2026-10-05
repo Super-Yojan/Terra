@@ -13,16 +13,21 @@ use bevy::{
     render::{
         RenderApp,
         extract_component::{ExtractComponent, ExtractComponentPlugin},
-        gpu_readback::{Readback, ReadbackComplete},
         render_asset::RenderAssets,
         render_resource::{
-            Extent3d, Origin3d, TexelCopyTextureInfo, TextureAspect, TextureDimension,
-            TextureFormat, TextureUsages,
+            Buffer, BufferDescriptor, BufferUsages, Extent3d, MapMode, Origin3d,
+            TexelCopyBufferInfo, TexelCopyBufferLayout, TexelCopyTextureInfo, TextureAspect,
+            TextureDimension, TextureFormat, TextureUsages,
         },
-        renderer::{RenderContext, ViewQuery},
+        renderer::{RenderContext, RenderDevice, ViewQuery},
         texture::GpuImage,
         view::ViewDepthTexture,
     },
+    transform::TransformSystems,
+};
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicUsize, Ordering},
 };
 
 #[derive(Default)]
@@ -36,9 +41,30 @@ impl Plugin for TerraDepthCameraPlugin {
             .validate()
             .expect("invalid depth camera configuration");
         app.insert_resource(self.config.clone())
-            .add_systems(Update, (mount_cameras, remove_orphan_previews));
+            .add_systems(
+                Update,
+                (mount_cameras, remove_orphan_previews, receive_depth),
+            )
+            .init_resource::<CaptureQueue>()
+            .add_systems(
+                PostUpdate,
+                stamp_exposures.after(TransformSystems::Propagate),
+            );
         if app.get_sub_app(RenderApp).is_some() {
-            app.add_plugins(ExtractComponentPlugin::<DepthCamera>::default());
+            app.add_plugins((
+                ExtractComponentPlugin::<DepthCamera>::default(),
+                ExtractComponentPlugin::<DepthExposure>::default(),
+                ExtractComponentPlugin::<DepthCapture>::default(),
+            ));
+            let queue = app.world().resource::<CaptureQueue>().clone();
+            app.get_sub_app_mut(RenderApp)
+                .unwrap()
+                .insert_resource(queue)
+                .init_resource::<PendingCaptures>()
+                .add_systems(
+                    bevy::render::Render,
+                    map_captures.in_set(bevy::render::RenderSystems::Cleanup),
+                );
             app.get_sub_app_mut(RenderApp).unwrap().add_systems(
                 Core3d,
                 copy_camera_depth
@@ -124,6 +150,62 @@ pub struct DepthFrame {
     pub sequence: u64,
     /// CPU receipt time in Bevy elapsed seconds, not exposure time.
     pub received_at: f64,
+    /// Simulation exposure time and optical-camera-to-world pose, paired with this GPU copy.
+    pub exposure: Option<DepthExposure>,
+}
+
+#[derive(Component, Clone, ExtractComponent)]
+pub(crate) struct DepthCapture;
+
+#[derive(Component, Clone, Copy, ExtractComponent)]
+pub struct DepthExposure {
+    pub sensor: Entity,
+    pub timestamp: f64,
+    pub camera_transform: GlobalTransform,
+}
+struct CompletedCapture {
+    exposure: DepthExposure,
+    data: Vec<u8>,
+}
+#[derive(Resource, Clone, Default)]
+pub(crate) struct CaptureQueue(Arc<Mutex<Vec<CompletedCapture>>>, Arc<AtomicUsize>);
+#[derive(Resource, Default)]
+struct PendingCaptures(Vec<(Buffer, DepthExposure)>);
+fn stamp_exposures(
+    mut commands: Commands,
+    time: Res<Time>,
+    sensors: Query<(Entity, &GlobalTransform), With<DepthCamera>>,
+) {
+    for (sensor, transform) in &sensors {
+        commands.entity(sensor).insert(DepthExposure {
+            sensor,
+            timestamp: time.elapsed_secs_f64(),
+            camera_transform: *transform,
+        });
+    }
+}
+fn map_captures(mut pending: ResMut<PendingCaptures>, queue: Res<CaptureQueue>) {
+    for (buffer, exposure) in pending.0.drain(..) {
+        let mapped = buffer.clone();
+        let in_flight = queue.1.clone();
+        let queue = queue.0.clone();
+        buffer.slice(..).map_async(MapMode::Read, move |result| {
+            in_flight.fetch_sub(1, Ordering::Relaxed);
+            if result.is_err() {
+                return;
+            }
+            let view = mapped.slice(..).get_mapped_range();
+            let data = view.to_vec();
+            drop(view);
+            mapped.unmap();
+            if let Ok(mut completed) = queue.lock() {
+                // Bound CPU storage if the main thread stalls; older frames may be dropped.
+                if completed.len() < 64 {
+                    completed.push(CompletedCapture { exposure, data });
+                }
+            }
+        });
+    }
 }
 
 #[derive(Component)]
@@ -213,9 +295,8 @@ fn mount_cameras(
                     -physics.chassis_size.z / 2.0 - config.front_clearance,
                 ),
                 ChildOf(rover),
-                Readback::texture(depth_texture),
+                DepthCapture,
             ))
-            .observe(receive_depth)
             .id();
         if config.preview && slot.is_none_or(|slot| slot.0 == 0) {
             commands
@@ -254,17 +335,65 @@ fn mount_cameras(
     }
 }
 
+type DepthView = (
+    Option<&'static DepthCamera>,
+    Option<&'static DepthExposure>,
+    Option<&'static DepthCapture>,
+    &'static ViewDepthTexture,
+);
+
 fn copy_camera_depth(
-    view: ViewQuery<(Option<&DepthCamera>, &ViewDepthTexture)>,
+    view: ViewQuery<DepthView>,
+    device: Res<RenderDevice>,
+    queue: Res<CaptureQueue>,
+    mut pending: ResMut<PendingCaptures>,
     images: Res<RenderAssets<GpuImage>>,
     mut ctx: RenderContext,
 ) {
-    let (Some(sensor), depth) = view.into_inner() else {
+    let (Some(sensor), Some(exposure), Some(_), depth) = view.into_inner() else {
         return;
     };
     let Some(target) = images.get(sensor.depth_texture.id()) else {
         return;
     };
+    if queue
+        .1
+        .try_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
+            (n < 64).then_some(n + 1)
+        })
+        .is_err()
+    {
+        return;
+    }
+    let stride = (sensor.config.resolution.x * 4).div_ceil(256) * 256;
+    let buffer = device.create_buffer(&BufferDescriptor {
+        label: Some("Terra exposure-aligned depth"),
+        size: u64::from(stride) * u64::from(sensor.config.resolution.y),
+        usage: BufferUsages::COPY_DST | BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+    ctx.command_encoder().copy_texture_to_buffer(
+        TexelCopyTextureInfo {
+            texture: &depth.texture,
+            mip_level: 0,
+            origin: Origin3d::ZERO,
+            aspect: TextureAspect::DepthOnly,
+        },
+        TexelCopyBufferInfo {
+            buffer: &buffer,
+            layout: TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(stride),
+                rows_per_image: None,
+            },
+        },
+        Extent3d {
+            width: sensor.config.resolution.x,
+            height: sensor.config.resolution.y,
+            depth_or_array_layers: 1,
+        },
+    );
+    pending.0.push((buffer, *exposure));
     ctx.command_encoder().copy_texture_to_texture(
         TexelCopyTextureInfo {
             texture: &depth.texture,
@@ -313,39 +442,53 @@ fn decode_depth(bytes: &[u8], config: &DepthCameraConfig) -> Option<Vec<f32>> {
     Some(result)
 }
 
-fn receive_depth(
-    event: On<ReadbackComplete>,
+pub(crate) fn receive_depth(
+    queue: Res<CaptureQueue>,
     time: Res<Time>,
     mut sensors: Query<(&DepthCamera, &mut DepthFrame)>,
     mut images: ResMut<Assets<Image>>,
 ) {
-    let Ok((sensor, mut frame)) = sensors.get_mut(event.entity) else {
-        return;
-    };
-    let Some(depth) = decode_depth(&event.data, &sensor.config) else {
-        return;
-    };
-    if depth.len() != frame.width as usize * frame.height as usize {
-        return;
-    }
-    if let Some(mut image) = images.get_mut(&sensor.preview_texture) {
-        let mut rgba = Vec::with_capacity(depth.len() * 4);
-        for &metres in &depth {
-            let shade = if metres.is_finite() {
-                (255.0
-                    * (1.0
-                        - (metres - sensor.config.near) / (sensor.config.far - sensor.config.near))
-                        .clamp(0.0, 1.0)) as u8
-            } else {
-                0
-            };
-            rgba.extend_from_slice(&[shade, shade, shade, 255]);
+    let mut completed = queue.0.lock().expect("depth capture queue poisoned");
+    let mut captures = std::mem::take(&mut *completed);
+    drop(completed);
+    captures.sort_by(|a, b| a.exposure.timestamp.total_cmp(&b.exposure.timestamp));
+    for capture in captures {
+        let Ok((sensor, mut frame)) = sensors.get_mut(capture.exposure.sensor) else {
+            continue;
+        };
+        let Some(depth) = decode_depth(&capture.data, &sensor.config) else {
+            continue;
+        };
+        if depth.len() != frame.width as usize * frame.height as usize {
+            continue;
         }
-        image.data = Some(rgba);
+        if let Some(mut image) = images.get_mut(&sensor.preview_texture) {
+            let mut rgba = Vec::with_capacity(depth.len() * 4);
+            for &metres in &depth {
+                let shade = if metres.is_finite() {
+                    (255.0
+                        * (1.0
+                            - (metres - sensor.config.near)
+                                / (sensor.config.far - sensor.config.near))
+                            .clamp(0.0, 1.0)) as u8
+                } else {
+                    0
+                };
+                rgba.extend_from_slice(&[shade, shade, shade, 255]);
+            }
+            image.data = Some(rgba);
+        }
+        if frame
+            .exposure
+            .is_some_and(|old| capture.exposure.timestamp <= old.timestamp)
+        {
+            continue;
+        }
+        frame.exposure = Some(capture.exposure);
+        frame.depth_metres = depth;
+        frame.sequence += 1;
+        frame.received_at = time.elapsed_secs_f64();
     }
-    frame.depth_metres = depth;
-    frame.sequence += 1;
-    frame.received_at = time.elapsed_secs_f64();
 }
 
 fn remove_orphan_previews(
@@ -386,7 +529,8 @@ mod tests {
                 preview: false,
                 ..default()
             },
-        });
+        })
+        .add_plugins(crate::occupancy_map::TerraOccupancyMapPlugin);
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(45);
         while app.plugins_state() == PluginsState::Adding {
             assert!(
@@ -422,6 +566,11 @@ mod tests {
                     && metres.is_finite()
                 {
                     assert!((metres - 2.45).abs() < 0.05, "wall depth: {metres}");
+                    let exposure = frame
+                        .exposure
+                        .expect("GPU copy must carry its exposure pose");
+                    assert!(exposure.timestamp <= frame.received_at);
+                    assert!((exposure.camera_transform.translation().z + 0.45).abs() < 1e-5);
                     captured = true;
                     break;
                 }
@@ -429,6 +578,16 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         assert!(captured, "no valid depth frame received within 45 seconds");
+        let world = app.world_mut();
+        let mapped = world
+            .query::<&crate::occupancy_map::RoverOccupancyMap>()
+            .single(world)
+            .unwrap();
+        assert!(mapped.last_exposure.is_some());
+        assert!(
+            mapped.map.snapshot().occupancy.iter().any(|p| *p > 50),
+            "rendered wall must reach occupancy grid"
+        );
         // Stop capture and drain pending readbacks before the GPU app is dropped.
         let sensors: Vec<_> = app
             .world_mut()
@@ -436,7 +595,7 @@ mod tests {
             .iter(app.world())
             .collect();
         for sensor in sensors {
-            app.world_mut().entity_mut(sensor).remove::<Readback>();
+            app.world_mut().entity_mut(sensor).remove::<DepthCapture>();
         }
         for _ in 0..20 {
             app.update();
@@ -512,7 +671,7 @@ mod tests {
     #[test]
     fn mounts_once_and_follows_rover_pose() {
         let mut app = App::new();
-        app.add_plugins(TransformPlugin)
+        app.add_plugins((MinimalPlugins, TransformPlugin))
             .insert_resource(Assets::<Image>::default())
             .insert_resource(RoverPhysicsConfig::default())
             .add_plugins(TerraDepthCameraPlugin {

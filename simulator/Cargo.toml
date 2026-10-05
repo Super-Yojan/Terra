@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+terra-mapping = { path = "../crates/terra-mapping" }
 terra-types = { path = "../crates/terra-types" }
 terra-state = { path = "../crates/terra-state" }
 terra-control = { path = "../crates/terra-control" }

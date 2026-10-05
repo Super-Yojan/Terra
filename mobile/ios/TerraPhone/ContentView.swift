@@ -18,6 +18,21 @@ struct ContentView: View {
                     }
                     Button("Stop controller", role: .destructive) { forward = 0; yaw = 0; brain.stop() }
                 }
+                Section("Local occupancy map") {
+                    OccupancyMapView(grid: brain.occupancy, rover: brain.mapPose)
+                        .frame(height: 280)
+                    Text(brain.mapStatus).font(.footnote).foregroundStyle(.secondary)
+                    HStack {
+                        Label("Free", systemImage: "square.fill").foregroundStyle(.green)
+                        Label("Occupied", systemImage: "square.fill").foregroundStyle(.primary)
+                        Label("Unknown", systemImage: "square.fill").foregroundStyle(.secondary)
+                    }.font(.caption)
+                    if let grid = brain.occupancy {
+                        Text(String(format: "%.0f × %.0f m · %.0f cm cells · world +X right, +Y up", Double(grid.width) * grid.resolution, Double(grid.height) * grid.resolution, grid.resolution * 100)).font(.caption)
+                    }
+                    Button("Clear map") { brain.clearMap() }
+                    Text("Phone mapping uses scene depth when available. Initial camera height is assumed 0.5 m above flat ground; calibrate before using the map for navigation.").font(.footnote).foregroundStyle(.secondary)
+                }
                 Section("Velocity target") {
                     LabeledContent("Forward", value: String(format: "%.2f m/s", forward))
                     Slider(value: $forward, in: -1...1, step: 0.05)
@@ -52,5 +67,56 @@ struct ContentView: View {
         .onChange(of: yaw) { _, _ in brain.setTarget(forward: forward, yaw: yaw) }
         .onChange(of: scenePhase) { _, phase in if phase != .active { brain.stop() } }
         .onDisappear { brain.stop() }
+    }
+}
+
+
+struct OccupancyMapView: View {
+    let grid: OccupancyGrid?
+    let rover: SIMD3<Double>
+    var body: some View {
+        Canvas { context, size in
+            guard let grid, grid.width > 0, grid.height > 0,
+                  grid.occupancy.count == Int(grid.width) * Int(grid.height) else { return }
+            let scale = min(size.width / Double(grid.width), size.height / Double(grid.height))
+            let left = (size.width - Double(grid.width) * scale) / 2
+            let top = (size.height - Double(grid.height) * scale) / 2
+            var unknown = Path(), free = Path(), occupied = Path(), uncertain = Path()
+            for row in 0..<Int(grid.height) {
+                for col in 0..<Int(grid.width) {
+                    let rect = CGRect(x: left + Double(col) * scale, y: top + Double(Int(grid.height) - 1 - row) * scale, width: scale, height: scale)
+                    let value = grid.occupancy[row * Int(grid.width) + col]
+                    if value < 0 { unknown.addRect(rect) }
+                    else if value < 45 { free.addRect(rect) }
+                    else if value > 65 { occupied.addRect(rect) }
+                    else { uncertain.addRect(rect) }
+                }
+            }
+            context.fill(unknown, with: .color(.gray.opacity(0.18)))
+            context.fill(free, with: .color(.green.opacity(0.25)))
+            context.fill(uncertain, with: .color(.gray.opacity(0.4)))
+            context.fill(occupied, with: .foreground)
+            let x = left + (rover.x - grid.originX) / grid.resolution * scale
+            let y = top + (Double(grid.height) - (rover.y - grid.originY) / grid.resolution) * scale
+            if x >= left && x <= left + Double(grid.width) * scale && y >= top && y <= top + Double(grid.height) * scale {
+                let centre = CGPoint(x: x, y: y)
+                context.fill(Path(ellipseIn: CGRect(x: x - 5, y: y - 5, width: 10, height: 10)), with: .color(.blue))
+                var heading = Path(); heading.move(to: centre)
+                heading.addLine(to: CGPoint(x: x + 16 * cos(rover.z), y: y - 16 * sin(rover.z)))
+                context.stroke(heading, with: .color(.blue), lineWidth: 3)
+            }
+        }
+        .overlay {
+            if grid == nil { ContentUnavailableView("No map yet", systemImage: "map", description: Text("Start a rover to collect depth observations.")) }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Local occupancy map")
+        .accessibilityValue(accessibilitySummary)
+    }
+    private var accessibilitySummary: String {
+        guard let grid else { return "No depth observations yet" }
+        let known = grid.occupancy.filter { $0 >= 0 }.count
+        let occupied = grid.occupancy.filter { $0 > 65 }.count
+        return "\(known) observed cells, \(occupied) occupied cells. Rover position \(String(format: "%.1f", rover.x)), \(String(format: "%.1f", rover.y)) metres."
     }
 }

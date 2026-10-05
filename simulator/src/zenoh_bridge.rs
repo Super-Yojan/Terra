@@ -469,6 +469,7 @@ mod tests {
             sequence: 7,
             received_at: 1.25,
             depth_metres: vec![2.5, f32::NAN],
+            exposure: None,
         };
         let packet = encode_depth(&frame).unwrap();
         let split = packet.iter().position(|b| *b == b'\n').unwrap();
@@ -551,6 +552,7 @@ mod tests {
                     sequence: 1,
                     received_at: 1.0,
                     depth_metres: vec![2.0, f32::NAN],
+                    exposure: None,
                 },
             ))
             .id();

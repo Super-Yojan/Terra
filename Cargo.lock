@@ -500,10 +500,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "terra-mapping"
+version = "0.1.0"
+dependencies = [
+ "terra-types",
+]
+
+[[package]]
 name = "terra-mobile"
 version = "0.1.0"
 dependencies = [
  "terra-control",
+ "terra-mapping",
  "terra-state",
  "terra-types",
  "thiserror",

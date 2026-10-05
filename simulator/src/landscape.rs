@@ -819,7 +819,9 @@ mod tests {
             .collect();
         world.entity_mut(reader).remove::<Readback>();
         for sensor in sensors {
-            world.entity_mut(sensor).remove::<Readback>();
+            world
+                .entity_mut(sensor)
+                .remove::<crate::depth_camera::DepthCapture>();
         }
         for _ in 0..20 {
             app.update();
