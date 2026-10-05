@@ -6,6 +6,7 @@ Terra combines a Bevy/Avian rover simulator with reusable Rust robotics modules 
 - `terra-state`: VIO velocity anchors with bounded IMU prediction.
 - `terra-control`: differential-drive velocity PI control, feedforward, anti-windup and freshness checks.
 - `terra-mapping`: rolling local occupancy grids from depth and camera poses. See [mapping API](crates/terra-mapping/README.md).
+- `terra-transport`: leased Zenoh velocity publishing for remote simulator control.
 - `terra-mobile`: UniFFI interface shared by Swift and Rust.
 
 See [mobile controller setup](docs/MOBILE_CONTROL.md) for the sensor contract, iOS build and validation. The simulator lives in `simulator/`; its existing fleet and Zenoh velocity commands now feed the shared controller, which applies motor forces through Avian.

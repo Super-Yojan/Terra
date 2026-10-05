@@ -824,4 +824,97 @@ mod tests {
         }
         client.close().wait().unwrap();
     }
+    #[test]
+    #[ignore = "requires local TCP sockets; mobile adapter drives real Avian physics"]
+    fn mobile_adapter_drives_avian_and_disconnect_stops() {
+        use avian3d::prelude::*;
+        let socket = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("tcp/{}", socket.local_addr().unwrap());
+        drop(socket);
+        let mut app = App::new();
+        app.add_plugins((
+            MinimalPlugins,
+            TransformPlugin,
+            bevy::asset::AssetPlugin::default(),
+            bevy::mesh::MeshPlugin,
+            crate::physics::TerraPhysicsPlugin,
+            crate::velocity_controller::TerraVelocityControlPlugin,
+            TerraZenohPlugin {
+                config: ZenohBridgeConfig {
+                    listen: endpoint.clone(),
+                    ..default()
+                },
+            },
+        ))
+        .insert_resource(crate::terra::DriveConfig::default())
+        .insert_resource(Time::<Fixed>::from_hz(100.0))
+        .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+            Duration::from_millis(10),
+        ));
+        app.finish();
+        app.cleanup();
+        app.world_mut().spawn((
+            RigidBody::Static,
+            Collider::cuboid(100.0, 0.2, 100.0),
+            Transform::from_xyz(0.0, -0.1, 0.0),
+        ));
+        let rover = app
+            .world_mut()
+            .spawn((
+                Rover,
+                RoverId(9),
+                crate::physics::RoverBody::default(),
+                Transform::from_xyz(0.0, 0.1, 0.0),
+                DriveCommand::default(),
+                crate::terra::WheelSpeeds::default(),
+                crate::terra::Odometry::default(),
+            ))
+            .id();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !app
+            .world()
+            .resource::<Bridge>()
+            .shared
+            .connected
+            .load(Ordering::Acquire)
+        {
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        app.update();
+        let client =
+            terra_transport::RoverConnection::connect(&endpoint, "terra/rover", 9).unwrap();
+        for _ in 0..700 {
+            client.set_target(1.0, 0.2).unwrap();
+            app.update();
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        let command = app.world().get::<DriveCommand>(rover).unwrap();
+        assert_eq!(command.linear, 1.0);
+        assert_eq!(command.angular, 0.2);
+        assert!(
+            app.world()
+                .get::<Position>(rover)
+                .unwrap()
+                .0
+                .with_y(0.0)
+                .length()
+                > 1.0
+        );
+        assert!(app.world().get::<LinearVelocity>(rover).unwrap().length() > 0.5);
+        client.disconnect();
+        for _ in 0..600 {
+            app.update();
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert_eq!(app.world().get::<DriveCommand>(rover).unwrap().linear, 0.0);
+        assert!(app.world().get::<LinearVelocity>(rover).unwrap().length() < 0.05);
+        assert!(app.world().get::<AngularVelocity>(rover).unwrap().y.abs() < 0.05);
+        let shared = app.world().resource::<Bridge>().shared.clone();
+        drop(app);
+        while shared.connected.load(Ordering::Acquire) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(!shared.connected.load(Ordering::Acquire));
+    }
 }
