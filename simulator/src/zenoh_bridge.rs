@@ -257,7 +257,7 @@ fn run_transport(config: &ZenohBridgeConfig, shared: &Arc<Shared>) -> zenoh::Res
         .wait()?;
     shared.connected.store(true, Ordering::Release);
     info!(
-        "Terra Zenoh ready: {}/<id>/cmd_vel, {}/<id>/camera/{{rgb,depth}}, {}/fleet/{{size,state}}",
+        "Terra Zenoh ready: {}/<id>/cmd_vel, {}/<id>/camera/{{rgb,depth}} (depth includes exposure pose), {}/fleet/{{size,state}}",
         config.prefix, config.prefix, config.prefix
     );
     while !shared.stop.load(Ordering::Acquire) {
@@ -296,6 +296,31 @@ struct FrameHeader {
     vertical_fov: f32,
     near: f32,
     far: f32,
+    /// Simulation time paired with this GPU copy. Omitted when the frame has no exposure.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    exposure_time: Option<f64>,
+    /// Optical pose in the robotics world (position X/Y/Z, quaternion from optical axes). Depth only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    camera: Option<CameraPoseHeader>,
+    /// Rover body origin and heading in the same robotics frame, sampled with the exposure.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    body: Option<BodyPoseHeader>,
+}
+#[derive(Serialize)]
+struct CameraPoseHeader {
+    x: f64,
+    y: f64,
+    z: f64,
+    qx: f64,
+    qy: f64,
+    qz: f64,
+    qw: f64,
+}
+#[derive(Serialize)]
+struct BodyPoseHeader {
+    x: f64,
+    y: f64,
+    yaw: f64,
 }
 fn packet(header: FrameHeader, pixels: &[u8]) -> Option<Vec<u8>> {
     let mut bytes = serde_json::to_vec(&header).ok()?;
@@ -320,6 +345,23 @@ fn encode_depth_with_config(
         .iter()
         .flat_map(|value| value.to_le_bytes())
         .collect();
+    let (exposure_time, camera, body) = frame.exposure.map_or((None, None, None), |exposure| {
+        let pose = crate::occupancy_map::camera_pose(&exposure.camera_transform);
+        let (x, y, yaw) = crate::occupancy_map::body_pose(&exposure.body_transform);
+        (
+            Some(exposure.timestamp),
+            Some(CameraPoseHeader {
+                x: pose.position.x,
+                y: pose.position.y,
+                z: pose.position.z,
+                qx: pose.orientation.x,
+                qy: pose.orientation.y,
+                qz: pose.orientation.z,
+                qw: pose.orientation.w,
+            }),
+            Some(BodyPoseHeader { x, y, yaw }),
+        )
+    });
     packet(
         FrameHeader {
             rover_id: id,
@@ -332,6 +374,9 @@ fn encode_depth_with_config(
             vertical_fov: config.vertical_fov,
             near: config.near,
             far: config.far,
+            exposure_time,
+            camera,
+            body,
         },
         &pixels,
     )
@@ -416,6 +461,9 @@ fn publish_frames(
                     vertical_fov: camera.config.vertical_fov,
                     near: camera.config.near,
                     far: camera.config.far,
+                    exposure_time: None,
+                    camera: None,
+                    body: None,
                 },
                 &frame.rgba,
             )
@@ -478,10 +526,105 @@ mod tests {
         assert_eq!(header["sequence"], 7);
         assert_eq!(header["width"], 2);
         assert_eq!(header["received_at"], 1.25);
+        assert!(header.get("camera").is_none());
+        assert!(header.get("body").is_none());
+        assert!(header.get("exposure_time").is_none());
         let data = &packet[split + 1..];
         assert_eq!(data.len(), 8);
         assert_eq!(f32::from_le_bytes(data[..4].try_into().unwrap()), 2.5);
         assert!(f32::from_le_bytes(data[4..].try_into().unwrap()).is_nan());
+    }
+    #[test]
+    fn depth_packet_pose_round_trips_into_the_phone_decoder() {
+        use crate::depth_camera::{DepthCameraConfig, DepthExposure, DepthFrame};
+        use crate::occupancy_map::{body_pose, camera_pose};
+        use terra_mapping::{CameraIntrinsics, CameraPose, LocalOccupancyMap, MapConfig};
+        let camera_transform = GlobalTransform::from(Transform::from_xyz(-0.25, 0.5, -0.25));
+        let body_transform = GlobalTransform::from(Transform::from_xyz(0.0, 0.2, -1.0));
+        let frame = DepthFrame {
+            width: 1,
+            height: 1,
+            sequence: 4,
+            received_at: 3.0,
+            depth_metres: vec![2.0],
+            exposure: Some(DepthExposure {
+                sensor: Entity::PLACEHOLDER,
+                timestamp: 1.5,
+                camera_transform,
+                body_transform,
+            }),
+        };
+        let config = DepthCameraConfig {
+            resolution: UVec2::ONE,
+            vertical_fov: 60.0_f32.to_radians(),
+            ..default()
+        };
+        let packet = encode_depth_with_config(0, &frame, &config).unwrap();
+        let decoded = terra_transport::decode_depth_frame(&packet).expect("posed depth");
+        let pose = camera_pose(&camera_transform);
+        let (body_x, body_y, body_yaw) = body_pose(&body_transform);
+        assert_eq!(decoded.sequence, 4);
+        assert!((decoded.timestamp - 1.5).abs() < 1e-9);
+        assert!((decoded.camera_x - pose.position.x).abs() < 1e-5);
+        assert!((decoded.camera_y - pose.position.y).abs() < 1e-5);
+        assert!((decoded.camera_z - pose.position.z).abs() < 1e-5);
+        assert!((decoded.quaternion_x - pose.orientation.x).abs() < 1e-5);
+        assert!((decoded.quaternion_y - pose.orientation.y).abs() < 1e-5);
+        assert!((decoded.quaternion_z - pose.orientation.z).abs() < 1e-5);
+        assert!((decoded.quaternion_w - pose.orientation.w).abs() < 1e-5);
+        assert!((decoded.body_x - body_x).abs() < 1e-5);
+        assert!((decoded.body_y - body_y).abs() < 1e-5);
+        assert!((decoded.body_yaw - body_yaw).abs() < 1e-5);
+        assert!((decoded.cx).abs() < 1e-9 && decoded.cy.abs() < 1e-9);
+        let mut map = LocalOccupancyMap::new(MapConfig {
+            pixel_stride: 1,
+            ..MapConfig::default()
+        })
+        .unwrap();
+        map.recenter(decoded.body_x, decoded.body_y).unwrap();
+        map.integrate_depth(
+            decoded.timestamp,
+            CameraIntrinsics {
+                width: decoded.width,
+                height: decoded.height,
+                fx: decoded.fx,
+                fy: decoded.fy,
+                cx: decoded.cx,
+                cy: decoded.cy,
+            },
+            CameraPose {
+                position: terra_types::Vector3 {
+                    x: decoded.camera_x,
+                    y: decoded.camera_y,
+                    z: decoded.camera_z,
+                },
+                orientation: terra_types::Quaternion {
+                    x: decoded.quaternion_x,
+                    y: decoded.quaternion_y,
+                    z: decoded.quaternion_z,
+                    w: decoded.quaternion_w,
+                },
+            },
+            &decoded.depth_metres,
+        )
+        .unwrap();
+        let grid = map.snapshot();
+        let col = ((2.25 - grid.origin_x) / grid.resolution).floor() as usize;
+        let row = ((0.25 - grid.origin_y) / grid.resolution).floor() as usize;
+        assert!(
+            grid.occupancy[row * grid.width as usize + col] > 50,
+            "endpoint (2.25, 0.25) must be occupied"
+        );
+        assert!(
+            terra_transport::decode_depth_frame(
+                &encode_depth(&DepthFrame {
+                    exposure: None,
+                    ..frame
+                })
+                .unwrap()
+            )
+            .is_none()
+        );
     }
     #[test]
     #[ignore = "requires local TCP sockets; tests two real Zenoh sessions"]

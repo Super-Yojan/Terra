@@ -20,6 +20,23 @@ struct SwiftSmoke {
         precondition(cleared.occupancy.allSatisfy { $0 == -1 })
         if let endpoint = ProcessInfo.processInfo.environment["TERRA_ZENOH_SMOKE_ENDPOINT"] {
             let remote = try MobileZenohClient(endpoint: endpoint, prefix: "terra/rover", roverId: 9)
+            let deadline = Date().addingTimeInterval(3)
+            var mapped = false
+            while Date() < deadline {
+                if let frame = remote.takeDepth() {
+                    precondition(abs(frame.cameraZ - 0.5) < 1e-6 && abs(frame.bodyYaw) < 1e-6)
+                    precondition(frame.width == 1 && frame.depthMetres.count == 1)
+                    let remoteMap = try MobileOccupancyMap(settings: defaultOccupancySettings())
+                    try remoteMap.recenter(x: frame.bodyX, y: frame.bodyY)
+                    try remoteMap.integrateDepth(frame: MappingDepthFrame(timestamp: frame.timestamp, width: frame.width, height: frame.height, fx: frame.fx, fy: frame.fy, cx: frame.cx, cy: frame.cy, cameraX: frame.cameraX, cameraY: frame.cameraY, cameraZ: frame.cameraZ, quaternionX: frame.quaternionX, quaternionY: frame.quaternionY, quaternionZ: frame.quaternionZ, quaternionW: frame.quaternionW, depthMetres: frame.depthMetres))
+                    let remoteGrid = try remoteMap.snapshot()
+                    precondition(remoteGrid.occupancy.contains { $0 > 50 })
+                    mapped = true
+                    break
+                }
+                Thread.sleep(forTimeInterval: 0.05)
+            }
+            precondition(mapped, "posed simulator depth did not integrate into an occupied cell")
             for _ in 0..<20 {
                 try remote.setTarget(linear: 0.5, angular: 0.2)
                 Thread.sleep(forTimeInterval: 0.05)

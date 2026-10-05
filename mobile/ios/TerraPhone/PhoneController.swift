@@ -77,6 +77,10 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, @unc
         let endpoint = endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
         controlQueue.async {
             do {
+                self.occupancyMap = try MobileOccupancyMap(settings: defaultOccupancySettings())
+                self.simulatedPosition = .zero
+                self.mapGroundOffset = nil
+                self.lastMapTime = -Double.infinity
                 self.zenoh = try MobileZenohClient(endpoint: endpoint, prefix: "terra/rover", roverId: id)
                 self.target = (0, 0); self.tick = 0; self.mode = .remote
                 self.startTimer()
@@ -84,8 +88,10 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, @unc
                     self.zenohConnecting = false
                     self.source = "Bevy rover \(id) over Zenoh"
                     self.status = "Remote velocity targets · local feedback unavailable"
-                    self.zenohStatus = "Zenoh session open · commands at 20 Hz"
-                    self.occupancy = nil; self.mapStatus = "Remote depth subscription is not connected"
+                    self.zenohStatus = "Zenoh session open · waiting for depth"
+                    self.occupancy = nil
+                    self.mapPose = .zero
+                    self.mapStatus = "Waiting for simulator depth and exposure pose"
                 }
             } catch { self.fail(error) }
         }
@@ -167,6 +173,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, @unc
         if mode == .remote, let zenoh {
             do {
                 try zenoh.setTarget(linear: target.forward, angular: target.yaw)
+                if let frame = zenoh.takeDepth() { self.integrateRemoteDepth(frame) }
                 tick += 1
                 if tick % 10 == 0 { let status = zenoh.status(); DispatchQueue.main.async { self.zenohStatus = status } }
             } catch { fail(error) }
@@ -258,6 +265,16 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, @unc
         let q = (simd_quatd(angle: simulatedYaw, axis: SIMD3(0, 0, 1)) * opticalToBody).vector
         try map.integrateDepth(frame: MappingDepthFrame(timestamp: timestamp, width: 81, height: 1, fx: 60, fy: 60, cx: 40, cy: 0, cameraX: x, cameraY: y, cameraZ: 0.5, quaternionX: q.x, quaternionY: q.y, quaternionZ: q.z, quaternionW: q.w, depthMetres: depths))
         try publishMap(x: x, y: y, yaw: simulatedYaw, status: "Simulated depth · 10 Hz")
+    }
+    private func integrateRemoteDepth(_ frame: MobileDepthFrame) {
+        guard let map = occupancyMap else { return }
+        do {
+            try map.recenter(x: frame.bodyX, y: frame.bodyY)
+            try map.integrateDepth(frame: MappingDepthFrame(timestamp: frame.timestamp, width: frame.width, height: frame.height, fx: frame.fx, fy: frame.fy, cx: frame.cx, cy: frame.cy, cameraX: frame.cameraX, cameraY: frame.cameraY, cameraZ: frame.cameraZ, quaternionX: frame.quaternionX, quaternionY: frame.quaternionY, quaternionZ: frame.quaternionZ, quaternionW: frame.quaternionW, depthMetres: frame.depthMetres))
+            try publishMap(x: frame.bodyX, y: frame.bodyY, yaw: frame.bodyYaw, status: "Simulator depth · exposure pose")
+        } catch {
+            DispatchQueue.main.async { self.mapStatus = "Map: " + error.localizedDescription }
+        }
     }
     private func updatePhoneMap(frame: ARFrame, position: SIMD3<Float>, bodyOrientation: simd_quatf) {
         guard frame.timestamp - lastMapTime >= 0.1, let depth = frame.sceneDepth, let map = occupancyMap else { return }

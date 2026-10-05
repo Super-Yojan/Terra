@@ -119,8 +119,15 @@ def main():
                     with lock:
                         pending, latest = latest, {}
                     for (rover_id, kind), (header, image) in pending.items():
+                        pose = ""
+                        camera = header.get("camera")
+                        body = header.get("body")
+                        if isinstance(camera, dict) and "x" in camera and "z" in camera:
+                            pose += f" camera=({float(camera['x']):.2f},{float(camera['y']):.2f},{float(camera['z']):.2f})"
+                        if isinstance(body, dict) and "yaw" in body:
+                            pose += f" body=({float(body['x']):.2f},{float(body['y']):.2f},yaw={float(body['yaw']):.2f})"
                         print(f"rover={rover_id} {kind}: sequence={header['sequence']} shape={image.shape} "
-                              f"received_at={header['received_at']:.3f}s")
+                              f"received_at={header['received_at']:.3f}s{pose}")
                         if args.output:
                             destination = args.output / str(rover_id)
                             destination.mkdir(parents=True, exist_ok=True)
