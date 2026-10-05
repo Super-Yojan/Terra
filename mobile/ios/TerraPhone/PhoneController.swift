@@ -22,7 +22,10 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, @unc
     private var simulatedPosition = SIMD2<Double>.zero
     private var mapGroundOffset: Double?
     private var lastMapTime = -Double.infinity
-    private enum Mode { case stopped, simulation, phone }
+    @Published private(set) var zenohStatus = "Disconnected"
+    @Published private(set) var zenohConnecting = false
+    private var zenoh: MobileZenohClient?
+    private enum Mode { case stopped, simulation, phone, remote }
     private let controlQueue = DispatchQueue(label: "terra.control", qos: .userInteractive)
     private let motionQueue = OperationQueue()
     private let motion = CMMotionManager()
@@ -64,6 +67,29 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, @unc
             } catch { self.fail(error) }
         }
     }
+    func startBevy(endpoint: String, roverID: String) {
+        guard !zenohConnecting else { return }
+        guard let id = UInt64(roverID.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+            zenohStatus = "Rover ID must be a nonnegative integer"; return
+        }
+        stop()
+        zenohConnecting = true; zenohStatus = "Connecting…"
+        let endpoint = endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
+        controlQueue.async {
+            do {
+                self.zenoh = try MobileZenohClient(endpoint: endpoint, prefix: "terra/rover", roverId: id)
+                self.target = (0, 0); self.tick = 0; self.mode = .remote
+                self.startTimer()
+                DispatchQueue.main.async {
+                    self.zenohConnecting = false
+                    self.source = "Bevy rover \(id) over Zenoh"
+                    self.status = "Remote velocity targets · local feedback unavailable"
+                    self.zenohStatus = "Zenoh session open · commands at 20 Hz"
+                    self.occupancy = nil; self.mapStatus = "Remote depth subscription is not connected"
+                }
+            } catch { self.fail(error) }
+        }
+    }
     func startPhone() {
         stop()
         guard ARWorldTrackingConfiguration.isSupported, motion.isDeviceMotionAvailable else {
@@ -99,11 +125,13 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, @unc
         controlQueue.async {
             self.timer?.cancel(); self.timer = nil
             self.mode = .stopped
+            self.zenoh?.disconnect(); self.zenoh = nil
             try? self.controller?.reset()
             self.controller = nil
             DispatchQueue.main.async {
                 self.source = "Stopped"; self.status = "Motor output disabled"
                 self.mapStatus = "Map paused"
+                self.zenohStatus = "Disconnected"
                 self.leftEffort = 0; self.rightEffort = 0
                 self.measuredForward = 0; self.measuredYaw = 0
             }
@@ -136,6 +164,14 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, @unc
         timer.resume()
     }
     private func update() {
+        if mode == .remote, let zenoh {
+            do {
+                try zenoh.setTarget(linear: target.forward, angular: target.yaw)
+                tick += 1
+                if tick % 10 == 0 { let status = zenoh.status(); DispatchQueue.main.async { self.zenohStatus = status } }
+            } catch { fail(error) }
+            return
+        }
         guard let controller, mode != .stopped else { return }
         let now = mode == .simulation ? simulatedTime : CACurrentMediaTime()
         do {
@@ -281,10 +317,12 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, @unc
     }
     private func fail(_ error: Error) {
         mode = .stopped; timer?.cancel(); timer = nil; try? controller?.reset()
+        zenoh?.disconnect(); zenoh = nil
         DispatchQueue.main.async {
             self.motion.stopDeviceMotionUpdates(); self.session.pause()
             self.status = error.localizedDescription; self.leftEffort = 0; self.rightEffort = 0
             self.mapStatus = "Map paused"
+            self.zenohConnecting = false; self.zenohStatus = error.localizedDescription
         }
     }
 }

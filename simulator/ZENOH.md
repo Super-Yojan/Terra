@@ -155,3 +155,7 @@ The optional Python test uses the installed Zenoh and NumPy packages. Tests cove
 live resizing, ID retirement, command isolation, timeout stopping, RGB/depth
 payload decoding, real TCP sessions, and two simultaneous GPU camera pairs with
 cleanup after a rover is removed.
+
+## iOS client
+
+TerraPhone can publish velocity commands directly to this bridge. Configure the endpoint and rover ID in the app’s **Bevy simulator · Zenoh** section. Use localhost in iOS Simulator or the Mac’s LAN address on a physical phone; for LAN access bind this simulator to `tcp/0.0.0.0:7447`. See [phone demo and verification](../docs/MOBILE_CONTROL.md#drive-bevy-from-terraphone-over-zenoh). The app refreshes a leased Rust publisher, sends at 20 Hz, and sends zero when stopped or backgrounded. Fleet/state and camera subscriptions are follow-ups.
