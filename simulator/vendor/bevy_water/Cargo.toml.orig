@@ -1,0 +1,65 @@
+[package]
+name = "bevy_water"
+version = "0.18.1"
+edition = "2021"
+authors = ["Robert G. Jakabosky <rjakabosky+neopallium@neoawareness.com>"]
+license = "MIT OR Apache-2.0"
+description = "Dynamic ocean material for Bevy."
+keywords = ["water", "ocean", "waves", "bevy"]
+repository = "https://github.com/Neopallium/bevy_water"
+homepage = "https://github.com/Neopallium/bevy_water"
+
+exclude = [
+  "examples/*",
+  "showcase.webp",
+  "assets/models/*",
+  "assets/textures/*",
+  "assets/environment_maps/*",
+]
+
+[features]
+default = ["webgl2", "embed_shaders", "depth_prepass", "image_utils"]
+
+# Enable Bevy Easings support.
+easings = ["bevy_easings"]
+
+# Embed the shaders at compile-time.
+embed_shaders = []
+
+# file/embed watcher
+file_watcher = ["bevy/file_watcher", "bevy/embedded_watcher"]
+
+# Enable inspector in examples.
+inspector = ["bevy-inspector-egui"]
+
+# Enable debug lines in examples.
+debug = []
+
+# Enable bevy atmosphere support in the examples.
+atmosphere = []
+
+# Enable Screen Space Reflections support.
+ssr = ["depth_prepass"]
+
+# Enable DepthPrepass in examples.
+depth_prepass = []
+
+# Include ImageUtils
+image_utils = ["bevy/jpeg", "bevy/bevy_log"]
+
+# Select WebGL2 or WebGPU support.
+# Use webgl2 for native builds (non-wasm).
+webgl2 = ["bevy/webgl2"]
+webgpu = ["bevy/webgpu"]
+
+[dependencies]
+bevy = { version = "0.18.0", default-features = false, features = [
+  "bevy_asset",
+  "bevy_render",
+  "bevy_pbr",
+] }
+bevy_easings = { version = "0.18", optional = true }
+bevy-inspector-egui = { version = "0.36", optional = true }
+
+[dev-dependencies]
+bevy = { version = "0.18.0", features = ["3d", "free_camera"] }
