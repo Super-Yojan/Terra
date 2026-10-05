@@ -160,7 +160,9 @@ pub enum StopReason {
 }
 #[derive(Clone, Copy, Debug)]
 pub struct MotorOutput {
-    /// Signed effort [-1,1]; motor driver maps sign to direction and magnitude to duty.
+    /// Signed effort [-1, 1]. Positive is forward.
+    /// `terra-motors` maps magnitude to PWM duty and sign to direction.
+    /// Zero is coast, not a mechanical brake.
     pub left: f64,
     pub right: f64,
     pub estimated_forward: f64,

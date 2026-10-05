@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/terra-types", "crates/terra-state", "crates/terra-control", "crates/terra-mobile", "crates/terra-mapping"]
+members = ["crates/terra-types", "crates/terra-state", "crates/terra-control", "crates/terra-motors", "crates/terra-mobile", "crates/terra-mapping"]
 exclude = ["simulator"]
 
 [workspace.package]
@@ -11,6 +11,7 @@ edition = "2024"
 terra-types = { path = "crates/terra-types" }
 terra-state = { path = "crates/terra-state" }
 terra-control = { path = "crates/terra-control" }
+terra-motors = { path = "crates/terra-motors" }
 terra-mapping = { path = "crates/terra-mapping" }
 uniffi = "=0.31.1"
 
