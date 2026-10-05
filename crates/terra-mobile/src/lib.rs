@@ -5,7 +5,9 @@ use terra_state::{EstimatorConfig, VelocityEstimator};
 use terra_types::*;
 uniffi::setup_scaffolding!();
 mod mapping;
+mod transport;
 pub use mapping::*;
+pub use transport::*;
 
 #[derive(Clone, Debug, uniffi::Record)]
 pub struct ControlSettings {

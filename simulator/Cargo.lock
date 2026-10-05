@@ -6328,6 +6328,7 @@ dependencies = [
  "terra-control",
  "terra-mapping",
  "terra-state",
+ "terra-transport",
  "terra-types",
  "zenoh",
 ]
@@ -6659,6 +6660,14 @@ name = "terra-state"
 version = "0.1.0"
 dependencies = [
  "terra-types",
+]
+
+[[package]]
+name = "terra-transport"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "zenoh",
 ]
 
 [[package]]

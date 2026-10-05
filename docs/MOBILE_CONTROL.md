@@ -31,3 +31,29 @@ Each rover gets its own estimator and controller. Avian velocity and orientation
 The app shows the Rust local occupancy grid, rover position/heading, map scale and a clear action. Simulated mode generates room-wall depth observations at 10 Hz through the same UniFFI mapping object. Phone mode requests ARKit `sceneDepth` only when supported, rescales camera intrinsics to depth resolution, filters low-confidence returns and passes each depth map with that ARFrame's camera pose and timestamp. Mapping pauses while tracking is lost. Unsupported devices retain velocity control and show that depth is unavailable.
 
 The map is world-aligned: +X right and +Y upward on screen. Free cells are green, occupied cells use the primary foreground, unknown cells are faint gray and uncertain observed cells are darker gray. The blue marker indicates rover pose. Initial phone camera height is assumed to be 0.5 m over a flat ground reference; physical mounting and ground height require calibration. Phone depth comes from the rear camera's optical pose, independently of the rover-body mounting rotation. Stop preserves the map; starting either mode creates a new map. No Bevy/Zenoh map subscription is included.
+
+## Drive Bevy from TerraPhone over Zenoh
+
+TerraPhone now exposes the Rust `terra-transport` client through UniFFI. Use the **Bevy simulator · Zenoh** section to configure an endpoint and rover ID, then connect. This mode publishes the velocity sliders directly as simulator `cmd_vel` requests; the Bevy rover runs its own velocity feedback loop. Local phone IMU/VIO/motor effort readouts do not provide remote feedback. Connecting starts at zero. Stop, switching modes and leaving the foreground close the session with a final zero. The Rust publisher also expires its 250 ms command lease if Swift stops refreshing it; the simulator's independent 500 ms watchdog remains active.
+
+Demo on one Mac:
+
+```sh
+cd simulator
+TERRA_ROVER_COUNT=2 cargo run
+```
+
+Build/run TerraPhone in iOS Simulator, select `tcp/127.0.0.1:7447` and rover `0`, connect, then move the velocity sliders. Stop and check that the rover stops. Choose rover `1` to drive the second rover. To connect a physical iPhone, start Bevy with `TERRA_ZENOH_LISTEN=tcp/0.0.0.0:7447`, put the Mac and phone on the same network, enter `tcp/MAC_LAN_IP:7447`, allow local-network access, and allow incoming traffic to the simulator if prompted. Endpoint and ID are stored on the device; there is no automatic reconnect or automatic startup motion.
+
+The default topic prefix is `terra/rover`. Session-open status confirms a transport session, not rover discovery or movement acknowledgement. Fleet/state subscriptions are a follow-up. Camera/depth and occupancy-map subscriptions are also separate follow-ups; the app's remote mode shows no local occupancy map rather than mixing it with unrelated simulated/phone observations.
+
+Verification:
+
+```sh
+./scripts/build-ios.sh
+python3 scripts/check-zenoh-swift.py # requires eclipse-zenoh Python package
+cargo test -p terra-transport -- --ignored
+cargo test --manifest-path simulator/Cargo.toml mobile_adapter_drives_avian -- --ignored
+```
+
+The Swift test exercises Swift → UniFFI → Rust → Zenoh against a real Python peer, checking the selected topic, payload, lease expiry and final zero. The Bevy integration test uses the same transport to move an Avian rover and verifies stopping on disconnect. Physical iPhone networking has not been tested on a device.

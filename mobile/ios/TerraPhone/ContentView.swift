@@ -5,6 +5,8 @@ struct ContentView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var forward = 0.0
     @State private var yaw = 0.0
+    @AppStorage("zenohEndpoint") private var zenohEndpoint = "tcp/127.0.0.1:7447"
+    @AppStorage("zenohRoverID") private var zenohRoverID = "0"
     var body: some View {
         NavigationStack {
             Form {
@@ -17,6 +19,20 @@ struct ContentView: View {
                         Button("Phone IMU + VIO") { brain.startPhone() }
                     }
                     Button("Stop controller", role: .destructive) { forward = 0; yaw = 0; brain.stop() }
+                }
+                Section("Bevy simulator · Zenoh") {
+                    TextField("Zenoh endpoint", text: $zenohEndpoint)
+                        .textInputAutocapitalization(.never).autocorrectionDisabled()
+                        .accessibilityLabel("Zenoh TCP endpoint")
+                    TextField("Rover ID", text: $zenohRoverID).keyboardType(.numberPad)
+                        .accessibilityLabel("Simulator rover ID")
+                    LabeledContent("Connection", value: brain.zenohStatus)
+                    Button(brain.zenohConnecting ? "Connecting…" : "Connect to Bevy rover") {
+                        forward = 0; yaw = 0
+                        brain.startBevy(endpoint: zenohEndpoint, roverID: zenohRoverID)
+                    }.disabled(brain.zenohConnecting)
+                    Text("Use localhost in iOS Simulator. On an iPhone, enter the Mac’s LAN address. Connect starts at zero; use the velocity sliders to drive. Stop or leaving the app disconnects.")
+                        .font(.footnote).foregroundStyle(.secondary)
                 }
                 Section("Local occupancy map") {
                     OccupancyMapView(grid: brain.occupancy, rover: brain.mapPose)

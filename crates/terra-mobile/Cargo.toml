@@ -5,6 +5,7 @@ edition.workspace = true
 [lib]
 crate-type = ["lib", "staticlib", "cdylib"]
 [dependencies]
+terra-transport.workspace = true
 terra-mapping.workspace = true
 terra-types.workspace = true
 terra-state.workspace = true

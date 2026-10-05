@@ -18,6 +18,18 @@ struct SwiftSmoke {
         try map.clear()
         let cleared = try map.snapshot()
         precondition(cleared.occupancy.allSatisfy { $0 == -1 })
+        if let endpoint = ProcessInfo.processInfo.environment["TERRA_ZENOH_SMOKE_ENDPOINT"] {
+            let remote = try MobileZenohClient(endpoint: endpoint, prefix: "terra/rover", roverId: 9)
+            for _ in 0..<20 {
+                try remote.setTarget(linear: 0.5, angular: 0.2)
+                Thread.sleep(forTimeInterval: 0.05)
+            }
+            // Stop refreshing: the Rust lease must send zero while the connection stays open.
+            Thread.sleep(forTimeInterval: 0.4)
+            remote.disconnect()
+            precondition(remote.status() == "Disconnected")
+            print("Swift → UniFFI → Zenoh network path passed")
+        }
         let report = try runVelocityBenchmark()
         precondition(report.passed)
         print(String(format: "Swift → UniFFI → Rust passed: v=%.3f m/s, yaw=%.3f rad/s", report.finalForward, report.finalYawRate))
