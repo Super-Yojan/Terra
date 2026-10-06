@@ -24,9 +24,11 @@ Zero effort means coast, not a mechanical brake. The motor adapter, enable switc
 
 ## Waypoint follower
 
-`terra-waypoint` turns one WGS84 goal into a body twist. It does not live in the simulator. TerraPhone imports `MobileWaypoint` from the same UniFFI bundle as `MobileController`.
+`terra-waypoint` turns one WGS84 goal into a body twist. TerraPhone imports `MobileWaypoint` from the same UniFFI bundle as `MobileController`. The **Waypoint** section of the app is that call.
 
-Set the pose origin to the map anchor (the simulator's tile anchor, or the phone's pose origin), latch one goal, and step with the rover's local pose. `x` is metres north of that origin, `y` is metres west, and yaw `0` faces north. Pass `forward` and `yaw_rate` from `step` into `MobileController.set_target`. The velocity PI below it is unchanged.
+Start **Simulated rover**, **Phone IMU + VIO**, or **Connect to Bevy rover**. Then set the origin and the goal, or tap the occupancy map. The orange marker is the goal in the same metres as the blue rover: +X north, +Y west. **Johnson Center, 12 m north** fills latitude 38.82981, longitude −77.3075, about 12 m north of the George W. Johnson Center. **Go to waypoint** calls `setOrigin` and `setGoal`. While that goal is latched the phone steps the follower and the velocity sliders stay idle. **Cancel waypoint** returns to the sliders. Stop, or leaving the app, drops the latch.
+
+On a Bevy connection the pose comes from the depth frame's body position, and the twist is published as `cmd_vel`. Leave `terra/rover/<id>/goal` idle during this run. A goal latched inside the simulator owns the wheels until `{"cancel":true}`. With `TERRA_TILES=1` the simulator origin is the Johnson Center, which matches the default fields. The reachable square is 49 m from the origin.
 
 ```swift
 let follower = try MobileWaypoint(settings: defaultWaypointSettings())
@@ -36,7 +38,7 @@ let step = try follower.step(x: vioNorth, y: vioWest, yaw: heading)
 try controller.setTarget(target: TwistSetpoint(timestamp: now, forward: step.forward, yawRate: step.yawRate))
 ```
 
-`setGoal` returns false when the origin is missing or the point lies outside `halfExtent`. `cancel` drops the latch. `step` reports `latitude` and `longitude` of the goal; `localX` and `localY` are the tangent-plane metres the follower is steering toward. The simulator's Zenoh bridge calls this crate when a goal arrives, so a headless run uses the same follower the phone will.
+`setGoal` returns false when the origin is missing or the point lies outside `halfExtent`. `cancel` drops the latch. `step` reports `latitude` and `longitude` of the goal; `localX` and `localY` are the tangent-plane metres the follower is steering toward. `tangentMetres` and `geographicPosition` are the same projection the map tap uses. The simulator's Zenoh bridge calls this crate when a goal arrives on `terra/rover/<id>/goal`, so a headless run uses the same follower.
 
 ## Motor adapter
 
@@ -90,7 +92,7 @@ Bevy Zenoh mode uses the same grid. It does not subscribe to an occupancy topic.
 
 ## Drive Bevy from TerraPhone over Zenoh
 
-TerraPhone now exposes the Rust `terra-transport` client through UniFFI. Use the **Bevy simulator · Zenoh** section to configure an endpoint and rover ID, then connect. This mode publishes the velocity sliders directly as simulator `cmd_vel` requests; the Bevy rover runs its own velocity feedback loop. Local phone IMU/VIO/motor effort readouts do not provide remote feedback. Connecting starts at zero. Stop, switching modes and leaving the foreground close the session with a final zero. The Rust publisher also expires its 250 ms command lease if Swift stops refreshing it; the simulator's independent 500 ms watchdog remains active.
+TerraPhone now exposes the Rust `terra-transport` client through UniFFI. Use the **Bevy simulator · Zenoh** section to configure an endpoint and rover ID, then connect. This mode publishes either the velocity sliders or, after **Go to waypoint**, the phone follower's twist as simulator `cmd_vel`. The Bevy rover runs its own velocity feedback loop. Local phone IMU/VIO/motor effort readouts do not provide remote feedback. Connecting starts at zero. Stop, switching modes and leaving the foreground close the session with a final zero. The Rust publisher also expires its 250 ms command lease if Swift stops refreshing it; the simulator's independent 500 ms watchdog remains active.
 
 Demo on one Mac:
 

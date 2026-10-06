@@ -34,6 +34,19 @@ impl GeoOrigin {
             (longitude - self.longitude) * METRES_PER_DEGREE * self.latitude.to_radians().cos();
         (north, -east)
     }
+
+    /// Inverse of [`Self::to_local`]. `x` is metres north, `y` is metres west.
+    pub fn from_local(self, x: f64, y: f64) -> (f64, f64) {
+        let east = -y;
+        let latitude = self.latitude + x / METRES_PER_DEGREE;
+        let cos = self.latitude.to_radians().cos();
+        let longitude = if cos.abs() < 1e-8 {
+            self.longitude
+        } else {
+            self.longitude + east / (METRES_PER_DEGREE * cos)
+        };
+        (latitude, longitude)
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -507,6 +520,17 @@ mod tests {
             );
         }
         assert!(decode_goal(&vec![b'{'; 2049]).is_none());
+    }
+
+    #[test]
+    fn local_metres_round_trip_through_the_johnson_center() {
+        let origin = GeoOrigin::new(38.8297, -77.3075).unwrap();
+        let (x, y) = origin.to_local(38.82981, -77.3075);
+        assert!(x > 12.0 && x < 12.5, "{x}");
+        assert!(y.abs() < 1e-6, "{y}");
+        let (latitude, longitude) = origin.from_local(x, y);
+        assert!((latitude - 38.82981).abs() < 1e-9, "{latitude}");
+        assert!((longitude + 77.3075).abs() < 1e-9, "{longitude}");
     }
 
     #[test]
