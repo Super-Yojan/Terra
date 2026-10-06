@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/terra-autonomy", "crates/terra-navigation", "crates/terra-experiment", "crates/terra-types", "crates/terra-state", "crates/terra-control", "crates/terra-mobile", "crates/terra-motors","crates/terra-mapping", "crates/terra-transport", "crates/terra-waypoint"]
+members = ["crates/terra-actuators", "crates/terra-autonomy", "crates/terra-navigation", "crates/terra-experiment", "crates/terra-types", "crates/terra-state", "crates/terra-control", "crates/terra-mobile", "crates/terra-motors","crates/terra-mapping", "crates/terra-transport", "crates/terra-waypoint"]
 exclude = ["simulator"]
 
 [workspace.package]
@@ -8,6 +8,7 @@ version = "0.1.0"
 edition = "2024"
 
 [workspace.dependencies]
+terra-actuators = { path = "crates/terra-actuators" }
 terra-autonomy = { path = "crates/terra-autonomy" }
 terra-navigation = { path = "crates/terra-navigation" }
 terra-experiment = { path = "crates/terra-experiment" }
