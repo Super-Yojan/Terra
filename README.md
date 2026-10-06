@@ -5,7 +5,7 @@ Terra combines a Bevy/Avian rover simulator with reusable Rust robotics modules 
 - `terra-types`: sensor samples, coordinate conventions, commands and motor outputs.
 - `terra-state`: VIO velocity anchors with bounded IMU prediction.
 - `terra-control`: differential-drive velocity PI control, feedforward, anti-windup and freshness checks.
-- `terra-waypoint`: lat/lon go-to-waypoint follower. The phone imports it through `terra-mobile` as `MobileWaypoint`.
+- `terra-waypoint`: lat/lon go-to-waypoint follower. The phone imports it through `terra-mobile` as `MobileWaypoint`. TerraPhone's Waypoint section selects the goal and runs that follower.
 - `terra-motors`: signed wheel effort to PWM duty and direction, with a hardware enable gate and a command watchdog. See [motor adapter](docs/MOBILE_CONTROL.md#motor-adapter).
 - `terra-mapping`: rolling local occupancy grids from depth and camera poses. See [mapping API](crates/terra-mapping/README.md).
 - `terra-transport`: leased Zenoh velocity publishing for remote simulator control.

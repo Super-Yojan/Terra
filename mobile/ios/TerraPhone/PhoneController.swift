@@ -24,7 +24,14 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, @unc
     private var lastMapTime = -Double.infinity
     @Published private(set) var zenohStatus = "Disconnected"
     @Published private(set) var zenohConnecting = false
+    @Published private(set) var waypointActive = false
+    @Published private(set) var waypointStatus = "No goal"
+    @Published private(set) var waypointDistance = 0.0
     private var zenoh: MobileZenohClient?
+    private var follower: MobileWaypoint?
+    private var goalLatched = false
+    private var remotePose: (x: Double, y: Double, yaw: Double)?
+    private var phonePose: (x: Double, y: Double, yaw: Double)?
     private enum Mode { case stopped, simulation, phone, remote }
     private let controlQueue = DispatchQueue(label: "terra.control", qos: .userInteractive)
     private let motionQueue = OperationQueue()
@@ -56,6 +63,41 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, @unc
     }
     func setTarget(forward: Double, yaw: Double) {
         controlQueue.async { self.target = (forward, yaw) }
+    }
+    func engageWaypoint(originLatitude: Double, originLongitude: Double, latitude: Double, longitude: Double, token: String, halfExtent: Double) {
+        let token = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        controlQueue.async {
+            guard self.mode != .stopped else {
+                DispatchQueue.main.async { self.waypointStatus = "Start a rover or connect to Bevy, then go" }
+                return
+            }
+            do {
+                if self.follower == nil { self.follower = try MobileWaypoint(settings: defaultWaypointSettings()) }
+                try self.follower?.setOrigin(latitude: originLatitude, longitude: originLongitude)
+                let accepted = try self.follower?.setGoal(latitude: latitude, longitude: longitude, yaw: nil, token: token.isEmpty ? nil : token, halfExtent: halfExtent) ?? false
+                if !accepted { try self.follower?.cancel() }
+                self.goalLatched = accepted
+                DispatchQueue.main.async {
+                    self.waypointActive = accepted
+                    self.waypointDistance = 0
+                    self.waypointStatus = accepted ? "Goal latched · waiting for a pose" : "That point is outside \(Int(halfExtent)) m of the origin"
+                }
+            } catch {
+                self.goalLatched = false
+                DispatchQueue.main.async { self.waypointActive = false; self.waypointStatus = error.localizedDescription }
+            }
+        }
+    }
+    func cancelWaypoint() {
+        controlQueue.async {
+            try? self.follower?.cancel()
+            self.goalLatched = false
+            DispatchQueue.main.async {
+                self.waypointActive = false
+                self.waypointDistance = 0
+                self.waypointStatus = "Teleop"
+            }
+        }
     }
     func startSimulation() {
         stop()
@@ -132,11 +174,14 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, @unc
             self.timer?.cancel(); self.timer = nil
             self.mode = .stopped
             self.zenoh?.disconnect(); self.zenoh = nil
+            try? self.follower?.cancel(); self.follower = nil; self.goalLatched = false
+            self.remotePose = nil; self.phonePose = nil
             try? self.controller?.reset()
             self.controller = nil
             DispatchQueue.main.async {
                 self.source = "Stopped"; self.status = "Motor output disabled"
                 self.mapStatus = "Map paused"
+                self.waypointActive = false; self.waypointDistance = 0; self.waypointStatus = "No goal"
                 self.zenohStatus = "Disconnected"
                 self.leftEffort = 0; self.rightEffort = 0
                 self.measuredForward = 0; self.measuredYaw = 0
@@ -172,8 +217,12 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, @unc
     private func update() {
         if mode == .remote, let zenoh {
             do {
-                try zenoh.setTarget(linear: target.forward, angular: target.yaw)
-                if let frame = zenoh.takeDepth() { self.integrateRemoteDepth(frame) }
+                if let frame = zenoh.takeDepth() {
+                    remotePose = (frame.bodyX, frame.bodyY, frame.bodyYaw)
+                    self.integrateRemoteDepth(frame)
+                }
+                let command = try waypointCommand(x: remotePose?.x, y: remotePose?.y, yaw: remotePose?.yaw)
+                try zenoh.setTarget(linear: command.forward, angular: command.yaw)
                 tick += 1
                 if tick % 10 == 0 { let status = zenoh.status(); DispatchQueue.main.async { self.zenohStatus = status } }
             } catch { fail(error) }
@@ -188,7 +237,11 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, @unc
                     try controller.pushVio(sample: VioReading(timestamp: now, positionX: simulatedPosition.x, positionY: simulatedPosition.y, positionZ: 0, quaternionX: 0, quaternionY: 0, quaternionZ: sin(simulatedYaw / 2), quaternionW: cos(simulatedYaw / 2), velocityX: simulatedForward * cos(simulatedYaw), velocityY: simulatedForward * sin(simulatedYaw), velocityZ: 0, tracked: true))
                 }
             }
-            try controller.setTarget(target: TwistSetpoint(timestamp: now, forward: target.forward, yawRate: target.yaw))
+            let command = try waypointCommand(
+                x: mode == .simulation ? simulatedPosition.x : phonePose?.x,
+                y: mode == .simulation ? simulatedPosition.y : phonePose?.y,
+                yaw: mode == .simulation ? simulatedYaw : phonePose?.yaw)
+            try controller.setTarget(target: TwistSetpoint(timestamp: now, forward: command.forward, yawRate: command.yaw))
             let output = try controller.step(timestamp: now)
             if mode == .simulation {
                 simulatedAcceleration = 3 * (output.leftEffort + output.rightEffort) / 2 - simulatedForward
@@ -225,6 +278,8 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, @unc
         previousPoseTime = tracked ? frame.timestamp : nil
         if !tracked { filteredVelocity = .zero }
         let q = orientation.vector
+        let bodyForward = orientation.act(SIMD3<Float>(1, 0, 0))
+        phonePose = (Double(position.x), Double(position.y), atan2(Double(bodyForward.y), Double(bodyForward.x)))
         do {
             try controller.pushVio(sample: VioReading(timestamp: frame.timestamp, positionX: Double(position.x), positionY: Double(position.y), positionZ: Double(position.z), quaternionX: Double(q.x), quaternionY: Double(q.y), quaternionZ: Double(q.z), quaternionW: Double(q.w), velocityX: Double(filteredVelocity.x), velocityY: Double(filteredVelocity.y), velocityZ: Double(filteredVelocity.z), tracked: tracked && velocityReady))
             if tracked { updatePhoneMap(frame: frame, position: position, bodyOrientation: orientation) }
@@ -318,6 +373,29 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, @unc
     }
     func session(_ session: ARSession, didFailWithError error: Error) { fail(error) }
     func sessionWasInterrupted(_ session: ARSession) { fail(NSError(domain: "Terra", code: 1, userInfo: [NSLocalizedDescriptionKey: "AR session interrupted"])) }
+    private func waypointCommand(x: Double?, y: Double?, yaw: Double?) throws -> (forward: Double, yaw: Double) {
+        guard goalLatched, let follower, let x, let y, let yaw else {
+            return goalLatched ? (0, 0) : target
+        }
+        let step = try follower.step(x: x, y: y, yaw: yaw)
+        if tick % 10 == 0 {
+            let distance = step.distance
+            let phase = step.phase
+            DispatchQueue.main.async {
+                self.waypointActive = true
+                self.waypointDistance = distance
+                switch phase {
+                case .active: self.waypointStatus = String(format: "Driving · %.1f m remaining", distance)
+                case .arrived: self.waypointStatus = String(format: "Arrived · %.2f m", distance)
+                case .idle: self.waypointStatus = "No goal"
+                }
+            }
+        }
+        switch step.phase {
+        case .active: return (step.forward, step.yawRate)
+        case .arrived, .idle: return (0, 0)
+        }
+    }
     private func publish(_ output: ControlOutput) {
         DispatchQueue.main.async {
             self.measuredForward = output.estimatedForward; self.measuredYaw = output.estimatedYawRate
@@ -335,7 +413,10 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, @unc
     private func fail(_ error: Error) {
         mode = .stopped; timer?.cancel(); timer = nil; try? controller?.reset()
         zenoh?.disconnect(); zenoh = nil
+        try? follower?.cancel(); follower = nil; goalLatched = false
+        remotePose = nil; phonePose = nil
         DispatchQueue.main.async {
+            self.waypointActive = false; self.waypointDistance = 0; self.waypointStatus = "No goal"
             self.motion.stopDeviceMotionUpdates(); self.session.pause()
             self.status = error.localizedDescription; self.leftEffort = 0; self.rightEffort = 0
             self.mapStatus = "Map paused"

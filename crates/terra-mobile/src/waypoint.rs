@@ -2,7 +2,65 @@
 use crate::ControllerError;
 use std::sync::{Arc, Mutex};
 use terra_types::InputError;
-use terra_waypoint::{GoalCommand, WaypointConfig, WaypointController};
+use terra_waypoint::{GeoOrigin, GoalCommand, WaypointConfig, WaypointController};
+
+#[derive(Clone, Copy, Debug, uniffi::Record)]
+pub struct TangentMetres {
+    pub north: f64,
+    pub west: f64,
+}
+
+#[derive(Clone, Copy, Debug, uniffi::Record)]
+pub struct GeographicPosition {
+    pub latitude: f64,
+    pub longitude: f64,
+}
+
+fn geographic_range(latitude: f64, longitude: f64) -> Result<(), ControllerError> {
+    if !latitude.is_finite()
+        || !longitude.is_finite()
+        || !(-85.0..=85.0).contains(&latitude)
+        || !(-180.0..=180.0).contains(&longitude)
+    {
+        Err(InputError::OutOfRange.into())
+    } else {
+        Ok(())
+    }
+}
+
+/// Project a WGS84 point into the follower frame: `north` is +x, `west` is +y.
+#[uniffi::export]
+pub fn tangent_metres(
+    origin_latitude: f64,
+    origin_longitude: f64,
+    latitude: f64,
+    longitude: f64,
+) -> Result<TangentMetres, ControllerError> {
+    geographic_range(latitude, longitude)?;
+    let (north, west) =
+        GeoOrigin::new(origin_latitude, origin_longitude)?.to_local(latitude, longitude);
+    Ok(TangentMetres { north, west })
+}
+
+/// Inverse of [`tangent_metres`]. A map tap in north/west metres becomes the goal coordinate.
+#[uniffi::export]
+pub fn geographic_position(
+    origin_latitude: f64,
+    origin_longitude: f64,
+    north: f64,
+    west: f64,
+) -> Result<GeographicPosition, ControllerError> {
+    if !north.is_finite() || !west.is_finite() {
+        return Err(InputError::OutOfRange.into());
+    }
+    let (latitude, longitude) =
+        GeoOrigin::new(origin_latitude, origin_longitude)?.from_local(north, west);
+    geographic_range(latitude, longitude)?;
+    Ok(GeographicPosition {
+        latitude,
+        longitude,
+    })
+}
 
 #[derive(Clone, Debug, uniffi::Record)]
 pub struct WaypointSettings {
@@ -188,5 +246,15 @@ mod tests {
         let idle = follower.step(0.0, 0.0, 0.0).unwrap();
         assert_eq!(idle.phase, WaypointPhase::Idle);
         assert_eq!(idle.forward, 0.0);
+    }
+
+    #[test]
+    fn map_tap_round_trips_to_the_same_latitude() {
+        let projected = tangent_metres(38.8297, -77.3075, 38.82981, -77.3075).unwrap();
+        assert!(projected.north > 12.0 && projected.west.abs() < 1e-6);
+        let geographic =
+            geographic_position(38.8297, -77.3075, projected.north, projected.west).unwrap();
+        assert!((geographic.latitude - 38.82981).abs() < 1e-9);
+        assert!((geographic.longitude + 77.3075).abs() < 1e-9);
     }
 }
