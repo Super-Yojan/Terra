@@ -10,6 +10,8 @@ Terra combines a Bevy/Avian rover simulator with reusable Rust robotics modules 
 
 See [mobile controller setup](docs/MOBILE_CONTROL.md) for the sensor contract, iOS build and validation. The simulator lives in `simulator/`; its existing fleet and Zenoh velocity commands now feed the shared controller, which applies motor forces through Avian.
 
+To build and run the simulator in Docker with software rendering and a browser display, see [Docker setup](docker/DOCKER.md).
+
 ```sh
 cargo test --workspace
 cargo test --manifest-path simulator/Cargo.toml

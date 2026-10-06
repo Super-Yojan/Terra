@@ -1,0 +1,17 @@
+services:
+  terra-simulator:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: terra-simulator:local
+    ports:
+      # Keep the browser display and Zenoh peer local to this PC by default.
+      - "127.0.0.1:6080:6080"
+      - "127.0.0.1:7447:7447"
+    environment:
+      TERRA_ZENOH_LISTEN: tcp/0.0.0.0:7447
+      TERRA_ROVER_COUNT: "1"
+      TERRA_DISPLAY_MODE: 1600x900x24
+      TERRA_SOFTWARE_RENDERING: "1"
+    shm_size: 1gb
+    restart: "no"
