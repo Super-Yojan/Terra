@@ -10,13 +10,16 @@ final class BluetoothSession {
     private(set) var armed = false
     private(set) var arming = false
     private(set) var ready = false
+    private var layoutAvailable = false
+    private var faulted = false
     private var statusAt: TimeInterval?
     private var armRequested = false
     func reset() {
         generation &+= 1; session = nil; revision = 0; sequence = 0
-        armed = false; arming = false; ready = false; statusAt = nil; armRequested = false
+        armed = false; arming = false; ready = false; layoutAvailable = false; faulted = false; statusAt = nil; armRequested = false
     }
-    func synchronized(revision: UInt32) { ready = session != nil && self.revision == revision }
+    func invalidateLayout() { ready = false; stop() }
+    func synchronized(revision: UInt32) { ready = session != nil && layoutAvailable && !faulted && self.revision == revision }
     func status(_ value: [String: Any], now: TimeInterval) -> [Effect] {
         guard value["type"] as? String == "status", value["schema_version"] as? Int == 1,
               let revision = value["active_revision"] as? UInt32 else { return [] }
@@ -25,6 +28,9 @@ final class BluetoothSession {
             ready = false; armRequested = false; sequence = 0
         }
         session = incoming; self.revision = revision; statusAt = now
+        layoutAvailable = value["layout_available"] as? Bool == true
+        faulted = value["fault"] is String || value["emergency_stop"] as? Bool == true
+        if !layoutAvailable || faulted { invalidateLayout() }
         // An unsolicited status cannot resurrect local motion permission.
         armed = armRequested && value["armed"] as? Bool == true
         arming = armRequested && value["arming"] as? Bool == true
@@ -32,6 +38,8 @@ final class BluetoothSession {
         if value["fault"] is String || value["emergency_stop"] as? Bool == true {
             armRequested = false; armed = false; arming = false
         }
+        if let fault = value["fault"] as? String { return [.state("Fault: \(fault) · disarmed")] }
+        if value["emergency_stop"] as? Bool == true { return [.state("Emergency stop latched · disarmed")] }
         return [.state(armed ? "Armed" : arming ? "Arming at safe output" : "Disarmed")]
     }
     func control(_ kind: String) throws -> Data {

@@ -46,6 +46,8 @@ def validate_structure(layout: dict) -> list[dict]:
         if identifier in ids: add(identifier, 'duplicate_id', 'actuator IDs must be unique')
         ids.add(identifier)
         if not a['port'].strip(): add(identifier, 'port', 'port must not be empty')
+        if kind == 'unidirectional_esc' and a['inverted']:
+            add(identifier, 'inversion', 'unidirectional ESC cannot be inverted')
         lo, hi = a['limits']['min'], a['limits']['max']
         if not (0 if kind == 'unidirectional_esc' else -1) <= lo <= hi <= 1:
             add(identifier, 'command_limits', 'limits outside normalized range or unordered')

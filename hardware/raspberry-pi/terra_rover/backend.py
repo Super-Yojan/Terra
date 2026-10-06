@@ -18,6 +18,9 @@ class BackendError(RuntimeError):
         self.port, self.operation = port, operation
         super().__init__(f'{operation} on {port or "backend"}: {message}')
 
+class BackendValidationError(BackendError):
+    """Rejected before any hardware resource or output is changed."""
+
 def _forget_exception_owners(exc):
     """Release vendor frames/partial constructor owners before resource transfer."""
     seen = set()
@@ -116,10 +119,8 @@ class _Adapter:
     def configure(self, layout):
         if self._closed: raise BackendError(None, 'configure', 'backend closed')
         errors = validate_layout(layout, self._caps)
-        if errors: raise BackendError(None, 'configure', str(errors))
+        if errors: raise BackendValidationError(None, 'configure', str(errors))
         candidate = normalize_layout(layout)
-        if any(a['kind'] == 'unidirectional_esc' and a['inverted'] for a in candidate['actuators']):
-            raise BackendError(None, 'configure', 'unidirectional ESC inversion unsupported')
         self._before_configure()
         self._prepare()
         previous = self._layout
@@ -232,7 +233,10 @@ class FusionHatBackend(_Adapter):
         super().__init__(_capabilities(pwm_ports, 'fusion_hat', library_version or 'unloaded', occupied_resources), gate_reader)
 
     def _before_configure(self):
-        self.require_gate_open()
+        try:
+            self.require_gate_open()
+        except BackendError as exc:
+            raise BackendValidationError(None, 'gate', str(exc)) from exc
 
     def _release_for_configure(self):
         self.require_gate_open()

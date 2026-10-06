@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import tempfile
 
+from .backend import BackendValidationError
 from .layout import normalize_layout, validate_layout
 from .protocol import JSON_LIMIT, ProtocolError, _json, encode_control
 
@@ -227,6 +228,9 @@ class ConfigurationStore:
         previous = self.read()
         try:
             self.backend.configure(candidate)
+        except BackendValidationError as exc:
+            # Preflight has not touched resources: keep the valid layout and fault state.
+            return self._reply(request_id, [_error('backend_validation', exc)])
         except Exception as exc:
             # Adapter owns resource rollback. Do not open replacement resources here.
             self.errors = [_error('backend_configuration', exc)]
@@ -285,6 +289,8 @@ class ConfigurationStore:
 
     def status(self, now):
         result = self.safety.status(now)
+        result['active_revision'] = self.active_revision
+        result['layout_available'] = self._active is not None and self.safety.layout is not None
         try:
             self.backend.require_gate_open()
             result['hardware_gate_open_confirmed'] = True

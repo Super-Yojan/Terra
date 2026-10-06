@@ -17,6 +17,7 @@ struct ActuatorDraft: Codable, Equatable {
     var safe = ActuatorSafe(type: "zero")
     mutating func changeKind(_ value: String) {
         kind = value
+        if value == "unidirectional_esc" { inverted = false }
         limits = ActuatorLimits(min: value == "unidirectional_esc" ? 0 : -1, max: 1)
         route = value == "positional_servo" ? ActuatorRoute(type: "servo") : ActuatorRoute(type: "manual", forward_coefficient: 1, turn_coefficient: 0)
         safe = ActuatorSafe(type: value == "positional_servo" ? "position" : "zero", value: value == "positional_servo" ? 0 : nil)
@@ -63,7 +64,7 @@ struct ActuatorLayoutView: View {
                 Toggle("Phone feedback", isOn: $feedback)
                 Button("Connect selected rover") { if let id = UUID(uuidString: selected) { brain.startBluetooth(identifier: id, feedback: feedback) } }.disabled(UUID(uuidString: selected) == nil)
                 Text(brain.hardwareStatus)
-                Text(brain.hardwareReady ? "Layout and capabilities synchronized" : "Waiting for bonded owner access, status and layout")
+                Text(brain.hardwareReady ? "Layout and capabilities synchronized" : brain.hardwareConfigurationReady ? "Configuration available · motion requires a valid layout and cleared fault" : "Waiting for bonded owner access and capabilities")
                 Text("Manual mode commands normalized effort. Feedback requires a compatible left/right layout and healthy phone tracking.").font(.footnote)
             }
             Section("Hardware safety") {
@@ -71,6 +72,8 @@ struct ActuatorLayoutView: View {
                 Button("Arm hardware") { brain.armHardware() }.disabled(!brain.hardwareReady || brain.hardwareArmed || brain.hardwareArming)
                 Button("Disarm", role: .destructive) { brain.disarmHardware() }
                 Button("Emergency stop", role: .destructive) { brain.emergencyStop() }
+                if let fault = brain.hardwareFault { Text("Fault: \(fault)").textSelection(.enabled) }
+                Button("Reset fault") { brain.resetHardwareFault() }.disabled(!brain.configurationAllowed || brain.hardwareFault == nil)
                 Button("Reset emergency stop") { brain.emergencyStop(reset: true) }
                 Text("Reset does not arm. Arming resets propulsion and positional servo targets to their safe defaults. Open the independent hardware gate before editing or committing configuration.").font(.footnote)
             }
@@ -87,8 +90,9 @@ struct ActuatorLayoutView: View {
             }
             Section("Draft configuration") {
                 if let caps { Text("\(caps.board) · \(caps.library) \(caps.library_version)") }
-                Text("Active revision \(active?.revision ?? 0); draft base revision \(draft.revision)")
-                Button("Load active layout") { if let active { draft = active; dirty = false } }
+                Text("Active revision \(brain.activeLayoutRevision); draft base revision \(draft.revision)")
+                Button("Load active layout") { if let active { draft = active; dirty = false } }.disabled(active == nil)
+                Button("Use current revision for draft") { draft.revision = brain.activeLayoutRevision }.disabled(!brain.configurationAllowed)
                 Menu("Editable presets") {
                     Button("Terra Mini · four DC motors") { preset("mini") }
                     Button("Two bidirectional ESCs") { preset("esc") }
@@ -107,13 +111,14 @@ struct ActuatorLayoutView: View {
                 Text(brain.configurationStatus).textSelection(.enabled)
                 Button("Validate and stage draft") {
                     if let data = try? JSONEncoder().encode(draft) { brain.stageActuatorLayout(json: String(decoding: data, as: UTF8.self)) }
-                }.disabled(!brain.hardwareReady || brain.hardwareArmed || brain.hardwareArming)
-                Button("Commit acknowledged stage") { brain.commitActuatorLayout() }.disabled(!brain.hasStagedLayout || brain.hardwareArmed || brain.hardwareArming)
+                }.disabled(!brain.configurationAllowed)
+                Button("Commit acknowledged stage") { brain.commitActuatorLayout() }.disabled(!brain.hasStagedLayout || !brain.configurationAllowed)
                 Text("Stage validates without applying. Commit applies the exact acknowledged stage. Rejections retain this draft; active revision changes only after rover acknowledgement and refresh.").font(.footnote)
             }
         }
         .navigationTitle("Actuator layouts")
-        .onAppear { if !dirty, let active { draft = active } }
+        .onAppear { if !dirty { draft = active ?? ActuatorLayoutDraft(revision: brain.activeLayoutRevision) } }
+        .onChange(of: brain.activeLayoutRevision) { _, revision in if !dirty { draft.revision = revision } }
         .onChange(of: selected) { _, _ in if brain.hardwareActive { brain.stop() } }
         .onChange(of: brain.acknowledgedCommitRevision) { _, revision in
             if let revision { draft.revision = revision }
@@ -127,7 +132,7 @@ struct ActuatorLayoutView: View {
         var a = ActuatorDraft(id: id, name: "Actuator \(id)"); a.changeKind(kind); draft.actuators.append(a)
     }
     private func preset(_ kind: String) {
-        draft = ActuatorLayoutDraft(revision: active?.revision ?? 0)
+        draft = ActuatorLayoutDraft(revision: brain.activeLayoutRevision)
         let count = kind == "mini" ? 4 : 2
         for id in 0..<count {
             var a = ActuatorDraft(id: id, name: "Actuator \(id)")
@@ -153,7 +158,8 @@ private struct ActuatorEntryView: View {
             ForEach(ports, id: \.self) { Text($0).tag($0) }
         }
         if let port = capabilities?.ports[actuator.port] { Text("\(port.frequency_hz) Hz · resources \(port.resources.joined(separator: ", "))").font(.caption) }
-        Toggle("Invert output", isOn: $actuator.inverted)
+        Toggle("Invert output", isOn: $actuator.inverted).disabled(actuator.kind == "unidirectional_esc")
+        if actuator.kind == "unidirectional_esc" { Text("Unidirectional ESCs cannot invert output; zero always means stop.").font(.footnote) }
         number("Minimum normalized command", value: $actuator.limits.min)
         number("Maximum normalized command", value: $actuator.limits.max)
         if actuator.kind == "positional_servo" {

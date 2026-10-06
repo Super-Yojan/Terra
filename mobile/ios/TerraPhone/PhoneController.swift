@@ -42,6 +42,11 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, @unc
     @Published private(set) var hardwareActive = false
     @Published private(set) var hardwareFeedback = false
     @Published private(set) var hardwareReady = false
+    @Published private(set) var hardwareConfigurationReady = false
+    @Published private(set) var activeLayoutRevision: UInt32 = 0
+    @Published private(set) var hardwareFault: String?
+    private var configurationGeneration: UInt64 = 0
+    private var resetFaultRequest: UInt32?
     @Published private(set) var hardwareArmed = false
     @Published private(set) var hardwareArming = false
     @Published private(set) var hardwareStatus = "Disconnected"
@@ -524,7 +529,19 @@ extension PhoneController {
         bluetooth.$replyJSON.sink { [weak self] text in self?.receiveConfiguration(text) }.store(in: &subscriptions)
     }
     private func refreshBluetooth() {
+        if configurationGeneration != bluetooth.connectionGeneration {
+            configurationGeneration = bluetooth.connectionGeneration
+            staged = nil; stageRequest = nil; commitRequest = nil; resetFaultRequest = nil
+            acknowledgedCommitRevision = nil
+            configurationStatus = "Connection changed · stage draft again"
+        }
         hardwareStatus = bluetooth.status; hardwareReady = bluetooth.isReady
+        hardwareConfigurationReady = bluetooth.configurationReady
+        let remoteStatus = (try? JSONSerialization.jsonObject(with: Data(bluetooth.statusJSON.utf8))) as? [String: Any]
+        activeLayoutRevision = remoteStatus?["active_revision"] as? UInt32 ?? 0
+        hardwareFault = remoteStatus?["fault"] as? String
+        if let staged, staged.revision != activeLayoutRevision { self.staged = nil; stageRequest = nil }
+
         hardwareArmed = bluetooth.armed; hardwareArming = bluetooth.arming
         capabilitiesJSON = bluetooth.capabilitiesJSON; committedLayoutJSON = bluetooth.layoutJSON
         discoveredRovers = (try? JSONDecoder().decode([RoverPeripheral].self, from: Data(bluetooth.peripheralsJSON.utf8))) ?? []
@@ -606,23 +623,31 @@ extension PhoneController {
             bluetooth.drive(valuesJSON: values, producedAt: now)
         } catch { revokeHardwareMotion() }
     }
-    private var configurationAllowed: Bool {
+    var configurationAllowed: Bool {
         let status = (try? JSONSerialization.jsonObject(with: Data(bluetooth.statusJSON.utf8))) as? [String: Any]
-        return hardwareReady && status?["armed"] as? Bool == false && status?["arming"] as? Bool == false && status?["hardware_gate_open_confirmed"] as? Bool == true
+        return hardwareConfigurationReady && status?["armed"] as? Bool == false && status?["arming"] as? Bool == false && status?["hardware_gate_open_confirmed"] as? Bool == true
     }
     @discardableResult private func sendConfiguration(_ operation: String, payload: [String: Any]) -> UInt32? {
         guard nextRequest < UInt32.max else { return nil }
         nextRequest += 1
         guard let data = try? JSONSerialization.data(withJSONObject: ["schema_version": 1, "request_id": nextRequest, "operation": operation, "payload": payload]) else { return nil }
-        bluetooth.request(envelope: data); return nextRequest
+        bluetooth.request(envelope: data, generation: bluetooth.connectionGeneration); return nextRequest
+    }
+    func resetHardwareFault() {
+        guard configurationAllowed else { configurationStatus = "Disarm and open the hardware gate before resetting a fault"; return }
+        resetFaultRequest = sendConfiguration("reset_fault", payload: [:])
+        configurationStatus = "Waiting for fault reset acknowledgement · remains disarmed"
     }
     func stageActuatorLayout(json: String) {
-        staged = nil
+        staged = nil; stageRequest = nil
         guard configurationAllowed else { configurationStatus = "Disarm and open the hardware gate before configuration"; return }
         do {
             let errors = try actuatorValidateLayout(layoutJson: json, capabilitiesJson: capabilitiesJSON)
             guard errors == "[]" else { configurationStatus = errors; return }
             guard let object = try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any] else { return }
+            guard object["revision"] as? UInt32 == activeLayoutRevision else {
+                configurationStatus = "Draft revision is stale · use the current revision before staging"; return
+            }
             stageRequest = sendConfiguration("stage_layout", payload: ["layout": object]); configurationStatus = "Waiting for stage acknowledgement"
         } catch { configurationStatus = error.localizedDescription }
     }
@@ -635,11 +660,16 @@ extension PhoneController {
     }
     private func receiveConfiguration(_ text: String) {
         guard let object = (try? JSONSerialization.jsonObject(with: Data(text.utf8))) as? [String: Any], let id = object["request_id"] as? UInt32 else { return }
+        if id == resetFaultRequest {
+            resetFaultRequest = nil
+            configurationStatus = object["result"] as? String == "ok" ? "Fault reset acknowledged · arm explicitly when ready" : "Fault reset rejected: \(object["errors"] ?? [])"
+            return
+        }
         guard id == stageRequest || id == commitRequest else { return }
         guard object["result"] as? String == "ok" else { staged = nil; configurationStatus = "Rejected · draft retained: \(object["errors"] ?? [])"; return }
         if id == stageRequest {
             let payload = object["payload"] as? [String: Any]
-            if let revision = payload?["staged_revision"] as? UInt32 { staged = (id, revision); configurationStatus = "Staged revision \(revision) · commit explicitly" }
+            if let revision = payload?["staged_revision"] as? UInt32, revision == activeLayoutRevision, payload?["staged_request_id"] as? UInt32 == id { staged = (id, revision); configurationStatus = "Staged revision \(revision) · commit explicitly" }
         } else {
             staged = nil; stageRequest = nil; commitRequest = nil
             acknowledgedCommitRevision = object["active_revision"] as? UInt32

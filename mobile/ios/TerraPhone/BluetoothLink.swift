@@ -4,6 +4,8 @@ import CoreBluetooth
 
 final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeripheralDelegate {
     @Published private(set) var isReady = false
+    @Published private(set) var configurationReady = false
+    @Published private(set) var connectionGeneration: UInt64 = 0
     @Published private(set) var armed = false
     @Published private(set) var arming = false
     @Published private(set) var status = "Disconnected"
@@ -21,6 +23,7 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
     private var deferredIdentifier: UUID?
     private var synchronizedRevision: UInt32?
     private var hasCapabilities = false
+    private var capabilityObject: [String: Any] = [:]
     private var safeValues: [[String: Any]] = []
     private var awaitingSafeSequence: UInt32?
     private var awaitingSafeAt: TimeInterval?
@@ -75,10 +78,11 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
     }
     func disconnect() { queue.async { self.deferredIdentifier = nil; self.close("Disconnected") } }
     private func clear() {
-        policy.reset(); usedRequests.removeAll(); awaitingSafeAt = nil; safeValues = []; awaitingSafeSequence = nil; synchronizedRevision = nil; hasCapabilities = false; characteristics.removeAll(); statusAssembly.clear(); replyAssembly.clear()
+        policy.reset(); usedRequests.removeAll(); awaitingSafeAt = nil; safeValues = []; awaitingSafeSequence = nil; synchronizedRevision = nil; hasCapabilities = false; capabilityObject = [:]; characteristics.removeAll(); statusAssembly.clear(); replyAssembly.clear()
         active = nil; armSafe = nil; waitingRequest = nil; waitingRequestAt = nil; pendingDrive = nil; priority = nil; configuration.removeAll(); requests.removeAll()
         writeAt = nil; admitting = false; setup = false
-        DispatchQueue.main.async { self.isReady = false; self.armed = false; self.arming = false; self.connectedIdentifier = nil; self.capabilitiesJSON = "{}"; self.layoutJSON = "{}"; self.statusJSON = "{}" }
+        let generation = policy.generation
+        DispatchQueue.main.async { self.connectionGeneration = generation; self.configurationReady = false; self.isReady = false; self.armed = false; self.arming = false; self.connectedIdentifier = nil; self.capabilitiesJSON = "{}"; self.layoutJSON = "{}"; self.statusJSON = "{}" }
     }
     private func close(_ reason: String) { let old = peripheral; peripheral = nil; clear(); if let old = old { retiring = old; central.cancelPeripheralConnection(old) }; publish(reason) }
     private func terminal(_ reason: String) { peripheral?.delegate = nil; peripheral = nil; retiring = nil; clear(); publish(reason) }
@@ -122,7 +126,8 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
         do { priority = try packet(policy.control("disarm"), characteristic: controlID); pump() }
         catch { close("Disarmed; reconnect required") }
     }
-    func request(envelope: Data) { queue.async {
+    func request(envelope: Data, generation: UInt64) { queue.async {
+        guard generation == self.policy.generation else { return }
         do {
             guard self.configuration.count < 16, let object = try JSONSerialization.jsonObject(with: envelope) as? [String: Any],
                   object["schema_version"] as? Int == 1, let id = object["request_id"] as? UInt32,
@@ -233,8 +238,9 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
                 if object["type"] as? String == "status" {
                     for effect in policy.status(object, now: now) { if case .state(let text) = effect { publish(text) } }
                     if hasCapabilities, let revision = synchronizedRevision { policy.synchronized(revision: revision) }
+                    let configReady = hasCapabilities && policy.session != nil
                     let ready = policy.ready, armed = policy.armed, arming = policy.arming
-                    DispatchQueue.main.async { self.isReady = ready; self.armed = armed; self.arming = arming }
+                    DispatchQueue.main.async { self.configurationReady = configReady; self.isReady = ready; self.armed = armed; self.arming = arming }
                     DispatchQueue.main.async { self.statusJSON = text; self.connectedIdentifier = p.identifier }
                     if admitting {
                         admitting = false
@@ -254,11 +260,27 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
                 guard let id = object["request_id"] as? UInt32, id == waitingRequest, let operation = requests.removeValue(forKey: id) else { return }
                 waitingRequest = nil; waitingRequestAt = nil; replyAssembly.clear()
                 DispatchQueue.main.async { self.replyJSON = text }
-                guard object["result"] as? String == "ok" else { close("Configuration rejected; review reply and reconnect"); return }
-                if object["result"] as? String == "ok", let payload = object["payload"], let data = try? JSONSerialization.data(withJSONObject: payload) {
+                guard object["result"] as? String == "ok" else {
+                    if operation == "read_layout" {
+                        synchronizedRevision = nil; safeValues = []; policy.invalidateLayout()
+                        DispatchQueue.main.async { self.isReady = false; self.layoutJSON = "{}" }
+                    }
+                    publish("Configuration rejected: \(object["errors"] ?? [])")
+                    pump(); return
+                }
+                if operation == "read_layout", object["payload"] is NSNull {
+                    synchronizedRevision = nil; safeValues = []; policy.invalidateLayout()
+                    DispatchQueue.main.async { self.isReady = false; self.layoutJSON = "{}" }
+                    publish("No active layout · configure while disarmed with gate open")
+                    pump(); return
+                }
+                if object["result"] as? String == "ok", let payload = object["payload"] as? [String: Any], let data = try? JSONSerialization.data(withJSONObject: payload) {
                     let json = String(decoding: data, as: UTF8.self)
-                    if operation == "capabilities" { hasCapabilities = true; DispatchQueue.main.async { self.capabilitiesJSON = json } }
-                    if operation == "read_layout", let layout = payload as? [String: Any], let revision = layout["revision"] as? UInt32 {
+                    if operation == "capabilities" { capabilityObject = payload; hasCapabilities = true; DispatchQueue.main.async { self.capabilitiesJSON = json } }
+                    if operation == "read_layout", let revision = payload["revision"] as? UInt32 {
+                        let layout = payload
+                        let capabilities = String(decoding: try JSONSerialization.data(withJSONObject: capabilityObject), as: UTF8.self)
+                        guard try actuatorValidateLayout(layoutJson: json, capabilitiesJson: capabilities) == "[]" else { throw BluetoothPolicyError.malformed }
                         guard let actuators = layout["actuators"] as? [[String: Any]] else { throw BluetoothPolicyError.malformed }
                         safeValues = try actuators.map { actuator in
                             guard let id = actuator["id"], let safe = actuator["safe"] as? [String: Any], let limits = actuator["limits"] as? [String: Any], let min = limits["min"] as? Double, let max = limits["max"] as? Double else { throw BluetoothPolicyError.malformed }

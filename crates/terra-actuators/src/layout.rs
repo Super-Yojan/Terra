@@ -94,6 +94,9 @@ pub fn validate_structure(layout: &Layout) -> Result<(), Vec<LayoutError>> {
             _ => false,
         };
         if !calibration_ok { add(Some(a.id), "calibration", "calibration must match the kind and contain valid power or ordered microsecond pulses"); }
+        if a.kind == OutputKind::UnidirectionalEsc && a.inverted {
+            add(Some(a.id), "inversion", "unidirectional ESC cannot be inverted");
+        }
         let servo = a.kind == OutputKind::PositionalServo;
         if servo != matches!(a.route, Route::Servo) { add(Some(a.id), "route_kind", "servo routes require positional servos; propulsion routes require propulsion outputs"); }
         if let Route::Manual { forward_coefficient, turn_coefficient } = &a.route {
