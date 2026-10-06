@@ -89,6 +89,11 @@ class SafetyController:
         self.last_drive_at = None
         self._disarm('connected')
 
+    def disarm(self, reason: str, now: float):
+        """Transport safety stop; does not accept a command or advance sequence."""
+        if not self._clock(now): return
+        self._disarm(reason)
+
     def set_status_subscribed(self, subscribed: bool, now: float):
         if not self._clock(now): return
         previous = self.subscribed

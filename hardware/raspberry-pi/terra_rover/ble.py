@@ -64,6 +64,7 @@ class Characteristic(ServiceInterface):
         peer = self.peripheral.authorize(options)
         if self.name in ('status', 'reply'): raise DBusError('org.bluez.Error.NotPermitted', 'not writable')
         if options.get('offset', Variant('q', 0)).value or options.get('prepare-authorize', Variant('b', False)).value:
+            if self.name == 'drive': self.peripheral.malformed_drive(peer)
             raise DBusError('org.bluez.Error.NotSupported', 'use application fragments')
         try: self.peripheral.handle_write(peer, self.name, bytes(value), time.monotonic())
         except ProtocolError as exc: raise DBusError('org.bluez.Error.InvalidValueLength', str(exc)) from exc
@@ -115,6 +116,7 @@ class BlePeripheral:
         self.events = deque(maxlen=32)
         self.drive = None
         self.priority = None
+        self.invalid_drive = None
         self.configuring = False
         self.assemblers = {name: FragmentAssembler(limit) for name, limit in
                            [('drive', 96), ('priority', 96), ('json', JSON_LIMIT)]}
@@ -161,11 +163,26 @@ class BlePeripheral:
         for char in self.chars.values(): char.notifying = False
         with self.lock:
             self.drive = self.priority = None
+            self.invalid_drive = None
             self.events.clear()
             self.events.append((self.generation, 'disconnect', None, now))
+    def malformed_drive(self, peer):
+        if peer != self.peer: raise denied('owner is not admitted')
+        self._owner_device(peer)
+        with self.lock:
+            self.invalid_drive = self.generation
+            self.drive = None
+        self.assemblers['drive'].clear()
+
     def handle_write(self, peer, characteristic, value, now):
         if peer != self.peer: raise denied('owner is not admitted')
         self._owner_device(peer)
+        try: return self._handle_write(characteristic, value, now)
+        except ProtocolError:
+            if characteristic == 'drive': self.malformed_drive(peer)
+            raise
+
+    def _handle_write(self, characteristic, value, now):
         if len(value) < 5: raise ProtocolError('fragment too short')
         message = int.from_bytes(value[:2], 'little')
         if characteristic == 'drive': route = 'drive'
@@ -219,7 +236,18 @@ class BlePeripheral:
             with self.lock:
                 events = list(self.events); self.events.clear()
                 priority, drive = self.priority, self.drive
+                invalid_drive = self.invalid_drive
+                self.invalid_drive = None
                 self.priority = self.drive = None
+            # Apply lifecycle in queue order before command admission.
+            for generation, kind, value, received in events:
+                if generation != self.generation: continue
+                if kind == 'connect': self.store.begin_connection(value, time.monotonic())
+                elif kind == 'disconnect': self.store.end_connection(time.monotonic())
+                elif kind == 'subscribe': self.safety.set_status_subscribed(value, time.monotonic())
+            if invalid_drive == self.generation:
+                self.safety.disarm('malformed_drive', time.monotonic())
+                drive = None
             # Priority is processed before disk/backend configuration.
             if priority is not None and priority[0] == self.generation:
                 generation, frame, received = priority
@@ -228,10 +256,7 @@ class BlePeripheral:
                 priority = None
             for generation, kind, value, received in events:
                 if generation != self.generation: continue
-                if kind == 'connect': self.store.begin_connection(value, started)
-                elif kind == 'disconnect': self.store.end_connection(started)
-                elif kind == 'subscribe': self.safety.set_status_subscribed(value, started)
-                elif kind == 'json':
+                if kind == 'json':
                     with self.lock: self.configuring = True
                     try:
                         if not self.safety.status(time.monotonic())['armed'] and not self.safety.status(time.monotonic())['arming'] and self.safety.layout is not None:
@@ -245,6 +270,8 @@ class BlePeripheral:
                 if item is None or item[0] != self.generation: continue
                 generation, frame, received = item
                 accepted = self.safety.accept(frame, received, time.monotonic())
+                if frame.kind == CommandKind.DRIVE and not accepted:
+                    self.safety.disarm('rejected_drive', time.monotonic())
                 acknowledgement = dict(schema_version=1, type='command_acceptance', session=frame.session,
                                        sequence=frame.sequence, accepted=accepted)
                 self.loop.call_soon_threadsafe(self._emit, 'status', acknowledgement, generation)
@@ -257,7 +284,7 @@ class BlePeripheral:
                 try: self.backend.apply(self.safety.tick(time.monotonic(), False))
                 except Exception: pass
             if now-self.last_status >= .1:
-                status = self.store.status(now)
+                status = self.store.status(time.monotonic())
                 status.update(type='status', generation=self.generation)
                 self.status_bytes = json.dumps(status, separators=(',', ':')).encode()
                 self.loop.call_soon_threadsafe(self._emit, 'status', status, self.generation)

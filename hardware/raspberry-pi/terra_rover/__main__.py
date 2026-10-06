@@ -8,11 +8,12 @@ import tempfile
 import time
 import sys
 
-from dbus_next import BusType, DBusError, Variant
+from dbus_next import BusType, DBusError, Variant, PropertyAccess
 from dbus_next.aio import MessageBus
-from dbus_next.service import ServiceInterface, method
+from dbus_next.service import ServiceInterface, method, dbus_property
 from .backend import MockBackend, FusionHatBackend, file_gate_reader
-from .ble import BlePeripheral, ROOT
+from .ble import (BlePeripheral, ROOT, SERVICE, SERVICE_UUID, STATUS_UUID,
+                  GattService, ObjectManager, Advertisement)
 
 class SetupAgent(ServiceInterface):
     def __init__(self, expected, deadline):
@@ -50,6 +51,31 @@ class SetupAgent(ServiceInterface):
     @method()
     def Release(self): self.confirmed.clear()
 
+class SetupStatus(ServiceInterface):
+    """Encrypted read initiates pairing; no output backend or write API exists."""
+    def __init__(self, agent, gate_file):
+        super().__init__('org.bluez.GattCharacteristic1')
+        self.agent, self.gate_file = agent, gate_file
+    @dbus_property(access=PropertyAccess.READ)
+    def UUID(self) -> 's': return STATUS_UUID
+    @dbus_property(access=PropertyAccess.READ)
+    def Service(self) -> 'o': return SERVICE
+    @dbus_property(access=PropertyAccess.READ)
+    def Flags(self) -> 'as': return ['read', 'encrypt-read']
+    @method()
+    def ReadValue(self, options: 'a{sv}') -> 'ay':
+        device = options.get('device')
+        if device is None: raise DBusError('org.bluez.Error.NotAuthorized', 'device required')
+        self.agent.check(device.value)
+        if device.value not in self.agent.confirmed:
+            raise DBusError('org.bluez.Error.NotAuthorized', 'local numeric confirmation required')
+        if self.gate_file.read_text().strip() != '0':
+            raise DBusError('org.bluez.Error.NotAuthorized', 'physical gate must be open')
+        data = b'{"schema_version":1,"type":"setup","armed":false,"pairing_confirmed":true}'
+        offset = options.get('offset', Variant('q', 0)).value
+        if offset > len(data): raise DBusError('org.bluez.Error.InvalidOffset', 'offset')
+        return data[offset:]
+
 async def setup(args):
     if args.owner.exists(): raise RuntimeError('owner already provisioned; remove owner explicitly to replace')
     if not args.expected_peer: raise RuntimeError('--expected-peer Bluetooth address is required')
@@ -66,7 +92,16 @@ async def setup(args):
     deadline = time.monotonic()+args.setup_seconds
     agent = SetupAgent(args.expected_peer.upper(), deadline)
     path = ROOT+'/agent'; bus.export(path, agent)
-    registered = False
+    registered = gatt_registered = advertised = False
+    gatt = proxy.get_interface('org.bluez.GattManager1')
+    advertising = proxy.get_interface('org.bluez.LEAdvertisingManager1')
+    status_path = SERVICE+'/status'
+    bus.export(SERVICE, GattService())
+    bus.export(status_path, SetupStatus(agent, args.gate_file))
+    tree = {SERVICE: {'org.bluez.GattService1': {'UUID': Variant('s', SERVICE_UUID), 'Primary': Variant('b', True)}},
+            status_path: {'org.bluez.GattCharacteristic1': {'UUID': Variant('s', STATUS_UUID), 'Service': Variant('o', SERVICE), 'Flags': Variant('as', ['read', 'encrypt-read'])}}}
+    bus.export(ROOT, ObjectManager(tree))
+    bus.export(ROOT+'/advertisement', Advertisement(args.name))
     try:
         await agents.call_register_agent(path, 'DisplayYesNo'); registered = True
         await agents.call_request_default_agent(path)
@@ -75,6 +110,8 @@ async def setup(args):
         await properties.call_set('org.bluez.Adapter1', 'DiscoverableTimeout', Variant('u', args.setup_seconds))
         await properties.call_set('org.bluez.Adapter1', 'Pairable', Variant('b', True))
         await properties.call_set('org.bluez.Adapter1', 'Discoverable', Variant('b', True))
+        await gatt.call_register_application(ROOT, {}); gatt_registered = True
+        await advertising.call_register_advertisement(ROOT+'/advertisement', {}); advertised = True
         print('Pair the expected phone now; compare the numeric code locally.', flush=True)
         while time.monotonic() < deadline:
             if args.gate_file.read_text().strip() != '0': raise RuntimeError('gate changed during setup')
@@ -97,9 +134,15 @@ async def setup(args):
             await asyncio.sleep(.25)
         raise RuntimeError('owner setup expired')
     finally:
-        await properties.call_set('org.bluez.Adapter1', 'Pairable', Variant('b', False))
-        await properties.call_set('org.bluez.Adapter1', 'Discoverable', Variant('b', False))
-        if registered: await agents.call_unregister_agent(path)
+        # Attempt every cleanup even if BlueZ lost its bus/adapter mid-setup.
+        for operation in (
+            lambda: properties.call_set('org.bluez.Adapter1', 'Pairable', Variant('b', False)),
+            lambda: properties.call_set('org.bluez.Adapter1', 'Discoverable', Variant('b', False)),
+            lambda: advertising.call_unregister_advertisement(ROOT+'/advertisement') if advertised else asyncio.sleep(0),
+            lambda: gatt.call_unregister_application(ROOT) if gatt_registered else asyncio.sleep(0),
+            lambda: agents.call_unregister_agent(path) if registered else asyncio.sleep(0)):
+            try: await operation()
+            except Exception: pass
         bus.disconnect()
 
 def main():
