@@ -2,6 +2,7 @@
 from copy import deepcopy
 from importlib import import_module, metadata
 import math
+import traceback
 from pathlib import Path
 from typing import Protocol
 
@@ -16,6 +17,21 @@ class BackendError(RuntimeError):
     def __init__(self, port, operation, message):
         self.port, self.operation = port, operation
         super().__init__(f'{operation} on {port or "backend"}: {message}')
+
+def _forget_exception_owners(exc):
+    """Release vendor frames/partial constructor owners before resource transfer."""
+    seen = set()
+    pending = [exc]
+    while pending:
+        current = pending.pop()
+        if id(current) in seen: continue
+        seen.add(id(current))
+        pending.extend(child for child in (current.__cause__, current.__context__) if child is not None)
+        if current.__traceback__ is not None:
+            traceback.clear_frames(current.__traceback__)
+        current.__traceback__ = None
+        current.__cause__ = None
+        current.__context__ = None
 
 class Backend(Protocol):
     def capabilities(self) -> dict: ...
@@ -89,16 +105,25 @@ class _Adapter:
         candidate = normalize_layout(layout)
         if any(a['kind'] == 'unidirectional_esc' and a['inverted'] for a in candidate['actuators']):
             raise BackendError(None, 'configure', 'unidirectional ESC inversion unsupported')
+        self._before_configure()
         self._prepare()
         previous = self._layout
         if previous is not None:
             self._release_for_configure()
         self._layout = candidate
+        failure = None
+        failed_port = None
         try:
             for a in candidate['actuators']:
                 self._open(a)
                 self._write(a, _mapped(a, _safe(a)))
         except Exception as exc:
+            failure, failed_port = str(exc), a['port']
+            _forget_exception_owners(exc)
+        # Exit the handler before retiring resources or opening replacements.
+        # Only diagnostic strings survive; vendor constructor/write frames must
+        # not retain a PWM whose destructor can later disable its replacement.
+        if failure is not None:
             failures = self._safe_all()
             if previous is not None:
                 try:
@@ -109,8 +134,11 @@ class _Adapter:
                         self._write(old, _mapped(old, _safe(old)))
                 except Exception as rollback:
                     failures.append(f'rollback: {rollback}')
+                    _forget_exception_owners(rollback)
                     failures.extend(self._safe_all())
-            raise BackendError(a['port'], 'configure', f'{exc}; safe failures: {failures}') from exc
+            raise BackendError(failed_port, 'configure', f'{failure}; safe failures: {failures}') from None
+
+    def _before_configure(self): pass
 
     def _release_for_configure(self):
         failures = self._safe_all()
@@ -153,8 +181,12 @@ class _Adapter:
                 port = a['port']
                 self._write(a, value)
         except Exception as exc:
-            failures = self._safe_all()
-            raise BackendError(port, 'apply', f'{exc}; safe failures: {failures}') from exc
+            failure = str(exc)
+            _forget_exception_owners(exc)
+        else:
+            return
+        failures = self._safe_all()
+        raise BackendError(port, 'apply', f'{failure}; safe failures: {failures}') from None
 
     def close(self):
         failures = self._safe_all()
@@ -183,6 +215,10 @@ class FusionHatBackend(_Adapter):
         self._motor_factory, self._pwm_factory = motor_factory, pwm_factory
         self._version = library_version
         super().__init__(_capabilities(pwm_ports, 'fusion_hat', library_version or 'unloaded', occupied_resources), gate_reader)
+
+    def _before_configure(self):
+        if self.read_gate():
+            raise BackendError(None, 'configure', 'physical gate must be open before configuring outputs')
 
     def _release_for_configure(self):
         if self.read_gate():

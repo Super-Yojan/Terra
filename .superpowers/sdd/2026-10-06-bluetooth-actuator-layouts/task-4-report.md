@@ -37,3 +37,15 @@ interlock remains required. Unidirectional inversion is explicitly unsupported
 
 Ordinary close retains safe ESC output objects; process exit and object destruction
 can disable pulses, so continuity cannot be guaranteed after service termination.
+
+## Review fixes after a969438
+
+Initial and repeated real configuration now check gate open before output construction.
+Configure captures only failure text/port, recursively clears vendor exception
+traceback frames and exception chains, and exits the exception handler before
+closing candidate resources and constructing rollback replacements. Clearing frames
+retires inaccessible partially-constructed vendor PWM owners before replacements
+can exist. Explicitly closed known output owners are released before reopening.
+Rollback errors are likewise sanitized; final configure BackendError has no vendor
+exception cause. Source-read review traced write and constructor failure ownership,
+retirement before rollback, and initial gate ordering. No execution checks performed.
