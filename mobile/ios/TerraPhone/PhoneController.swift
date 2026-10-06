@@ -28,7 +28,12 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, @unc
     @Published private(set) var waypointStatus = "No goal"
     @Published private(set) var waypointDistance = 0.0
     private var zenoh: MobileZenohClient?
-    private var follower: MobileWaypoint?
+    @Published private(set) var autonomyLevel="teleop"
+    @Published private(set) var autonomyReason="Idle"
+    @Published var runLog:URL?
+    @Published private(set) var proposedGoal:UInt64?
+    private var proposalRun=""
+    @Published private(set) var proposalText=""
     private var goalLatched = false
     private var remotePose: (x: Double, y: Double, yaw: Double)?
     private var phonePose: (x: Double, y: Double, yaw: Double)?
@@ -72,10 +77,12 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, @unc
                 return
             }
             do {
-                if self.follower == nil { self.follower = try MobileWaypoint(settings: defaultWaypointSettings()) }
-                try self.follower?.setOrigin(latitude: originLatitude, longitude: originLongitude)
-                let accepted = try self.follower?.setGoal(latitude: latitude, longitude: longitude, yaw: nil, token: token.isEmpty ? nil : token, halfExtent: halfExtent) ?? false
-                if !accepted { try self.follower?.cancel() }
+                let now=self.mode == .simulation ? self.simulatedTime:CACurrentMediaTime()
+                try self.controller?.autonomyOrigin(latitude:originLatitude,longitude:originLongitude)
+                let values:[String:Any]=["frame":"wgs84","latitude":latitude,"longitude":longitude,"token":token.isEmpty ? UUID().uuidString:token]
+                let payload=String(decoding:try JSONSerialization.data(withJSONObject:values),as:UTF8.self)
+                if self.mode == .remote {try self.zenoh?.sendAction(kind:"goal",payload:payload)}else{try self.controller?.autonomyRequest(kind:"goal",payload:payload,timestamp:now)}
+                let accepted=true
                 self.goalLatched = accepted
                 DispatchQueue.main.async {
                     self.waypointActive = accepted
@@ -90,7 +97,8 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, @unc
     }
     func cancelWaypoint() {
         controlQueue.async {
-            try? self.follower?.cancel()
+            let now=self.mode == .simulation ? self.simulatedTime:CACurrentMediaTime()
+            if self.mode == .remote {try? self.zenoh?.sendAction(kind:"goal",payload:"{\"cancel\":true}")}else{try? self.controller?.autonomyRequest(kind:"goal",payload:"{\"cancel\":true}",timestamp:now)}
             self.goalLatched = false
             DispatchQueue.main.async {
                 self.waypointActive = false
@@ -174,7 +182,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, @unc
             self.timer?.cancel(); self.timer = nil
             self.mode = .stopped
             self.zenoh?.disconnect(); self.zenoh = nil
-            try? self.follower?.cancel(); self.follower = nil; self.goalLatched = false
+            self.goalLatched = false
             self.remotePose = nil; self.phonePose = nil
             try? self.controller?.reset()
             self.controller = nil
@@ -200,6 +208,9 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, @unc
     }
     private func prepare(_ mode: Mode) throws {
         self.controller = try MobileController(settings: defaultControlSettings())
+                let log=FileManager.default.urls(for:.documentDirectory,in:.userDomainMask)[0].appendingPathComponent("Terra-run-\(UUID().uuidString).jsonl")
+                try self.controller?.beginRecording(path:log.path,runId:UUID().uuidString)
+                DispatchQueue.main.async {self.runLog=log}
         self.occupancyMap = try MobileOccupancyMap(settings: defaultOccupancySettings())
         simulatedPosition = .zero; mapGroundOffset = nil; lastMapTime = -Double.infinity
         DispatchQueue.main.async { self.occupancy = nil; self.mapPose = .zero; self.mapStatus = mode == .simulation ? "Simulated depth · 10 Hz" : (ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) ? "Waiting for scene depth" : "Scene depth unavailable on this device") }
@@ -221,10 +232,10 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, @unc
                     remotePose = (frame.bodyX, frame.bodyY, frame.bodyYaw)
                     self.integrateRemoteDepth(frame)
                 }
-                let command = try waypointCommand(x: remotePose?.x, y: remotePose?.y, yaw: remotePose?.yaw)
+                let command = target
                 try zenoh.setTarget(linear: command.forward, angular: command.yaw)
                 tick += 1
-                if tick % 10 == 0 { let status = zenoh.status(); DispatchQueue.main.async { self.zenohStatus = status } }
+                if tick % 10 == 0 { updateAuthority();let status = zenoh.status(); DispatchQueue.main.async { self.zenohStatus = status } }
             } catch { fail(error) }
             return
         }
@@ -237,11 +248,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, @unc
                     try controller.pushVio(sample: VioReading(timestamp: now, positionX: simulatedPosition.x, positionY: simulatedPosition.y, positionZ: 0, quaternionX: 0, quaternionY: 0, quaternionZ: sin(simulatedYaw / 2), quaternionW: cos(simulatedYaw / 2), velocityX: simulatedForward * cos(simulatedYaw), velocityY: simulatedForward * sin(simulatedYaw), velocityZ: 0, tracked: true))
                 }
             }
-            let command = try waypointCommand(
-                x: mode == .simulation ? simulatedPosition.x : phonePose?.x,
-                y: mode == .simulation ? simulatedPosition.y : phonePose?.y,
-                yaw: mode == .simulation ? simulatedYaw : phonePose?.yaw)
-            try controller.setTarget(target: TwistSetpoint(timestamp: now, forward: command.forward, yawRate: command.yaw))
+            try controller.setTarget(target: TwistSetpoint(timestamp:now,forward:target.forward,yawRate:target.yaw))
             let output = try controller.step(timestamp: now)
             if mode == .simulation {
                 simulatedAcceleration = 3 * (output.leftEffort + output.rightEffort) / 2 - simulatedForward
@@ -253,7 +260,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, @unc
                 simulatedTime += 0.01
             }
             tick += 1
-            if tick % 10 == 0 { publish(output) }
+            if tick % 10 == 0 { publish(output);updateAuthority() }
         } catch { fail(error) }
     }
     func session(_ session: ARSession, didUpdate frame: ARFrame) {
@@ -295,6 +302,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, @unc
     }
     private func publishMap(x: Double, y: Double, yaw: Double, status: String) throws {
         guard let grid = try occupancyMap?.snapshot() else { return }
+        if mode != .remote {try controller?.autonomyMap(grid:grid,timestamp:lastMapTime.isFinite ? lastMapTime:simulatedTime,revision:UInt64(tick))}
         DispatchQueue.main.async { self.occupancy = grid; self.mapPose = SIMD3(x, y, yaw); self.mapStatus = status }
     }
     private func updateSimulatedMap(timestamp: Double) throws {
@@ -373,28 +381,32 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, @unc
     }
     func session(_ session: ARSession, didFailWithError error: Error) { fail(error) }
     func sessionWasInterrupted(_ session: ARSession) { fail(NSError(domain: "Terra", code: 1, userInfo: [NSLocalizedDescriptionKey: "AR session interrupted"])) }
-    private func waypointCommand(x: Double?, y: Double?, yaw: Double?) throws -> (forward: Double, yaw: Double) {
-        guard goalLatched, let follower, let x, let y, let yaw else {
-            return goalLatched ? (0, 0) : target
+    func setAutonomy(_ level:String) {
+        controlQueue.async {
+            self.target=(0,0)
+            do {let payload=String(decoding:try JSONSerialization.data(withJSONObject:["level":level,"token":UUID().uuidString]),as:UTF8.self)
+                if self.mode == .remote {try self.zenoh?.sendAction(kind:"autonomy",payload:payload)}else{try self.controller?.autonomyRequest(kind:"autonomy",payload:payload,timestamp:self.mode == .simulation ? self.simulatedTime:CACurrentMediaTime())}
+            }catch{DispatchQueue.main.async{self.autonomyReason=error.localizedDescription}}
         }
-        let step = try follower.step(x: x, y: y, yaw: yaw)
-        if tick % 10 == 0 {
-            let distance = step.distance
-            let phase = step.phase
-            DispatchQueue.main.async {
-                self.waypointActive = true
-                self.waypointDistance = distance
-                switch phase {
-                case .active: self.waypointStatus = String(format: "Driving · %.1f m remaining", distance)
-                case .arrived: self.waypointStatus = String(format: "Arrived · %.2f m", distance)
-                case .idle: self.waypointStatus = "No goal"
-                }
-            }
-        }
-        switch step.phase {
-        case .active: return (step.forward, step.yawRate)
-        case .arrived, .idle: return (0, 0)
-        }
+    }
+    func emergencyStop(reset:Bool=false) {
+        controlQueue.async {self.target=(0,0);let payload="{\"action\":\"\(reset ? "reset":"stop")\",\"token\":\"\(UUID().uuidString)\"}";if self.mode == .remote {try? self.zenoh?.sendAction(kind:"safety",payload:payload)}else{try? self.controller?.autonomyRequest(kind:"safety",payload:payload,timestamp:self.mode == .simulation ? self.simulatedTime:CACurrentMediaTime())}}
+    }
+    func exportRun() {
+        controlQueue.async {do {try self.controller?.endRecording()}catch{DispatchQueue.main.async{self.autonomyReason=error.localizedDescription}}}
+    }
+    func decideProposal(_ id:UInt64,approve:Bool) {
+        let run=proposalRun
+        controlQueue.async {do {let payload=String(decoding:try JSONSerialization.data(withJSONObject:["run_id":run,"proposal_id":id,"decision":approve ? "approve":"reject","token":UUID().uuidString]),as:UTF8.self);if self.mode == .remote{try self.zenoh?.sendAction(kind:"goal/decision",payload:payload)}else{try self.controller?.autonomyRequest(kind:"goal/decision",payload:payload,timestamp:self.mode == .simulation ? self.simulatedTime:CACurrentMediaTime())}}catch{DispatchQueue.main.async{self.autonomyReason=error.localizedDescription}}}
+    }
+    private func updateAuthority() {
+        let raw=mode == .remote ? zenoh?.autonomyStatus():controller?.autonomyStatus()
+        guard let raw,let data=raw.data(using:.utf8),let object=(try? JSONSerialization.jsonObject(with:data)) as? [String:Any] else{return}
+        let status=(object["status"] as? [String:Any]) ?? object
+        let level=status["requested_level"] as? String ?? "teleop", reason=status["reason"] as? String ?? "Unknown"
+        let goal=object["goal"] as? [String:Any]
+        let proposal=object["proposal"] as? [String:Any]
+        DispatchQueue.main.async {self.autonomyLevel=level;self.autonomyReason=reason;self.proposalRun=proposal?["run_id"] as? String ?? "";self.proposedGoal=(proposal?["proposal_id"] as? NSNumber)?.uint64Value;self.proposalText=proposal.map{String(format:"Search target %.1f, %.1f m",$0["x"] as? Double ?? 0,$0["y"] as? Double ?? 0)} ?? "";if let goal{self.waypointActive=(goal["state"] as? String)=="active";self.waypointDistance=goal["distance"] as? Double ?? 0;self.waypointStatus=goal["state"] as? String ?? "Unknown"}}
     }
     private func publish(_ output: ControlOutput) {
         DispatchQueue.main.async {
@@ -413,7 +425,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, @unc
     private func fail(_ error: Error) {
         mode = .stopped; timer?.cancel(); timer = nil; try? controller?.reset()
         zenoh?.disconnect(); zenoh = nil
-        try? follower?.cancel(); follower = nil; goalLatched = false
+        goalLatched = false
         remotePose = nil; phonePose = nil
         DispatchQueue.main.async {
             self.waypointActive = false; self.waypointDistance = 0; self.waypointStatus = "No goal"

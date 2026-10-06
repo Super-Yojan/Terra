@@ -1,5 +1,7 @@
 # Phone velocity controller
 
+See the [mission-autonomy guide](autonomy/README.md) for four shared-core levels, explicit waypoint authority, safety controls, and experiment logs.
+
 The reusable pipeline is IMU + VIO → estimated body velocity → velocity controller → signed left/right motor effort. Both efforts are normalized to [-1, 1]; positive effort drives forward. The `terra-motors` adapter maps magnitude to PWM duty and sign to direction, after a hardware enable gate and an independent command watchdog. It does not toggle GPIO itself. The iOS app displays effort only. This project does not implement an iOS Zenoh transport.
 
 ## Build and run

@@ -2016,11 +2016,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "terra-autonomy"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "terra-mapping",
+ "terra-navigation",
+ "terra-waypoint",
+]
+
+[[package]]
 name = "terra-control"
 version = "0.1.0"
 dependencies = [
  "terra-state",
  "terra-types",
+]
+
+[[package]]
+name = "terra-experiment"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "terra-mapping",
 ]
 
 [[package]]
@@ -2034,8 +2054,12 @@ dependencies = [
 name = "terra-mobile"
 version = "0.1.0"
 dependencies = [
+ "serde_json",
+ "terra-autonomy",
  "terra-control",
+ "terra-experiment",
  "terra-mapping",
+ "terra-navigation",
  "terra-state",
  "terra-transport",
  "terra-types",
@@ -2049,6 +2073,15 @@ name = "terra-motors"
 version = "0.1.0"
 dependencies = [
  "terra-types",
+]
+
+[[package]]
+name = "terra-navigation"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "terra-mapping",
 ]
 
 [[package]]

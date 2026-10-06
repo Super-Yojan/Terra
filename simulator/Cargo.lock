@@ -6325,8 +6325,11 @@ dependencies = [
  "fastrand",
  "serde",
  "serde_json",
+ "terra-autonomy",
  "terra-control",
+ "terra-experiment",
  "terra-mapping",
+ "terra-navigation",
  "terra-state",
  "terra-transport",
  "terra-types",
@@ -6642,6 +6645,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "terra-autonomy"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "terra-mapping",
+ "terra-navigation",
+ "terra-waypoint",
+]
+
+[[package]]
 name = "terra-control"
 version = "0.1.0"
 dependencies = [
@@ -6650,10 +6664,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "terra-experiment"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "terra-mapping",
+]
+
+[[package]]
 name = "terra-mapping"
 version = "0.1.0"
 dependencies = [
  "terra-types",
+]
+
+[[package]]
+name = "terra-navigation"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "terra-mapping",
 ]
 
 [[package]]

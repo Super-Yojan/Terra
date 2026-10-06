@@ -104,6 +104,16 @@ impl WorldConfig {
                 .map_err(|_| "TERRA_WORLD_SIZE must be a number of metres".to_owned())?;
         }
         config.tiles = crate::geo::GeoTileConfig::from_env()?;
+        if std::env::var("TERRA_MISSION").as_deref() == Ok("1") {
+            config.tiles.enabled = false;
+            config.landscape.enabled = false;
+            config.size = 100.;
+        }
+        if let Ok(seed) = std::env::var("TERRA_MISSION_SEED") {
+            config.landscape.seed = seed
+                .parse()
+                .map_err(|_| "invalid mission seed".to_owned())?;
+        }
         config.validate().map_err(str::to_owned)?;
         Ok(config)
     }

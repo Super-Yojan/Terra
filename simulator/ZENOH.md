@@ -1,5 +1,7 @@
 # Terra fleet, camera frames, and Zenoh control
 
+See the [mission-autonomy guide](../docs/autonomy/README.md) for four shared-core levels, explicit waypoint authority, safety controls, and experiment logs.
+
 The simulator starts one rover by default. Choose an initial count from 0 through
 32 with `TERRA_ROVER_COUNT`:
 

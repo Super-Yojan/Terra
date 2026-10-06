@@ -63,6 +63,16 @@ struct ContentView: View {
                     Button("Clear map") { brain.clearMap() }
                     Text("Phone mapping uses scene depth when available. Initial camera height is assumed 0.5 m above flat ground; calibrate before using the map for navigation. Bevy Zenoh mode uses the simulator’s exposure-aligned camera pose instead, with ground at robotics Z = 0.").font(.footnote).foregroundStyle(.secondary)
                 }
+                Section("Mission autonomy") {
+                    Picker("Requested level",selection:Binding(get:{brain.autonomyLevel},set:{brain.setAutonomy($0)})) {Text("Teleop").tag("teleop");Text("Assisted teleop").tag("assisted_teleop");Text("Waypoint").tag("waypoint");Text("Supervised search").tag("supervised")}
+                    Text(brain.autonomyReason)
+                    if let proposal=brain.proposedGoal {Text(brain.proposalText);HStack {Button("Approve search target") {brain.decideProposal(proposal,approve:true)};Button("Reject") {brain.decideProposal(proposal,approve:false)}}}
+                    Button("Take over") {forward=0;yaw=0;brain.setAutonomy("teleop")}
+                    Button("Emergency stop",role:.destructive) {forward=0;yaw=0;brain.emergencyStop()}
+                    Button("Reset stop") {brain.emergencyStop(reset:true)}
+                    Button("Finish run log") {brain.exportRun()}
+                    if let log=brain.runLog {ShareLink("Share run log",item:log)}
+                }
                 Section("Waypoint") {
                     TextField("Origin latitude", text: $originLat).keyboardType(.numbersAndPunctuation)
                         .accessibilityLabel("Origin latitude")
@@ -96,7 +106,7 @@ struct ContentView: View {
                     if !entryNote.isEmpty {
                         Text(entryNote).font(.footnote).foregroundStyle(.red)
                     }
-                    Text("Tap the map to drop the goal. On that grid +X is north and +Y is west, the same frame as the blue rover marker. Go latches the coordinate on this phone. Connect to Bevy first: the phone sends the twist as cmd_vel and does not publish a Zenoh goal. A goal already latched in the simulator ignores these twists until it is cancelled.")
+                    Text("Tap the map to drop the goal. On that grid +X is north and +Y is west, the same frame as the blue rover marker. Select Waypoint autonomy before sending a goal. The shared Rust runtime selects motion locally; remote goals are sent to the simulator-owned arbiter.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 Section("Velocity target") {

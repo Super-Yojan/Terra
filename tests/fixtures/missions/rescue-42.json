@@ -1,0 +1,1 @@
+{"schema_version":1,"scenario":"disaster_search","seed":42,"world_size_metres":100,"time_budget_seconds":600,"detection_range_metres":5,"return_radius_metres":2,"objectives":["observe survivors through free occupancy rays","confirm reports","return observing rovers to base"],"ground_truth_visibility":"simulator_only"}

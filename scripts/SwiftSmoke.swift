@@ -47,6 +47,34 @@ struct SwiftSmoke {
             precondition(remote.status() == "Disconnected")
             print("Swift → UniFFI → Zenoh network path passed")
         }
+        let authority = try MobileController(settings: defaultControlSettings())
+        func feed(_ t:Double) throws {
+            try authority.pushImu(sample:ImuReading(timestamp:t,accelerationForward:0,accelerationLeft:0,accelerationUp:0,gyroRoll:0,gyroPitch:0,gyroYaw:0))
+            try authority.pushVio(sample:VioReading(timestamp:t,positionX:0,positionY:0,positionZ:0,quaternionX:0,quaternionY:0,quaternionZ:0,quaternionW:1,velocityX:0,velocityY:0,velocityZ:0,tracked:true))
+            var cells=Array(repeating:Int8(-1),count:1600)
+            for y in 12..<28 {for x in 12..<28 {cells[y*40+x]=0}}
+            try authority.autonomyMap(grid:OccupancyGrid(width:40,height:40,resolution:0.25,originX:-5,originY:-5,occupancy:cells),timestamp:t,revision:UInt64(t*10))
+        }
+        for (index,level) in ["teleop","assisted_teleop","waypoint","supervised"].enumerated() {
+            let t=Double(index)*0.1
+            try feed(t)
+            try authority.autonomyRequest(kind:"autonomy",payload:"{\"level\":\"\(level)\",\"token\":\"mode-\(index)\"}",timestamp:t)
+            if index<2 {try authority.setTarget(target:TwistSetpoint(timestamp:t,forward:1,yawRate:0))}
+            if index==2 {try authority.autonomyRequest(kind:"goal",payload:"{\"frame\":\"local\",\"x\":1.5,\"y\":0,\"token\":\"goal\"}",timestamp:t)}
+            _=try authority.step(timestamp:t)
+            let state=try JSONSerialization.jsonObject(with:Data(authority.autonomyStatus().utf8)) as! [String:Any]
+            precondition((state["status"] as! [String:Any])["requested_level"] as! String==level)
+            if index==3 {
+                let proposal=state["proposal"] as! [String:Any]
+                let decision:[String:Any]=["decision":"approve","proposal_id":proposal["proposal_id"]!,"run_id":proposal["run_id"]!,"token":"approve"]
+                try authority.autonomyRequest(kind:"goal/decision",payload:String(decoding:try JSONSerialization.data(withJSONObject:decision),as:UTF8.self),timestamp:t+0.01)
+                _=try authority.step(timestamp:t+0.01)
+            }
+        }
+        try authority.autonomyRequest(kind:"safety",payload:"{\"action\":\"stop\",\"token\":\"stop\"}",timestamp:0.4)
+        let stopped=try authority.step(timestamp:0.4)
+        precondition(stopped.leftEffort==0 && stopped.rightEffort==0)
+        print("Four shared autonomy levels and stop passed through Swift bindings")
         let report = try runVelocityBenchmark()
         precondition(report.passed)
         print(String(format: "Swift → UniFFI → Rust passed: v=%.3f m/s, yaw=%.3f rad/s", report.finalForward, report.finalYawRate))
