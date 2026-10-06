@@ -1,10 +1,24 @@
 # Terra
 
+Configurable Bluetooth actuator control is implemented for TerraPhone and a
+standalone Raspberry Pi peripheral. See [Bluetooth setup and protocol](docs/hardware/BLUETOOTH.md),
+[Fusion HAT resource requirements](docs/hardware/FUSION_HAT.md), and
+[mobile hardware controls](docs/MOBILE_CONTROL.md#bluetooth-actuator-control).
+This branch is implementation-only: no tests, builds, binding generation, radio
+sessions, or physical commissioning were performed. [Evidence status](docs/hardware/evidence/README.md)
+records the limits; the [optional future bench procedure](docs/hardware/BENCH.md)
+requires separate authorization. Timing targets and physical compatibility remain
+unverified. Commands elsewhere in this README are future developer instructions,
+not records of execution for this feature.
+
 See the [mission-autonomy guide](docs/autonomy/README.md) for four shared-core levels, explicit waypoint authority, safety controls, and experiment logs.
 
 Terra combines a Bevy/Avian rover simulator with reusable Rust robotics modules and an iOS controller app.
 
 - `terra-types`: sensor samples, coordinate conventions, commands and motor outputs.
+- `terra-actuators`: configurable actuator layouts, routing, and Bluetooth framing;
+  [editable examples](crates/terra-actuators/presets/) require capability validation
+  and explicit port selection for the ESC/servo templates.
 - `terra-state`: VIO velocity anchors with bounded IMU prediction.
 - `terra-control`: differential-drive velocity PI control, feedforward, anti-windup and freshness checks.
 - `terra-waypoint`: lat/lon go-to-waypoint follower. The phone imports it through `terra-mobile` as `MobileWaypoint`. TerraPhone's Waypoint section selects the goal and runs that follower.

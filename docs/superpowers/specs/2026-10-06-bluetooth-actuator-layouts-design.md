@@ -6,7 +6,20 @@ TerraPhone controls a user-designed Terra chassis over BLE without Bevy. The pho
 
 Support configurable DC motor, ESC, and positional servo outputs in the first version. terra-mini uses motor ports; NEXT uses ESCs on servo pins. Neither preset defines Terra's required geometry. TurboPi, cameras over BLE, general sensor peripherals, and a new arbitrary-geometry autonomy controller are outside this version.
 
-Status: architecture approved in conversation; this detailed spec awaits review. Implementation must validate the installed Fusion HAT library and board capabilities before claiming physical compatibility.
+Status: Tasks 1–8 implemented and independently reviewed by source; Task 9 is
+documentation-only. The user explicitly prohibited tests, builds, check scripts,
+binding generation, screenshots and hardware checks. The architecture below
+describes intended behavior; compilation, runtime safety/timing, radio behavior and
+physical compatibility remain unverified. Acceptance criteria are not proven.
+Historical test/bench requirements describe a future separately authorized phase.
+
+Execution rulings: vendor source/API support targets `fusion_hat` 1.14.0; PWM
+connectors must be explicitly supplied. Real configuration requires confirmed open
+physical gate, exposed as `hardware_gate_open_confirmed`. Unknown gate input never
+counts as open. Requests use numeric u32 IDs; commit identifies both exact staged
+request and revision. Provisioning exports only encrypted read-only status, then
+normal service requires explicit restart/reconnect and owner admission. See
+[deployment protocol](../../hardware/BLUETOOTH.md) and [evidence](../../hardware/evidence/README.md).
 
 ## Components and ownership
 

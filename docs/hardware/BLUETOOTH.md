@@ -1,5 +1,29 @@
 # Terra Bluetooth actuator peripheral
 
+These are future deployment instructions, not execution evidence. No installation,
+radio session or hardware procedure was performed for this implementation.
+
+From the repository root, create a deployment virtual environment and install the
+local package (paths require suitable deployment permissions):
+
+```sh
+python3 -m venv /opt/terra/venv
+/opt/terra/venv/bin/python -m pip install ./hardware/raspberry-pi
+```
+
+`fusion_hat` is deliberately absent from package dependencies: install the exact
+reviewed 1.14.0 vendor release separately for real hardware. Mock mode requires no
+vendor package but still uses BlueZ, D-Bus and a Linux radio. Use the virtual
+environment interpreter for the CLI examples below. Before first setup, create
+the private owner directory and run provisioning as the normal service account
+with its BlueZ permissions; setup does not create that directory.
+
+The [service unit](../../packaging/terra-rover.service) uses that interpreter,
+defaults to no exposed PWM ports, and restarts on failure. Adapt its installation
+paths, gate source and `--pwm-ports` list to confirmed connectors. Its writable
+state directory is separate from the gate producer. Stop it before any standalone
+CLI invocation; two processes must not own the same hardware or GATT application.
+
 Linux BlueZ and Python 3.10+ are required. Install the `hardware/raspberry-pi` package in a virtual environment (dependency dbus-next 0.2.3); real hardware additionally requires deployment-approved `fusion_hat` 1.14.0. Enable bluetooth.service. Provision a terra-rover system user with I2C access, a private mode-0700 `/var/lib/terra-rover`, and BlueZ system-bus permission to register GATT/advertisements and set adapter properties. Install packaging/terra-rover.service after adapting `/opt/terra` to your installation. BlueZ system-bus policy varies by distribution; grant these actions only to the service account.
 
 The independent physical gate producer writes ASCII `0` for confirmed isolated/open and `1` for closed. Other tokens/read failures forbid motion and configuration. The gate file must be protected from the service/phone and refreshed by supervised hardware input; a stale file is not detected by this adapter. Prefer a directly injected GPIO gate reader for production. Gate closure never arms. Outputs must be independently isolated before service termination: process exit cannot guarantee continuous ESC stop PWM.
@@ -21,6 +45,30 @@ python3 -m terra_rover --mock --name 'Terra Rover' --config /var/lib/terra-rover
 Mock gate defaults open; --mock-gate-closed explicitly enables its simulated interlock. Real hardware requires --gate-file and defaults to M0–M3 capabilities. Supply --pwm-ports only for physically confirmed exposed P0–P11 ports. Timer/resource conflicts are validated before activation. Persisted layout load fails closed and advertises faults if gate is closed/unavailable; reconnect never restores arming.
 
 ## Swift/CoreBluetooth integration
+
+Periodic status also includes `hardware_gate_open_confirmed`: true only after the
+strict backend query confirms open. The phone requires this field for mutations;
+the server repeats its own gate/disarmed validation. `hardware_gate=false` alone
+does not distinguish open from unavailable input. Phone-side manual control routes
+fresh normalized effort and individual servo positions; feedback mode requires a
+compatible left/right propulsion layout and healthy sensors. See
+[mobile controls](../MOBILE_CONTROL.md#bluetooth-actuator-control).
+
+The [terra-mini](../../crates/terra-actuators/presets/terra-mini.json),
+[ESC](../../crates/terra-actuators/presets/esc-template.json) and
+[mixed servo](../../crates/terra-actuators/presets/mixed-servo-template.json)
+examples are drafts. `SELECT_*_PWM_PORT` markers intentionally make the JSON
+templates invalid until capability ports are selected. Replace them and the base
+revision before staging. Resource validation rejects direct aliases and shared
+timer frequency conflicts; advertising a PWM port does not establish its wiring
+or ESC calibration. See [resource map](FUSION_HAT.md).
+
+Configuration reply envelopes contain exactly the fields listed below and no
+`operation` field. Correlate by numeric `request_id` and the original request's
+operation. TerraPhone reserves initial synchronization IDs 1 and 2; external
+requests should use fresh IDs elsewhere (for example 1000 onward). After commit,
+refresh capabilities/layout with new IDs; ATT acknowledgement alone is neither
+commit success nor command acceptance.
 
 Every UUID ends `-4c2b-4f91-9e3a-1d8c6b2a0f10`:
 

@@ -34,12 +34,16 @@ other hardware clients; deployment must also prevent external timer reconfigurat
 Provide an independent physical `gate_reader` returning exact bool True only when
 closed. Missing reader, read exception, non-bool result, or closed adapter returns
 False. `file_gate_reader(path)` reads an independently maintained ASCII input file;
-only trimmed `1` means closed. The GPIO/interface producer must actively report
+trimmed `0` means confirmed open, trimmed `1` means closed, and every other token
+raises an input error. Motion permission treats errors as unavailable; configuration
+requires `require_gate_open()` to succeed and never equates unavailable with open.
+Status exposes this distinction as `hardware_gate_open_confirmed`.
+The GPIO/interface producer must actively report
 current input, including failure/open states. A stale file is unsafe: supervision
 and electrical fail-open wiring belong to deployment. Gate is separate from BLE
 and must not be a simulated software enable in hardware mode.
 
-Service CLI should expose explicit PWM port list and gate input path and construct
+The service CLI exposes `--pwm-ports` and `--gate-file` and constructs
 FusionHatBackend(pwm_ports=..., gate_reader=file_gate_reader(...)). Layout changes require disarmed service state and physical gate open. Reconfigure
 safes and explicitly closes old PWM resources before opening new owners; rollback
 reopens the previous layout at safe outputs after failure. Service owns disarmed enforcement.
@@ -63,3 +67,4 @@ verification or calibration certification.
 
 Ordinary close retains safe ESC output objects; process exit and object destruction
 can disable pulses, so continuity cannot be guaranteed after service termination.
+See [optional future bench procedure](BENCH.md) and [implementation evidence](evidence/README.md).

@@ -2,7 +2,11 @@
 
 See the [mission-autonomy guide](autonomy/README.md) for four shared-core levels, explicit waypoint authority, safety controls, and experiment logs.
 
-The reusable pipeline is IMU + VIO → estimated body velocity → velocity controller → signed left/right motor effort. Both efforts are normalized to [-1, 1]; positive effort drives forward. The `terra-motors` adapter maps magnitude to PWM duty and sign to direction, after a hardware enable gate and an independent command watchdog. It does not toggle GPIO itself. The iOS app displays effort only. This project does not implement an iOS Zenoh transport.
+The reusable pipeline is IMU + VIO → estimated body velocity → velocity controller → signed left/right motor effort. Both efforts are normalized to [-1, 1]; positive effort drives forward. The `terra-motors` adapter maps magnitude to PWM duty and sign to direction, after a hardware enable gate and an independent command watchdog. It does not toggle GPIO itself. TerraPhone also implements Zenoh simulator control and Bluetooth actuator commands; the Pi backend owns physical output writes.
+
+Build and verification commands below describe future developer workflows. The
+Bluetooth implementation has no execution evidence: none of these commands were
+run for this feature. See [evidence status](hardware/evidence/README.md).
 
 ## Build and run
 
@@ -129,6 +133,8 @@ cargo test --manifest-path simulator/Cargo.toml mobile_adapter_drives_avian -- -
 
 The Swift test exercises Swift → UniFFI → Rust → Zenoh against a real Python peer, checking the selected topic, payload, lease expiry and final zero. It also publishes one posed depth packet and checks that Swift integrates it into an occupied cell. `depth_packet_pose_round_trips_into_the_phone_decoder` checks that a simulator depth packet decodes to the same robotics pose the in-sim map uses, then occupies the expected cell. The ignored transport test checks that the phone client consumes each posed depth sequence once. The Bevy integration test uses the same transport to move an Avian rover and verifies stopping on disconnect. Physical iPhone networking has not been tested on a device. Seeing the grid in Simulator still requires the Bevy app to be running so the GPU depth camera can publish frames.
 
+## Bluetooth actuator control
+
 Bluetooth actuator hardware is configured through **Discover, configure and arm
 rover**. Scan, select the stable peripheral identifier/name, and connect explicitly.
 Bonded owner access, periodic status, capabilities and the active layout must all
@@ -141,6 +147,15 @@ rover's capabilities. Configure routing, inversion, command limits, DC power,
 ESC stop/neutral/end pulses and arming duration, or servo min/center/max pulses and
 safe position/disabled PWM. Presets are editable drafts and require explicit port
 selection. Disabled-safe servos start controls at center bounded by their limits.
+
+The repository [terra-mini](../crates/terra-actuators/presets/terra-mini.json),
+[ESC template](../crates/terra-actuators/presets/esc-template.json), and
+[mixed servo template](../crates/terra-actuators/presets/mixed-servo-template.json)
+are editable examples. The JSON templates intentionally contain `SELECT_*_PWM_PORT`
+selection markers and are invalid layouts until each is replaced with an exposed,
+nonconflicting capability port. The mobile presets present capability-driven port
+selection. Set the draft revision to the connected rover's active revision;
+example pulse values are not calibration approval for a particular actuator.
 
 Open the independent hardware cutoff and disarm before configuration. **Validate
 and stage draft** reports validation or rover rejection; **Commit acknowledged
