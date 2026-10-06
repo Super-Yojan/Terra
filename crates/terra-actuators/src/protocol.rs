@@ -104,7 +104,7 @@ pub struct EmptyPayload {}
 pub struct StagePayload { pub layout: Layout }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct CommitPayload { pub staged_revision: u32 }
+pub struct CommitPayload { pub staged_revision: u32, pub staged_request_id: u32 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "operation", content = "payload", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ControlOperation { Capabilities(EmptyPayload), ReadLayout(EmptyPayload), StageLayout(StagePayload), CommitLayout(CommitPayload), ResetFault(EmptyPayload), ResetEmergencyStop(EmptyPayload) }

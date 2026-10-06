@@ -191,11 +191,14 @@ def decode_control(data: bytes) -> dict:
         raise ProtocolError("unsupported control schema")
     _uint(envelope['request_id'], 32)
     operation, payload = envelope['operation'], envelope['payload']
+    if type(operation) is not str:
+        raise ProtocolError("operation must be string")
     if operation in ('capabilities', 'read_layout', 'reset_fault', 'reset_emergency_stop'):
         _keys(payload, ())
     elif operation == 'commit_layout':
-        _keys(payload, ('staged_revision',))
+        _keys(payload, ('staged_revision', 'staged_request_id'))
         _uint(payload['staged_revision'], 32)
+        _uint(payload['staged_request_id'], 32)
     elif operation == 'stage_layout':
         _keys(payload, ('layout',))
         _validate_layout_shape(payload['layout'])
@@ -217,26 +220,33 @@ def _validate_layout_shape(layout):
     for entry in layout['actuators']:
         _keys(entry, ('id', 'name', 'port', 'kind', 'inverted', 'limits', 'calibration', 'route', 'safe'))
         _uint(entry['id'], 8)
-        if type(entry['name']) is not str or type(entry['port']) is not str or type(entry['inverted']) is not bool or entry['kind'] not in calibration_fields:
+        if type(entry['name']) is not str or type(entry['port']) is not str or type(entry['inverted']) is not bool or type(entry['kind']) is not str or entry['kind'] not in calibration_fields:
             raise ProtocolError("invalid actuator fields")
         _keys(entry['limits'], ('min', 'max'))
         for value in entry['limits'].values(): _number(value)
         calibration = entry['calibration']; kind = calibration.get('type') if isinstance(calibration, dict) else None
-        if kind not in calibration_fields: raise ProtocolError("unknown calibration")
+        if type(kind) is not str or kind not in calibration_fields: raise ProtocolError("unknown calibration")
         _keys(calibration, ('type', *calibration_fields[kind]))
         for key in calibration_fields[kind]:
             _number(calibration[key]) if key == 'max_power_fraction' else _uint(calibration[key], 32)
         route = entry['route']; route_type = route.get('type') if isinstance(route, dict) else None
-        if route_type not in ('left_effort', 'right_effort', 'manual', 'servo'): raise ProtocolError("unknown route")
+        if type(route_type) is not str or route_type not in ('left_effort', 'right_effort', 'manual', 'servo'): raise ProtocolError("unknown route")
         _keys(route, ('type', 'forward_coefficient', 'turn_coefficient') if route_type == 'manual' else ('type',))
         if route_type == 'manual': _number(route['forward_coefficient']); _number(route['turn_coefficient'])
         safe = entry['safe']; safe_type = safe.get('type') if isinstance(safe, dict) else None
-        if safe_type not in ('zero', 'position', 'disabled'): raise ProtocolError("unknown safe output")
+        if type(safe_type) is not str or safe_type not in ('zero', 'position', 'disabled'): raise ProtocolError("unknown safe output")
         _keys(safe, ('type', 'value') if safe_type == 'position' else ('type',))
         if safe_type == 'position': _number(safe['value'])
 
 def _number(value):
-    if type(value) not in (int, float) or not math.isfinite(value): raise ProtocolError("expected finite number")
+    if type(value) not in (int, float):
+        raise ProtocolError("expected finite number")
+    try:
+        finite = math.isfinite(value)
+    except (OverflowError, TypeError, ValueError) as exc:
+        raise ProtocolError("expected finite number") from exc
+    if not finite:
+        raise ProtocolError("expected finite number")
 
 def encode_control(envelope: dict) -> bytes:
     try: data = json.dumps(envelope, separators=(',', ':'), allow_nan=False).encode('utf-8')
