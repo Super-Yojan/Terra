@@ -30,6 +30,7 @@ class SafetyController:
         self.hardware_gate = False
         self.last_sequence = None
         self.last_time = None
+        self.last_drive_at = None
         self.fault = None
         self.emergency_stop = False
         self._disarm('boot')
@@ -75,6 +76,7 @@ class SafetyController:
         errors = validate_layout(layout, self.capabilities) if self.capabilities is not None else validate_structure(layout)
         if errors: raise ValueError(errors)
         self.layout = deepcopy(layout)
+        self.last_drive_at = None
         self._disarm('configuration_changed')
 
     def connect(self, session: int, now: float):
@@ -84,6 +86,7 @@ class SafetyController:
         self.subscribed = False
         self.hardware_gate = False
         self.last_sequence = None
+        self.last_drive_at = None
         self._disarm('connected')
 
     def set_status_subscribed(self, subscribed: bool, now: float):
@@ -127,6 +130,7 @@ class SafetyController:
             else:
                 if not self._safe_frame(frame): return False
                 self.safe_received = received_at
+            self.last_drive_at = received_at
         self.last_sequence = frame.sequence
         return True
 
@@ -167,6 +171,7 @@ class SafetyController:
         self._clock(now)
         self.session = None
         self.last_sequence = None
+        self.last_drive_at = None
         self.subscribed = False
         self.hardware_gate = False
         self._disarm('disconnected')
@@ -187,8 +192,11 @@ class SafetyController:
         self._disarm('emergency_stop_reset')
 
     def status(self, now: float) -> dict:
-        if self._clock(now): self._expire(now)
+        valid_clock = self._clock(now)
+        if valid_clock: self._expire(now)
         return dict(schema_version=1, session=self.session, active_revision=self.layout['revision'] if self.layout else None,
                     armed=self.armed, arming=self.arming, hardware_gate=self.hardware_gate,
                     status_subscribed=self.subscribed, fault=self.fault, emergency_stop=self.emergency_stop,
-                    stop_reason=self.reason, last_sequence=self.last_sequence)
+                    stop_reason=self.reason, last_sequence=self.last_sequence,
+                    command_age_ms=(max(0.0, (now - self.last_drive_at) * 1000)
+                                    if valid_clock and self.last_drive_at is not None else None))
