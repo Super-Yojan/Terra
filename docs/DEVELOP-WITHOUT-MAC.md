@@ -14,7 +14,7 @@ Real-terrain tiles (`TERRA_TILES`) and the Zenoh go-to-waypoint command (`terra/
 - Bevy’s system libraries (`pkg-config`, `build-essential`, Wayland, X11, XKB, Vulkan, ALSA, udev)
 - Mesa lavapipe / llvmpipe, selected with `WGPU_BACKEND=vulkan` and `VK_ICD_FILENAMES=/etc/vulkan/terra-lvp.json`
 - Python 3 and the Zenoh client packages from `simulator/tools/requirements.txt` (`eclipse-zenoh>=1,<2`, `numpy`)
-- A Fluxbox desktop on noVNC port **6080** (VNC port 5901), password `vscode`
+- A Fluxbox desktop on noVNC port **6080** (VNC port 5901, 1440×768, 24-bit color), password `vscode`
 - Cargo registry, git, and target directories on Docker volumes, so rebuilding the container keeps the compile cache
 - `lld` as the linker, and dev builds with line tables only (`CARGO_PROFILE_DEV_DEBUG=line-tables-only`), so a Bevy debug build fits in memory
 

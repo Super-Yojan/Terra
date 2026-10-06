@@ -41,7 +41,9 @@
     "VK_ICD_FILENAMES": "/etc/vulkan/terra-lvp.json",
     "VK_DRIVER_FILES": "/etc/vulkan/terra-lvp.json",
     "LIBGL_ALWAYS_SOFTWARE": "1",
-    "GALLIUM_DRIVER": "llvmpipe"
+    "GALLIUM_DRIVER": "llvmpipe",
+    "VNC_PASSWORD": "vscode",
+    "VNC_RESOLUTION": "1440x768x24"
   },
   "mounts": [
     "source=terra-cargo-registry,target=/usr/local/cargo/registry,type=volume",
