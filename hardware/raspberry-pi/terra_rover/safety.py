@@ -2,9 +2,8 @@
 from copy import deepcopy
 from dataclasses import dataclass
 import math
-import struct
-from .layout import validate_layout, validate_structure
-from .protocol import CommandFrame, CommandKind, ProtocolError, validate_command
+from .layout import normalize_layout, validate_layout, validate_structure
+from .protocol import CommandFrame, CommandKind, ProtocolError, decode_frame, encode_frame, validate_command
 
 WATCHDOG_SECONDS = 0.200
 
@@ -42,6 +41,8 @@ class SafetyController:
         self.mailbox = None
         self.safe_received = None
         self.arm_deadline = None
+        self.arrival_boundary = self.last_time
+        self.armed_at = None
 
     @staticmethod
     def _finite_time(value):
@@ -70,6 +71,7 @@ class SafetyController:
     def configure(self, layout: dict, now: float):
         if not self._clock(now): raise ValueError('invalid clock')
         if self.armed or self.arming: raise ValueError('configuration requires disarmed state')
+        layout = normalize_layout(layout)
         errors = validate_layout(layout, self.capabilities) if self.capabilities is not None else validate_structure(layout)
         if errors: raise ValueError(errors)
         self.layout = deepcopy(layout)
@@ -86,7 +88,9 @@ class SafetyController:
 
     def set_status_subscribed(self, subscribed: bool, now: float):
         if not self._clock(now): return
+        previous = self.subscribed
         self.subscribed = bool(subscribed)
+        if self.subscribed and not previous: self._disarm('status_subscribed')
         if not self.subscribed: self._disarm('status_unsubscribed')
 
     def accept(self, frame: CommandFrame, received_at: float, now: float) -> bool:
@@ -96,6 +100,7 @@ class SafetyController:
             return False
         if self.session is None or self.layout is None: return False
         try:
+            frame = decode_frame(encode_frame(frame))
             validate_command(frame, self.session, self.layout, self.last_sequence)
         except (ProtocolError, ValueError, TypeError, OverflowError):
             return False
@@ -105,6 +110,8 @@ class SafetyController:
         elif frame.kind == CommandKind.DISARM:
             self._disarm('requested')
         elif frame.kind == CommandKind.ARM:
+            if self.arrival_boundary is not None and received_at <= self.arrival_boundary: return False
+            if self.safe_received is not None and received_at < self.safe_received: return False
             if self.armed or self.arming or not self.subscribed or not self.hardware_gate or self.fault or self.emergency_stop or self.safe_received is None:
                 return False
             durations = [a['calibration'].get('arming_duration_ms', 0) for a in self.layout['actuators']]
@@ -113,7 +120,9 @@ class SafetyController:
             self.arm_deadline = now + max(durations, default=0) / 1000
         else:
             if self.fault or self.emergency_stop: return False
+            if self.arrival_boundary is not None and received_at <= self.arrival_boundary: return False
             if self.armed:
+                if self.armed_at is None or received_at <= self.armed_at: return False
                 self.mailbox = (frame.values, received_at)
             else:
                 if not self._safe_frame(frame): return False
@@ -129,12 +138,14 @@ class SafetyController:
             if safe['type'] == 'disabled':
                 limits = entries[record.id]['limits']
                 target = max(limits['min'], min(limits['max'], 0))
-            if record.value != struct.unpack('<f', struct.pack('<f', target))[0]: return False
+            if record.value != target: return False
         return True
 
     def tick(self, now: float, hardware_gate: bool) -> OutputBatch:
         valid_clock = self._clock(now)
+        previous_gate = self.hardware_gate
         self.hardware_gate = bool(hardware_gate)
+        if self.hardware_gate and not previous_gate: self._disarm('hardware_gate_closed')
         if not self.hardware_gate: self._disarm('hardware_gate_open')
         if valid_clock:
             self._expire(now)
@@ -142,6 +153,7 @@ class SafetyController:
                 self.arming = False
                 self.armed = True
                 self.reason = 'awaiting_command'
+                self.armed_at = now
                 self.mailbox = None  # only a frame accepted after completion may actuate
         commands = self._safe_outputs()
         if self.armed and self.mailbox:

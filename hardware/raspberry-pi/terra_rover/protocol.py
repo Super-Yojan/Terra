@@ -80,7 +80,14 @@ def validate_command(frame: CommandFrame, session: int, layout: dict, last_seque
             raise ProtocolError("incomplete or unknown actuator coverage")
         for record in frame.values:
             limits = actuators[record.id]['limits']
-            if not limits['min'] <= record.value <= limits['max']:
+            # Rust layout limits and wire values both use f32, without tolerance.
+            try:
+                lower = struct.unpack('<f', struct.pack('<f', limits['min']))[0]
+                upper = struct.unpack('<f', struct.pack('<f', limits['max']))[0]
+                value = struct.unpack('<f', struct.pack('<f', record.value))[0]
+            except (OverflowError, ValueError, TypeError, struct.error) as exc:
+                raise ProtocolError('unrepresentable command limit or value') from exc
+            if not math.isfinite(lower) or not math.isfinite(upper) or not lower <= value <= upper:
                 raise ProtocolError("actuator value outside layout limits")
 
 class FragmentAssembler:

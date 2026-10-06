@@ -1,5 +1,30 @@
 """Layout validation matching the portable Rust layout schema."""
+from copy import deepcopy
+import math
+import struct
 from .protocol import ProtocolError, _validate_layout_shape
+
+
+def normalize_layout(layout: dict) -> dict:
+    """Round JSON floating fields exactly as Rust serde's f32 fields."""
+    _validate_layout_shape(layout)
+    normalized = deepcopy(layout)
+    def convert(container, key):
+        try:
+            value = struct.unpack('<f', struct.pack('<f', container[key]))[0]
+        except (OverflowError, ValueError, TypeError, struct.error) as exc:
+            raise ProtocolError('layout number is not representable as finite f32') from exc
+        if not math.isfinite(value):
+            raise ProtocolError('layout number is not representable as finite f32')
+        container[key] = value
+    for entry in normalized['actuators']:
+        for key in ('min', 'max'): convert(entry['limits'], key)
+        if entry['calibration']['type'] == 'dc_motor':
+            convert(entry['calibration'], 'max_power_fraction')
+        if entry['route']['type'] == 'manual':
+            for key in ('forward_coefficient', 'turn_coefficient'): convert(entry['route'], key)
+        if entry['safe']['type'] == 'position': convert(entry['safe'], 'value')
+    return normalized
 
 
 def validate_structure(layout: dict) -> list[dict]:
@@ -7,7 +32,7 @@ def validate_structure(layout: dict) -> list[dict]:
     def add(identifier, code, message):
         errors.append(dict(actuator_id=identifier, code=code, message=message))
     try:
-        _validate_layout_shape(layout)
+        layout = normalize_layout(layout)
     except ProtocolError as exc:
         add(None, 'schema_version', str(exc))
         return errors
