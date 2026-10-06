@@ -22,6 +22,8 @@ impl std::error::Error for TransportError {}
 #[derive(Default)]
 struct State {
     target: Option<(f64, f64, Instant)>,
+    actions: std::collections::VecDeque<(String, String)>,
+    authority: String,
     shutdown: bool,
     error: Option<String>,
 }
@@ -208,6 +210,7 @@ impl RoverConnection {
         }));
         let inbox = depth.clone();
         let key = format!("{prefix}/{rover_id}/cmd_vel");
+        let base = format!("{prefix}/{rover_id}");
         let depth_key = format!("{prefix}/{rover_id}/camera/depth");
         let worker = thread::Builder::new()
             .name("terra-mobile-zenoh".into())
@@ -237,7 +240,27 @@ impl RoverConnection {
                         return;
                     }
                 };
+                let status_shared = shared.clone();
+                let authority = session
+                    .declare_subscriber(format!("{base}/autonomy/status"))
+                    .callback(move |sample| {
+                        let bytes = sample.payload().to_bytes();
+                        if bytes.len() <= 65536
+                            && let Ok(text) = String::from_utf8(bytes.to_vec())
+                        {
+                            status_shared.lock().unwrap().authority = text;
+                        }
+                    })
+                    .wait()
+                    .ok();
                 loop {
+                    let actions = std::mem::take(&mut shared.lock().unwrap().actions);
+                    for (kind, payload) in actions {
+                        if let Err(e) = session.put(format!("{base}/{kind}"), payload).wait() {
+                            shared.lock().unwrap().error = Some(e.to_string());
+                        }
+                    }
+
                     let (shutdown, linear, angular) = {
                         let state = shared.lock().unwrap();
                         let target = state.target.filter(|(_, _, t)| t.elapsed() < LEASE);
@@ -262,6 +285,7 @@ impl RoverConnection {
                     }
                     thread::sleep(Duration::from_millis(50));
                 }
+                drop(authority);
                 drop(subscriber);
                 let _ = session.close().wait();
                 shared.lock().unwrap().shutdown = true;
@@ -290,6 +314,26 @@ impl RoverConnection {
         }
         state.target = Some((linear, angular, Instant::now()));
         Ok(())
+    }
+    pub fn send_action(&self, kind: &str, payload: &str) -> Result<(), TransportError> {
+        if !matches!(kind, "autonomy" | "safety" | "goal" | "goal/decision")
+            || payload.len() > 2048
+            || serde_json::from_str::<serde_json::Value>(payload).is_err()
+        {
+            return Err(TransportError::InvalidTarget);
+        }
+        let mut state = self.state.lock().unwrap();
+        if state.shutdown {
+            return Err(TransportError::Closed);
+        }
+        if state.actions.len() >= 64 {
+            return Err(TransportError::Network("action queue full".into()));
+        }
+        state.actions.push_back((kind.into(), payload.into()));
+        Ok(())
+    }
+    pub fn autonomy_status(&self) -> String {
+        self.state.lock().unwrap().authority.clone()
     }
     pub fn status(&self) -> String {
         let state = self.state.lock().unwrap();
@@ -497,4 +541,53 @@ mod tests {
         client.disconnect();
         server.close().wait().unwrap();
     }
+}
+mod control_plane;
+pub use control_plane::ControlPlane;
+/// Bounded intent inbox with protected distinct emergency stops.
+pub type ControlAction = (String, Vec<u8>, Instant);
+fn stop_token(a: &ControlAction) -> Option<String> {
+    if a.0 != "safety" {
+        return None;
+    }
+    let v: serde_json::Value = serde_json::from_slice(&a.1).ok()?;
+    let o = v.as_object()?;
+    let token = o.get("token")?.as_str()?;
+    (o.len() == 2
+        && v["action"] == "stop"
+        && (1..=64).contains(&token.len())
+        && token
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"._:-".contains(&b)))
+    .then(|| token.into())
+}
+fn is_stop(a: &ControlAction) -> bool {
+    stop_token(a).is_some()
+}
+pub fn enqueue_control_action(
+    q: &mut std::collections::VecDeque<ControlAction>,
+    kind: String,
+    payload: Vec<u8>,
+    received: Instant,
+) {
+    let action = (kind, payload, received);
+    if let Some(token) = stop_token(&action) {
+        q.retain(|a| stop_token(a).as_deref() != Some(&token));
+    }
+    if q.len() >= 256 {
+        if let Some(i) = q.iter().position(|a| !is_stop(a)) {
+            q.remove(i);
+        } else {
+            return;
+        }
+    }
+    q.push_back(action);
+}
+/// A stop dominates every other request received in the same control tick, including reset.
+pub fn drain_control_actions(
+    q: &mut std::collections::VecDeque<ControlAction>,
+) -> Vec<ControlAction> {
+    let mut actions = std::mem::take(q).into_iter().collect::<Vec<_>>();
+    actions.sort_by_key(is_stop);
+    actions
 }

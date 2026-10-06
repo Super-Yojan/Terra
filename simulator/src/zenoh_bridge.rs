@@ -12,9 +12,9 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 use std::time::{Duration, Instant};
-use terra_waypoint::{
-    GoalCommand, GoalState, WaypointConfig, WaypointController, decode_goal, encode_status,
-};
+use terra_waypoint::{GoalCommand, decode_goal, encode_status};
+#[cfg(test)]
+use terra_waypoint::{GoalState, WaypointConfig, WaypointController};
 use zenoh::Wait;
 
 #[derive(Clone, Resource)]
@@ -110,7 +110,7 @@ impl Plugin for TerraZenohPlugin {
                     claim_rovers.after(crate::terra::reconcile_fleet),
                 ),
             )
-            .add_systems(FixedUpdate, (apply_remote_commands, drive_goals).chain())
+            .add_systems(FixedUpdate, drive_autonomy)
             .add_systems(Update, publish_frames);
     }
 }
@@ -119,6 +119,7 @@ struct Outgoing {
     frames: BTreeMap<(u64, &'static str), Vec<u8>>,
     fleet: Option<Vec<u8>>,
     goals: BTreeMap<u64, Vec<u8>>,
+    states: BTreeMap<(u64, String), Vec<u8>>,
 }
 #[derive(Clone)]
 struct GoalInbox {
@@ -130,6 +131,7 @@ type LeasedCommand = Option<(DriveCommand, Instant)>;
 struct Shared {
     commands: Mutex<BTreeMap<u64, LeasedCommand>>,
     goals: Mutex<BTreeMap<u64, GoalInbox>>,
+    actions: Mutex<BTreeMap<u64, std::collections::VecDeque<(String, Vec<u8>, Instant)>>>,
     goal_seq: std::sync::atomic::AtomicU64,
     fleet_request: Mutex<Option<usize>>,
     outgoing: Mutex<Outgoing>,
@@ -172,6 +174,7 @@ fn claim_rovers(
         }
     }
 }
+#[cfg(test)]
 type RemoteRovers<'w, 's> = Query<
     'w,
     's,
@@ -179,6 +182,7 @@ type RemoteRovers<'w, 's> = Query<
     (With<Rover>, With<ZenohControlled>),
 >;
 
+#[cfg(test)]
 fn apply_remote_commands(
     bridge: Res<Bridge>,
     config: Res<ZenohBridgeConfig>,
@@ -213,6 +217,7 @@ fn decode_command(bytes: &[u8]) -> Option<DriveCommand> {
     let Twist { linear, angular } = serde_json::from_slice(bytes).ok()?;
     (linear.is_finite() && angular.is_finite()).then_some(DriveCommand { linear, angular })
 }
+#[cfg(test)]
 fn fresh_command(
     command: Option<(DriveCommand, Instant)>,
     now: Instant,
@@ -236,12 +241,14 @@ fn decode_fleet_request(bytes: &[u8]) -> Option<usize> {
     (request.count <= MAX_ROVERS).then_some(request.count)
 }
 
+#[cfg(test)]
 struct TrackedGoal {
     seq: u64,
     follower: WaypointController,
     last_payload: Vec<u8>,
     last_sent: Option<Instant>,
 }
+#[cfg(test)]
 impl TrackedGoal {
     fn new() -> Self {
         Self {
@@ -253,11 +260,13 @@ impl TrackedGoal {
         }
     }
 }
+#[cfg(test)]
 #[derive(Default)]
 struct GoalRuntime {
     rovers: BTreeMap<u64, TrackedGoal>,
 }
 
+#[cfg(test)]
 fn drive_goals(
     bridge: Res<Bridge>,
     world: Option<Res<crate::world::WorldConfig>>,
@@ -341,6 +350,44 @@ fn robotics_pose(translation: Vec3, rotation: Quat) -> (f64, f64, f64) {
 
 fn run_transport(config: &ZenohBridgeConfig, shared: &Arc<Shared>) -> zenoh::Result<()> {
     let session = zenoh::open(config.session_config()?).wait()?;
+    let incoming = shared.clone();
+    let action_prefix = config.prefix.clone();
+    let _actions = session
+        .declare_subscriber(format!("{}/*/**", config.prefix))
+        .callback(move |sample| {
+            let key = sample.key_expr().as_str();
+            let Some(rest) = key.strip_prefix(&format!("{action_prefix}/")) else {
+                return;
+            };
+            let Some((id, kind)) = rest.split_once('/') else {
+                return;
+            };
+            let Ok(id) = id.parse::<u64>() else {
+                return;
+            };
+            if !matches!(
+                kind,
+                "autonomy" | "teleop" | "safety" | "goal/decision" | "mission/report"
+            ) {
+                return;
+            }
+            if !incoming.commands.lock().unwrap().contains_key(&id) {
+                return;
+            }
+            let bytes = sample.payload().to_bytes();
+            if bytes.len() > 2048 {
+                return;
+            }
+            let mut actions = incoming.actions.lock().unwrap();
+            let queue = actions.entry(id).or_default();
+            terra_transport::enqueue_control_action(
+                queue,
+                kind.into(),
+                bytes.to_vec(),
+                Instant::now(),
+            );
+        })
+        .wait()?;
     let incoming = shared.clone();
     let prefix = config.prefix.clone();
     let _subscriber = session
@@ -426,6 +473,14 @@ fn run_transport(config: &ZenohBridgeConfig, shared: &Arc<Shared>) -> zenoh::Res
         }
         let live: std::collections::BTreeSet<u64> =
             shared.commands.lock().unwrap().keys().copied().collect();
+        for ((id, kind), payload) in outgoing.states {
+            if live.contains(&id) {
+                session
+                    .put(format!("{}/{id}/{kind}", config.prefix), payload)
+                    .encoding(zenoh::bytes::Encoding::APPLICATION_JSON)
+                    .wait()?;
+            }
+        }
         for (id, payload) in outgoing.goals {
             if !live.contains(&id) {
                 continue;
@@ -1268,5 +1323,400 @@ mod tests {
             std::thread::sleep(Duration::from_millis(5));
         }
         assert!(!shared.connected.load(Ordering::Acquire));
+    }
+}
+
+struct AutonomousRover {
+    arbiter: terra_autonomy::AutonomyArbiter,
+    goal_seq: u64,
+    command_time: Option<Instant>,
+    near_miss: terra_experiment::NearMiss,
+    contacts: std::collections::BTreeSet<Entity>,
+    observed_area: terra_experiment::ObservedArea,
+}
+#[derive(Component, Default)]
+pub(crate) struct AutonomyMotorGate {
+    pub hold: bool,
+    pub reset: bool,
+}
+struct AutonomyRuntime {
+    rovers: BTreeMap<u64, AutonomousRover>,
+    start: Instant,
+    run_id: String,
+    recorder: Option<terra_experiment::RunRecorder>,
+    mission: terra_experiment::Mission,
+    last_publish: f64,
+    sequence: u64,
+}
+impl Default for AutonomyRuntime {
+    fn default() -> Self {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let run_id = format!("run-{stamp}");
+        let config = terra_experiment::MissionConfig::rescue(
+            std::env::var("TERRA_MISSION_SEED")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(42),
+        );
+        let root = std::env::var("TERRA_RUN_DIR").unwrap_or_else(|_| "runs".into());
+        let _ = std::fs::create_dir_all(&root);
+        let manifest = serde_json::json!({"run_id":run_id,"platform":"bevy","mission":config,"trial_design":std::env::var("TERRA_TRIAL_DESIGN").unwrap_or_else(|_|"adaptive".into()),"planner":terra_navigation::PlannerConfig::default(),"collision_observation":"simulator_contacts","git_revision":option_env!("TERRA_GIT_REVISION").unwrap_or("unknown")});
+        let recorder = terra_experiment::RunRecorder::create(
+            &std::path::Path::new(&root).join(format!("{run_id}.jsonl")),
+            manifest,
+            8192,
+        )
+        .ok();
+        Self {
+            rovers: BTreeMap::new(),
+            start: Instant::now(),
+            run_id,
+            recorder,
+            mission: terra_experiment::Mission::new(config).unwrap(),
+            last_publish: -1.,
+            sequence: 0,
+        }
+    }
+}
+#[allow(clippy::type_complexity)]
+fn drive_autonomy(
+    bridge: Res<Bridge>,
+    time: Res<Time<Fixed>>,
+    world: Option<Res<crate::world::WorldConfig>>,
+    patch: Option<Res<crate::geo::GeoPatch>>,
+    keys: Option<Res<ButtonInput<KeyCode>>>,
+    mut entities: Commands,
+    contacts: Option<avian3d::prelude::Collisions>,
+    grounds: Query<(), With<crate::world::Ground>>,
+    mut rovers: Query<
+        (
+            Entity,
+            &RoverId,
+            &Transform,
+            &mut DriveCommand,
+            Option<&crate::occupancy_map::RoverOccupancyMap>,
+            Option<&avian3d::prelude::LinearVelocity>,
+            Option<&avian3d::prelude::AngularVelocity>,
+            Option<&mut AutonomyMotorGate>,
+            Option<&crate::velocity_controller::VelocityControlState>,
+        ),
+        (With<Rover>, With<ZenohControlled>),
+    >,
+    mut runtime: Local<AutonomyRuntime>,
+) {
+    use terra_autonomy::*;
+    use terra_navigation::{Pose, Twist};
+    let now = runtime.start.elapsed().as_secs_f64();
+    let tick = time.elapsed_secs_f64();
+    let incoming = bridge.shared.goals.lock().unwrap().clone();
+    let remote = bridge.shared.commands.lock().unwrap().clone();
+    let mut actions = std::mem::take(&mut *bridge.shared.actions.lock().unwrap());
+    let half = world
+        .as_ref()
+        .map(|w| f64::from(w.size) * 0.5 - 1.)
+        .unwrap_or(50.);
+    let space = keys.is_some_and(|k| k.pressed(KeyCode::Space));
+    let due = now - runtime.last_publish >= 0.2;
+    if due {
+        runtime.last_publish = now;
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    for (entity, id, transform, mut command, map, velocity, angular, gate, control) in &mut rovers {
+        seen.insert(id.0);
+        let (x, y, yaw) = robotics_pose(transform.translation, transform.rotation);
+        let pose = Pose { x, y, yaw };
+        let forward = transform.rotation * Vec3::NEG_Z;
+        let measured = Twist {
+            linear: velocity.map(|v| v.0.dot(forward) as f64).unwrap_or(0.),
+            angular: angular.map(|v| v.y as f64).unwrap_or(0.),
+        };
+        let snapshot = map.map(|m| m.map.snapshot());
+        let map_time = map
+            .and_then(|m| m.last_exposure)
+            .map(|exposure| now - (tick - exposure).max(0.));
+        let healthy = control.is_none_or(|c| c.healthy(tick))
+            && bridge.shared.connected.load(Ordering::Acquire)
+            && runtime.recorder.as_ref().is_some_and(|r| !r.failed());
+        let mut tracked = runtime.rovers.remove(&id.0).unwrap_or_else(|| {
+            let mut a = AutonomyArbiter::default();
+            a.run_id = runtime.run_id.clone();
+            a.assigned_level = std::env::var("TERRA_ASSIGNED_LEVEL")
+                .ok()
+                .and_then(|s| serde_json::from_value(serde_json::Value::String(s)).ok());
+            AutonomousRover {
+                arbiter: a,
+                goal_seq: 0,
+                command_time: None,
+                near_miss: terra_experiment::NearMiss::default(),
+                contacts: std::collections::BTreeSet::new(),
+                observed_area: terra_experiment::ObservedArea::default(),
+            }
+        });
+        if let Some(p) = patch.as_ref() {
+            tracked
+                .arbiter
+                .set_origin(p.anchor.latitude, p.anchor.longitude);
+        }
+        if let Some(Some((c, received))) = remote.get(&id.0) {
+            if tracked.command_time != Some(*received) {
+                tracked.command_time = Some(*received);
+                let age = received.elapsed().as_secs_f64();
+                if age < 0.5 {
+                    tracked.arbiter.accept_operator(
+                        TeleopRequest {
+                            linear: c.linear as f64,
+                            angular: c.angular as f64,
+                            run_id: None,
+                            authority_revision: None,
+                            operator_session_id: None,
+                            sequence: None,
+                        },
+                        now - age,
+                    );
+                }
+            }
+        }
+        if let Some(mut queue) = actions.remove(&id.0) {
+            for (kind, bytes, received) in terra_transport::drain_control_actions(&mut queue) {
+                match kind.as_str() {
+                    "autonomy" => {
+                        if let Some(r) = decode_level(&bytes) {
+                            tracked.arbiter.set_level(r);
+                        }
+                    }
+                    "teleop" => {
+                        if let Some(r) = decode_teleop(&bytes) {
+                            tracked
+                                .arbiter
+                                .accept_operator(r, now - received.elapsed().as_secs_f64());
+                        }
+                    }
+                    "safety" => {
+                        if let Some(r) = decode_safety(&bytes) {
+                            tracked.arbiter.set_safety(r, healthy);
+                        }
+                    }
+                    "goal/decision" => {
+                        if let Some(r) = decode_decision(&bytes) {
+                            tracked.arbiter.decide_proposal(
+                                r,
+                                &ArbiterInput {
+                                    now,
+                                    pose,
+                                    pose_time: now,
+                                    map: snapshot.as_ref(),
+                                    map_time,
+                                    map_revision: map.map(|m| m.last_sequence).unwrap_or(0),
+                                    measured: Twist::default(),
+                                    healthy,
+                                },
+                            );
+                        }
+                    }
+                    "mission/report" => {
+                        if let Ok(v) = serde_json::from_slice::<serde_json::Value>(&bytes) {
+                            if let Some(target) = v["survivor_id"].as_u64() {
+                                runtime.mission.report(id.0, target, now);
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if space {
+            tracked.arbiter.hold_emergency_stop();
+        }
+        if let Some(g) = incoming.get(&id.0) {
+            if g.seq != tracked.goal_seq {
+                tracked.goal_seq = g.seq;
+                tracked.arbiter.accept_goal(&g.command, half);
+            }
+        }
+        let mut output = tracked.arbiter.step(ArbiterInput {
+            now,
+            pose,
+            pose_time: now,
+            map: snapshot.as_ref(),
+            map_time,
+            map_revision: map.map(|m| m.last_sequence).unwrap_or(0),
+            measured,
+            healthy,
+        });
+        *command = DriveCommand {
+            linear: output.twist.linear as f32,
+            angular: output.twist.angular as f32,
+        };
+        let hold = output.status.safety != "clear";
+        if let Some(mut gate) = gate {
+            gate.hold = hold;
+            gate.reset = output.reset_controller;
+        } else {
+            entities.entity(entity).insert(AutonomyMotorGate {
+                hold,
+                reset: output.reset_controller,
+            });
+        }
+        // Observations require a complete ray through observed free occupancy. Ground truth is never published directly.
+        if let Some(m) = snapshot.as_ref() {
+            let candidates = runtime.mission.candidates().to_vec();
+            for target in candidates {
+                let distance = (target.x - x).hypot(target.y - y);
+                let n = (distance / m.resolution).ceil() as usize;
+                let visible = n > 0
+                    && distance <= 5.
+                    && (0..=n).all(|i| {
+                        let t = i as f64 / n as f64;
+                        let a = ((x + (target.x - x) * t - m.origin_x) / m.resolution).floor();
+                        let b = ((y + (target.y - y) * t - m.origin_y) / m.resolution).floor();
+                        a >= 0. && b >= 0. && a < m.width as f64 && b < m.height as f64 && {
+                            let value = m.occupancy[b as usize * m.width as usize + a as usize];
+                            (0..65).contains(&value)
+                        }
+                    });
+                if visible {
+                    runtime.mission.observe_target(id.0, target.id, x, y, now);
+                }
+            }
+        }
+        let observed_area = snapshot
+            .as_ref()
+            .and_then(|m| tracked.observed_area.observe(m));
+        let clearance = snapshot.as_ref().and_then(|m| {
+            terra_navigation::observed_clearance(m, pose, tracked.arbiter.planner.config.radius)
+        });
+        if let Some(kind) = tracked.near_miss.update(clearance) {
+            output.events.push(DecisionEvent {
+                kind: kind.into(),
+                token: None,
+                reason: "observed_clearance".into(),
+                level: output.status.requested_level,
+            });
+        }
+        let touching = contacts
+            .as_ref()
+            .map(|c| {
+                c.entities_colliding_with(entity)
+                    .filter(|e| grounds.get(*e).is_err())
+                    .collect::<std::collections::BTreeSet<_>>()
+            })
+            .unwrap_or_default();
+        for target in touching.difference(&tracked.contacts) {
+            output.events.push(DecisionEvent {
+                kind: "contact_start".into(),
+                token: None,
+                reason: format!("simulator_contact:{target:?}"),
+                level: output.status.requested_level,
+            });
+        }
+        tracked.contacts = touching;
+        runtime.mission.update_pose(id.0, x, y, now);
+        runtime.sequence += 1;
+        let event = serde_json::json!({"kind":"control_tick","run_id":runtime.run_id,"sequence":runtime.sequence,"rover_id":id.0,"time":now,"status":output.status,"selected":output.twist,"source_command":output.intent,"pose":pose,"goal":output.goal,"proposal":output.proposal,"events":output.events,"mission":runtime.mission.status(now),"clearance":clearance,"observed_free_area":observed_area});
+        if let Some(r) = runtime.recorder.as_ref() {
+            let _ = r.record(event);
+        }
+        if due || output.reset_controller {
+            let utc = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs_f64();
+            let mut outgoing = bridge.shared.outgoing.lock().unwrap();
+            outgoing
+                .goals
+                .insert(id.0, encode_status(&output.goal).unwrap());
+            for (kind, value) in [
+                (
+                    "autonomy/status",
+                    serde_json::to_value(&output.status).unwrap(),
+                ),
+                (
+                    "goal/proposal",
+                    serde_json::to_value(&output.proposal).unwrap(),
+                ),
+                (
+                    "mission/status",
+                    serde_json::to_value(runtime.mission.status(now)).unwrap(),
+                ),
+                (
+                    "experiment/status",
+                    serde_json::json!({"run_id":runtime.run_id,"schema_version":1,"run_elapsed":now,"utc":utc,"recording":healthy}),
+                ),
+            ] {
+                outgoing
+                    .states
+                    .insert((id.0, kind.into()), serde_json::to_vec(&value).unwrap());
+            }
+        }
+        runtime.rovers.insert(id.0, tracked);
+    }
+    runtime.rovers.retain(|id, _| seen.contains(id));
+}
+
+#[cfg(test)]
+mod autonomy_integration_tests {
+    use super::*;
+    #[test]
+    fn runtime_selects_teleop_and_latches_stop_per_rover() {
+        let shared = Arc::new(Shared::default());
+        shared.connected.store(true, Ordering::Release);
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .insert_resource(Bridge {
+                shared: shared.clone(),
+            })
+            .add_systems(FixedUpdate, drive_autonomy);
+        for id in [1, 2] {
+            app.world_mut().spawn((
+                Rover,
+                RoverId(id),
+                ZenohControlled,
+                Transform::default(),
+                DriveCommand::default(),
+            ));
+        }
+        app.world_mut().run_schedule(FixedUpdate);
+        shared.actions.lock().unwrap().insert(
+            1,
+            std::collections::VecDeque::from([(
+                "teleop".into(),
+                br#"{"linear":1,"angular":0}"#.to_vec(),
+                Instant::now(),
+            )]),
+        );
+        app.world_mut().run_schedule(FixedUpdate);
+        let mut q = app.world_mut().query::<(&RoverId, &DriveCommand)>();
+        let out = q
+            .iter(app.world())
+            .map(|(id, c)| (id.0, c.linear))
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(out[&1], 1.);
+        assert_eq!(out[&2], 0.);
+        shared.actions.lock().unwrap().insert(
+            1,
+            std::collections::VecDeque::from([
+                (
+                    "safety".into(),
+                    br#"{"action":"stop","token":"stop"}"#.to_vec(),
+                    Instant::now(),
+                ),
+                (
+                    "teleop".into(),
+                    br#"{"linear":1,"angular":0}"#.to_vec(),
+                    Instant::now(),
+                ),
+            ]),
+        );
+        std::thread::sleep(Duration::from_millis(2));
+        app.world_mut().run_schedule(FixedUpdate);
+        let mut q = app.world_mut().query::<(&RoverId, &DriveCommand)>();
+        assert!(q.iter(app.world()).all(|(_, c)| c.linear == 0.));
+        let payload =
+            shared.outgoing.lock().unwrap().states[&(1, "autonomy/status".into())].clone();
+        let value: serde_json::Value = serde_json::from_slice(&payload).unwrap();
+        assert_eq!(value["safety"], "emergency_stop");
     }
 }

@@ -1,5 +1,7 @@
 # Terra
 
+See the [mission-autonomy guide](docs/autonomy/README.md) for four shared-core levels, explicit waypoint authority, safety controls, and experiment logs.
+
 Terra combines a Bevy/Avian rover simulator with reusable Rust robotics modules and an iOS controller app.
 
 - `terra-types`: sensor samples, coordinate conventions, commands and motor outputs.

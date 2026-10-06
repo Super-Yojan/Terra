@@ -51,6 +51,13 @@ impl MobileZenohClient {
         self.connection.set_target(linear, angular)?;
         Ok(())
     }
+    pub fn send_action(&self, kind: String, payload: String) -> Result<(), ZenohError> {
+        self.connection.send_action(&kind, &payload)?;
+        Ok(())
+    }
+    pub fn autonomy_status(&self) -> String {
+        self.connection.autonomy_status()
+    }
     pub fn status(&self) -> String {
         self.connection.status()
     }

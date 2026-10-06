@@ -4,6 +4,10 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+terra-transport = { path = "../crates/terra-transport" }
+terra-autonomy = { path = "../crates/terra-autonomy" }
+terra-navigation = { path = "../crates/terra-navigation" }
+terra-experiment = { path = "../crates/terra-experiment" }
 terra-mapping = { path = "../crates/terra-mapping" }
 terra-types = { path = "../crates/terra-types" }
 terra-state = { path = "../crates/terra-state" }
@@ -29,6 +33,3 @@ opt-level = 1
 # Enable a large amount of optimization in the dev profile for dependencies.
 [profile.dev.package."*"]
 opt-level = 3
-
-[dev-dependencies]
-terra-transport = { path = "../crates/terra-transport" }
