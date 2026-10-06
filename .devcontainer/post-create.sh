@@ -9,7 +9,7 @@ source .devcontainer/cargo-jobs.sh
 git config --global --add safe.directory "$(pwd)" || true
 if command -v git-lfs >/dev/null 2>&1; then
   git lfs install --skip-repo
-  git lfs pull
+  git lfs pull || echo "git lfs pull failed; rover.glb stays a pointer until Git LFS can authenticate."
 fi
 
 if [[ -n "${CARGO_TARGET_DIR:-}" ]]; then

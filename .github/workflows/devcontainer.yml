@@ -17,6 +17,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          lfs: true
 
       # A parallel Bevy link can exceed the 16 GB GitHub-hosted runner.
       - name: Add swap

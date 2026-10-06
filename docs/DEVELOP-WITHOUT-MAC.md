@@ -115,7 +115,9 @@ Debug builds in the container keep line tables and link with `lld`. Unset `CARGO
 
 **noVNC shows a connection error.** Wait until the desktop entrypoint has started, then open port 6080 again. The password is `vscode`. `echo $DISPLAY` should print `:1`.
 
-**The Bevy window never appears, or the process exits.** Run `vulkaninfo --summary` in the container. The device name should mention lavapipe or llvmpipe. Confirm `VK_ICD_FILENAMES` is `/etc/vulkan/terra-lvp.json` and that the file exists. `scripts/sim-remote.sh` exits if `DISPLAY=:1` is not up yet.
+**The Bevy window never appears, or the process exits.** Run `env -u DISPLAY vulkaninfo --summary` in the container. The device name should mention lavapipe or llvmpipe. Confirm `VK_ICD_FILENAMES` is `/etc/vulkan/terra-lvp.json` and that the file exists. `scripts/sim-remote.sh` exits if `DISPLAY=:1` is not up yet. `vulkaninfo` without clearing `DISPLAY` tries to open a window and can exit non-zero even when lavapipe works.
+
+**The rover mesh is missing.** `simulator/assets/models/rover.glb` is Git LFS. The post-create script runs `git lfs pull`. If that cannot authenticate, run it again after Git credentials are available. A pointer file makes Bevy log `invalid glTF file`.
 
 **The window is black for a long time.** Shader compilation on lavapipe is slow the first run. Leave the process running. stderr from `cargo run` shows progress.
 
