@@ -2,6 +2,7 @@ mod depth_camera;
 mod geo;
 mod landscape;
 mod mission;
+mod next_competition;
 mod occupancy_map;
 mod physics;
 mod rgb_camera;
@@ -20,6 +21,7 @@ use world::TerraWorldPlugin;
 fn main() {
     let mut app = App::new();
     mission::install(&mut app);
+    next_competition::install(&mut app);
     let defaults = DefaultPlugins.set(AssetPlugin {
         file_path: concat!(env!("CARGO_MANIFEST_DIR"), "/assets").into(),
         ..default()

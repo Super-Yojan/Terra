@@ -19,7 +19,7 @@ The simulator also runs without a Mac. The dev container works in GitHub Codespa
 
 [![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/Super-Yojan/Terra)
 
-The simulator still boots into the flat practice world. `TERRA_TILES=1` builds that square from a real Terrarium elevation tile instead (bundled George Mason University Fairfax sample, centered on the Johnson Center, or another lat/lon when the network is available). High-level goals use `terra/rover/<id>/goal`; `cmd_vel` stays a debug twist. See [world design](simulator/WORLD.md#real-world-tiles), [how to run and test](simulator/WORLD.md#reproduce-and-test), and the [Zenoh waypoint contract](simulator/ZENOH.md#go-to-waypoint).
+The simulator still boots into the flat practice world. `TERRA_TILES=1` builds that square from a real Terrarium elevation tile instead (bundled George Mason University Fairfax sample, centered on the Johnson Center, or another lat/lon when the network is available). `TERRA_NEXT=1` loads the NEXT competition practice pitch instead, with Zatara, tennis balls, and deposit buckets. High-level goals use `terra/rover/<id>/goal`; `cmd_vel` stays a debug twist. See [world design](simulator/WORLD.md#real-world-tiles), [NEXT practice](simulator/NEXT.md), [how to run and test](simulator/WORLD.md#reproduce-and-test), and the [Zenoh waypoint contract](simulator/ZENOH.md#go-to-waypoint).
 
 ```sh
 cargo test --workspace

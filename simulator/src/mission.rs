@@ -4,7 +4,7 @@ use bevy::prelude::*;
 #[derive(Component)]
 pub struct MissionObstacle;
 pub fn install(app: &mut App) {
-    if std::env::var("TERRA_MISSION").as_deref() == Ok("1") {
+    if std::env::var("TERRA_MISSION").as_deref() == Ok("1") && !crate::next_competition::enabled() {
         app.add_systems(Startup, spawn_layout);
     }
 }

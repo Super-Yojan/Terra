@@ -14,6 +14,9 @@ and voxel hill meshes have static Avian colliders. Roads sit on the flat ground
 collider. Leaves and branches are visual geometry; water has no buoyancy model.
 The pond is a surface over the flat ground, rather than an excavated basin.
 
+`TERRA_NEXT=1` replaces this town with the NEXT competition practice pitch
+(soccer field, tennis balls, deposit buckets, and Zatara). See [NEXT.md](NEXT.md).
+
 ## Configuration
 
 Pass a `WorldConfig` to `TerraWorldPlugin`, for example:

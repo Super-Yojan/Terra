@@ -104,7 +104,9 @@ impl WorldConfig {
                 .map_err(|_| "TERRA_WORLD_SIZE must be a number of metres".to_owned())?;
         }
         config.tiles = crate::geo::GeoTileConfig::from_env()?;
-        if std::env::var("TERRA_MISSION").as_deref() == Ok("1") {
+        if crate::next_competition::enabled() {
+            config.prepare_next_field();
+        } else if std::env::var("TERRA_MISSION").as_deref() == Ok("1") {
             config.tiles.enabled = false;
             config.landscape.enabled = false;
             config.size = 100.;
@@ -116,6 +118,16 @@ impl WorldConfig {
         }
         config.validate().map_err(str::to_owned)?;
         Ok(config)
+    }
+
+    /// Flat NEXT pitch: no practice town and no elevation tiles.
+    pub(crate) fn prepare_next_field(&mut self) {
+        self.tiles.enabled = false;
+        self.landscape.enabled = false;
+        self.show_grid = false;
+        self.size = crate::next_competition::WORLD_SIZE;
+        self.camera_offset = Vec3::new(0.0, 12.0, 14.0);
+        self.follow_rover = true;
     }
 
     pub fn validate(&self) -> Result<(), &'static str> {
