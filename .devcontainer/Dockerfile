@@ -13,6 +13,7 @@ RUN apt-get update \
         lld \
         cmake \
         git \
+        git-lfs \
         ca-certificates \
         curl \
         xz-utils \
