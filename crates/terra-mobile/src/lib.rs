@@ -4,6 +4,8 @@ use terra_control::{ControllerConfig, VelocityController};
 use terra_state::{EstimatorConfig, VelocityEstimator};
 use terra_types::*;
 uniffi::setup_scaffolding!();
+mod actuators;
+pub use actuators::*;
 mod autonomy;
 mod mapping;
 mod transport;

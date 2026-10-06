@@ -16,6 +16,9 @@
 		C3525A6A065BA09E9080CA76 /* TerraPhoneApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5695D4ADB6DDDB9AD9ECC1EB /* TerraPhoneApp.swift */; };
 		D4D6286AE77051472C8C0C79 /* SwiftUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 8E15CDF054403F8D93571D51 /* SwiftUI.framework */; };
 		E20F918C58083B14AF5A3709 /* TerraCore.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = FD7D52E4241E3416851D20EB /* TerraCore.xcframework */; };
+		B200000000000000000000001 /* BluetoothSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000000000000000000001 /* BluetoothSession.swift */; };
+		B200000000000000000000002 /* BluetoothLink.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000000000000000000002 /* BluetoothLink.swift */; };
+		B200000000000000000000003 /* CoreBluetooth.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B100000000000000000000003 /* CoreBluetooth.framework */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -30,6 +33,9 @@
 		C39B748CBDE909384D42F851 /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS18.0.sdk/System/Library/Frameworks/Foundation.framework; sourceTree = DEVELOPER_DIR; };
 		D896D79ADD2800F8E4769A32 /* ContentView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		FD7D52E4241E3416851D20EB /* TerraCore.xcframework */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = wrapper.xcframework; path = TerraCore.xcframework; sourceTree = "<group>"; };
+		B100000000000000000000001 /* BluetoothSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BluetoothSession.swift; sourceTree = "<group>"; };
+		B100000000000000000000002 /* BluetoothLink.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BluetoothLink.swift; sourceTree = "<group>"; };
+		B100000000000000000000003 /* CoreBluetooth.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreBluetooth.framework; path = System/Library/Frameworks/CoreBluetooth.framework; sourceTree = SDKROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -38,6 +44,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				62C0FE3E47BC4186D25299BD /* Foundation.framework in Frameworks */,
+				B200000000000000000000003 /* CoreBluetooth.framework in Frameworks */,
 				E20F918C58083B14AF5A3709 /* TerraCore.xcframework in Frameworks */,
 				AFDB283652F72C559CA9F336 /* ARKit.framework in Frameworks */,
 				53BC26083B3D74375B889AB7 /* CoreMotion.framework in Frameworks */,
@@ -79,6 +86,7 @@
 			isa = PBXGroup;
 			children = (
 				C39B748CBDE909384D42F851 /* Foundation.framework */,
+				B100000000000000000000003 /* CoreBluetooth.framework */,
 				40F2DDDC1E0A2ABA4F09C11F /* ARKit.framework */,
 				93A5245F123BA9089B07AC8D /* CoreMotion.framework */,
 				8E15CDF054403F8D93571D51 /* SwiftUI.framework */,
@@ -92,6 +100,8 @@
 				5695D4ADB6DDDB9AD9ECC1EB /* TerraPhoneApp.swift */,
 				D896D79ADD2800F8E4769A32 /* ContentView.swift */,
 				9C2FA04187CC39D929F3A531 /* PhoneController.swift */,
+				B100000000000000000000002 /* BluetoothLink.swift */,
+				B100000000000000000000001 /* BluetoothSession.swift */,
 				543C3C67B32982AE4FA32C81 /* Info.plist */,
 			);
 			path = TerraPhone;
@@ -170,6 +180,8 @@
 				C3525A6A065BA09E9080CA76 /* TerraPhoneApp.swift in Sources */,
 				949B117EE8E4E06D4A054039 /* ContentView.swift in Sources */,
 				08906BAF4104CBE47B269B2D /* PhoneController.swift in Sources */,
+				B200000000000000000000002 /* BluetoothLink.swift in Sources */,
+				B200000000000000000000001 /* BluetoothSession.swift in Sources */,
 				B801C8002482FB48C25D7908 /* TerraCore.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
