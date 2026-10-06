@@ -7,7 +7,6 @@ mod rgb_camera;
 mod terra;
 mod velocity_controller;
 mod voxel_terrain;
-mod waypoint;
 mod world;
 mod zenoh_bridge;
 

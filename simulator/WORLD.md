@@ -210,20 +210,20 @@ The committed fallback is `simulator/assets/geo/terrarium.png` (slippy `15/9347/
 Start the simulator first (either world). In a second terminal, from `simulator`:
 
 ```sh
-python3 tools/zenoh_client.py --rover 0 goto --x 12 --y 0 --token gmu-north
+python3 tools/zenoh_client.py --rover 0 goto --lat 38.82981 --lon -77.3075 --token gmu-north
 ```
 
 That publishes **once** to `terra/rover/0/goal`:
 
 ```json
-{"frame":"local","x":12.0,"y":0.0,"token":"gmu-north"}
+{"frame":"wgs84","latitude":38.82981,"longitude":-77.3075,"token":"gmu-north"}
 ```
 
-`x` is metres north of the spawn, `y` is metres west. On the default Fairfax patch this 12 m north heading stays clear of the slope boxes. The client then prints `terra/rover/0/goal/status` until the rover arrives:
+That point is about 12 m north of the Johnson Center and stays clear of the slope boxes. The follower is `terra-waypoint` (`MobileWaypoint` on the phone). The simulator bridge calls the same crate. The client prints `terra/rover/0/goal/status` until the rover arrives:
 
 ```json
-{"state":"active","goal_id":1,"token":"gmu-north","distance":11.2,"x":12.0,"y":0.0}
-{"state":"arrived","goal_id":1,"token":"gmu-north","distance":0.1,"x":12.0,"y":0.0}
+{"state":"active","goal_id":1,"token":"gmu-north","distance":11.2,"latitude":38.82981,"longitude":-77.3075,"x":12.2,"y":0.0}
+{"state":"arrived","goal_id":1,"token":"gmu-north","distance":0.1,"latitude":38.82981,"longitude":-77.3075,"x":12.2,"y":0.0}
 ```
 
 In the window the rover turns to face north (into the scene, Bevy −Z) and drives at about 1 m/s. It slows inside 3 m and stops within 0.75 m of the point. A latched goal ignores `cmd_vel` until you cancel it:
@@ -262,10 +262,8 @@ cargo clippy --all-targets -- -D warnings
 | `geo::tests::flat_grid_has_no_obstacles_and_a_ridge_does` | Slope boxes, including the open spawn |
 | `geo::tests::bundled_gmu_tile_builds_a_mixed_patch_offline` | Offline bundled Terrarium tile, and that 12 m north is clear |
 | `geo::tests::disabled_config_accepts_placeholder_coordinates` | Tile mode stays off unless enabled |
-| `waypoint::tests::decodes_local_wgs84_and_cancel_and_rejects_the_rest` | Goal JSON codec |
-| `waypoint::tests::wgs84_uses_the_anchor_and_local_goals_stay_inside_the_square` | Frame conversion and world bounds |
-| `waypoint::tests::pursuit_faces_the_goal_and_a_unicycle_arrives` | Pure-pursuit twist into the velocity command |
-| `waypoint::tests::status_json_reports_progress_fields` | `goal/status` JSON |
+| `terra-waypoint` decode, projection, and pursuit tests | Goal JSON, lat/lon tangent plane, and the follower |
+| `terra-mobile` `phone_facade_steers_toward_a_lat_lon_north_of_the_origin` | UniFFI `MobileWaypoint` |
 | `zenoh_bridge::tests::waypoint_goal_drives_north_and_publishes_status` | Bridge accepts `terra/rover/0/goal` and publishes status |
 | `test_goal_payload_matches_the_terra_contract` | Python `encode_goal` matches the JSON contract |
 

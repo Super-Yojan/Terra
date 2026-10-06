@@ -8,6 +8,7 @@ terra-mapping = { path = "../crates/terra-mapping" }
 terra-types = { path = "../crates/terra-types" }
 terra-state = { path = "../crates/terra-state" }
 terra-control = { path = "../crates/terra-control" }
+terra-waypoint = { path = "../crates/terra-waypoint" }
 bevy = {version="0.19.1", features=["bevy_scene", "bevy_gltf"]}
 bevytiles = "0.1.0"
 bevy_water = { path = "vendor/bevy_water", default-features = false, features = ["embed_shaders"] }

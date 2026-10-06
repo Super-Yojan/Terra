@@ -6330,6 +6330,7 @@ dependencies = [
  "terra-state",
  "terra-transport",
  "terra-types",
+ "terra-waypoint",
  "zenoh",
 ]
 
@@ -6673,6 +6674,15 @@ dependencies = [
 [[package]]
 name = "terra-types"
 version = "0.1.0"
+
+[[package]]
+name = "terra-waypoint"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "terra-types",
+]
 
 [[package]]
 name = "thiserror"

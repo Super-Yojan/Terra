@@ -106,10 +106,13 @@ requests use the same size cap; the accepted shapes are below.
 `cmd_vel` remains the debug teleop path: ARGOS or TerraPhone may stream twists,
 and the 500 ms watchdog still applies. The operator contract for a mission goal
 is one message on `terra/rover/<id>/goal`. Terra does not require a refresh.
-While that goal is latched, the waypoint follower owns `DriveCommand` and the
-velocity controller below it. A fresh `cmd_vel` does not preempt it. Publish
-`{"cancel":true}` before using debug teleop again. Holding Space zeros the
-wheels and leaves the goal latched.
+The follower itself is the `terra-waypoint` crate. TerraPhone imports it as
+`MobileWaypoint` from the UniFFI bundle and runs `step` on the phone, then
+passes the twist to `MobileController`. The simulator does not contain a second
+follower: its Zenoh bridge calls that same crate and writes the resulting
+`DriveCommand` into the velocity loop. A fresh `cmd_vel` does not preempt a
+latched goal. Publish `{"cancel":true}` before using debug teleop again.
+Holding Space zeros the wheels and leaves the goal latched.
 
 The goal body is one of these objects and nothing else:
 
@@ -135,13 +138,15 @@ Terra publishes `terra/rover/<id>/goal/status` when the state changes and a few
 times a second while a goal is active:
 
 ```json
-{"state":"active","goal_id":4,"token":"goal-1","distance":6.2,"x":12.0,"y":-4.0,"yaw":0.4}
+{"state":"active","goal_id":4,"token":"goal-1","distance":6.2,"x":12.0,"y":-4.0,"yaw":0.4,"latitude":38.8299,"longitude":-77.3075}
 ```
 
 `state` is `idle`, `active`, or `arrived`. `goal_id` increases for each accepted
-goal and is `0` when idle. `x`, `y`, and `yaw` are the goal in the local frame,
-not the rover pose. `distance` is the remaining horizontal metres. `token` and
-`yaw` are omitted when the goal did not set them. Arrival is within 0.75 m, and
+goal and is `0` when idle. `latitude` and `longitude` are the goal that was
+sent. `x` and `y` are that same goal after the tangent-plane projection
+(`x` north, `y` west), not the rover pose. `distance` is the remaining
+horizontal metres. `token`, `yaw`, `latitude`, and `longitude` are omitted when
+the goal did not set them. Arrival is within 0.75 m, and
 within about 0.12 rad when a final yaw was set. The follower slows inside 3 m,
 turns in place when the heading error is large, and writes a body twist into
 the existing velocity loop. It does not plan around obstacles; the chassis
@@ -149,15 +154,17 @@ stops on Avian collisions.
 
 `python3 tools/zenoh_client.py goto` publishes that JSON once and prints status
 until `arrived`, or until `idle` after `--cancel`. Step-by-step build, tile,
-and test commands are in [WORLD.md](WORLD.md#reproduce-and-test). A 12 m north
-goal stays clear on the bundled Fairfax campus patch:
+and test commands are in [WORLD.md](WORLD.md#reproduce-and-test). The phone-facing
+goal is latitude and longitude. About 12 m north of the Johnson Center stays
+clear on the bundled Fairfax patch:
 
 ```sh
-python3 tools/zenoh_client.py --rover 0 goto --x 12 --y 0 --token gmu-north
+python3 tools/zenoh_client.py --rover 0 goto --lat 38.82981 --lon -77.3075 --token gmu-north
 ```
 
-Key `terra/rover/0/goal`, body `{"frame":"local","x":12.0,"y":0.0,"token":"gmu-north"}`.
-Watch `terra/rover/0/goal/status` for `"state":"arrived"`.
+Key `terra/rover/0/goal`, body `{"frame":"wgs84","latitude":38.82981,"longitude":-77.3075,"token":"gmu-north"}`.
+Watch `terra/rover/0/goal/status` for `"state":"arrived"`. `x` and `y` in that
+status are the projected metres, not the command.
 
 ### ARGOS follow-up
 

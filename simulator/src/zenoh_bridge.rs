@@ -3,7 +3,6 @@ use crate::{
     depth_camera::{DepthCamera, DepthCameraConfig, DepthFrame},
     rgb_camera::RgbFrame,
     terra::{DriveCommand, KeyboardControlled, MAX_ROVERS, Rover, RoverFleet, RoverId},
-    waypoint::{self, GoalCommand, GoalState, GoalStatus, ResolvedGoal, WaypointConfig},
 };
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -13,6 +12,9 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 use std::time::{Duration, Instant};
+use terra_waypoint::{
+    GoalCommand, GoalState, WaypointConfig, WaypointController, decode_goal, encode_status,
+};
 use zenoh::Wait;
 
 #[derive(Clone, Resource)]
@@ -234,23 +236,26 @@ fn decode_fleet_request(bytes: &[u8]) -> Option<usize> {
     (request.count <= MAX_ROVERS).then_some(request.count)
 }
 
-#[derive(Default)]
 struct TrackedGoal {
     seq: u64,
-    goal_id: u64,
-    goal: Option<ResolvedGoal>,
+    follower: WaypointController,
     last_payload: Vec<u8>,
     last_sent: Option<Instant>,
 }
+impl TrackedGoal {
+    fn new() -> Self {
+        Self {
+            seq: 0,
+            follower: WaypointController::new(WaypointConfig::default())
+                .expect("default waypoint configuration"),
+            last_payload: Vec::new(),
+            last_sent: None,
+        }
+    }
+}
 #[derive(Default)]
 struct GoalRuntime {
-    next_id: u64,
     rovers: BTreeMap<u64, TrackedGoal>,
-}
-enum GoalUpdate {
-    Cancel,
-    Ignore,
-    Go(ResolvedGoal),
 }
 
 fn drive_goals(
@@ -271,76 +276,35 @@ fn drive_goals(
         .unwrap_or(500.0);
     let anchor = patch.as_ref().map(|patch| &patch.anchor);
     let paused = keys.is_some_and(|keys| keys.pressed(KeyCode::Space));
-    let gains = WaypointConfig::default();
     let mut seen = std::collections::BTreeSet::new();
     for (id, transform, mut command) in &mut rovers {
         seen.insert(id.0);
-        if let Some(inbox) = incoming.get(&id.0) {
-            let previous = runtime
-                .rovers
-                .get(&id.0)
-                .map(|tracked| tracked.seq)
-                .unwrap_or(0);
-            if inbox.seq != previous {
-                let update = match &inbox.command {
-                    GoalCommand::Cancel => GoalUpdate::Cancel,
-                    command => match waypoint::resolve_goal(command, anchor, half) {
-                        Some(goal) => GoalUpdate::Go(goal),
-                        None => GoalUpdate::Ignore,
-                    },
-                };
-                let goal_id = if matches!(update, GoalUpdate::Go(_)) {
-                    runtime.next_id = runtime.next_id.saturating_add(1).max(1);
-                    runtime.next_id
-                } else {
-                    0
-                };
-                let tracked = runtime.rovers.entry(id.0).or_default();
-                tracked.seq = inbox.seq;
-                match update {
-                    GoalUpdate::Cancel => {
-                        tracked.goal = None;
-                        tracked.goal_id = 0;
-                    }
-                    GoalUpdate::Ignore => {}
-                    GoalUpdate::Go(goal) => {
-                        tracked.goal_id = goal_id;
-                        tracked.goal = Some(goal);
-                    }
-                }
-            }
+        let tracked = runtime.rovers.entry(id.0).or_insert_with(TrackedGoal::new);
+        if let Some(anchor) = anchor {
+            let _ = tracked
+                .follower
+                .set_origin(anchor.latitude, anchor.longitude);
         }
-        let tracked = runtime.rovers.entry(id.0).or_default();
-        let (x, y, yaw) = waypoint::robotics_pose(transform.translation, transform.rotation);
-        let status = if let Some(goal) = tracked.goal.clone() {
-            let output = waypoint::pursuit(x, y, yaw, goal.x, goal.y, goal.yaw, &gains);
-            if paused {
-                *command = DriveCommand::default();
-            } else if output.arrived {
+        if let Some(inbox) = incoming.get(&id.0)
+            && inbox.seq != tracked.seq
+        {
+            tracked.seq = inbox.seq;
+            let _ = tracked.follower.accept(&inbox.command, half);
+        }
+        let (x, y, yaw) = robotics_pose(transform.translation, transform.rotation);
+        let output = tracked.follower.step(x, y, yaw);
+        if output.status.state != GoalState::Idle {
+            if paused || output.status.state != GoalState::Active {
                 *command = DriveCommand::default();
             } else {
                 *command = DriveCommand {
-                    linear: output.linear,
-                    angular: output.angular,
+                    linear: output.linear as f32,
+                    angular: output.angular as f32,
                 };
             }
-            GoalStatus {
-                state: if output.arrived {
-                    GoalState::Arrived
-                } else {
-                    GoalState::Active
-                },
-                goal_id: tracked.goal_id,
-                token: goal.token.clone(),
-                distance: f64::from(output.distance),
-                x: f64::from(goal.x),
-                y: f64::from(goal.y),
-                yaw: goal.yaw.map(f64::from),
-            }
-        } else {
-            GoalStatus::idle()
-        };
-        let Some(payload) = waypoint::encode_status(&status) else {
+        }
+        let status = output.status;
+        let Some(payload) = encode_status(&status) else {
             continue;
         };
         let period = if status.state == GoalState::Idle {
@@ -365,6 +329,16 @@ fn drive_goals(
     }
     runtime.rovers.retain(|id, _| seen.contains(id));
 }
+/// Bevy pose to the robotics frame `terra-waypoint` steps: x = −Z, y = −X, yaw 0 faces −Z.
+fn robotics_pose(translation: Vec3, rotation: Quat) -> (f64, f64, f64) {
+    let forward = rotation * Vec3::NEG_Z;
+    (
+        f64::from(-translation.z),
+        f64::from(-translation.x),
+        f64::from((-forward.x).atan2(-forward.z)),
+    )
+}
+
 fn run_transport(config: &ZenohBridgeConfig, shared: &Arc<Shared>) -> zenoh::Result<()> {
     let session = zenoh::open(config.session_config()?).wait()?;
     let incoming = shared.clone();
@@ -400,7 +374,7 @@ fn run_transport(config: &ZenohBridgeConfig, shared: &Arc<Shared>) -> zenoh::Res
             else {
                 return;
             };
-            let Some(command) = waypoint::decode_goal(&sample.payload().to_bytes()) else {
+            let Some(command) = decode_goal(&sample.payload().to_bytes()) else {
                 return;
             };
             if !incoming.commands.lock().unwrap().contains_key(&id) {

@@ -22,6 +22,22 @@ The starter app assumes the phone lies flat, screen upward, with its top edge po
 
 Zero effort means coast, not a mechanical brake. The motor adapter, enable switch, and command watchdog are specified in [Motor adapter](#motor-adapter). Physical phone sensing and hardware actuation have not been validated on a rover.
 
+## Waypoint follower
+
+`terra-waypoint` turns one WGS84 goal into a body twist. It does not live in the simulator. TerraPhone imports `MobileWaypoint` from the same UniFFI bundle as `MobileController`.
+
+Set the pose origin to the map anchor (the simulator's tile anchor, or the phone's pose origin), latch one goal, and step with the rover's local pose. `x` is metres north of that origin, `y` is metres west, and yaw `0` faces north. Pass `forward` and `yaw_rate` from `step` into `MobileController.set_target`. The velocity PI below it is unchanged.
+
+```swift
+let follower = try MobileWaypoint(settings: defaultWaypointSettings())
+try follower.setOrigin(latitude: 38.8297, longitude: -77.3075)
+_ = try follower.setGoal(latitude: 38.82981, longitude: -77.3075, yaw: nil, token: "gmu-north", halfExtent: 49)
+let step = try follower.step(x: vioNorth, y: vioWest, yaw: heading)
+try controller.setTarget(target: TwistSetpoint(timestamp: now, forward: step.forward, yawRate: step.yawRate))
+```
+
+`setGoal` returns false when the origin is missing or the point lies outside `halfExtent`. `cancel` drops the latch. `step` reports `latitude` and `longitude` of the goal; `localX` and `localY` are the tangent-plane metres the follower is steering toward. The simulator's Zenoh bridge calls this crate when a goal arrives, so a headless run uses the same follower the phone will.
+
 ## Motor adapter
 
 `terra-motors` sits behind `MotorOutput`. `map_effort` converts one signed effort to a PWM duty in `[0, 1]` and a direction. `MotorAdapter` applies that to both wheels and returns a `ChassisPwm` to write to the driver. The iOS UI does not call it. The simulator still turns controller effort into Avian forces rather than PWM. Run `cargo test -p terra-motors` for the mapping, enable gate, and watchdog tests. Crate details and the bench checklist are in [crates/terra-motors/README.md](../crates/terra-motors/README.md).
