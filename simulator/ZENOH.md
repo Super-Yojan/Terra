@@ -52,7 +52,7 @@ metadata, and an RGB PPM image. `rgb.npy` has shape `(height, width, 4)` and uin
 sRGB RGBA channels. `depth.npy` has shape `(height, width)` and float32 axial
 metres; NaN means no valid depth return.
 
-Drive a particular rover for five seconds:
+Drive a particular rover for five seconds. This is the debug twist path:
 
 ```sh
 python3 tools/zenoh_client.py --rover 0 drive --linear 1.0 --angular 0.3 --seconds 5
@@ -64,9 +64,20 @@ speed saturation and Avian collisions still apply. Each rover stops when it has
 no fresh command for 500 ms, or the transport fails. Holding Space stops all
 remote-controlled rovers. Invalid commands do not renew the timeout.
 
-Zenoh owns driving while enabled. For local W/A/S/D control of the primary rover,
-start with `TERRA_ZENOH=0`; fleet size can still be changed through the Bevy
-resource API below, but network operations are disabled.
+Send one go-to-waypoint goal instead of streaming twists. Terra latches it and
+drives with the onboard velocity loop. See [Go to waypoint](#go-to-waypoint).
+
+```sh
+python3 tools/zenoh_client.py --rover 0 goto --x 12 --y -4
+python3 tools/zenoh_client.py --rover 0 goto --lat 38.8299 --lon -77.3075
+python3 tools/zenoh_client.py --rover 0 goto --cancel
+```
+
+Zenoh owns driving while enabled. A latched goal overrides debug twists until
+it is cancelled. For local W/A/S/D control of the primary rover, start with
+`TERRA_ZENOH=0`; fleet size can still be changed through the Bevy resource API
+below, but network operations are disabled. Real-world tiles are independent of
+Zenoh; see [WORLD.md](WORLD.md#real-world-tiles).
 
 ## Topics and wire formats
 
@@ -75,7 +86,9 @@ rover. The per-rover keys are:
 
 | Key | Payload |
 | --- | --- |
-| `terra/rover/<id>/cmd_vel` | JSON `{"linear":1.0,"angular":0.3}` |
+| `terra/rover/<id>/cmd_vel` | JSON `{"linear":1.0,"angular":0.3}` (debug twist) |
+| `terra/rover/<id>/goal` | JSON go-to-waypoint, published once and latched |
+| `terra/rover/<id>/goal/status` | JSON progress for the latched goal |
 | `terra/rover/<id>/camera/rgb` | Frame packet, `RGBA8_SRGB` |
 | `terra/rover/<id>/camera/depth` | Frame packet, `32FC1_LE` |
 | `terra/rover/fleet/size` | JSON `{"count":3}` |
@@ -85,7 +98,84 @@ Fleet state is published on changes and every second for clients that connect
 later. Count is the actual number of spawned rovers; it acknowledges a size
 request once the spawn/removal completes. Commands for inactive IDs are ignored.
 Drive and fleet requests must be valid JSON with exactly the fields above and
-fit within 2048 bytes. Count must be an integer from 0 through 32.
+fit within 2048 bytes. Count must be an integer from 0 through 32. Goal
+requests use the same size cap; the accepted shapes are below.
+
+## Go to waypoint
+
+`cmd_vel` remains the debug teleop path: ARGOS or TerraPhone may stream twists,
+and the 500 ms watchdog still applies. The operator contract for a mission goal
+is one message on `terra/rover/<id>/goal`. Terra does not require a refresh.
+The follower itself is the `terra-waypoint` crate. TerraPhone imports it as
+`MobileWaypoint` from the UniFFI bundle and runs `step` on the phone, then
+passes the twist to `MobileController`. The simulator does not contain a second
+follower: its Zenoh bridge calls that same crate and writes the resulting
+`DriveCommand` into the velocity loop. A fresh `cmd_vel` does not preempt a
+latched goal. Publish `{"cancel":true}` before using debug teleop again.
+Holding Space zeros the wheels and leaves the goal latched.
+
+The goal body is one of these objects and nothing else:
+
+```json
+{"frame":"local","x":12.0,"y":-4.0}
+{"frame":"local","x":12.0,"y":-4.0,"yaw":0.4,"token":"goal-1"}
+{"frame":"wgs84","latitude":38.8299,"longitude":-77.3075}
+{"cancel":true}
+```
+
+`x` and `y` are metres in the same robotics frame as depth `body`: `x` is
+`-Bevy Z`, `y` is `-Bevy X`, and yaw 0 faces +x. In the flat world that is
+simply the practice square, spawn at `(0, 0)`. With `TERRA_TILES=1`, `+x` is
+north and `+y` is west of the configured latitude and longitude. Optional `yaw`
+is radians in `[-2π, 2π]` and is the heading to hold after the position is
+reached. Optional `token` is 1 to 64 characters from `[A-Za-z0-9._:-]` and is
+echoed so a client can correlate a goal. `wgs84` is accepted only while a tile
+anchor is loaded; Terra converts it into local metres. Targets outside the
+ground square (one metre inside the edge) are ignored and do not replace the
+current goal. Commands for an id that is not spawned are ignored.
+
+Terra publishes `terra/rover/<id>/goal/status` when the state changes and a few
+times a second while a goal is active:
+
+```json
+{"state":"active","goal_id":4,"token":"goal-1","distance":6.2,"x":12.0,"y":-4.0,"yaw":0.4,"latitude":38.8299,"longitude":-77.3075}
+```
+
+`state` is `idle`, `active`, or `arrived`. `goal_id` increases for each accepted
+goal and is `0` when idle. `latitude` and `longitude` are the goal that was
+sent. `x` and `y` are that same goal after the tangent-plane projection
+(`x` north, `y` west), not the rover pose. `distance` is the remaining
+horizontal metres. `token`, `yaw`, `latitude`, and `longitude` are omitted when
+the goal did not set them. Arrival is within 0.75 m, and
+within about 0.12 rad when a final yaw was set. The follower slows inside 3 m,
+turns in place when the heading error is large, and writes a body twist into
+the existing velocity loop. It does not plan around obstacles; the chassis
+stops on Avian collisions.
+
+`python3 tools/zenoh_client.py goto` publishes that JSON once and prints status
+until `arrived`, or until `idle` after `--cancel`. Step-by-step build, tile,
+and test commands are in [WORLD.md](WORLD.md#reproduce-and-test). The phone-facing
+goal is latitude and longitude. About 12 m north of the Johnson Center stays
+clear on the bundled Fairfax patch:
+
+```sh
+python3 tools/zenoh_client.py --rover 0 goto --lat 38.82981 --lon -77.3075 --token gmu-north
+```
+
+Key `terra/rover/0/goal`, body `{"frame":"wgs84","latitude":38.82981,"longitude":-77.3075,"token":"gmu-north"}`.
+Watch `terra/rover/0/goal/status` for `"state":"arrived"`. `x` and `y` in that
+status are the projected metres, not the command.
+
+### ARGOS follow-up
+
+ARGOS does not speak this topic yet. `docs/DESIGN.md` there already says goal
+keys land in `src/argos/contract.py` after Terra specifies them. The follow-up
+in `Super-Yojan/ARGOS` is:
+
+- Add `TerraTopics.goal(rover_id)` → `<prefix>/<id>/goal` and `goal_status` → `<prefix>/<id>/goal/status`.
+- Add `encode_goal` for the three bodies above, with the same 2048-byte cap as `encode_twist`.
+- Add a CLI (and later a supervisor call) that publishes **once**, then watches `goal/status` until `goal_id` advances and `state` is `arrived`. Do not refresh the goal at 20 Hz.
+- Leave `cmd_vel` / `encode_twist` marked as the debug path. A latched Terra goal ignores twists until `{"cancel":true}`.
 
 A frame packet is a UTF-8 JSON header, a single newline byte, then contiguous
 pixel bytes. The header contains:

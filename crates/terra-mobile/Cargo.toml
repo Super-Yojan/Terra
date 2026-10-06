@@ -10,6 +10,7 @@ terra-mapping.workspace = true
 terra-types.workspace = true
 terra-state.workspace = true
 terra-control.workspace = true
+terra-waypoint.workspace = true
 uniffi.workspace = true
 thiserror = "2"
 [features]

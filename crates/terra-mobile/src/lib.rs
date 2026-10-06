@@ -6,8 +6,10 @@ use terra_types::*;
 uniffi::setup_scaffolding!();
 mod mapping;
 mod transport;
+mod waypoint;
 pub use mapping::*;
 pub use transport::*;
+pub use waypoint::*;
 
 #[derive(Clone, Debug, uniffi::Record)]
 pub struct ControlSettings {

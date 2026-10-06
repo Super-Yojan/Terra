@@ -1,4 +1,5 @@
 mod depth_camera;
+mod geo;
 mod landscape;
 mod occupancy_map;
 mod physics;
@@ -21,7 +22,9 @@ fn main() {
         .add_plugins((
             DefaultPlugins,
             TerraPhysicsPlugin,
-            TerraWorldPlugin::default(),
+            TerraWorldPlugin {
+                config: world::WorldConfig::from_env().expect("invalid Terra world configuration"),
+            },
             TerraPlugin::default(),
             velocity_controller::TerraVelocityControlPlugin,
             TerraDepthCameraPlugin::default(),

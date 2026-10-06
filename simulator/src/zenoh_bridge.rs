@@ -12,6 +12,9 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 use std::time::{Duration, Instant};
+use terra_waypoint::{
+    GoalCommand, GoalState, WaypointConfig, WaypointController, decode_goal, encode_status,
+};
 use zenoh::Wait;
 
 #[derive(Clone, Resource)]
@@ -107,7 +110,7 @@ impl Plugin for TerraZenohPlugin {
                     claim_rovers.after(crate::terra::reconcile_fleet),
                 ),
             )
-            .add_systems(FixedUpdate, apply_remote_commands)
+            .add_systems(FixedUpdate, (apply_remote_commands, drive_goals).chain())
             .add_systems(Update, publish_frames);
     }
 }
@@ -115,11 +118,19 @@ impl Plugin for TerraZenohPlugin {
 struct Outgoing {
     frames: BTreeMap<(u64, &'static str), Vec<u8>>,
     fleet: Option<Vec<u8>>,
+    goals: BTreeMap<u64, Vec<u8>>,
+}
+#[derive(Clone)]
+struct GoalInbox {
+    seq: u64,
+    command: GoalCommand,
 }
 type LeasedCommand = Option<(DriveCommand, Instant)>;
 #[derive(Default)]
 struct Shared {
     commands: Mutex<BTreeMap<u64, LeasedCommand>>,
+    goals: Mutex<BTreeMap<u64, GoalInbox>>,
+    goal_seq: std::sync::atomic::AtomicU64,
     fleet_request: Mutex<Option<usize>>,
     outgoing: Mutex<Outgoing>,
     connected: AtomicBool,
@@ -224,6 +235,110 @@ fn decode_fleet_request(bytes: &[u8]) -> Option<usize> {
     let request: FleetRequest = serde_json::from_slice(bytes).ok()?;
     (request.count <= MAX_ROVERS).then_some(request.count)
 }
+
+struct TrackedGoal {
+    seq: u64,
+    follower: WaypointController,
+    last_payload: Vec<u8>,
+    last_sent: Option<Instant>,
+}
+impl TrackedGoal {
+    fn new() -> Self {
+        Self {
+            seq: 0,
+            follower: WaypointController::new(WaypointConfig::default())
+                .expect("default waypoint configuration"),
+            last_payload: Vec::new(),
+            last_sent: None,
+        }
+    }
+}
+#[derive(Default)]
+struct GoalRuntime {
+    rovers: BTreeMap<u64, TrackedGoal>,
+}
+
+fn drive_goals(
+    bridge: Res<Bridge>,
+    world: Option<Res<crate::world::WorldConfig>>,
+    patch: Option<Res<crate::geo::GeoPatch>>,
+    keys: Option<Res<ButtonInput<KeyCode>>>,
+    mut rovers: Query<
+        (&RoverId, &Transform, &mut DriveCommand),
+        (With<Rover>, With<ZenohControlled>),
+    >,
+    mut runtime: Local<GoalRuntime>,
+) {
+    let incoming = bridge.shared.goals.lock().unwrap().clone();
+    let half = world
+        .as_ref()
+        .map(|world| (f64::from(world.size) * 0.5 - 1.0).max(1.0))
+        .unwrap_or(500.0);
+    let anchor = patch.as_ref().map(|patch| &patch.anchor);
+    let paused = keys.is_some_and(|keys| keys.pressed(KeyCode::Space));
+    let mut seen = std::collections::BTreeSet::new();
+    for (id, transform, mut command) in &mut rovers {
+        seen.insert(id.0);
+        let tracked = runtime.rovers.entry(id.0).or_insert_with(TrackedGoal::new);
+        if let Some(anchor) = anchor {
+            let _ = tracked
+                .follower
+                .set_origin(anchor.latitude, anchor.longitude);
+        }
+        if let Some(inbox) = incoming.get(&id.0)
+            && inbox.seq != tracked.seq
+        {
+            tracked.seq = inbox.seq;
+            let _ = tracked.follower.accept(&inbox.command, half);
+        }
+        let (x, y, yaw) = robotics_pose(transform.translation, transform.rotation);
+        let output = tracked.follower.step(x, y, yaw);
+        if output.status.state != GoalState::Idle {
+            if paused || output.status.state != GoalState::Active {
+                *command = DriveCommand::default();
+            } else {
+                *command = DriveCommand {
+                    linear: output.linear as f32,
+                    angular: output.angular as f32,
+                };
+            }
+        }
+        let status = output.status;
+        let Some(payload) = encode_status(&status) else {
+            continue;
+        };
+        let period = if status.state == GoalState::Idle {
+            Duration::from_secs(1)
+        } else {
+            Duration::from_millis(200)
+        };
+        let due = tracked
+            .last_sent
+            .is_none_or(|sent| sent.elapsed() >= period);
+        if payload != tracked.last_payload || due {
+            bridge
+                .shared
+                .outgoing
+                .lock()
+                .unwrap()
+                .goals
+                .insert(id.0, payload.clone());
+            tracked.last_payload = payload;
+            tracked.last_sent = Some(Instant::now());
+        }
+    }
+    runtime.rovers.retain(|id, _| seen.contains(id));
+}
+/// Bevy pose to the robotics frame `terra-waypoint` steps: x = −Z, y = −X, yaw 0 faces −Z.
+fn robotics_pose(translation: Vec3, rotation: Quat) -> (f64, f64, f64) {
+    let forward = rotation * Vec3::NEG_Z;
+    (
+        f64::from(-translation.z),
+        f64::from(-translation.x),
+        f64::from((-forward.x).atan2(-forward.z)),
+    )
+}
+
 fn run_transport(config: &ZenohBridgeConfig, shared: &Arc<Shared>) -> zenoh::Result<()> {
     let session = zenoh::open(config.session_config()?).wait()?;
     let incoming = shared.clone();
@@ -247,6 +362,36 @@ fn run_transport(config: &ZenohBridgeConfig, shared: &Arc<Shared>) -> zenoh::Res
         })
         .wait()?;
     let incoming = shared.clone();
+    let prefix = config.prefix.clone();
+    let _goal_subscriber = session
+        .declare_subscriber(format!("{prefix}/*/goal"))
+        .callback(move |sample| {
+            let key = sample.key_expr().as_str();
+            let Some(id) = key
+                .strip_prefix(&format!("{prefix}/"))
+                .and_then(|key| key.strip_suffix("/goal"))
+                .and_then(|id| id.parse::<u64>().ok())
+            else {
+                return;
+            };
+            let Some(command) = decode_goal(&sample.payload().to_bytes()) else {
+                return;
+            };
+            if !incoming.commands.lock().unwrap().contains_key(&id) {
+                return;
+            }
+            let seq = incoming
+                .goal_seq
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                + 1;
+            incoming
+                .goals
+                .lock()
+                .unwrap()
+                .insert(id, GoalInbox { seq, command });
+        })
+        .wait()?;
+    let incoming = shared.clone();
     let _fleet_subscriber = session
         .declare_subscriber(format!("{}/fleet/size", config.prefix))
         .callback(move |sample| {
@@ -257,8 +402,8 @@ fn run_transport(config: &ZenohBridgeConfig, shared: &Arc<Shared>) -> zenoh::Res
         .wait()?;
     shared.connected.store(true, Ordering::Release);
     info!(
-        "Terra Zenoh ready: {}/<id>/cmd_vel, {}/<id>/camera/{{rgb,depth}} (depth includes exposure pose), {}/fleet/{{size,state}}",
-        config.prefix, config.prefix, config.prefix
+        "Terra Zenoh ready: {}/<id>/{{cmd_vel,goal}}, {}/<id>/goal/status, {}/<id>/camera/{{rgb,depth}} (depth includes exposure pose), {}/fleet/{{size,state}}",
+        config.prefix, config.prefix, config.prefix, config.prefix
     );
     while !shared.stop.load(Ordering::Acquire) {
         let outgoing = std::mem::take(&mut *shared.outgoing.lock().unwrap());
@@ -275,6 +420,18 @@ fn run_transport(config: &ZenohBridgeConfig, shared: &Arc<Shared>) -> zenoh::Res
         if let Some(state) = outgoing.fleet {
             session
                 .put(format!("{}/fleet/state", config.prefix), state)
+                .encoding(zenoh::bytes::Encoding::APPLICATION_JSON)
+                .congestion_control(zenoh::qos::CongestionControl::Drop)
+                .wait()?;
+        }
+        let live: std::collections::BTreeSet<u64> =
+            shared.commands.lock().unwrap().keys().copied().collect();
+        for (id, payload) in outgoing.goals {
+            if !live.contains(&id) {
+                continue;
+            }
+            session
+                .put(format!("{}/{id}/goal/status", config.prefix), payload)
                 .encoding(zenoh::bytes::Encoding::APPLICATION_JSON)
                 .congestion_control(zenoh::qos::CongestionControl::Drop)
                 .wait()?;
@@ -830,6 +987,58 @@ mod tests {
         app.world_mut().run_schedule(FixedUpdate);
         assert_eq!(app.world().get::<DriveCommand>(first).unwrap().linear, 1.0);
         assert_eq!(app.world().get::<DriveCommand>(second).unwrap().linear, 0.0);
+    }
+    #[test]
+    fn waypoint_goal_drives_north_and_publishes_status() {
+        let shared = Arc::new(Shared::default());
+        shared.connected.store(true, Ordering::Release);
+        shared.commands.lock().unwrap().insert(0, None);
+        shared.goals.lock().unwrap().insert(
+            0,
+            GoalInbox {
+                seq: 1,
+                command: GoalCommand::Local {
+                    x: 10.0,
+                    y: 0.0,
+                    yaw: None,
+                    token: Some("goal-1".into()),
+                },
+            },
+        );
+        let mut app = App::new();
+        app.insert_resource(Bridge {
+            shared: shared.clone(),
+        })
+        .insert_resource(ZenohBridgeConfig::default())
+        .add_systems(FixedUpdate, drive_goals);
+        app.world_mut().spawn((
+            Rover,
+            RoverId(0),
+            ZenohControlled,
+            Transform::default(),
+            DriveCommand::default(),
+        ));
+        app.world_mut().run_schedule(FixedUpdate);
+        let world = app.world_mut();
+        let command = world
+            .query_filtered::<&DriveCommand, With<Rover>>()
+            .single(world)
+            .unwrap();
+        assert!(command.linear > 0.5, "{}", command.linear);
+        assert!(command.angular.abs() < 0.05, "{}", command.angular);
+        let payload = shared
+            .outgoing
+            .lock()
+            .unwrap()
+            .goals
+            .get(&0)
+            .cloned()
+            .unwrap();
+        let status: serde_json::Value = serde_json::from_slice(&payload).unwrap();
+        assert_eq!(status["state"], "active");
+        assert_eq!(status["goal_id"], 1);
+        assert_eq!(status["token"], "goal-1");
+        assert!(status["distance"].as_f64().unwrap() > 9.0);
     }
     #[test]
     fn fleet_requests_validate_count_and_apply_to_the_resource() {
