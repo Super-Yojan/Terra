@@ -170,6 +170,7 @@ struct Brain {
     run_start: Option<f64>,
     run_id: String,
     sequence: u64,
+    last_map_publish: Option<f64>,
     dashboard: Option<terra_transport::ControlPlane>,
 }
 #[derive(uniffi::Object)]
@@ -199,6 +200,7 @@ impl MobileController {
                         .as_nanos()
                 ),
                 sequence: 0,
+                last_map_publish: None,
                 dashboard: None,
             }),
         }))
@@ -390,6 +392,13 @@ impl MobileController {
             p.expires_at -= start;
             p
         });
+        let publish_map = map.is_some()
+            && brain
+                .last_map_publish
+                .is_none_or(|last| timestamp - last >= 0.2);
+        if publish_map {
+            brain.last_map_publish = Some(timestamp);
+        }
         if let Some(d) = brain.dashboard.as_ref() {
             d.publish("experiment/status",serde_json::json!({"run_id":brain.run_id,"run_elapsed":timestamp-start,"schema_version":1,"utc":std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs_f64(),"recording":brain.recorder.as_ref().is_some_and(|r|!r.failed())}).to_string());
             d.publish(
@@ -401,6 +410,13 @@ impl MobileController {
                 "goal/proposal",
                 serde_json::to_string(&wire_proposal).unwrap(),
             );
+            if publish_map && let Some((grid, _, sequence)) = map.as_ref() {
+                d.publish(
+                    "map/occupancy",
+                    terra_autonomy::occupancy_telemetry(d.rover_id, &brain.run_id, *sequence, grid)
+                        .to_string(),
+                );
+            }
             d.publish("pose",serde_json::json!({"rover_id":d.rover_id,"sequence":brain.sequence,"x":pose.0.x,"y":pose.0.y,"yaw":pose.0.yaw}).to_string());
         }
         brain.autonomy_json =
