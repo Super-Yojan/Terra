@@ -24,7 +24,7 @@ pub struct RoverOccupancyMap {
 }
 /// Convert optical X-right/Y-down/Z-forward into Bevy camera X-right/Y-up/-Z-forward,
 /// then Bevy world into robotics world (-Z, -X, Y).
-fn camera_pose(transform: &GlobalTransform) -> CameraPose {
+pub(crate) fn camera_pose(transform: &GlobalTransform) -> CameraPose {
     let t = transform.compute_transform();
     let world_from_bevy = Quat::from_mat3(&Mat3::from_cols(
         Vec3::new(0.0, -1.0, 0.0),
@@ -45,6 +45,14 @@ fn camera_pose(transform: &GlobalTransform) -> CameraPose {
             w: q.w as f64,
         },
     }
+}
+/// Rover origin in robotics XY, and yaw of body forward (Bevy −Z) about world up.
+pub(crate) fn body_pose(transform: &GlobalTransform) -> (f64, f64, f64) {
+    let t = transform.compute_transform();
+    let forward = t.rotation * -Vec3::Z;
+    let x = -forward.z as f64;
+    let y = -forward.x as f64;
+    (-t.translation.z as f64, -t.translation.x as f64, y.atan2(x))
 }
 fn update_maps(
     mut commands: Commands,
@@ -128,6 +136,17 @@ mod tests {
         assert!((down.z + 1.0).abs() < 1e-6);
     }
     #[test]
+    fn body_pose_uses_robotics_axes_and_bevy_heading() {
+        let straight = body_pose(&GlobalTransform::from(Transform::from_xyz(2.0, 0.4, -3.0)));
+        assert!((straight.0 - 3.0).abs() < 1e-6);
+        assert!((straight.1 + 2.0).abs() < 1e-6);
+        assert!(straight.2.abs() < 1e-5);
+        let turned = body_pose(&GlobalTransform::from(Transform::from_rotation(
+            Quat::from_rotation_y(std::f32::consts::FRAC_PI_2),
+        )));
+        assert!((turned.2 - std::f64::consts::FRAC_PI_2).abs() < 1e-5);
+    }
+    #[test]
     fn late_frame_uses_exposure_pose_and_maps_are_independent() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
@@ -162,6 +181,7 @@ mod tests {
                     sensor: Entity::PLACEHOLDER,
                     timestamp: 1.0,
                     camera_transform: GlobalTransform::from(Transform::from_xyz(-0.25, 0.5, -0.25)),
+                    body_transform: GlobalTransform::from(Transform::from_xyz(0.0, 0.0, -1.0)),
                 }),
             },
             ChildOf(rover),

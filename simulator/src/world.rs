@@ -10,11 +10,47 @@ pub struct TerraWorldPlugin {
 
 impl Plugin for TerraWorldPlugin {
     fn build(&self, app: &mut App) {
-        self.config
+        let mut config = self.config.clone();
+        let tiles_requested = config.tiles.enabled;
+        if tiles_requested {
+            // The practice town is replaced only after a tile patch actually loads.
+            config.landscape.enabled = false;
+        }
+        config
             .validate()
             .expect("invalid Terra world configuration");
-        crate::landscape::install(app, &self.config);
-        app.insert_resource(self.config.clone())
+        let patch = if tiles_requested {
+            match crate::geo::load_patch(&config.tiles, config.size) {
+                Ok(patch) => {
+                    eprintln!(
+                        "Terra tiles: {} cells around {:.5}, {:.5} zoom {} ({} obstacles, origin elevation {:.1} m)",
+                        patch.cells.len(),
+                        patch.anchor.latitude,
+                        patch.anchor.longitude,
+                        patch.anchor.zoom,
+                        patch.cells.iter().filter(|cell| cell.obstacle).count(),
+                        patch.origin_elevation
+                    );
+                    Some(patch)
+                }
+                Err(error) => {
+                    eprintln!("Terra tiles: {error}. Continuing with the flat practice world.");
+                    config.tiles.enabled = false;
+                    config.landscape = self.config.landscape.clone();
+                    if config.validate().is_err() {
+                        config.landscape.enabled = false;
+                    }
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        crate::landscape::install(app, &config);
+        if patch.is_some() {
+            app.add_systems(Startup, crate::geo::spawn_patch);
+        }
+        app.insert_resource(config)
             .insert_resource(ClearColor(Color::srgb(0.65, 0.78, 0.88)))
             .insert_resource(GlobalAmbientLight {
                 brightness: 220.0,
@@ -22,6 +58,9 @@ impl Plugin for TerraWorldPlugin {
             })
             .add_systems(Startup, generate_world)
             .add_systems(PostUpdate, follow_rover.before(TransformSystems::Propagate));
+        if let Some(patch) = patch {
+            app.insert_resource(patch);
+        }
     }
 }
 
@@ -38,6 +77,7 @@ pub struct WorldConfig {
     pub follow_rover: bool,
     pub show_grid: bool,
     pub landscape: LandscapeConfig,
+    pub tiles: crate::geo::GeoTileConfig,
 }
 
 impl Default for WorldConfig {
@@ -50,11 +90,34 @@ impl Default for WorldConfig {
             follow_rover: true,
             show_grid: false,
             landscape: LandscapeConfig::default(),
+            tiles: crate::geo::GeoTileConfig::default(),
         }
     }
 }
 
 impl WorldConfig {
+    pub fn from_env() -> Result<Self, String> {
+        let mut config = Self::default();
+        if let Ok(value) = std::env::var("TERRA_WORLD_SIZE") {
+            config.size = value
+                .parse()
+                .map_err(|_| "TERRA_WORLD_SIZE must be a number of metres".to_owned())?;
+        }
+        config.tiles = crate::geo::GeoTileConfig::from_env()?;
+        if std::env::var("TERRA_MISSION").as_deref() == Ok("1") {
+            config.tiles.enabled = false;
+            config.landscape.enabled = false;
+            config.size = 100.;
+        }
+        if let Ok(seed) = std::env::var("TERRA_MISSION_SEED") {
+            config.landscape.seed = seed
+                .parse()
+                .map_err(|_| "invalid mission seed".to_owned())?;
+        }
+        config.validate().map_err(str::to_owned)?;
+        Ok(config)
+    }
+
     pub fn validate(&self) -> Result<(), &'static str> {
         if !self.size.is_finite()
             || self.size <= 0.0
@@ -77,6 +140,10 @@ impl WorldConfig {
             return Err("camera response must be finite and positive");
         }
         self.landscape.validate(self.size)?;
+        self.tiles.validate()?;
+        if self.tiles.enabled && !(40.0..=512.0).contains(&self.size) {
+            return Err("tile worlds must be 40 to 512 metres wide");
+        }
         Ok(())
     }
 }

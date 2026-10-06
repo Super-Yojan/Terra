@@ -31,6 +31,29 @@ def decode_frame(payload):
     return header, np.frombuffer(pixels, dtype=dtype).reshape(shape).copy()
 
 
+def encode_goal(args):
+    """JSON body for terra/rover/<id>/goal. One publish; Terra latches it."""
+    if args.cancel:
+        return json.dumps({"cancel": True})
+    payload = {}
+    if args.lat is not None or args.lon is not None:
+        if args.lat is None or args.lon is None or args.x is not None or args.y is not None:
+            raise ValueError("pass both --lat and --lon, or both --x and --y")
+        payload = {"frame": "wgs84", "latitude": args.lat, "longitude": args.lon}
+    else:
+        if args.x is None or args.y is None:
+            raise ValueError("pass both --x and --y, or both --lat and --lon, or --cancel")
+        payload = {"frame": "local", "x": args.x, "y": args.y}
+    if args.yaw is not None:
+        payload["yaw"] = args.yaw
+    if args.token:
+        payload["token"] = args.token
+    body = json.dumps(payload)
+    if len(body.encode()) > 2048:
+        raise ValueError("goal payload exceeds 2048 bytes")
+    return body
+
+
 def main():
     import zenoh
     parser = argparse.ArgumentParser(description=__doc__)
@@ -41,10 +64,19 @@ def main():
     frames = actions.add_parser("frames", help="Receive RGB and depth frames")
     frames.add_argument("--all", action="store_true", help="Receive every rover camera")
     frames.add_argument("--output", type=Path, help="Overwrite latest .npy frames and JSON metadata here")
-    drive = actions.add_parser("drive", help="Repeat a velocity command at 20 Hz")
+    drive = actions.add_parser("drive", help="Debug only: repeat a velocity command at 20 Hz")
     drive.add_argument("--linear", type=float, default=0.0, help="Forward speed in m/s")
     drive.add_argument("--angular", type=float, default=0.0, help="Left turn in rad/s")
     drive.add_argument("--seconds", type=float, default=5.0)
+    goto = actions.add_parser("goto", help="Send one go-to-waypoint goal and print status")
+    goto.add_argument("--x", type=float, help="Local robotics x, metres north of the anchor")
+    goto.add_argument("--y", type=float, help="Local robotics y, metres west of the anchor")
+    goto.add_argument("--yaw", type=float, help="Optional final heading, radians, yaw 0 faces +x")
+    goto.add_argument("--lat", type=float, help="WGS84 latitude; requires a Terra tile anchor")
+    goto.add_argument("--lon", type=float, help="WGS84 longitude")
+    goto.add_argument("--token", help="Optional correlation token, echoed in goal/status")
+    goto.add_argument("--cancel", action="store_true", help="Clear the latched goal")
+    goto.add_argument("--timeout", type=float, default=45.0)
     fleet = actions.add_parser("fleet", help="List IDs or change the fleet size")
     fleet.add_argument("--count", type=int, help="Desired count, 0 through 32")
     args = parser.parse_args()
@@ -55,6 +87,15 @@ def main():
     if args.action == "drive" and (not all(math.isfinite(x) for x in
             (args.linear, args.angular, args.seconds)) or args.seconds <= 0):
         parser.error("Drive values must be finite and duration must be positive")
+    if args.action == "goto":
+        numbers = [value for value in (args.x, args.y, args.yaw, args.lat, args.lon, args.timeout)
+                   if value is not None]
+        if not all(math.isfinite(value) for value in numbers) or args.timeout <= 0:
+            parser.error("Goto values must be finite and timeout must be positive")
+        try:
+            goal_payload = encode_goal(args)
+        except ValueError as error:
+            parser.error(str(error))
     config = zenoh.Config()
     config.insert_json5("mode", json.dumps("client"))
     config.insert_json5("connect/endpoints", json.dumps([args.endpoint]))
@@ -72,6 +113,41 @@ def main():
                 pass
             finally:
                 session.put(key, json.dumps({"linear": 0.0, "angular": 0.0}))
+        elif args.action == "goto":
+            status_key = f"{args.prefix}/{args.rover}/goal/status"
+            goal_key = f"{args.prefix}/{args.rover}/goal"
+            seen, event = {}, threading.Event()
+
+            def receive_status(sample):
+                nonlocal seen
+                try:
+                    seen = json.loads(bytes(sample.payload))
+                except json.JSONDecodeError:
+                    return
+                event.set()
+
+            subscriber = session.declare_subscriber(status_key, receive_status)
+            try:
+                event.wait(0.3)
+                previous = seen.get("goal_id", 0) if isinstance(seen, dict) else 0
+                event.clear()
+                session.put(goal_key, goal_payload)
+                deadline = time.monotonic() + args.timeout
+                while time.monotonic() < deadline:
+                    event.wait(0.2)
+                    event.clear()
+                    if not isinstance(seen, dict) or "state" not in seen:
+                        continue
+                    print(json.dumps(seen))
+                    state = seen.get("state")
+                    goal_id = seen.get("goal_id", 0)
+                    if args.cancel and state == "idle":
+                        return
+                    if not args.cancel and goal_id != previous and state == "arrived":
+                        return
+                raise SystemExit("No matching goal status before timeout")
+            finally:
+                subscriber.undeclare()
         elif args.action == "fleet":
             event, state = threading.Event(), {}
             def receive_state(sample):
@@ -119,8 +195,15 @@ def main():
                     with lock:
                         pending, latest = latest, {}
                     for (rover_id, kind), (header, image) in pending.items():
+                        pose = ""
+                        camera = header.get("camera")
+                        body = header.get("body")
+                        if isinstance(camera, dict) and "x" in camera and "z" in camera:
+                            pose += f" camera=({float(camera['x']):.2f},{float(camera['y']):.2f},{float(camera['z']):.2f})"
+                        if isinstance(body, dict) and "yaw" in body:
+                            pose += f" body=({float(body['x']):.2f},{float(body['y']):.2f},yaw={float(body['yaw']):.2f})"
                         print(f"rover={rover_id} {kind}: sequence={header['sequence']} shape={image.shape} "
-                              f"received_at={header['received_at']:.3f}s")
+                              f"received_at={header['received_at']:.3f}s{pose}")
                         if args.output:
                             destination = args.output / str(rover_id)
                             destination.mkdir(parents=True, exist_ok=True)

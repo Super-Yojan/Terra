@@ -1,6 +1,12 @@
 # Phone velocity controller
 
-The reusable pipeline is IMU + VIO → estimated body velocity → velocity controller → signed left/right motor effort. Both efforts are normalized to [-1, 1]; positive effort drives forward. Hardware must translate magnitude to PWM and sign to direction. This project currently displays the output; it does not send PWM to hardware or implement an iOS Zenoh transport.
+See the [mission-autonomy guide](autonomy/README.md) for four shared-core levels, explicit waypoint authority, safety controls, and experiment logs.
+
+The reusable pipeline is IMU + VIO → estimated body velocity → velocity controller → signed left/right motor effort. Both efforts are normalized to [-1, 1]; positive effort drives forward. The `terra-motors` adapter maps magnitude to PWM duty and sign to direction, after a hardware enable gate and an independent command watchdog. It does not toggle GPIO itself. TerraPhone also implements Zenoh simulator control and Bluetooth actuator commands; the Pi backend owns physical output writes.
+
+Build and verification commands below describe future developer workflows. The
+Bluetooth implementation has no execution evidence: none of these commands were
+run for this feature. See [evidence status](hardware/evidence/README.md).
 
 ## Build and run
 
@@ -20,7 +26,63 @@ The estimator anchors velocity to VIO and integrates IMU only between fresh VIO 
 
 The starter app assumes the phone lies flat, screen upward, with its top edge pointing forward. Core Motion phone axes are converted to rover axes; ARKit poses are converted into a Z-up world and the same body frame. The app treats the sensor origin as the rover origin. Before physical motor integration, calibrate the mount rotation and sensor offset, account for offset-induced rotational velocity, and tune gains, feedforward, limits and sensor filtering for the actual rover. Defaults are tuned for the included simulated motor plant.
 
-Zero effort means neutral motor output, not guaranteed mechanical braking. A hardware enable switch and independent motor-command watchdog belong in the motor adapter. Physical phone sensing and hardware actuation have not been validated on a rover.
+Zero effort means coast, not a mechanical brake. The motor adapter, enable switch, and command watchdog are specified in [Motor adapter](#motor-adapter). Physical phone sensing and hardware actuation have not been validated on a rover.
+
+## Waypoint follower
+
+`terra-waypoint` turns one WGS84 goal into a body twist. TerraPhone imports `MobileWaypoint` from the same UniFFI bundle as `MobileController`. The **Waypoint** section of the app is that call.
+
+Start **Simulated rover**, **Phone IMU + VIO**, or **Connect to Bevy rover**. Then set the origin and the goal, or tap the occupancy map. The orange marker is the goal in the same metres as the blue rover: +X north, +Y west. **Johnson Center, 12 m north** fills latitude 38.82981, longitude −77.3075, about 12 m north of the George W. Johnson Center. **Go to waypoint** calls `setOrigin` and `setGoal`. While that goal is latched the phone steps the follower and the velocity sliders stay idle. **Cancel waypoint** returns to the sliders. Stop, or leaving the app, drops the latch.
+
+On a Bevy connection the pose comes from the depth frame's body position, and the twist is published as `cmd_vel`. Leave `terra/rover/<id>/goal` idle during this run. A goal latched inside the simulator owns the wheels until `{"cancel":true}`. With `TERRA_TILES=1` the simulator origin is the Johnson Center, which matches the default fields. The reachable square is 49 m from the origin.
+
+```swift
+let follower = try MobileWaypoint(settings: defaultWaypointSettings())
+try follower.setOrigin(latitude: 38.8297, longitude: -77.3075)
+_ = try follower.setGoal(latitude: 38.82981, longitude: -77.3075, yaw: nil, token: "gmu-north", halfExtent: 49)
+let step = try follower.step(x: vioNorth, y: vioWest, yaw: heading)
+try controller.setTarget(target: TwistSetpoint(timestamp: now, forward: step.forward, yawRate: step.yawRate))
+```
+
+`setGoal` returns false when the origin is missing or the point lies outside `halfExtent`. `cancel` drops the latch. `step` reports `latitude` and `longitude` of the goal; `localX` and `localY` are the tangent-plane metres the follower is steering toward. `tangentMetres` and `geographicPosition` are the same projection the map tap uses. The simulator's Zenoh bridge calls this crate when a goal arrives on `terra/rover/<id>/goal`, so a headless run uses the same follower.
+
+## Motor adapter
+
+`terra-motors` sits behind `MotorOutput`. `map_effort` converts one signed effort to a PWM duty in `[0, 1]` and a direction. `MotorAdapter` applies that to both wheels and returns a `ChassisPwm` to write to the driver. The iOS UI does not call it. The simulator still turns controller effort into Avian forces rather than PWM. Run `cargo test -p terra-motors` for the mapping, enable gate, and watchdog tests. Crate details and the bench checklist are in [crates/terra-motors/README.md](../crates/terra-motors/README.md).
+
+### PWM
+
+Positive effort is forward. `WheelPwm::sign_magnitude` is `(DIR, duty)` with DIR asserted for forward. `WheelPwm::in1_in2` is `(in1, in2)` with at most one input nonzero. `duty_counts` quantizes a duty onto a timer period such as 255. Efforts outside `[-1, 1]`, or non-finite efforts, coast both wheels and drop driver enable.
+
+### Enable switch
+
+The adapter boots as if the switch is open. `set_hardware_enable(false, now)` coasts both wheels and sets `drive_enabled` false. Closing the switch does not replay a previous effort; hold stays `AwaitCommand` until `apply` runs while the switch remains closed. The returned `ChassisPwm` is the software gate in front of PWM.
+
+The physical switch also has to be able to remove motor power or the driver enable pin when this process is not running. Sample it every motor tick and write the returned `drive_enabled` level. A driver that brakes when disabled is a property of that chip; this adapter never commands brake mode.
+
+### Watchdog
+
+`MotorWatchdog` is separate from the controller's 500 ms target timeout. The default motor `command_timeout` is 200 ms (config allows up to 1 s). Age is `now - commanded_at`, where `commanded_at` is when the effort was produced. `poll` uses the latched stamp. Applying the same stamp again does not extend the window. On expiry, hold is `Watchdog`, both duties are 0, and `drive_enabled` is false. A newer fresh command may drive again without recycling the switch.
+
+`apply_effort_now` stamps the sample at the call time. Use it only for an effort computed on that tick. A bridge that repeats the last packet must keep the original `commanded_at` and call `poll` when nothing new arrived.
+
+### Fail-safe
+
+Zero effort is coast: duty 0, no direction, IN1 and IN2 both low. It is not a mechanical brake and not an electrical short across the motor. A fresh stream of controller zeros (phone backgrounded, tracking lost, or a stale velocity target) keeps the watchdog kicked, so `drive_enabled` stays true while the switch is closed and the wheels coast. The chassis can roll.
+
+If commands stop arriving, or the last producer stamp ages out, the watchdog coasts and deasserts `drive_enabled`. That is still not a brake. Loss of the phone link only drops driver enable when the robot stops refreshing `commanded_at`. Open the hardware switch before the wheels are on the ground. An invalid effort, a backwards adapter clock, a producer time in the future, or an older stamp than the one already latched also coast and drop enable.
+
+### Bench
+
+Wheels off the ground. No autonomy stack. Logic power until the enable path is confirmed.
+
+1. Switch open. Apply `+1` / `-1`. Duties stay 0 and `drive_enabled` is false.
+2. Close the switch without a new command. Outputs stay in coast (`AwaitCommand`).
+3. Apply left `+0.5`, right `-0.25`. Left half-scale forward, right quarter-scale reverse, enable asserted.
+4. Apply `0, 0`. Duties go to 0. Enable may stay asserted. Wheels coast; they do not brake. Confirm both H-bridge inputs are low.
+5. Stop new stamps. Within the watchdog window, enable drops and duties stay 0. A wheel turned by hand coasts.
+6. A new stamp may drive again. Opening the switch drops PWM immediately.
+7. Stopping the phone link or the control process follows step 5 when stamps stop advancing. The chassis is not braked.
 
 ## Simulation
 
@@ -30,4 +92,90 @@ Each rover gets its own estimator and controller. Avian velocity and orientation
 
 The app shows the Rust local occupancy grid, rover position/heading, map scale and a clear action. Simulated mode generates room-wall depth observations at 10 Hz through the same UniFFI mapping object. Phone mode requests ARKit `sceneDepth` only when supported, rescales camera intrinsics to depth resolution, filters low-confidence returns and passes each depth map with that ARFrame's camera pose and timestamp. Mapping pauses while tracking is lost. Unsupported devices retain velocity control and show that depth is unavailable.
 
-The map is world-aligned: +X right and +Y upward on screen. Free cells are green, occupied cells use the primary foreground, unknown cells are faint gray and uncertain observed cells are darker gray. The blue marker indicates rover pose. Initial phone camera height is assumed to be 0.5 m over a flat ground reference; physical mounting and ground height require calibration. Phone depth comes from the rear camera's optical pose, independently of the rover-body mounting rotation. Stop preserves the map; starting either mode creates a new map. No Bevy/Zenoh map subscription is included.
+The map is world-aligned: +X right and +Y upward on screen. Free cells are green, occupied cells use the primary foreground, unknown cells are faint gray and uncertain observed cells are darker gray. The blue marker indicates rover pose. Initial phone camera height is assumed to be 0.5 m over a flat ground reference; physical mounting and ground height require calibration. Phone depth comes from the rear camera's optical pose, independently of the rover-body mounting rotation. Stop preserves the map; starting either mode creates a new map.
+
+Bevy Zenoh mode uses the same grid. It does not subscribe to an occupancy topic. Each simulator depth packet carries the exposure-aligned optical camera pose and the rover body pose in the robotics frame (the same conversion the simulator uses for its own per-rover map). The phone recenters on the body position, integrates axial depth through `MobileOccupancyMap`, and draws the body heading. Ground is robotics Z = 0, which is the simulator floor (Bevy Y = 0); the 0.5 m phone-height assumption is not used. Depth packets without an exposure pose are ignored. Body pose is sampled with the camera at exposure time, so the marker matches the depth frame rather than a later odometry estimate. There is still no published map snapshot for ARGOS or other operators.
+
+## Drive Bevy from TerraPhone over Zenoh
+
+TerraPhone now exposes the Rust `terra-transport` client through UniFFI. Use the **Bevy simulator · Zenoh** section to configure an endpoint and rover ID, then connect. This mode publishes either the velocity sliders or, after **Go to waypoint**, the phone follower's twist as simulator `cmd_vel`. The Bevy rover runs its own velocity feedback loop. Local phone IMU/VIO/motor effort readouts do not provide remote feedback. Connecting starts at zero. Stop, switching modes and leaving the foreground close the session with a final zero. The Rust publisher also expires its 250 ms command lease if Swift stops refreshing it; the simulator's independent 500 ms watchdog remains active.
+
+Demo on one Mac:
+
+```sh
+cd simulator
+TERRA_ROVER_COUNT=2 cargo run
+```
+
+Build/run TerraPhone in iOS Simulator, select `tcp/127.0.0.1:7447` and rover `0`, connect, then move the velocity sliders. Stop and check that the rover stops. Choose rover `1` to drive the second rover. To connect a physical iPhone, start Bevy with `TERRA_ZENOH_LISTEN=tcp/0.0.0.0:7447`, put the Mac and phone on the same network, enter `tcp/MAC_LAN_IP:7447`, allow local-network access, and allow incoming traffic to the simulator if prompted. Endpoint and ID are stored on the device; there is no automatic reconnect or automatic startup motion.
+
+The default topic prefix is `terra/rover`. Session-open status confirms a transport session, not rover discovery or movement acknowledgement. The connection status counts posed depth frames as they arrive. Fleet/state and RGB subscriptions remain follow-ups. Remote mode builds the local occupancy map from `terra/rover/<id>/camera/depth` only; it does not mix in simulated-room or ARKit observations.
+
+One-Mac occupancy demo:
+
+```sh
+cd simulator
+TERRA_ROVER_COUNT=1 cargo run
+```
+
+Build and run TerraPhone in the iOS Simulator (`./scripts/build-ios.sh`, then open `mobile/ios/TerraPhone.xcodeproj`). Select `tcp/127.0.0.1:7447` and rover `0`, then connect. The occupancy section starts at “Waiting for simulator depth and exposure pose”. After the simulator publishes a depth frame, the grid fills with free and occupied cells as the rover sees the world. Move the velocity sliders; the blue marker and the map window follow the published body pose. Stop disconnects and keeps the last grid. Rover `1` maps that rover only. A physical iPhone uses the same LAN setup as velocity control; the depth stream is about 1.9 MiB/s at the default 256×192 resolution, before protocol overhead.
+
+Verification:
+
+```sh
+./scripts/build-ios.sh
+python3 scripts/check-zenoh-swift.py # requires eclipse-zenoh Python package
+cargo test -p terra-transport
+cargo test -p terra-transport -- --ignored
+cargo test --manifest-path simulator/Cargo.toml depth_packet_pose_round_trips_into_the_phone_decoder
+cargo test --manifest-path simulator/Cargo.toml mobile_adapter_drives_avian -- --ignored
+```
+
+The Swift test exercises Swift → UniFFI → Rust → Zenoh against a real Python peer, checking the selected topic, payload, lease expiry and final zero. It also publishes one posed depth packet and checks that Swift integrates it into an occupied cell. `depth_packet_pose_round_trips_into_the_phone_decoder` checks that a simulator depth packet decodes to the same robotics pose the in-sim map uses, then occupies the expected cell. The ignored transport test checks that the phone client consumes each posed depth sequence once. The Bevy integration test uses the same transport to move an Avian rover and verifies stopping on disconnect. Physical iPhone networking has not been tested on a device. Seeing the grid in Simulator still requires the Bevy app to be running so the GPU depth camera can publish frames.
+
+## Bluetooth actuator control
+
+Bluetooth actuator hardware is configured through **Discover, configure and arm
+rover**. Scan, select the stable peripheral identifier/name, and connect explicitly.
+Bonded owner access, periodic status, capabilities and the active layout must all
+be available before hardware becomes ready. Starting, stopping, switching modes,
+and leaving the app reset controls and disconnect hardware; reconnect never arms.
+
+The form supports up to sixteen independently named actuators with arbitrary
+unique IDs from 0–255. Choose output kinds and physical ports from the connected
+rover's capabilities. Configure routing, inversion, command limits, DC power,
+ESC stop/neutral/end pulses and arming duration, or servo min/center/max pulses and
+safe position/disabled PWM. Presets are editable drafts and require explicit port
+selection. Disabled-safe servos start controls at center bounded by their limits.
+
+The repository [terra-mini](../crates/terra-actuators/presets/terra-mini.json),
+[ESC template](../crates/terra-actuators/presets/esc-template.json), and
+[mixed servo template](../crates/terra-actuators/presets/mixed-servo-template.json)
+are editable examples. The JSON templates intentionally contain `SELECT_*_PWM_PORT`
+selection markers and are invalid layouts until each is replaced with an exposed,
+nonconflicting capability port. The mobile presets present capability-driven port
+selection. Set the draft revision to the connected rover's active revision;
+example pulse values are not calibration approval for a particular actuator.
+
+Open the independent hardware cutoff and disarm before configuration. **Validate
+and stage draft** reports validation or rover rejection; **Commit acknowledged
+stage** references the exact stage request and revision. The draft remains on
+rejection. Commit acknowledgement triggers capabilities and layout refresh; the
+active revision is shown separately. Resetting an emergency stop never arms.
+
+Manual mode uses normalized forward and turn effort; its left/right arcade mix is
+normalized before Rust routing, while independent manual routes use coefficients.
+Positional servo sliders command position independently of propulsion. Phone
+feedback requires a compatible layout, fresh Rust output and healthy IMU/VIO;
+tracking loss explicitly disarms. Commands are produced on one control queue at
+20 Hz with their monotonic production time. Bluetooth owns session and sequence
+and sends safe output during disarmed/arming states. Custom manual layouts disable
+waypoint/autonomy choices; existing simulation and Zenoh controls remain available.
+
+This implementation has not been built or exercised on hardware. No tests,
+bindings generation, smoke scripts, screenshots, or hardware checks were performed
+under the implementation-only instruction.
+The rover status field `hardware_gate_open_confirmed` is true only when its strict
+backend gate query succeeds and confirms open. An unreadable gate remains false;
+the phone requires this confirmation for stage/commit. The rover repeats its own
+authoritative safety validation when handling the request.

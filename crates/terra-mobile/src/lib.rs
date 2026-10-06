@@ -4,8 +4,15 @@ use terra_control::{ControllerConfig, VelocityController};
 use terra_state::{EstimatorConfig, VelocityEstimator};
 use terra_types::*;
 uniffi::setup_scaffolding!();
+mod actuators;
+pub use actuators::*;
+mod autonomy;
 mod mapping;
+mod transport;
+mod waypoint;
 pub use mapping::*;
+pub use transport::*;
+pub use waypoint::*;
 
 #[derive(Clone, Debug, uniffi::Record)]
 pub struct ControlSettings {
@@ -156,6 +163,17 @@ impl From<InputError> for ControllerError {
 struct Brain {
     estimator: VelocityEstimator,
     controller: VelocityController,
+    autonomy: terra_autonomy::AutonomyArbiter,
+    pose: Option<(terra_navigation::Pose, f64)>,
+    map: Option<(terra_mapping::MapSnapshot, f64, u64)>,
+    autonomy_json: String,
+    recorder: Option<terra_experiment::RunRecorder>,
+    near_miss: terra_experiment::NearMiss,
+    run_start: Option<f64>,
+    run_id: String,
+    sequence: u64,
+    last_map_publish: Option<f64>,
+    dashboard: Option<terra_transport::ControlPlane>,
 }
 #[derive(uniffi::Object)]
 pub struct MobileController {
@@ -169,6 +187,23 @@ impl MobileController {
             brain: Mutex::new(Brain {
                 estimator: VelocityEstimator::new(settings.estimator())?,
                 controller: VelocityController::new(settings.controller())?,
+                autonomy: terra_autonomy::AutonomyArbiter::default(),
+                pose: None,
+                map: None,
+                autonomy_json: String::new(),
+                recorder: None,
+                near_miss: terra_experiment::NearMiss::default(),
+                run_start: None,
+                run_id: format!(
+                    "phone-{}",
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_nanos()
+                ),
+                sequence: 0,
+                last_map_publish: None,
+                dashboard: None,
             }),
         }))
     }
@@ -193,6 +228,32 @@ impl MobileController {
         Ok(())
     }
     pub fn push_vio(&self, sample: VioReading) -> Result<(), ControllerError> {
+        if sample.tracked {
+            let q = Quaternion {
+                x: sample.quaternion_x,
+                y: sample.quaternion_y,
+                z: sample.quaternion_z,
+                w: sample.quaternion_w,
+            }
+            .normalized()
+            .ok_or(InputError::OutOfRange)?;
+            let forward = q.rotate(Vector3 {
+                x: 1.,
+                y: 0.,
+                z: 0.,
+            });
+            self.brain
+                .lock()
+                .map_err(|_| ControllerError::Internal)?
+                .pose = Some((
+                terra_navigation::Pose {
+                    x: sample.position_x,
+                    y: sample.position_y,
+                    yaw: forward.y.atan2(forward.x),
+                },
+                sample.timestamp,
+            ));
+        }
         self.brain
             .lock()
             .map_err(|_| ControllerError::Internal)?
@@ -220,24 +281,180 @@ impl MobileController {
         Ok(())
     }
     pub fn set_target(&self, target: TwistSetpoint) -> Result<(), ControllerError> {
-        self.brain
-            .lock()
-            .map_err(|_| ControllerError::Internal)?
-            .controller
-            .set_target(VelocityTarget {
-                timestamp: target.timestamp,
-                forward: target.forward,
-                yaw_rate: target.yaw_rate,
-            })?;
+        let mut brain = self.brain.lock().map_err(|_| ControllerError::Internal)?;
+        if !target.timestamp.is_finite()
+            || !target.forward.is_finite()
+            || !target.yaw_rate.is_finite()
+            || target.forward.abs() > 5.
+            || target.yaw_rate.abs() > 5.
+        {
+            return Err(InputError::OutOfRange.into());
+        }
+        brain.autonomy.accept_operator(
+            terra_autonomy::TeleopRequest {
+                linear: target.forward,
+                angular: target.yaw_rate,
+                run_id: None,
+                authority_revision: None,
+                operator_session_id: None,
+                sequence: None,
+            },
+            target.timestamp,
+        );
         Ok(())
     }
     pub fn step(&self, timestamp: f64) -> Result<ControlOutput, ControllerError> {
         let mut brain = self.brain.lock().map_err(|_| ControllerError::Internal)?;
         let estimate = brain.estimator.estimate(timestamp);
+        let pose = brain.pose.unwrap_or_default();
+        let map = brain.map.clone();
+        let incoming = brain
+            .dashboard
+            .as_ref()
+            .map(|d| d.take_actions())
+            .unwrap_or_default();
+        for (kind, bytes, age) in incoming {
+            match kind.as_str() {
+                "autonomy" => {
+                    if let Some(r) = terra_autonomy::decode_level(&bytes) {
+                        brain.autonomy.set_level(r);
+                    }
+                }
+                "teleop" | "cmd_vel" => {
+                    if let Some(r) = terra_autonomy::decode_teleop(&bytes) {
+                        brain.autonomy.accept_operator(r, timestamp - age);
+                    }
+                }
+                "goal" => {
+                    if let Some(g) = terra_waypoint::decode_goal(&bytes) {
+                        brain.autonomy.accept_goal(&g, 20_000.);
+                    }
+                }
+                "safety" => {
+                    if let Some(r) = terra_autonomy::decode_safety(&bytes) {
+                        brain
+                            .autonomy
+                            .set_safety(r, estimate.health == Health::Ready);
+                    }
+                }
+                "goal/decision" => {
+                    if let Some(r) = terra_autonomy::decode_decision(&bytes) {
+                        brain.autonomy.decide_proposal(
+                            r,
+                            &terra_autonomy::ArbiterInput {
+                                now: timestamp,
+                                pose: pose.0,
+                                pose_time: pose.1,
+                                map: map.as_ref().map(|m| &m.0),
+                                map_time: map.as_ref().map(|m| m.1),
+                                map_revision: map.as_ref().map(|m| m.2).unwrap_or(0),
+                                measured: terra_navigation::Twist {
+                                    linear: estimate.forward,
+                                    angular: estimate.yaw_rate,
+                                },
+                                healthy: estimate.health == Health::Ready,
+                            },
+                        );
+                    }
+                }
+                _ => {}
+            }
+        }
+        let healthy = estimate.health == Health::Ready
+            && brain.dashboard.as_ref().is_none_or(|d| !d.failed())
+            && brain.recorder.as_ref().is_none_or(|r| !r.failed());
+        brain.autonomy.run_id = brain.run_id.clone();
+        let mut output = brain.autonomy.step(terra_autonomy::ArbiterInput {
+            now: timestamp,
+            pose: pose.0,
+            pose_time: pose.1,
+            map: map.as_ref().map(|m| &m.0),
+            map_time: map.as_ref().map(|m| m.1),
+            map_revision: map.as_ref().map(|m| m.2).unwrap_or(0),
+            measured: terra_navigation::Twist {
+                linear: estimate.forward,
+                angular: estimate.yaw_rate,
+            },
+            healthy,
+        });
+        let clearance = map.as_ref().and_then(|m| {
+            terra_navigation::observed_clearance(&m.0, pose.0, brain.autonomy.planner.config.radius)
+        });
+        if let Some(kind) = brain.near_miss.update(clearance) {
+            output.events.push(terra_autonomy::DecisionEvent {
+                kind: kind.into(),
+                token: None,
+                reason: "observed_clearance".into(),
+                level: output.status.requested_level,
+            });
+        }
+        let start = *brain.run_start.get_or_insert(timestamp);
+        brain.sequence += 1;
+        let wire_proposal = output.proposal.clone().map(|mut p| {
+            p.expires_at -= start;
+            p
+        });
+        let publish_map = map.is_some()
+            && brain
+                .last_map_publish
+                .is_none_or(|last| timestamp - last >= 0.2);
+        if publish_map {
+            brain.last_map_publish = Some(timestamp);
+        }
+        if let Some(d) = brain.dashboard.as_ref() {
+            d.publish("experiment/status",serde_json::json!({"run_id":brain.run_id,"run_elapsed":timestamp-start,"schema_version":1,"utc":std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs_f64(),"recording":brain.recorder.as_ref().is_some_and(|r|!r.failed())}).to_string());
+            d.publish(
+                "autonomy/status",
+                serde_json::to_string(&output.status).unwrap(),
+            );
+            d.publish("goal/status", serde_json::to_string(&output.goal).unwrap());
+            d.publish(
+                "goal/proposal",
+                serde_json::to_string(&wire_proposal).unwrap(),
+            );
+            if publish_map && let Some((grid, _, sequence)) = map.as_ref() {
+                d.publish(
+                    "map/occupancy",
+                    terra_autonomy::occupancy_telemetry(d.rover_id, &brain.run_id, *sequence, grid)
+                        .to_string(),
+                );
+            }
+            d.publish("pose",serde_json::json!({"rover_id":d.rover_id,"sequence":brain.sequence,"x":pose.0.x,"y":pose.0.y,"yaw":pose.0.yaw}).to_string());
+        }
+        brain.autonomy_json =
+            serde_json::json!({"status":output.status,"goal":output.goal,"proposal":wire_proposal})
+                .to_string();
+        if let Some(r) = brain.recorder.as_ref() {
+            let _=r.record(serde_json::json!({"kind":"control_tick","time":timestamp-start,"source_time":timestamp,"sequence":brain.sequence,"clearance":clearance,"selected":output.twist,"source_command":output.intent,"status":output.status,"goal":output.goal,"proposal":wire_proposal,"run_id":brain.run_id,"events":output.events}));
+        }
+        if output.reset_controller {
+            brain.controller.reset();
+        }
+        if output.status.safety != "clear" {
+            brain.controller.reset();
+            return Ok(MotorOutput::stopped(if estimate.health == Health::Ready {
+                StopReason::StaleTarget
+            } else {
+                StopReason::SensorNotReady
+            })
+            .into());
+        }
+        brain.controller.set_target(VelocityTarget {
+            timestamp,
+            forward: output.twist.linear,
+            yaw_rate: output.twist.angular,
+        })?;
         Ok(brain.controller.step(estimate).into())
     }
     pub fn reset(&self) -> Result<(), ControllerError> {
         let mut brain = self.brain.lock().map_err(|_| ControllerError::Internal)?;
+        brain.autonomy = terra_autonomy::AutonomyArbiter::default();
+        brain.dashboard = None;
+        brain.pose = None;
+        brain.map = None;
+        if let Some(mut r) = brain.recorder.take() {
+            let _ = r.close();
+        }
         brain.estimator.reset();
         brain.controller.reset();
         Ok(())

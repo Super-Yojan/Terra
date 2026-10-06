@@ -1,0 +1,8 @@
+.git
+**/.git
+**/target
+mobile/ios/build
+mobile/ios/DerivedData
+mobile/ios/Generated
+**/.DS_Store
+*.swp

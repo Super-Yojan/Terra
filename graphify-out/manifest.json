@@ -1,0 +1,272 @@
+{
+  "/Users/yojan/git/Terra/crates/terra-control/src/lib.rs": {
+    "mtime": 1791218738.5635798,
+    "ast_hash": "08ad765b1712b9551c62a5d054700e21",
+    "semantic_hash": "08ad765b1712b9551c62a5d054700e21"
+  },
+  "/Users/yojan/git/Terra/crates/terra-mapping/examples/wall.rs": {
+    "mtime": 1791220335.1726904,
+    "ast_hash": "638d78e55e205c9d33444c32cc4128c4",
+    "semantic_hash": "638d78e55e205c9d33444c32cc4128c4"
+  },
+  "/Users/yojan/git/Terra/crates/terra-mapping/src/lib.rs": {
+    "mtime": 1791220325.6257143,
+    "ast_hash": "2fe1f2ab5a784c5e731289f224b94ffc",
+    "semantic_hash": "2fe1f2ab5a784c5e731289f224b94ffc"
+  },
+  "/Users/yojan/git/Terra/crates/terra-mobile/src/bin/bindgen.rs": {
+    "mtime": 1791218738.564104,
+    "ast_hash": "2cef546e4454f34146d737130b0e6065",
+    "semantic_hash": "2cef546e4454f34146d737130b0e6065"
+  },
+  "/Users/yojan/git/Terra/crates/terra-mobile/src/lib.rs": {
+    "mtime": 1791257021.9066863,
+    "ast_hash": "63cb6f5861e9b6149c29a82e342541fe",
+    "semantic_hash": "63cb6f5861e9b6149c29a82e342541fe"
+  },
+  "/Users/yojan/git/Terra/crates/terra-mobile/src/mapping.rs": {
+    "mtime": 1791220262.4967048,
+    "ast_hash": "442ed38ad807fe4640d0760fd925eacb",
+    "semantic_hash": "442ed38ad807fe4640d0760fd925eacb"
+  },
+  "/Users/yojan/git/Terra/crates/terra-mobile/src/transport.rs": {
+    "mtime": 1791256125.1649945,
+    "ast_hash": "9e63bfae504d6b2ef233aaa34df2c61b",
+    "semantic_hash": "9e63bfae504d6b2ef233aaa34df2c61b"
+  },
+  "/Users/yojan/git/Terra/crates/terra-mobile/src/waypoint.rs": {
+    "mtime": 1791258209.0189848,
+    "ast_hash": "8999e11d2426398483d9502c6278629b",
+    "semantic_hash": "8999e11d2426398483d9502c6278629b"
+  },
+  "/Users/yojan/git/Terra/crates/terra-motors/src/lib.rs": {
+    "mtime": 1791256125.1656227,
+    "ast_hash": "deae7529a5dc2e82dbf8d6d50f765503",
+    "semantic_hash": "deae7529a5dc2e82dbf8d6d50f765503"
+  },
+  "/Users/yojan/git/Terra/crates/terra-state/src/lib.rs": {
+    "mtime": 1791218846.9689217,
+    "ast_hash": "fadd49def841b57b7acd42f99e9bf78b",
+    "semantic_hash": "fadd49def841b57b7acd42f99e9bf78b"
+  },
+  "/Users/yojan/git/Terra/crates/terra-transport/src/lib.rs": {
+    "mtime": 1791256125.1658604,
+    "ast_hash": "feb5735f230a1e7a12da401102d3bd9f",
+    "semantic_hash": "feb5735f230a1e7a12da401102d3bd9f"
+  },
+  "/Users/yojan/git/Terra/crates/terra-types/src/lib.rs": {
+    "mtime": 1791256125.1664913,
+    "ast_hash": "9986214e3cee3e8ff5a00e59884dc2cb",
+    "semantic_hash": "9986214e3cee3e8ff5a00e59884dc2cb"
+  },
+  "/Users/yojan/git/Terra/crates/terra-waypoint/src/lib.rs": {
+    "mtime": 1791258209.0193338,
+    "ast_hash": "63b32494fc27b06b05015d082171bc77",
+    "semantic_hash": "63b32494fc27b06b05015d082171bc77"
+  },
+  "/Users/yojan/git/Terra/mobile/ios/TerraPhone/ContentView.swift": {
+    "mtime": 1791258209.0201547,
+    "ast_hash": "07407a2ba3013f82a15ea8d54a79a710",
+    "semantic_hash": "07407a2ba3013f82a15ea8d54a79a710"
+  },
+  "/Users/yojan/git/Terra/mobile/ios/TerraPhone/PhoneController.swift": {
+    "mtime": 1791258209.020272,
+    "ast_hash": "6f2324912745f1e7ba76b4a5803662df",
+    "semantic_hash": "6f2324912745f1e7ba76b4a5803662df"
+  },
+  "/Users/yojan/git/Terra/mobile/ios/TerraPhone/TerraPhoneApp.swift": {
+    "mtime": 1791218377.655888,
+    "ast_hash": "3aaa50440a3b009c302593cd36cc9447",
+    "semantic_hash": "3aaa50440a3b009c302593cd36cc9447"
+  },
+  "/Users/yojan/git/Terra/scripts/SwiftSmoke.swift": {
+    "mtime": 1791256125.1675563,
+    "ast_hash": "fcd4e9a0d9f2d5316ae57994e3c4e5fd",
+    "semantic_hash": "fcd4e9a0d9f2d5316ae57994e3c4e5fd"
+  },
+  "/Users/yojan/git/Terra/scripts/build-ios.sh": {
+    "mtime": 1791218508.9000854,
+    "ast_hash": "d8f1d764cd3821ec6bdc0d05bd8425d3",
+    "semantic_hash": "d8f1d764cd3821ec6bdc0d05bd8425d3"
+  },
+  "/Users/yojan/git/Terra/scripts/check-swift.sh": {
+    "mtime": 1791218736.073947,
+    "ast_hash": "33c5b60f1c6b115c45226d810e688f6d",
+    "semantic_hash": "33c5b60f1c6b115c45226d810e688f6d"
+  },
+  "/Users/yojan/git/Terra/scripts/check-zenoh-swift.py": {
+    "mtime": 1791256125.1677442,
+    "ast_hash": "e48be5ddb10aec36ff485fa7048c47de",
+    "semantic_hash": "e48be5ddb10aec36ff485fa7048c47de"
+  },
+  "/Users/yojan/git/Terra/scripts/create-ios-project.rb": {
+    "mtime": 1791218508.8994029,
+    "ast_hash": "edf520a2522e7aca2ff0bff53db1a694",
+    "semantic_hash": "edf520a2522e7aca2ff0bff53db1a694"
+  },
+  "/Users/yojan/git/Terra/simulator/src/depth_camera.rs": {
+    "mtime": 1791256125.168122,
+    "ast_hash": "1365f62bba905ca793101040c65d9514",
+    "semantic_hash": "1365f62bba905ca793101040c65d9514"
+  },
+  "/Users/yojan/git/Terra/simulator/src/geo.rs": {
+    "mtime": 1791258164.6596425,
+    "ast_hash": "f04702bb25b166cb969ac5da2464987b",
+    "semantic_hash": "f04702bb25b166cb969ac5da2464987b"
+  },
+  "/Users/yojan/git/Terra/simulator/src/landscape.rs": {
+    "mtime": 1791221233.7299814,
+    "ast_hash": "1e22227b422341a59a08ef9c3929843d",
+    "semantic_hash": "1e22227b422341a59a08ef9c3929843d"
+  },
+  "/Users/yojan/git/Terra/simulator/src/main.rs": {
+    "mtime": 1791257021.9087057,
+    "ast_hash": "c21799323d780ef7082890c70ee2b973",
+    "semantic_hash": "c21799323d780ef7082890c70ee2b973"
+  },
+  "/Users/yojan/git/Terra/simulator/src/occupancy_map.rs": {
+    "mtime": 1791256125.168352,
+    "ast_hash": "9d2414cbc4a6c1f462475b6c5b7d7385",
+    "semantic_hash": "9d2414cbc4a6c1f462475b6c5b7d7385"
+  },
+  "/Users/yojan/git/Terra/simulator/src/physics.rs": {
+    "mtime": 1791218433.746592,
+    "ast_hash": "c5ad476ec67db8fa8a64d204064ae4ed",
+    "semantic_hash": "c5ad476ec67db8fa8a64d204064ae4ed"
+  },
+  "/Users/yojan/git/Terra/simulator/src/rgb_camera.rs": {
+    "mtime": 1791215148.0135903,
+    "ast_hash": "c72ee261c43050f4956613836c648997",
+    "semantic_hash": "c72ee261c43050f4956613836c648997"
+  },
+  "/Users/yojan/git/Terra/simulator/src/terra.rs": {
+    "mtime": 1791218157.1391997,
+    "ast_hash": "e6840b947f7fa365b1f5f2305d1ab6ee",
+    "semantic_hash": "e6840b947f7fa365b1f5f2305d1ab6ee"
+  },
+  "/Users/yojan/git/Terra/simulator/src/velocity_controller.rs": {
+    "mtime": 1791218790.7953656,
+    "ast_hash": "dd686ae39b3beefd633f48a632d885ff",
+    "semantic_hash": "dd686ae39b3beefd633f48a632d885ff"
+  },
+  "/Users/yojan/git/Terra/simulator/src/voxel_terrain.rs": {
+    "mtime": 1791132345.161473,
+    "ast_hash": "9f3e54ad8c66efb03e3718249beb906d",
+    "semantic_hash": "9f3e54ad8c66efb03e3718249beb906d"
+  },
+  "/Users/yojan/git/Terra/simulator/src/world.rs": {
+    "mtime": 1791256134.1723332,
+    "ast_hash": "aaaecf2a54b361e78a5912fdc431a742",
+    "semantic_hash": "aaaecf2a54b361e78a5912fdc431a742"
+  },
+  "/Users/yojan/git/Terra/simulator/src/zenoh_bridge.rs": {
+    "mtime": 1791257021.9089258,
+    "ast_hash": "62e7f1a9e4c4c987f61bb45a07d76146",
+    "semantic_hash": "62e7f1a9e4c4c987f61bb45a07d76146"
+  },
+  "/Users/yojan/git/Terra/simulator/tools/test_zenoh_client.py": {
+    "mtime": 1791256134.172861,
+    "ast_hash": "f55fc2652dcca010ca90da021270d641",
+    "semantic_hash": "f55fc2652dcca010ca90da021270d641"
+  },
+  "/Users/yojan/git/Terra/simulator/tools/zenoh_client.py": {
+    "mtime": 1791256134.1730464,
+    "ast_hash": "dcaa27fffe32e46ab21eb351fb245c0b",
+    "semantic_hash": "dcaa27fffe32e46ab21eb351fb245c0b"
+  },
+  "/Users/yojan/git/Terra/simulator/vendor/bevy_water/src/image_utils.rs": {
+    "mtime": 1153704088.0,
+    "ast_hash": "64793bf781f255c9cbc39b28bed8b6e8",
+    "semantic_hash": "64793bf781f255c9cbc39b28bed8b6e8"
+  },
+  "/Users/yojan/git/Terra/simulator/vendor/bevy_water/src/lib.rs": {
+    "mtime": 1153704088.0,
+    "ast_hash": "af0cf8e5e63be486cbda054a27fc4a98",
+    "semantic_hash": "af0cf8e5e63be486cbda054a27fc4a98"
+  },
+  "/Users/yojan/git/Terra/simulator/vendor/bevy_water/src/param.rs": {
+    "mtime": 1153704088.0,
+    "ast_hash": "7be2365969419d163d43196e9b669ab9",
+    "semantic_hash": "7be2365969419d163d43196e9b669ab9"
+  },
+  "/Users/yojan/git/Terra/simulator/vendor/bevy_water/src/water.rs": {
+    "mtime": 1791131412.7735775,
+    "ast_hash": "d5be03a9cb1102883cccd1668b935bf2",
+    "semantic_hash": "d5be03a9cb1102883cccd1668b935bf2"
+  },
+  "/Users/yojan/git/Terra/simulator/vendor/bevy_water/src/water/material.rs": {
+    "mtime": 1153704088.0,
+    "ast_hash": "7e2e7513d1fa60cc24509052c858daab",
+    "semantic_hash": "7e2e7513d1fa60cc24509052c858daab"
+  },
+  "/Users/yojan/git/Terra/simulator/vendor/bevy_water/src/wave.rs": {
+    "mtime": 1153704088.0,
+    "ast_hash": "ac34151d51ed10d712ccfe015da33193",
+    "semantic_hash": "ac34151d51ed10d712ccfe015da33193"
+  },
+  "/Users/yojan/git/Terra/README.md": {
+    "mtime": 1791258209.018689,
+    "ast_hash": "0a0a058770dfa3fdbf4a6c54cb053e8a",
+    "semantic_hash": "0a0a058770dfa3fdbf4a6c54cb053e8a"
+  },
+  "/Users/yojan/git/Terra/crates/terra-mapping/README.md": {
+    "mtime": 1791256125.1647007,
+    "ast_hash": "0ff8c8725ccb5620e433a8b76d3b7db0",
+    "semantic_hash": "0ff8c8725ccb5620e433a8b76d3b7db0"
+  },
+  "/Users/yojan/git/Terra/crates/terra-motors/README.md": {
+    "mtime": 1791256125.1653457,
+    "ast_hash": "5fa144a9c123e752c640afd136ddf28e",
+    "semantic_hash": "5fa144a9c123e752c640afd136ddf28e"
+  },
+  "/Users/yojan/git/Terra/crates/terra-transport/README.md": {
+    "mtime": 1791228085.1044521,
+    "ast_hash": "32b6ae5b374c6741e4ea72cd71af2f8b",
+    "semantic_hash": "32b6ae5b374c6741e4ea72cd71af2f8b"
+  },
+  "/Users/yojan/git/Terra/docs/MOBILE_CONTROL.md": {
+    "mtime": 1791258209.0199962,
+    "ast_hash": "7b517fe58023e364464845f9086480d8",
+    "semantic_hash": "7b517fe58023e364464845f9086480d8"
+  },
+  "/Users/yojan/git/Terra/simulator/DEPTH_CAMERA.md": {
+    "mtime": 1791129525.590314,
+    "ast_hash": "56b0d6c7e7e691980bdb215b4fd93273",
+    "semantic_hash": "56b0d6c7e7e691980bdb215b4fd93273"
+  },
+  "/Users/yojan/git/Terra/simulator/WORLD.md": {
+    "mtime": 1791257021.9083202,
+    "ast_hash": "a801264b58eae9f3e45a7551f77238b8",
+    "semantic_hash": "a801264b58eae9f3e45a7551f77238b8"
+  },
+  "/Users/yojan/git/Terra/simulator/ZENOH.md": {
+    "mtime": 1791257021.9084563,
+    "ast_hash": "0172e1804f1c284e4162b6da046f4750",
+    "semantic_hash": "0172e1804f1c284e4162b6da046f4750"
+  },
+  "/Users/yojan/git/Terra/simulator/tools/requirements.txt": {
+    "mtime": 1791215654.6574166,
+    "ast_hash": "f76bd837cdb67eecc41e09b31c8467d7",
+    "semantic_hash": "f76bd837cdb67eecc41e09b31c8467d7"
+  },
+  "/Users/yojan/git/Terra/simulator/vendor/bevy_water/README.md": {
+    "mtime": 1153704088.0,
+    "ast_hash": "baddf844e5351186dc78afbca389f8e4",
+    "semantic_hash": "baddf844e5351186dc78afbca389f8e4"
+  },
+  "/Users/yojan/git/Terra/simulator/vendor/bevy_water/TERRA_PORT.md": {
+    "mtime": 1791132416.874638,
+    "ast_hash": "90d308a1e2338f97ad209438652732b1",
+    "semantic_hash": "90d308a1e2338f97ad209438652732b1"
+  },
+  "/Users/yojan/git/Terra/simulator/assets/geo/terrarium.png": {
+    "mtime": 1791256134.1714816,
+    "ast_hash": "2bcef3f81bd59fb3a97c837f2ce58bca",
+    "semantic_hash": "2bcef3f81bd59fb3a97c837f2ce58bca"
+  },
+  "/Users/yojan/git/Terra/simulator/docs/world-preview.png": {
+    "mtime": 1791132416.8698218,
+    "ast_hash": "eac4a17a082613df91842ff7de07891f",
+    "semantic_hash": "eac4a17a082613df91842ff7de07891f"
+  }
+}

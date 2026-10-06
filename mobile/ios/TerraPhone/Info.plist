@@ -14,4 +14,6 @@
 <key>UISupportedInterfaceOrientations</key><array><string>UIInterfaceOrientationPortrait</string></array>
 <key>NSCameraUsageDescription</key><string>Terra uses visual motion tracking to estimate rover velocity.</string>
 <key>NSMotionUsageDescription</key><string>Terra combines phone motion with visual tracking for rover velocity control.</string>
+<key>NSLocalNetworkUsageDescription</key><string>Terra sends rover velocity commands to the simulator over your local network.</string>
+<key>NSBluetoothAlwaysUsageDescription</key><string>Terra connects to your bonded rover to configure and control its actuators.</string>
 </dict></plist>

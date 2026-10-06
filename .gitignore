@@ -1,4 +1,5 @@
 simulator/target/
+simulator/.cache/
 .DS_Store
 *.swp
 
@@ -7,3 +8,6 @@ simulator/target/
 /mobile/ios/build/
 /mobile/ios/DerivedData/
 **/xcuserdata/
+
+/.superpowers/
+/simulator/runs/

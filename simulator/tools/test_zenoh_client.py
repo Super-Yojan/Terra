@@ -6,7 +6,7 @@ import time
 import unittest
 
 import numpy as np
-from zenoh_client import decode_frame
+from zenoh_client import decode_frame, encode_goal
 
 
 class FrameTests(unittest.TestCase):
@@ -22,6 +22,20 @@ class FrameTests(unittest.TestCase):
         metadata = {"version": 1, "width": 1, "height": 1, "encoding": "RGBA8_SRGB"}
         _, image = decode_frame(json.dumps(metadata).encode() + b"\n" + bytes([10, 20, 30, 255]))
         self.assertEqual(image.tolist(), [[[10, 20, 30, 255]]])
+
+    def test_goal_payload_matches_the_terra_contract(self):
+        class Args:
+            cancel = False
+            x, y, yaw = 10.0, -2.0, None
+            lat = lon = token = None
+        self.assertEqual(json.loads(encode_goal(Args())),
+                         {"frame": "local", "x": 10.0, "y": -2.0})
+        Args.lat, Args.lon, Args.x, Args.y = 38.8299, -77.3075, None, None
+        Args.token = "goal-1"
+        self.assertEqual(json.loads(encode_goal(Args())), {
+            "frame": "wgs84", "latitude": 38.8299, "longitude": -77.3075, "token": "goal-1"})
+        Args.cancel = True
+        self.assertEqual(json.loads(encode_goal(Args())), {"cancel": True})
 
     def test_rejects_truncated_payload(self):
         metadata = {"version": 1, "width": 2, "height": 1, "encoding": "32FC1_LE"}
