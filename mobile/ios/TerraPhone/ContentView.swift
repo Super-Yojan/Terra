@@ -17,6 +17,10 @@ struct ContentView: View {
     var body: some View {
         NavigationStack {
             Form {
+                Section("Bluetooth actuators") {
+                    NavigationLink("Discover, configure and arm rover") { ActuatorLayoutView(brain: brain) }
+                    Text(brain.hardwareStatus).font(.footnote)
+                }
                 Section("Controller") {
                     LabeledContent("Source", value: brain.source)
                     LabeledContent("Status", value: brain.status)
@@ -65,6 +69,7 @@ struct ContentView: View {
                 }
                 Section("Mission autonomy") {
                     Picker("Requested level",selection:Binding(get:{brain.autonomyLevel},set:{brain.setAutonomy($0)})) {Text("Teleop").tag("teleop");Text("Assisted teleop").tag("assisted_teleop");Text("Waypoint").tag("waypoint");Text("Supervised search").tag("supervised")}
+                        .disabled(brain.hardwareActive && !brain.hardwareFeedback)
                     Text(brain.autonomyReason)
                     if let proposal=brain.proposedGoal {Text(brain.proposalText);HStack {Button("Approve search target") {brain.decideProposal(proposal,approve:true)};Button("Reject") {brain.decideProposal(proposal,approve:false)}}}
                     Button("Take over") {forward=0;yaw=0;brain.setAutonomy("teleop")}
@@ -100,7 +105,7 @@ struct ContentView: View {
                         LabeledContent("Distance", value: String(format: "%.1f m", brain.waypointDistance))
                     }
                     Button("Go to waypoint") { goToWaypoint() }
-                        .disabled(brain.waypointActive)
+                        .disabled(brain.waypointActive || (brain.hardwareActive && !brain.hardwareFeedback))
                     Button("Cancel waypoint", role: .destructive) { brain.cancelWaypoint() }
                         .disabled(!brain.waypointActive)
                     if !entryNote.isEmpty {
@@ -109,12 +114,12 @@ struct ContentView: View {
                     Text("Tap the map to drop the goal. On that grid +X is north and +Y is west, the same frame as the blue rover marker. Select Waypoint autonomy before sending a goal. The shared Rust runtime selects motion locally; remote goals are sent to the simulator-owned arbiter.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
-                Section("Velocity target") {
-                    LabeledContent("Forward", value: String(format: "%.2f m/s", forward))
+                Section(brain.hardwareActive && !brain.hardwareFeedback ? "Normalized manual effort" : "Velocity target") {
+                    LabeledContent("Forward", value: String(format: brain.hardwareActive && !brain.hardwareFeedback ? "%.2f effort" : "%.2f m/s", forward))
                     Slider(value: $forward, in: -1...1, step: 0.05)
                         .accessibilityLabel("Forward velocity in metres per second")
                         .disabled(brain.waypointActive)
-                    LabeledContent("Left turn", value: String(format: "%.2f rad/s", yaw))
+                    LabeledContent("Left turn", value: String(format: brain.hardwareActive && !brain.hardwareFeedback ? "%.2f effort" : "%.2f rad/s", yaw))
                     Slider(value: $yaw, in: -1...1, step: 0.05)
                         .accessibilityLabel("Turn rate in radians per second")
                         .disabled(brain.waypointActive)
@@ -126,7 +131,7 @@ struct ContentView: View {
                     LabeledContent("Measured turn", value: String(format: "%.2f rad/s", brain.measuredYaw))
                     LabeledContent("Left motor", value: String(format: "%+.3f", brain.leftEffort))
                     LabeledContent("Right motor", value: String(format: "%+.3f", brain.rightEffort))
-                    Text("Motor effort is signed from −1 to +1. This phone displays that effort only; no motor hardware is connected. Robot-side PWM, the enable switch, and the command watchdog are in the terra-motors adapter. Zero effort coasts and is not a brake.")
+                    Text("Motor effort is normalized from −1 to +1 (unidirectional ESCs use 0 to 1). Bluetooth hardware requires explicit arming and an independent enable gate. Zero effort is not a brake.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 Section("Shared Rust test") {
@@ -142,6 +147,8 @@ struct ContentView: View {
             }
             .navigationTitle("Terra Brain")
         }
+        .onChange(of: brain.hardwareArmed) { _, _ in forward = 0; yaw = 0 }
+        .onChange(of: brain.hardwareActive) { _, _ in forward = 0; yaw = 0 }
         .onChange(of: forward) { _, _ in brain.setTarget(forward: forward, yaw: yaw) }
         .onChange(of: yaw) { _, _ in brain.setTarget(forward: forward, yaw: yaw) }
         .onChange(of: scenePhase) { _, phase in if phase != .active { brain.stop() } }

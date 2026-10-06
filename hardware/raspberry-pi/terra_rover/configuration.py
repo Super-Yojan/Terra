@@ -285,6 +285,11 @@ class ConfigurationStore:
 
     def status(self, now):
         result = self.safety.status(now)
+        try:
+            self.backend.require_gate_open()
+            result['hardware_gate_open_confirmed'] = True
+        except Exception:
+            result['hardware_gate_open_confirmed'] = False
         result.update(service_state='fault' if result['fault'] else 'armed' if result['armed'] else 'arming' if result['arming'] else 'disarmed',
                       configuration_errors=deepcopy(self.errors), battery=None, battery_reason='unsupported')
         return result

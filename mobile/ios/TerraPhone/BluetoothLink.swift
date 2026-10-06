@@ -104,6 +104,11 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
             }; self.pump()
         } catch { self.publish("Synchronize layout and safe output before arming") }
     } }
+    func emergencyStop() { queue.async {
+        self.policy.stop(); self.awaitingSafeSequence = nil; self.awaitingSafeAt = nil; self.armSafe = nil; self.pendingDrive = nil
+        do { self.priority = try self.packet(self.policy.control("emergency_stop"), characteristic: self.controlID); self.pump() }
+        catch { self.close("Emergency stop; reconnect required") }
+    } }
     func disarm() { queue.async { self.stop() } }
     private func stop() {
         policy.stop(); awaitingSafeSequence = nil; awaitingSafeAt = nil; armSafe = nil; pendingDrive = nil

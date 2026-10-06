@@ -45,3 +45,9 @@ pub fn actuator_encode_frame(frame_json: String) -> Result<Vec<u8>, MobileActuat
 pub fn actuator_fragment(message_id: u16, payload: Vec<u8>, maximum_write_length: u32) -> Result<Vec<Vec<u8>>, MobileActuatorError> {
     protocol::fragment_message(&payload, message_id, maximum_write_length as usize, protocol::JSON_LIMIT).map_err(invalid)
 }
+
+#[uniffi::export]
+pub fn actuator_supports_feedback(layout_json: String) -> Result<bool, MobileActuatorError> {
+    let layout: Layout = parse(&layout_json)?;
+    Ok(terra_actuators::supports_feedback(&layout))
+}

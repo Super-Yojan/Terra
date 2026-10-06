@@ -19,6 +19,7 @@
 		B200000000000000000000001 /* BluetoothSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000000000000000000001 /* BluetoothSession.swift */; };
 		B200000000000000000000002 /* BluetoothLink.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000000000000000000002 /* BluetoothLink.swift */; };
 		B200000000000000000000003 /* CoreBluetooth.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B100000000000000000000003 /* CoreBluetooth.framework */; };
+		B200000000000000000000004 /* ActuatorLayoutView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B100000000000000000000004 /* ActuatorLayoutView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -36,6 +37,7 @@
 		B100000000000000000000001 /* BluetoothSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BluetoothSession.swift; sourceTree = "<group>"; };
 		B100000000000000000000002 /* BluetoothLink.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BluetoothLink.swift; sourceTree = "<group>"; };
 		B100000000000000000000003 /* CoreBluetooth.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreBluetooth.framework; path = System/Library/Frameworks/CoreBluetooth.framework; sourceTree = SDKROOT; };
+		B100000000000000000000004 /* ActuatorLayoutView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActuatorLayoutView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -101,6 +103,7 @@
 				D896D79ADD2800F8E4769A32 /* ContentView.swift */,
 				9C2FA04187CC39D929F3A531 /* PhoneController.swift */,
 				B100000000000000000000002 /* BluetoothLink.swift */,
+				B100000000000000000000004 /* ActuatorLayoutView.swift */,
 				B100000000000000000000001 /* BluetoothSession.swift */,
 				543C3C67B32982AE4FA32C81 /* Info.plist */,
 			);
@@ -181,6 +184,7 @@
 				949B117EE8E4E06D4A054039 /* ContentView.swift in Sources */,
 				08906BAF4104CBE47B269B2D /* PhoneController.swift in Sources */,
 				B200000000000000000000002 /* BluetoothLink.swift in Sources */,
+				B200000000000000000000004 /* ActuatorLayoutView.swift in Sources */,
 				B200000000000000000000001 /* BluetoothSession.swift in Sources */,
 				B801C8002482FB48C25D7908 /* TerraCore.swift in Sources */,
 			);
