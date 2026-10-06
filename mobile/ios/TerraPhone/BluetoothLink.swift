@@ -94,6 +94,8 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
         }
     } }
     func drive(valuesJSON: String, producedAt: TimeInterval) { queue.async {
+        // Expected motion inhibition must not preempt fragmented repair/reset requests.
+        guard self.policy.ready else { return }
         do {
             guard self.awaitingSafeSequence == nil, self.now >= producedAt, self.now - producedAt < 0.1 else { return }
             let values = try JSONSerialization.jsonObject(with: Data(valuesJSON.utf8))
