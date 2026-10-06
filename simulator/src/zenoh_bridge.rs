@@ -3,6 +3,7 @@ use crate::{
     depth_camera::{DepthCamera, DepthCameraConfig, DepthFrame},
     rgb_camera::RgbFrame,
     terra::{DriveCommand, KeyboardControlled, MAX_ROVERS, Rover, RoverFleet, RoverId},
+    waypoint::{self, GoalCommand, GoalState, GoalStatus, ResolvedGoal, WaypointConfig},
 };
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -107,7 +108,7 @@ impl Plugin for TerraZenohPlugin {
                     claim_rovers.after(crate::terra::reconcile_fleet),
                 ),
             )
-            .add_systems(FixedUpdate, apply_remote_commands)
+            .add_systems(FixedUpdate, (apply_remote_commands, drive_goals).chain())
             .add_systems(Update, publish_frames);
     }
 }
@@ -115,11 +116,19 @@ impl Plugin for TerraZenohPlugin {
 struct Outgoing {
     frames: BTreeMap<(u64, &'static str), Vec<u8>>,
     fleet: Option<Vec<u8>>,
+    goals: BTreeMap<u64, Vec<u8>>,
+}
+#[derive(Clone)]
+struct GoalInbox {
+    seq: u64,
+    command: GoalCommand,
 }
 type LeasedCommand = Option<(DriveCommand, Instant)>;
 #[derive(Default)]
 struct Shared {
     commands: Mutex<BTreeMap<u64, LeasedCommand>>,
+    goals: Mutex<BTreeMap<u64, GoalInbox>>,
+    goal_seq: std::sync::atomic::AtomicU64,
     fleet_request: Mutex<Option<usize>>,
     outgoing: Mutex<Outgoing>,
     connected: AtomicBool,
@@ -224,6 +233,138 @@ fn decode_fleet_request(bytes: &[u8]) -> Option<usize> {
     let request: FleetRequest = serde_json::from_slice(bytes).ok()?;
     (request.count <= MAX_ROVERS).then_some(request.count)
 }
+
+#[derive(Default)]
+struct TrackedGoal {
+    seq: u64,
+    goal_id: u64,
+    goal: Option<ResolvedGoal>,
+    last_payload: Vec<u8>,
+    last_sent: Option<Instant>,
+}
+#[derive(Default)]
+struct GoalRuntime {
+    next_id: u64,
+    rovers: BTreeMap<u64, TrackedGoal>,
+}
+enum GoalUpdate {
+    Cancel,
+    Ignore,
+    Go(ResolvedGoal),
+}
+
+fn drive_goals(
+    bridge: Res<Bridge>,
+    world: Option<Res<crate::world::WorldConfig>>,
+    patch: Option<Res<crate::geo::GeoPatch>>,
+    keys: Option<Res<ButtonInput<KeyCode>>>,
+    mut rovers: Query<
+        (&RoverId, &Transform, &mut DriveCommand),
+        (With<Rover>, With<ZenohControlled>),
+    >,
+    mut runtime: Local<GoalRuntime>,
+) {
+    let incoming = bridge.shared.goals.lock().unwrap().clone();
+    let half = world
+        .as_ref()
+        .map(|world| (f64::from(world.size) * 0.5 - 1.0).max(1.0))
+        .unwrap_or(500.0);
+    let anchor = patch.as_ref().map(|patch| &patch.anchor);
+    let paused = keys.is_some_and(|keys| keys.pressed(KeyCode::Space));
+    let gains = WaypointConfig::default();
+    let mut seen = std::collections::BTreeSet::new();
+    for (id, transform, mut command) in &mut rovers {
+        seen.insert(id.0);
+        if let Some(inbox) = incoming.get(&id.0) {
+            let previous = runtime
+                .rovers
+                .get(&id.0)
+                .map(|tracked| tracked.seq)
+                .unwrap_or(0);
+            if inbox.seq != previous {
+                let update = match &inbox.command {
+                    GoalCommand::Cancel => GoalUpdate::Cancel,
+                    command => match waypoint::resolve_goal(command, anchor, half) {
+                        Some(goal) => GoalUpdate::Go(goal),
+                        None => GoalUpdate::Ignore,
+                    },
+                };
+                let goal_id = if matches!(update, GoalUpdate::Go(_)) {
+                    runtime.next_id = runtime.next_id.saturating_add(1).max(1);
+                    runtime.next_id
+                } else {
+                    0
+                };
+                let tracked = runtime.rovers.entry(id.0).or_default();
+                tracked.seq = inbox.seq;
+                match update {
+                    GoalUpdate::Cancel => {
+                        tracked.goal = None;
+                        tracked.goal_id = 0;
+                    }
+                    GoalUpdate::Ignore => {}
+                    GoalUpdate::Go(goal) => {
+                        tracked.goal_id = goal_id;
+                        tracked.goal = Some(goal);
+                    }
+                }
+            }
+        }
+        let tracked = runtime.rovers.entry(id.0).or_default();
+        let (x, y, yaw) = waypoint::robotics_pose(transform.translation, transform.rotation);
+        let status = if let Some(goal) = tracked.goal.clone() {
+            let output = waypoint::pursuit(x, y, yaw, goal.x, goal.y, goal.yaw, &gains);
+            if paused {
+                *command = DriveCommand::default();
+            } else if output.arrived {
+                *command = DriveCommand::default();
+            } else {
+                *command = DriveCommand {
+                    linear: output.linear,
+                    angular: output.angular,
+                };
+            }
+            GoalStatus {
+                state: if output.arrived {
+                    GoalState::Arrived
+                } else {
+                    GoalState::Active
+                },
+                goal_id: tracked.goal_id,
+                token: goal.token.clone(),
+                distance: f64::from(output.distance),
+                x: f64::from(goal.x),
+                y: f64::from(goal.y),
+                yaw: goal.yaw.map(f64::from),
+            }
+        } else {
+            GoalStatus::idle()
+        };
+        let Some(payload) = waypoint::encode_status(&status) else {
+            continue;
+        };
+        let period = if status.state == GoalState::Idle {
+            Duration::from_secs(1)
+        } else {
+            Duration::from_millis(200)
+        };
+        let due = tracked
+            .last_sent
+            .is_none_or(|sent| sent.elapsed() >= period);
+        if payload != tracked.last_payload || due {
+            bridge
+                .shared
+                .outgoing
+                .lock()
+                .unwrap()
+                .goals
+                .insert(id.0, payload.clone());
+            tracked.last_payload = payload;
+            tracked.last_sent = Some(Instant::now());
+        }
+    }
+    runtime.rovers.retain(|id, _| seen.contains(id));
+}
 fn run_transport(config: &ZenohBridgeConfig, shared: &Arc<Shared>) -> zenoh::Result<()> {
     let session = zenoh::open(config.session_config()?).wait()?;
     let incoming = shared.clone();
@@ -247,6 +388,36 @@ fn run_transport(config: &ZenohBridgeConfig, shared: &Arc<Shared>) -> zenoh::Res
         })
         .wait()?;
     let incoming = shared.clone();
+    let prefix = config.prefix.clone();
+    let _goal_subscriber = session
+        .declare_subscriber(format!("{prefix}/*/goal"))
+        .callback(move |sample| {
+            let key = sample.key_expr().as_str();
+            let Some(id) = key
+                .strip_prefix(&format!("{prefix}/"))
+                .and_then(|key| key.strip_suffix("/goal"))
+                .and_then(|id| id.parse::<u64>().ok())
+            else {
+                return;
+            };
+            let Some(command) = waypoint::decode_goal(&sample.payload().to_bytes()) else {
+                return;
+            };
+            if !incoming.commands.lock().unwrap().contains_key(&id) {
+                return;
+            }
+            let seq = incoming
+                .goal_seq
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                + 1;
+            incoming
+                .goals
+                .lock()
+                .unwrap()
+                .insert(id, GoalInbox { seq, command });
+        })
+        .wait()?;
+    let incoming = shared.clone();
     let _fleet_subscriber = session
         .declare_subscriber(format!("{}/fleet/size", config.prefix))
         .callback(move |sample| {
@@ -257,8 +428,8 @@ fn run_transport(config: &ZenohBridgeConfig, shared: &Arc<Shared>) -> zenoh::Res
         .wait()?;
     shared.connected.store(true, Ordering::Release);
     info!(
-        "Terra Zenoh ready: {}/<id>/cmd_vel, {}/<id>/camera/{{rgb,depth}} (depth includes exposure pose), {}/fleet/{{size,state}}",
-        config.prefix, config.prefix, config.prefix
+        "Terra Zenoh ready: {}/<id>/{{cmd_vel,goal}}, {}/<id>/goal/status, {}/<id>/camera/{{rgb,depth}} (depth includes exposure pose), {}/fleet/{{size,state}}",
+        config.prefix, config.prefix, config.prefix, config.prefix
     );
     while !shared.stop.load(Ordering::Acquire) {
         let outgoing = std::mem::take(&mut *shared.outgoing.lock().unwrap());
@@ -275,6 +446,18 @@ fn run_transport(config: &ZenohBridgeConfig, shared: &Arc<Shared>) -> zenoh::Res
         if let Some(state) = outgoing.fleet {
             session
                 .put(format!("{}/fleet/state", config.prefix), state)
+                .encoding(zenoh::bytes::Encoding::APPLICATION_JSON)
+                .congestion_control(zenoh::qos::CongestionControl::Drop)
+                .wait()?;
+        }
+        let live: std::collections::BTreeSet<u64> =
+            shared.commands.lock().unwrap().keys().copied().collect();
+        for (id, payload) in outgoing.goals {
+            if !live.contains(&id) {
+                continue;
+            }
+            session
+                .put(format!("{}/{id}/goal/status", config.prefix), payload)
                 .encoding(zenoh::bytes::Encoding::APPLICATION_JSON)
                 .congestion_control(zenoh::qos::CongestionControl::Drop)
                 .wait()?;
@@ -830,6 +1013,58 @@ mod tests {
         app.world_mut().run_schedule(FixedUpdate);
         assert_eq!(app.world().get::<DriveCommand>(first).unwrap().linear, 1.0);
         assert_eq!(app.world().get::<DriveCommand>(second).unwrap().linear, 0.0);
+    }
+    #[test]
+    fn waypoint_goal_drives_north_and_publishes_status() {
+        let shared = Arc::new(Shared::default());
+        shared.connected.store(true, Ordering::Release);
+        shared.commands.lock().unwrap().insert(0, None);
+        shared.goals.lock().unwrap().insert(
+            0,
+            GoalInbox {
+                seq: 1,
+                command: GoalCommand::Local {
+                    x: 10.0,
+                    y: 0.0,
+                    yaw: None,
+                    token: Some("goal-1".into()),
+                },
+            },
+        );
+        let mut app = App::new();
+        app.insert_resource(Bridge {
+            shared: shared.clone(),
+        })
+        .insert_resource(ZenohBridgeConfig::default())
+        .add_systems(FixedUpdate, drive_goals);
+        app.world_mut().spawn((
+            Rover,
+            RoverId(0),
+            ZenohControlled,
+            Transform::default(),
+            DriveCommand::default(),
+        ));
+        app.world_mut().run_schedule(FixedUpdate);
+        let world = app.world_mut();
+        let command = world
+            .query_filtered::<&DriveCommand, With<Rover>>()
+            .single(world)
+            .unwrap();
+        assert!(command.linear > 0.5, "{}", command.linear);
+        assert!(command.angular.abs() < 0.05, "{}", command.angular);
+        let payload = shared
+            .outgoing
+            .lock()
+            .unwrap()
+            .goals
+            .get(&0)
+            .cloned()
+            .unwrap();
+        let status: serde_json::Value = serde_json::from_slice(&payload).unwrap();
+        assert_eq!(status["state"], "active");
+        assert_eq!(status["goal_id"], 1);
+        assert_eq!(status["token"], "goal-1");
+        assert!(status["distance"].as_f64().unwrap() > 9.0);
     }
     #[test]
     fn fleet_requests_validate_count_and_apply_to_the_resource() {

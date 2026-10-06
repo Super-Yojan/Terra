@@ -12,6 +12,8 @@ Terra combines a Bevy/Avian rover simulator with reusable Rust robotics modules 
 
 See [mobile controller setup](docs/MOBILE_CONTROL.md) for the sensor contract, iOS build and validation. The simulator lives in `simulator/`; its existing fleet and Zenoh velocity commands now feed the shared controller, which applies motor forces through Avian.
 
+The simulator still boots into the flat practice world. `TERRA_TILES=1` builds that square from a real Terrarium elevation tile instead (bundled George Mason University Fairfax sample, centered on the Johnson Center, or another lat/lon when the network is available). High-level goals use `terra/rover/<id>/goal`; `cmd_vel` stays a debug twist. See [world design](simulator/WORLD.md#real-world-tiles), [how to run and test](simulator/WORLD.md#reproduce-and-test), and the [Zenoh waypoint contract](simulator/ZENOH.md#go-to-waypoint).
+
 ```sh
 cargo test --workspace
 cargo test --manifest-path simulator/Cargo.toml
