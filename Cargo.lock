@@ -2016,6 +2016,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "terra-actuators"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "terra-autonomy"
 version = "0.1.0"
 dependencies = [
@@ -2054,6 +2062,8 @@ dependencies = [
 name = "terra-mobile"
 version = "0.1.0"
 dependencies = [
+ "serde",
+ "terra-actuators",
  "serde_json",
  "terra-autonomy",
  "terra-control",

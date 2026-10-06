@@ -1,0 +1,72 @@
+{
+  "schema_version": 1,
+  "revision": 0,
+  "actuators": [
+    {
+      "id": 0,
+      "name": "M2",
+      "port": "M2",
+      "kind": "dc_motor",
+      "inverted": false,
+      "limits": {
+        "min": -0.4,
+        "max": 0.4
+      },
+      "calibration": {
+        "type": "dc_motor",
+        "max_power_fraction": 0.5
+      },
+      "route": {
+        "type": "left_effort"
+      },
+      "safe": {
+        "type": "zero"
+      }
+    },
+    {
+      "id": 1,
+      "name": "M3",
+      "port": "M3",
+      "kind": "dc_motor",
+      "inverted": false,
+      "limits": {
+        "min": -0.4,
+        "max": 0.4
+      },
+      "calibration": {
+        "type": "dc_motor",
+        "max_power_fraction": 0.5
+      },
+      "route": {
+        "type": "right_effort"
+      },
+      "safe": {
+        "type": "zero"
+      }
+    },
+    {
+      "id": 2,
+      "name": "Position servo",
+      "port": "SELECT_SERVO_PWM_PORT",
+      "kind": "positional_servo",
+      "inverted": false,
+      "limits": {
+        "min": -0.5,
+        "max": 0.5
+      },
+      "calibration": {
+        "type": "positional_servo",
+        "min_us": 1000,
+        "center_us": 1500,
+        "max_us": 2000
+      },
+      "route": {
+        "type": "servo"
+      },
+      "safe": {
+        "type": "position",
+        "value": 0.0
+      }
+    }
+  ]
+}

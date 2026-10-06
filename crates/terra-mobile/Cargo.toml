@@ -5,6 +5,8 @@ edition.workspace = true
 [lib]
 crate-type = ["lib", "staticlib", "cdylib"]
 [dependencies]
+terra-actuators.workspace = true
+serde = { version = "1", features = ["derive"] }
 terra-autonomy.workspace = true
 terra-navigation.workspace = true
 terra-experiment.workspace = true

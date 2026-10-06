@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "revision": 0,
+  "actuators": [
+    {
+      "id": 0,
+      "name": "Left ESC",
+      "port": "SELECT_LEFT_PWM_PORT",
+      "kind": "bidirectional_esc",
+      "inverted": false,
+      "limits": {
+        "min": -0.3,
+        "max": 0.3
+      },
+      "calibration": {
+        "type": "bidirectional_esc",
+        "reverse_us": 1000,
+        "neutral_us": 1500,
+        "forward_us": 2000,
+        "arming_duration_ms": 3000
+      },
+      "route": {
+        "type": "manual",
+        "forward_coefficient": 1.0,
+        "turn_coefficient": -1
+      },
+      "safe": {
+        "type": "zero"
+      }
+    },
+    {
+      "id": 1,
+      "name": "Right ESC",
+      "port": "SELECT_RIGHT_PWM_PORT",
+      "kind": "bidirectional_esc",
+      "inverted": false,
+      "limits": {
+        "min": -0.3,
+        "max": 0.3
+      },
+      "calibration": {
+        "type": "bidirectional_esc",
+        "reverse_us": 1000,
+        "neutral_us": 1500,
+        "forward_us": 2000,
+        "arming_duration_ms": 3000
+      },
+      "route": {
+        "type": "manual",
+        "forward_coefficient": 1.0,
+        "turn_coefficient": 1
+      },
+      "safe": {
+        "type": "zero"
+      }
+    }
+  ]
+}
