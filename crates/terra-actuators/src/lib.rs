@@ -25,3 +25,4 @@ impl std::fmt::Display for ActuatorError {
     }
 }
 impl std::error::Error for ActuatorError {}
+pub mod protocol;
