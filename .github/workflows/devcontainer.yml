@@ -35,7 +35,7 @@ jobs:
           runCmd: |
             set -euo pipefail
             test -f /etc/vulkan/terra-lvp.json
-            vulkaninfo --summary
+            env -u DISPLAY vulkaninfo --summary
             rustc --version
             cargo build --locked --manifest-path simulator/Cargo.toml
             cargo test --locked --manifest-path simulator/Cargo.toml

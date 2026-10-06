@@ -25,8 +25,10 @@ if [[ ! -f /etc/vulkan/terra-lvp.json ]]; then
   echo "lavapipe ICD /etc/vulkan/terra-lvp.json is missing" >&2
   exit 1
 fi
+# DISPLAY is set for the desktop. vulkaninfo then tries to create an X
+# window and exits non-zero on lavapipe; the headless query is the check.
 echo "Vulkan devices:"
-vulkaninfo --summary
+env -u DISPLAY vulkaninfo --summary
 
 echo "Installing Python Zenoh client dependencies..."
 python3 -m pip install -r simulator/tools/requirements.txt
