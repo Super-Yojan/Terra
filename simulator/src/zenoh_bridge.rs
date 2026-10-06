@@ -1628,6 +1628,9 @@ fn drive_autonomy(
             outgoing
                 .goals
                 .insert(id.0, encode_status(&output.goal).unwrap());
+if let Some(grid)=snapshot.as_ref() {
+    outgoing.states.insert((id.0,"map/occupancy".into()),serde_json::to_vec(&terra_autonomy::occupancy_telemetry(id.0,&runtime.run_id,map.map(|m|m.last_sequence).unwrap_or(0),grid)).unwrap());
+}
             for (kind, value) in [
                 (
                     "autonomy/status",
