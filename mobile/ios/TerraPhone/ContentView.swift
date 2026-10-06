@@ -5,6 +5,7 @@ struct ContentView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var forward = 0.0
     @State private var yaw = 0.0
+    @State private var calibration = MountCalibration.load()
     var body: some View {
         NavigationStack {
             Form {
@@ -31,7 +32,7 @@ struct ContentView: View {
                         Text(String(format: "%.0f × %.0f m · %.0f cm cells · world +X right, +Y up", Double(grid.width) * grid.resolution, Double(grid.height) * grid.resolution, grid.resolution * 100)).font(.caption)
                     }
                     Button("Clear map") { brain.clearMap() }
-                    Text("Phone mapping uses scene depth when available. Initial camera height is assumed 0.5 m above flat ground; calibrate before using the map for navigation.").font(.footnote).foregroundStyle(.secondary)
+                    Text("Phone mapping uses scene depth when available. It requires a saved measured camera height above the ground plane.").font(.footnote).foregroundStyle(.secondary)
                 }
                 Section("Velocity target") {
                     LabeledContent("Forward", value: String(format: "%.2f m/s", forward))
@@ -55,9 +56,36 @@ struct ContentView: View {
                     Text(brain.benchmark).font(.footnote)
                 }
                 Section("Phone mounting") {
-                    Text("Default: phone flat, screen up, top edge toward the rover’s front. Phone and rover origins are assumed coincident. Calibrate the mount before connecting motor hardware.")
+                    Text("Mount the phone with its rear camera facing rover-forward. Enter rear-camera position relative to the rover reference point using a straight line measurement in meters.")
                         .font(.footnote).foregroundStyle(.secondary)
-                    Text("ARKit needs a physical supported iPhone and visual features. Use Simulated rover on the iOS simulator.")
+                    LabeledContent("Calibration", value: brain.calibrationStatus)
+                    calibrationField("Camera forward offset (m)", value: $calibration.cameraOffsetForward)
+                    calibrationField("Camera left offset (m)", value: $calibration.cameraOffsetLeft)
+                    calibrationField("Camera height (m)", value: $calibration.cameraHeight)
+                    calibrationField("Camera roll (°)", value: $calibration.cameraRollDegrees)
+                    calibrationField("Camera pitch (°)", value: $calibration.cameraPitchDegrees)
+                    calibrationField("Camera yaw (°)", value: $calibration.cameraYawDegrees)
+                    Text("Angles are mount corrections around rover +X forward, +Y left, +Z up; roll X, pitch Y, yaw Z. Measure relative to the upright, rear-camera-forward position.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                    Toggle("Measurements reviewed", isOn: $calibration.reviewed)
+                    Button("Save measured mount calibration") { brain.saveMountCalibration(calibration) }
+                    Text("After saving, manually rotate the rover at least 90° in both directions around the rover reference point. Confirm ARKit tracking remains normal and the camera arc agrees with the measured offset; record the result in the calibration checklist.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                    Button("Start offset turn pass") { brain.beginAutomaticOffsetFit() }
+                        .disabled(brain.offsetFitInProgress)
+                    Button("Finish turn pass") { brain.finishAutomaticOffsetFit() }
+                        .disabled(!brain.offsetFitInProgress)
+                    Text(brain.offsetFitStatus).font(.footnote).foregroundStyle(.secondary)
+                    if let fitted = brain.fittedCameraOffset {
+                        Button("Use fitted offset") {
+                            calibration.cameraOffsetForward = fitted.x
+                            calibration.cameraOffsetLeft = fitted.y
+                            calibration.reviewed = false
+                        }
+                    }
+                    Text("With the rover motor-disabled, record one ≥90° turn pass, then a pass in the opposite direction. The fit checks ARKit tracking and rejects inconsistent paths. Review the result before saving it.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                    Text("ARKit needs a physical supported iPhone and visual features. Use Simulated rover on the iOS simuluator.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
             }
@@ -67,6 +95,11 @@ struct ContentView: View {
         .onChange(of: yaw) { _, _ in brain.setTarget(forward: forward, yaw: yaw) }
         .onChange(of: scenePhase) { _, phase in if phase != .active { brain.stop() } }
         .onDisappear { brain.stop() }
+    }
+
+    private func calibrationField(_ title: String, value: Binding<Double>) -> some View {
+        TextField(title, value: value, format: .number.precision(.fractionLength(0...3)))
+            .keyboardType(.decimalPad)
     }
 }
 
