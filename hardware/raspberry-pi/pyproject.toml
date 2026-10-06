@@ -7,7 +7,7 @@ name = "terra-rover"
 version = "0.1.0"
 description = "Terra configurable Bluetooth actuator service"
 requires-python = ">=3.10"
-dependencies = []
+dependencies = ["dbus-next==0.2.3"]
 
 [tool.setuptools.packages.find]
 include = ["terra_rover*"]

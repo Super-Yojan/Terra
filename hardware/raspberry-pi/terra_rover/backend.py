@@ -43,7 +43,11 @@ class Backend(Protocol):
 def file_gate_reader(path):
     """Only an exact ASCII 1 (with surrounding whitespace) denotes closed gate."""
     gate_path = Path(path)
-    return lambda: gate_path.read_text(encoding='ascii').strip() == '1'
+    def read():
+        token = gate_path.read_text(encoding='ascii').strip()
+        if token not in ('0', '1'): raise ValueError('gate file must contain 0 or 1')
+        return token == '1'
+    return read
 
 def _capabilities(pwm_ports, library, version, occupied_resources):
     ports = {}
@@ -97,6 +101,16 @@ class _Adapter:
         if self._closed or self._gate_reader is None: return False
         try: return self._gate_reader() is True
         except Exception: return False
+
+    def require_gate_open(self):
+        if self._closed or self._gate_reader is None:
+            raise BackendError(None, 'gate', 'gate state unavailable')
+        try:
+            state = self._gate_reader()
+        except Exception as exc:
+            raise BackendError(None, 'gate', 'gate state unreadable') from exc
+        if state is not False:
+            raise BackendError(None, 'gate', 'gate must be confirmed open')
 
     def configure(self, layout):
         if self._closed: raise BackendError(None, 'configure', 'backend closed')
@@ -217,12 +231,10 @@ class FusionHatBackend(_Adapter):
         super().__init__(_capabilities(pwm_ports, 'fusion_hat', library_version or 'unloaded', occupied_resources), gate_reader)
 
     def _before_configure(self):
-        if self.read_gate():
-            raise BackendError(None, 'configure', 'physical gate must be open before configuring outputs')
+        self.require_gate_open()
 
     def _release_for_configure(self):
-        if self.read_gate():
-            raise BackendError(None, 'configure', 'physical gate must be open for resource transfer')
+        self.require_gate_open()
         failures = self._safe_all()
         for port, output in self._outputs.items():
             legs = (output.pwm_a, output.pwm_b) if port in MOTOR_PINS else (output,)

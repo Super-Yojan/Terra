@@ -1,0 +1,25 @@
+[Unit]
+Description=Terra owner-only Bluetooth actuator peripheral
+After=bluetooth.service
+Requires=bluetooth.service
+
+[Service]
+Type=simple
+User=terra-rover
+Group=terra-rover
+SupplementaryGroups=i2c bluetooth
+StateDirectory=terra-rover
+StateDirectoryMode=0700
+WorkingDirectory=/opt/terra/hardware/raspberry-pi
+ExecStart=/opt/terra/venv/bin/python -m terra_rover --config /var/lib/terra-rover/layout.json --owner /var/lib/terra-rover/owner.json --gate-file /run/terra-interlock/gate
+Restart=on-failure
+RestartSec=2
+TimeoutStopSec=15
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/terra-rover
+
+[Install]
+WantedBy=multi-user.target

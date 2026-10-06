@@ -66,8 +66,9 @@ class ConfigurationStore:
         status = self.safety.status(now)
         if status['armed'] or status['arming']:
             return [_error('configuration_armed', 'configuration requires disarmed state')]
-        if self.backend.capabilities().get('library') != 'mock' and self.backend.read_gate():
-            return [_error('hardware_gate', 'physical gate must be open for configuration')]
+        if self.backend.capabilities().get('library') != 'mock':
+            try: self.backend.require_gate_open()
+            except Exception as exc: return [_error('hardware_gate', exc)]
         if status['fault'] in ('invalid_clock', 'clock_regression'):
             return [_error('clock', status['fault'])]
         return []
