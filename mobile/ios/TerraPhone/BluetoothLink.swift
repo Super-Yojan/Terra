@@ -18,6 +18,7 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
     private var found: [UUID: CBPeripheral] = [:]
     private var peripheral: CBPeripheral?
     private var retiring: CBPeripheral?
+    private var deferredIdentifier: UUID?
     private var synchronizedRevision: UInt32?
     private var hasCapabilities = false
     private var safeValues: [[String: Any]] = []
@@ -62,11 +63,17 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
     private func publish(_ text: String) { DispatchQueue.main.async { self.status = text } }
     func scan() { queue.async { guard self.central.state == .poweredOn else { return }; self.central.scanForPeripherals(withServices: [self.serviceID]); self.publish("Scanning") } }
     func connect(identifier: UUID) { queue.async {
-        guard self.peripheral == nil, self.retiring == nil, let selected = self.found[identifier] else { return }
-        self.clear(); self.peripheral = selected; self.callbackGeneration = self.policy.generation
-        selected.delegate = self; self.central.stopScan(); self.central.connect(selected); self.publish("Connecting")
+        self.deferredIdentifier = identifier
+        self.connectDeferredIfPossible()
     } }
-    func disconnect() { queue.async { self.close("Disconnected") } }
+    private func connectDeferredIfPossible() {
+        guard peripheral == nil, retiring == nil, let identifier = deferredIdentifier else { return }
+        deferredIdentifier = nil
+        guard let selected = found[identifier] else { publish("Scan and select the rover again"); return }
+        clear(); peripheral = selected; callbackGeneration = policy.generation
+        selected.delegate = self; central.stopScan(); central.connect(selected); publish("Connecting")
+    }
+    func disconnect() { queue.async { self.deferredIdentifier = nil; self.close("Disconnected") } }
     private func clear() {
         policy.reset(); usedRequests.removeAll(); awaitingSafeAt = nil; safeValues = []; awaitingSafeSequence = nil; synchronizedRevision = nil; hasCapabilities = false; characteristics.removeAll(); statusAssembly.clear(); replyAssembly.clear()
         active = nil; armSafe = nil; waitingRequest = nil; waitingRequestAt = nil; pendingDrive = nil; priority = nil; configuration.removeAll(); requests.removeAll()
@@ -179,8 +186,8 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
         if let data = try? JSONSerialization.data(withJSONObject: items) { DispatchQueue.main.async { self.peripheralsJSON = String(decoding: data, as: UTF8.self) } }
     }
     func centralManager(_ central: CBCentralManager, didConnect p: CBPeripheral) { guard current(p) else { return }; p.discoverServices([serviceID]) }
-    func centralManager(_ central: CBCentralManager, didFailToConnect p: CBPeripheral, error: Error?) { if retiring === p { p.delegate = nil; retiring = nil; return }; guard current(p) else { return }; terminal("Connection failed; reconnect explicitly") }
-    func centralManager(_ central: CBCentralManager, didDisconnectPeripheral p: CBPeripheral, error: Error?) { if retiring === p { retiring = nil; return }; guard current(p) else { return }; terminal("Disconnected; explicit reconnect and arm required") }
+    func centralManager(_ central: CBCentralManager, didFailToConnect p: CBPeripheral, error: Error?) { if retiring === p { p.delegate = nil; retiring = nil; connectDeferredIfPossible(); return }; guard current(p) else { return }; terminal("Connection failed; reconnect explicitly") }
+    func centralManager(_ central: CBCentralManager, didDisconnectPeripheral p: CBPeripheral, error: Error?) { if retiring === p { p.delegate = nil; retiring = nil; connectDeferredIfPossible(); return }; guard current(p) else { return }; terminal("Disconnected; explicit reconnect and arm required") }
     func peripheral(_ p: CBPeripheral, didDiscoverServices error: Error?) {
         guard current(p) else { return }
         guard error == nil, let service = p.services?.first(where: { $0.uuid == serviceID }) else { close("Terra service unavailable"); return }

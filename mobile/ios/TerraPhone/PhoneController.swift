@@ -51,6 +51,9 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, @unc
     @Published private(set) var discoveredRovers: [RoverPeripheral] = []
     @Published private(set) var servoPositions: [UInt8: Double] = [:]
     @Published private(set) var feedbackCompatible = false
+    @Published private(set) var acknowledgedCommitRevision: UInt32?
+    private var requestedHardwareFeedback: UUID?
+    private var feedbackConnectionSawUnready = false
     private var subscriptions = Set<AnyCancellable>()
     private var bleActive = false
     private var bleFeedback = false
@@ -186,6 +189,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, @unc
             return
         }
         controlQueue.async {
+            guard self.sensorEpochMatches(epoch) else { return }
             do { try self.prepare(.phone); self.startTimer() }
             catch { self.fail(error) }
         }
@@ -211,7 +215,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, @unc
     func stop() {
         sensorEpochLock.lock(); sensorEpoch += 1; sensorEpochLock.unlock()
         bluetooth.disarm(); bluetooth.disconnect()
-        hardwareActive = false
+        hardwareActive = false; requestedHardwareFeedback = nil
         motion.stopDeviceMotionUpdates()
         session.pause()
         controlQueue.async {
@@ -258,6 +262,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, @unc
         previousPosition = nil; previousPoseTime = nil; filteredVelocity = .zero
     }
     private func startTimer() {
+        self.timer?.cancel(); self.timer = nil
         let timer = DispatchSource.makeTimerSource(queue: controlQueue)
         timer.schedule(deadline: .now(), repeating: .milliseconds(10), leeway: .milliseconds(1))
         timer.setEventHandler { [weak self] in self?.update() }
@@ -527,6 +532,18 @@ extension PhoneController {
         let layout = committedLayoutJSON
         let ready = hardwareReady
         let compatible = feedbackCompatible
+        if requestedHardwareFeedback != nil && !ready { feedbackConnectionSawUnready = true }
+        if let requested = requestedHardwareFeedback, feedbackConnectionSawUnready, bluetooth.connectedIdentifier == requested, ready {
+            requestedHardwareFeedback = nil
+            if compatible && ARWorldTrackingConfiguration.isSupported && motion.isDeviceMotionAvailable {
+                startPhoneSensors()
+                hardwareFeedback = true
+                controlQueue.async { self.bleFeedback = true; self.target = (0, 0); self.resetServoTargets() }
+            } else {
+                configurationStatus = "Feedback requires a compatible fresh rover layout and available phone tracking"
+                disarmHardware()
+            }
+        }
         controlQueue.async {
             self.bleCompatible = compatible
             if self.bleLayout != layout { self.bleLayout = layout; self.target = (0, 0); self.resetServoTargets() }
@@ -536,19 +553,21 @@ extension PhoneController {
     func scanBluetooth() { bluetooth.scan() }
     func startBluetooth(identifier: UUID, feedback: Bool) {
         stop()
-        guard !feedback || feedbackCompatible else { configurationStatus = "Select a feedback-compatible committed layout first"; return }
-        if feedback { startPhoneSensors() }
-        hardwareActive = true; hardwareFeedback = feedback
+        requestedHardwareFeedback = feedback ? identifier : nil
+        feedbackConnectionSawUnready = false
+        sensorEpochLock.lock(); let epoch = sensorEpoch; sensorEpochLock.unlock()
+        hardwareActive = true; hardwareFeedback = false
         controlQueue.async {
-            self.bleActive = true; self.bleFeedback = feedback; self.hardwareMotionRevoked = true
+            guard self.sensorEpochMatches(epoch) else { return }
+            self.bleActive = true; self.bleFeedback = false; self.hardwareMotionRevoked = true
             self.target = (0, 0); self.resetServoTargets()
-            if !feedback { self.mode = .bluetoothManual; self.tick = 0; self.startTimer() }
+            self.mode = .bluetoothManual; self.tick = 0; self.startTimer()
             self.bluetooth.connect(identifier: identifier)
-            DispatchQueue.main.async { self.source = feedback ? "Bluetooth · phone feedback" : "Bluetooth · normalized manual effort" }
+            DispatchQueue.main.async { self.source = feedback ? "Bluetooth · waiting for fresh feedback-compatible layout" : "Bluetooth · normalized manual effort" }
         }
     }
     func armHardware() {
-        guard hardwareReady, !hardwareArmed, !hardwareArming else { return }
+        guard requestedHardwareFeedback == nil, hardwareReady, !hardwareArmed, !hardwareArming else { return }
         controlQueue.async {
             guard self.bleActive, !self.bleFeedback || (self.feedbackTrackingHealthy && self.bleCompatible) else { return }
             self.target = (0, 0); self.resetServoTargets(); self.hardwareMotionRevoked = false
@@ -623,6 +642,7 @@ extension PhoneController {
             if let revision = payload?["staged_revision"] as? UInt32 { staged = (id, revision); configurationStatus = "Staged revision \(revision) · commit explicitly" }
         } else {
             staged = nil; stageRequest = nil; commitRequest = nil
+            acknowledgedCommitRevision = object["active_revision"] as? UInt32
             configurationStatus = "Commit acknowledged · refreshing active layout"
             sendConfiguration("capabilities", payload: [:]); sendConfiguration("read_layout", payload: [:])
         }

@@ -60,7 +60,7 @@ struct ActuatorLayoutView: View {
                     Text("Select discovered rover").tag("")
                     ForEach(brain.discoveredRovers) { rover in Text("\(rover.name) · \(rover.identifier)").tag(rover.identifier) }
                 }
-                Toggle("Phone feedback", isOn: $feedback).disabled(!brain.feedbackCompatible)
+                Toggle("Phone feedback", isOn: $feedback)
                 Button("Connect selected rover") { if let id = UUID(uuidString: selected) { brain.startBluetooth(identifier: id, feedback: feedback) } }.disabled(UUID(uuidString: selected) == nil)
                 Text(brain.hardwareStatus)
                 Text(brain.hardwareReady ? "Layout and capabilities synchronized" : "Waiting for bonded owner access, status and layout")
@@ -114,6 +114,10 @@ struct ActuatorLayoutView: View {
         }
         .navigationTitle("Actuator layouts")
         .onAppear { if !dirty, let active { draft = active } }
+        .onChange(of: selected) { _, _ in if brain.hardwareActive { brain.stop() } }
+        .onChange(of: brain.acknowledgedCommitRevision) { _, revision in
+            if let revision { draft.revision = revision }
+        }
         .onChange(of: brain.committedLayoutJSON) { _, _ in if !dirty, let active { draft = active } }
         .onChange(of: draft) { _, _ in dirty = true; brain.invalidateStagedLayout() }
     }
