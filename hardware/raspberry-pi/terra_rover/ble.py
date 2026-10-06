@@ -310,7 +310,12 @@ class BlePeripheral:
                 self.disconnect(self.peer, time.monotonic())
         self.bus.add_message_handler(changed)
         # ObjectManager changes cover newly discovered paired devices.
-        manager.on_interfaces_added(lambda p, i: self.devices.update({p: {k:v.value for k,v in i['org.bluez.Device1'].items()}}) if 'org.bluez.Device1' in i else None)
+        def added(path, interfaces):
+            if 'org.bluez.Device1' not in interfaces: return
+            self.devices[path] = {k: v.value for k, v in interfaces['org.bluez.Device1'].items()}
+            if self.peer is not None and path != self.peer and self.devices[path].get('Connected'):
+                self.disconnect(self.peer, time.monotonic())
+        manager.on_interfaces_added(added)
         manager.on_interfaces_removed(lambda p, i: (self.disconnect(p, time.monotonic()), self.devices.pop(p, None)) if 'org.bluez.Device1' in i else None)
         # Install bus match for Device1 property signals on the whole adapter tree.
         dbus = self.bus.get_proxy_object('org.freedesktop.DBus', '/org/freedesktop/DBus', await self.bus.introspect('org.freedesktop.DBus', '/org/freedesktop/DBus')).get_interface('org.freedesktop.DBus')
