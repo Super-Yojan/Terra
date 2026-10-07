@@ -45,10 +45,14 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, @unc
     @Published private(set) var hardwareConfigurationReady = false
     @Published private(set) var activeLayoutRevision: UInt32 = 0
     @Published private(set) var hardwareFault: String?
+    private var autoConnectionGeneration: UInt64 = 0
+    private var autoConnectionPending = false
     private var configurationGeneration: UInt64 = 0
     private var resetFaultRequest: UInt32?
     @Published private(set) var hardwareArmed = false
     @Published private(set) var hardwareArming = false
+    @Published private(set) var hardwareBenchMode = false
+    @Published private(set) var hardwareBenchEnabled = false
     @Published private(set) var hardwareStatus = "Disconnected"
     @Published private(set) var capabilitiesJSON = "{}"
     @Published private(set) var committedLayoutJSON = "{}"
@@ -67,7 +71,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, @unc
     private var staged: (request: UInt32, revision: UInt32)?
     private var stageRequest: UInt32?
     private var commitRequest: UInt32?
-    private var nextRequest: UInt32 = 1000
+    private var nextRequest: UInt32 = max(1000, UInt32(clamping: UserDefaults.standard.integer(forKey: "hardwareConfigurationRequestID")))
     private var sensorEpoch = 0
     private let sensorEpochLock = NSLock()
     private var hardwareMotionRevoked = true
@@ -110,7 +114,13 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, @unc
         let token = token.trimmingCharacters(in: .whitespacesAndNewlines)
         controlQueue.async {
             guard self.mode != .stopped, !self.bleActive || self.bleFeedback else {
-                DispatchQueue.main.async { self.waypointStatus = "Start a rover or connect to Bevy, then go" }
+                DispatchQueue.main.async {
+                    #if targetEnvironment(simulator)
+                    self.waypointStatus = "Start a rover or connect to Bevy, then go"
+                    #else
+                    self.waypointStatus = "Start a rover or connect over Bluetooth, then go"
+                    #endif
+                }
                 return
             }
             do {
@@ -155,6 +165,16 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, @unc
         }
     }
     func startBevy(endpoint: String, roverID: String) {
+        // Device builds have no Bevy connection UI. Ignore the call so a saved
+        // endpoint cannot open Zenoh; Bluetooth stays the link.
+        #if targetEnvironment(simulator)
+        connectBevySimulator(endpoint: endpoint, roverID: roverID)
+        #else
+        _ = (endpoint, roverID)
+        #endif
+    }
+    #if targetEnvironment(simulator)
+    private func connectBevySimulator(endpoint: String, roverID: String) {
         guard !zenohConnecting else { return }
         guard let id = UInt64(roverID.trimmingCharacters(in: .whitespacesAndNewlines)) else {
             zenohStatus = "Rover ID must be a nonnegative integer"; return
@@ -183,6 +203,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, @unc
             } catch { self.fail(error) }
         }
     }
+    #endif
     func startPhone() {
         stop()
         startPhoneSensors()
@@ -217,9 +238,14 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, @unc
         }
         source = "Core Motion + ARKit"
     }
-    func stop() {
+    /// keepBluetooth leaves the rover link up for the actuator layout screen,
+    /// which is pushed from this root and would otherwise drop on navigation.
+    func stop(keepBluetooth: Bool = false) {
+        autoConnectionGeneration &+= 1; autoConnectionPending = false
+        bluetooth.cancelAutomaticConnection()
         sensorEpochLock.lock(); sensorEpoch += 1; sensorEpochLock.unlock()
-        bluetooth.disarm(); bluetooth.disconnect()
+        bluetooth.disarm()
+        if !keepBluetooth { bluetooth.disconnect() }
         hardwareActive = false; requestedHardwareFeedback = nil
         motion.stopDeviceMotionUpdates()
         session.pause()
@@ -454,8 +480,11 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, @unc
         }
     }
     func emergencyStop(reset:Bool=false) {
+        // Stop/reset must also reach a connected rover after navigation has
+        // stopped the motion timer while retaining its synchronized BLE link.
+        let hardwareConnected = hardwareReady || hardwareConfigurationReady || bluetooth.connectedIdentifier != nil
         controlQueue.async {
-            if self.bleActive {
+            if self.bleActive || hardwareConnected {
                 self.target = (0, 0); self.resetServoTargets()
                 if reset { DispatchQueue.main.async { self.sendConfiguration("reset_emergency_stop", payload: [:]) } } else { self.bluetooth.emergencyStop() }
                 return
@@ -536,8 +565,13 @@ extension PhoneController {
             configurationStatus = "Connection changed · stage draft again"
         }
         hardwareStatus = bluetooth.status; hardwareReady = bluetooth.isReady
+        if bluetooth.isReady, let identifier = bluetooth.connectedIdentifier {
+            UserDefaults.standard.set(identifier.uuidString, forKey: "preferredHardwareRover")
+        }
         hardwareConfigurationReady = bluetooth.configurationReady
         let remoteStatus = (try? JSONSerialization.jsonObject(with: Data(bluetooth.statusJSON.utf8))) as? [String: Any]
+        hardwareBenchMode = remoteStatus?["gate_mode"] as? String == "bench"
+        hardwareBenchEnabled = remoteStatus?["bench_enabled"] as? Bool == true
         activeLayoutRevision = remoteStatus?["active_revision"] as? UInt32 ?? 0
         hardwareFault = remoteStatus?["fault"] as? String
         if let staged, staged.revision != activeLayoutRevision { self.staged = nil; stageRequest = nil }
@@ -567,7 +601,29 @@ extension PhoneController {
             if self.bleActive && (!ready || (self.bleFeedback && !compatible)) { self.revokeHardwareMotion() }
         }
     }
-    func scanBluetooth() { bluetooth.scan() }
+    func autoConnectHardware() {
+        #if !targetEnvironment(simulator)
+        guard UserDefaults.standard.object(forKey: "autoConnectHardware") as? Bool != false,
+              !hardwareActive, source == "Stopped", !autoConnectionPending else { return }
+        autoConnectionPending = true
+        let generation = autoConnectionGeneration
+        let preferred = UserDefaults.standard.string(forKey: "preferredHardwareRover").flatMap(UUID.init(uuidString:))
+        bluetooth.scanForAutomaticConnection(preferred: preferred) { [weak self] identifier in
+            DispatchQueue.main.async {
+                guard let self, self.autoConnectionGeneration == generation,
+                      UserDefaults.standard.object(forKey: "autoConnectHardware") as? Bool != false,
+                      !self.hardwareActive, self.source == "Stopped" else { return }
+                self.autoConnectionPending = false
+                self.startBluetooth(identifier: identifier, feedback: false)
+            }
+        }
+        #endif
+    }
+    func cancelAutoConnection() {
+        autoConnectionGeneration &+= 1; autoConnectionPending = false
+        bluetooth.cancelAutomaticConnection()
+    }
+    func scanBluetooth() { cancelAutoConnection(); bluetooth.scan() }
     func startBluetooth(identifier: UUID, feedback: Bool) {
         stop()
         requestedHardwareFeedback = feedback ? identifier : nil
@@ -585,8 +641,22 @@ extension PhoneController {
     }
     func armHardware() {
         guard requestedHardwareFeedback == nil, hardwareReady, !hardwareArmed, !hardwareArming else { return }
+        sensorEpochLock.lock(); let epoch = sensorEpoch; sensorEpochLock.unlock()
         controlQueue.async {
-            guard self.bleActive, !self.bleFeedback || (self.feedbackTrackingHealthy && self.bleCompatible) else { return }
+            guard self.sensorEpochMatches(epoch) else { return }
+            // Navigation stops output while retaining the BLE link. An explicit
+            // Arm can resume manual output on that already synchronized connection.
+            if !self.bleActive {
+                guard self.mode == .stopped else { return }
+                self.bleActive = true; self.bleFeedback = false; self.mode = .bluetoothManual
+                self.tick = 0; self.startTimer()
+                DispatchQueue.main.async {
+                    guard self.sensorEpochMatches(epoch) else { return }
+                    self.hardwareActive = true; self.hardwareFeedback = false
+                    self.source = "Bluetooth · normalized manual effort"
+                }
+            }
+            guard !self.bleFeedback || (self.feedbackTrackingHealthy && self.bleCompatible) else { return }
             self.target = (0, 0); self.resetServoTargets(); self.hardwareMotionRevoked = false
             self.bluetooth.arm()
         }
@@ -628,10 +698,16 @@ extension PhoneController {
         return hardwareConfigurationReady && status?["armed"] as? Bool == false && status?["arming"] as? Bool == false && status?["hardware_gate_open_confirmed"] as? Bool == true
     }
     @discardableResult private func sendConfiguration(_ operation: String, payload: [String: Any]) -> UInt32? {
-        guard nextRequest < UInt32.max else { return nil }
+        guard nextRequest < 0x7fffffff else { return nil }
         nextRequest += 1
+        UserDefaults.standard.set(Int(nextRequest), forKey: "hardwareConfigurationRequestID")
         guard let data = try? JSONSerialization.data(withJSONObject: ["schema_version": 1, "request_id": nextRequest, "operation": operation, "payload": payload]) else { return nil }
         bluetooth.request(envelope: data, generation: bluetooth.connectionGeneration); return nextRequest
+    }
+    func setBenchEnabled(_ enabled: Bool) {
+        guard hardwareBenchMode, hardwareConfigurationReady else { return }
+        if !enabled { setTarget(forward: 0, yaw: 0); disarmHardware() }
+        sendConfiguration("set_bench_enabled", payload: ["enabled": enabled])
     }
     func resetHardwareFault() {
         guard configurationAllowed else { configurationStatus = "Disarm and open the hardware gate before resetting a fault"; return }

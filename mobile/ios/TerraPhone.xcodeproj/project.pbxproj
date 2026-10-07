@@ -7,6 +7,13 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		DB0000000000000000000001 /* DriveControlPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = DB0000000000000000000002; };
+		DB0000000000000000000003 /* DriveJoystickCommand.swift in Sources */ = {isa = PBXBuildFile; fileRef = DB0000000000000000000004; };
+		DA0000000000000000000009 /* TerraAutoConnectionPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA0000000000000000000010; };
+		DA0000000000000000000005 /* RoverModelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA0000000000000000000006; };
+		DA0000000000000000000007 /* Models in Resources */ = {isa = PBXBuildFile; fileRef = DA0000000000000000000008; };
+		DA0000000000000000000001 /* TerraDashboard.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA0000000000000000000002; };
+		DA0000000000000000000003 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = DA0000000000000000000004; };
 		08906BAF4104CBE47B269B2D /* PhoneController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C2FA04187CC39D929F3A531 /* PhoneController.swift */; };
 		53BC26083B3D74375B889AB7 /* CoreMotion.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 93A5245F123BA9089B07AC8D /* CoreMotion.framework */; };
 		62C0FE3E47BC4186D25299BD /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C39B748CBDE909384D42F851 /* Foundation.framework */; };
@@ -23,6 +30,13 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		DB0000000000000000000002 /* DriveControlPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DriveControlPanel.swift; sourceTree = "<group>"; };
+		DB0000000000000000000004 /* DriveJoystickCommand.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DriveJoystickCommand.swift; sourceTree = "<group>"; };
+		DA0000000000000000000010 /* TerraAutoConnectionPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerraAutoConnectionPolicy.swift; sourceTree = "<group>"; };
+		DA0000000000000000000006 /* RoverModelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RoverModelView.swift; sourceTree = "<group>"; };
+		DA0000000000000000000008 /* Models */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Models; sourceTree = "<group>"; };
+		DA0000000000000000000002 /* TerraDashboard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerraDashboard.swift; sourceTree = "<group>"; };
+		DA0000000000000000000004 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		3AFADC07BF9BCC1A9C2B11CF /* TerraCore.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TerraCore.swift; sourceTree = "<group>"; };
 		40F2DDDC1E0A2ABA4F09C11F /* ARKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = ARKit.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS18.0.sdk/System/Library/Frameworks/ARKit.framework; sourceTree = DEVELOPER_DIR; };
 		4DB3F3D968483A1FD1080BEB /* TerraPhone.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = TerraPhone.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -101,6 +115,13 @@
 			children = (
 				5695D4ADB6DDDB9AD9ECC1EB /* TerraPhoneApp.swift */,
 				D896D79ADD2800F8E4769A32 /* ContentView.swift */,
+				DA0000000000000000000002 /* TerraDashboard.swift */,
+				DA0000000000000000000006 /* RoverModelView.swift */,
+				DA0000000000000000000010 /* TerraAutoConnectionPolicy.swift */,
+				DB0000000000000000000002 /* DriveControlPanel.swift */,
+				DB0000000000000000000004 /* DriveJoystickCommand.swift */,
+				DA0000000000000000000008 /* Models */,
+				DA0000000000000000000004 /* Assets.xcassets */,
 				9C2FA04187CC39D929F3A531 /* PhoneController.swift */,
 				B100000000000000000000002 /* BluetoothLink.swift */,
 				B100000000000000000000004 /* ActuatorLayoutView.swift */,
@@ -170,6 +191,8 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				DA0000000000000000000003 /* Assets.xcassets in Resources */,
+				DA0000000000000000000007 /* Models in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -182,6 +205,11 @@
 			files = (
 				C3525A6A065BA09E9080CA76 /* TerraPhoneApp.swift in Sources */,
 				949B117EE8E4E06D4A054039 /* ContentView.swift in Sources */,
+				DA0000000000000000000001 /* TerraDashboard.swift in Sources */,
+				DA0000000000000000000005 /* RoverModelView.swift in Sources */,
+				DA0000000000000000000009 /* TerraAutoConnectionPolicy.swift in Sources */,
+				DB0000000000000000000001 /* DriveControlPanel.swift in Sources */,
+				DB0000000000000000000003 /* DriveJoystickCommand.swift in Sources */,
 				08906BAF4104CBE47B269B2D /* PhoneController.swift in Sources */,
 				B200000000000000000000002 /* BluetoothLink.swift in Sources */,
 				B200000000000000000000004 /* ActuatorLayoutView.swift in Sources */,

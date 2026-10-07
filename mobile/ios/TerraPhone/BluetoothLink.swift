@@ -21,6 +21,10 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
     private var acceptedStatusCount = 0
     private let queue = DispatchQueue(label: "terra.bluetooth")
     private var central: CBCentralManager!
+    private var scanningRequested = false
+    private var automaticSelection: ((UUID) -> Void)?
+    private var preferredRover: UUID?
+    private var discoveryWindow: DispatchWorkItem?
     private var advertisedNames: [UUID: String] = [:]
     private var found: [UUID: CBPeripheral] = [:]
     private var peripheral: CBPeripheral?
@@ -28,6 +32,7 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
     private var deferredIdentifier: UUID?
     private var synchronizedRevision: UInt32?
     private var hasCapabilities = false
+    private var synchronizationStarted = false
     private var capabilityObject: [String: Any] = [:]
     private var safeValues: [[String: Any]] = []
     private var awaitingSafeSequence: UInt32?
@@ -42,7 +47,7 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
     private var setup = false
     private var timer: DispatchSourceTimer?
     private var messageID: UInt16 = 0
-    private var requestID: UInt32 = 0
+    private var requestID: UInt32 = max(0x80000000, UInt32(clamping: UserDefaults.standard.integer(forKey: "bluetoothSynchronizationRequestID")))
     private var requests: [UInt32: String] = [:]
     private var configuration: [Packet] = []
     private var waitingRequest: UInt32?
@@ -68,7 +73,49 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
     }
     deinit { timer?.cancel() }
     private func publish(_ text: String) { DispatchQueue.main.async { self.status = text } }
-    func scan() { queue.async { guard self.central.state == .poweredOn else { return }; self.central.scanForPeripherals(withServices: [self.serviceID]); self.publish("Scanning") } }
+    func scan() { queue.async {
+        self.cancelAutomaticSelection()
+        self.scanningRequested = true
+        self.startRequestedScan()
+    } }
+    func scanForAutomaticConnection(preferred: UUID?, onSelect: @escaping (UUID) -> Void) {
+        queue.async {
+            guard self.peripheral == nil, self.automaticSelection == nil else { return }
+            self.found.removeAll(); self.advertisedNames.removeAll()
+            DispatchQueue.main.async { self.peripheralsJSON = "[]" }
+            self.preferredRover = preferred
+            self.automaticSelection = onSelect
+            self.scanningRequested = true
+            self.startRequestedScan()
+        }
+    }
+    func cancelAutomaticConnection() { queue.async {
+        self.cancelAutomaticSelection()
+        self.scanningRequested = false
+        self.central.stopScan()
+    } }
+    private func cancelAutomaticSelection() {
+        discoveryWindow?.cancel(); discoveryWindow = nil; automaticSelection = nil
+    }
+    private func startRequestedScan() {
+        guard scanningRequested else { return }
+        guard central.state == .poweredOn else {
+            publish(central.state == .unauthorized ? "Bluetooth permission required" : "Waiting for Bluetooth")
+            return
+        }
+        central.scanForPeripherals(withServices: [serviceID])
+        publish(automaticSelection == nil ? "Scanning" : "Searching for your rover…")
+    }
+    private func selectAutomaticRover() {
+        guard let selection = automaticSelection else { return }
+        if let id = TerraAutoConnectionPolicy.select(candidates: Array(found.keys), preferred: preferredRover) {
+            cancelAutomaticSelection(); scanningRequested = false; central.stopScan()
+            selection(id)
+        } else if preferredRover == nil, found.count > 1 {
+            cancelAutomaticSelection(); scanningRequested = false; central.stopScan()
+            publish("Multiple rovers found · choose one in Robots")
+        }
+    }
     func connect(identifier: UUID) { queue.async {
         self.deferredIdentifier = identifier
         self.connectDeferredIfPossible()
@@ -78,18 +125,21 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
         deferredIdentifier = nil
         guard let selected = found[identifier] else { publish("Scan and select the rover again"); return }
         clear(); peripheral = selected; callbackGeneration = policy.generation
-        selected.delegate = self; central.stopScan(); central.connect(selected); publish("Connecting")
+        selected.delegate = self; scanningRequested = false; cancelAutomaticSelection(); central.stopScan(); central.connect(selected); publish("Connecting")
     }
-    func disconnect() { queue.async { self.deferredIdentifier = nil; self.close("Disconnected") } }
+    func disconnect() { queue.async {
+        self.cancelAutomaticSelection(); self.scanningRequested = false; self.central.stopScan()
+        self.deferredIdentifier = nil; self.close("Disconnected")
+    } }
     private func clear() {
-        policy.reset(); usedRequests.removeAll(); awaitingSafeAt = nil; safeValues = []; awaitingSafeSequence = nil; synchronizedRevision = nil; hasCapabilities = false; capabilityObject = [:]; characteristics.removeAll(); statusAssembly.clear(); replyAssembly.clear()
+        policy.reset(); usedRequests.removeAll(); awaitingSafeAt = nil; safeValues = []; awaitingSafeSequence = nil; synchronizedRevision = nil; hasCapabilities = false; synchronizationStarted = false; capabilityObject = [:]; characteristics.removeAll(); statusAssembly.clear(); replyAssembly.clear()
         active = nil; armSafe = nil; waitingRequest = nil; waitingRequestAt = nil; pendingDrive = nil; priority = nil; configuration.removeAll(); requests.removeAll()
         writeAt = nil; admitting = false; setup = false
         lastStatusCallbackAt = nil; acceptedStatusCount = 0
         let generation = policy.generation
         DispatchQueue.main.async { self.connectionGeneration = generation; self.configurationReady = false; self.isReady = false; self.armed = false; self.arming = false; self.connectedIdentifier = nil; self.capabilitiesJSON = "{}"; self.layoutJSON = "{}"; self.statusJSON = "{}" }
     }
-    private func close(_ reason: String) { let old = peripheral; peripheral = nil; clear(); if let old = old { retiring = old; central.cancelPeripheralConnection(old) }; publish(reason) }
+    private func close(_ reason: String) { log.error("Closing link: \(reason, privacy: .public)"); let old = peripheral; peripheral = nil; clear(); if let old = old { retiring = old; central.cancelPeripheralConnection(old) }; publish(reason) }
     private func terminal(_ reason: String) { peripheral?.delegate = nil; peripheral = nil; retiring = nil; clear(); publish(reason) }
     private func current(_ p: CBPeripheral) -> Bool { peripheral === p && callbackGeneration == policy.generation }
     func send(frame: Data, producedAt: TimeInterval) { queue.async {
@@ -100,7 +150,7 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
     } }
     func drive(valuesJSON: String, producedAt: TimeInterval) { queue.async {
         // Expected motion inhibition must not preempt fragmented repair/reset requests.
-        guard self.policy.ready else { return }
+        guard self.policy.ready, self.policy.motionRequested else { return }
         do {
             guard self.awaitingSafeSequence == nil, self.now >= producedAt, self.now - producedAt < 0.1 else { return }
             let values = try JSONSerialization.jsonObject(with: Data(valuesJSON.utf8))
@@ -129,6 +179,8 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
     } }
     func disarm() { queue.async { self.stop() } }
     private func stop() {
+        // Cleanup after a closed link must preserve the original disconnect reason.
+        guard peripheral != nil, characteristics[controlID] != nil, policy.session != nil else { policy.stop(); return }
         policy.stop(); awaitingSafeSequence = nil; awaitingSafeAt = nil; armSafe = nil; pendingDrive = nil
         do { priority = try packet(policy.control("disarm"), characteristic: controlID); pump() }
         catch { close("Disarmed; reconnect required") }
@@ -144,11 +196,13 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
         } catch { self.publish("Invalid or duplicate configuration request") }
     } }
     private func synchronize() {
-        guard requests.isEmpty, characteristics[repliesID]?.isNotifying == true, characteristics[statusID]?.isNotifying == true else { return }
+        guard !synchronizationStarted, characteristics[repliesID]?.isNotifying == true, characteristics[statusID]?.isNotifying == true else { return }
+        synchronizationStarted = true
         for operation in ["capabilities", "read_layout"] {
             guard requestID < UInt32.max else { close("Request IDs exhausted"); return }; requestID += 1
             while usedRequests.contains(requestID), requestID < UInt32.max { requestID += 1 }
             do {
+                UserDefaults.standard.set(Int(requestID), forKey: "bluetoothSynchronizationRequestID")
                 let data = try JSONSerialization.data(withJSONObject: ["schema_version": 1, "request_id": requestID, "operation": operation, "payload": [:]] as [String: Any])
                 usedRequests.insert(requestID); requests[requestID] = operation; configuration.append(try packet(data, characteristic: controlID, request: requestID))
             } catch { close("Configuration encoding failed"); return }
@@ -183,8 +237,14 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
     private func tick() {
         guard peripheral != nil, !setup else { return }
         if let started = awaitingSafeAt, now - started >= 0.3 { stop(); return }
-        if let started = writeAt, now - started >= 0.1 { close("Bluetooth write stalled; reconnect required"); return }
-        if policy.stale(now: now) {
+        // ATT acknowledgement is transport liveness, not motion freshness.
+        // Packet age remains limited to 100 ms; the rover watchdog remains 200 ms.
+        let writeDeadline: TimeInterval = 2.0
+        if let started = writeAt, now - started >= writeDeadline { close("Bluetooth write stalled; reconnect required"); return }
+        // Motion paths already require fresh status (policy.stale, 0.3 s). This
+        // watchdog is link liveness only: the rover blocks its worker loop while
+        // fsyncing staged/committed layouts, so brief gaps must not disconnect.
+        if let age = policy.statusAge(now: now), age >= 2.0 {
             let callbackAge = lastStatusCallbackAt.map { String(format: "%.2fs", now - $0) } ?? "none"
             let detail = "last status callback: \(callbackAge), accepted: \(acceptedStatusCount)"
             log.error("Status timeout: \(detail, privacy: .public)")
@@ -195,9 +255,24 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
         // can truncate large capabilities documents and mix read bytes into the assembler.
         pump()
     }
-    func centralManagerDidUpdateState(_ central: CBCentralManager) { if central.state != .poweredOn { close("Bluetooth unavailable") } }
+    func centralManagerDidUpdateState(_ central: CBCentralManager) {
+        if central.state == .poweredOn { startRequestedScan() }
+        else { close(central.state == .unauthorized ? "Bluetooth permission required" : "Bluetooth unavailable") }
+    }
     func centralManager(_ central: CBCentralManager, didDiscover p: CBPeripheral, advertisementData: [String: Any], rssi RSSI: NSNumber) {
         found[p.identifier] = p
+        if automaticSelection != nil {
+            if preferredRover == p.identifier {
+                selectAutomaticRover()
+            } else if discoveryWindow == nil {
+                // Collect nearby candidates before selecting a first-time rover.
+                let window = DispatchWorkItem { [weak self] in
+                    self?.discoveryWindow = nil; self?.selectAutomaticRover()
+                }
+                discoveryWindow = window
+                queue.asyncAfter(deadline: .now() + 2, execute: window)
+            }
+        }
         advertisedNames[p.identifier] = advertisementData[CBAdvertisementDataLocalNameKey] as? String ?? p.name ?? "Terra peripheral"
         let items = found.values.map { ["identifier": $0.identifier.uuidString, "name": advertisedNames[$0.identifier] ?? $0.name ?? "Terra peripheral"] }
         if let data = try? JSONSerialization.data(withJSONObject: items) { DispatchQueue.main.async { self.peripheralsJSON = String(decoding: data, as: UTF8.self) } }
@@ -267,6 +342,9 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
                         admitting = false
                         guard let replies = characteristics[repliesID] else { throw BluetoothPolicyError.unavailable }
                         p.setNotifyValue(true, for: c); p.setNotifyValue(true, for: replies)
+                        // iOS may retain subscription state across app relaunch and
+                        // omit a notification-state callback for an already active subscription.
+                        synchronize()
                     }
                 } else if object["type"] as? String == "command_acceptance" {
                     if object["session"] as? UInt32 == policy.session, object["sequence"] as? UInt32 == awaitingSafeSequence, awaitingSafeSequence != nil {

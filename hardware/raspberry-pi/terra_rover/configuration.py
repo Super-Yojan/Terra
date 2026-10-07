@@ -105,13 +105,19 @@ class ConfigurationStore:
         self.errors = []
         return self.read()
 
+    def reset_bench(self):
+        gate = getattr(self.backend, 'bench_gate', None)
+        if gate is not None: gate.reset()
+
     def begin_connection(self, session, now):
+        self.reset_bench()
         self.safety.connect(session, now)
         self._connected = True
         self._stage = None
         self._cache.clear()
 
     def end_connection(self, now):
+        self.reset_bench()
         self._connected = False
         self._stage = None
         self._cache.clear()
@@ -167,6 +173,16 @@ class ConfigurationStore:
 
     def _dispatch(self, envelope, now):
         request_id, operation, payload = envelope['request_id'], envelope['operation'], envelope['payload']
+        if operation == 'set_bench_enabled':
+            gate = getattr(self.backend, 'bench_gate', None)
+            if gate is None: return self._reply(request_id, [_error('bench_mode', 'rover is not in bench mode')])
+            enabled = payload['enabled']
+            state = self.safety.status(now)
+            if enabled and (state['armed'] or state['arming'] or state['fault'] or state['emergency_stop'] or self._active is None):
+                return self._reply(request_id, [_error('bench_enable', 'valid layout, cleared stop/fault, and disarmed state required')])
+            if not enabled: self.safety.disarm('bench_disabled', now)
+            gate.set_enabled(enabled)
+            return self._reply(request_id, payload=dict(bench_enabled=gate.enabled))
         if operation == 'capabilities':
             return self._reply(request_id, payload=self.backend.capabilities())
         if operation == 'read_layout':
@@ -289,6 +305,9 @@ class ConfigurationStore:
 
     def status(self, now):
         result = self.safety.status(now)
+        gate = getattr(self.backend, 'bench_gate', None)
+        result['gate_mode'] = 'bench' if gate is not None else 'physical'
+        result['bench_enabled'] = gate.enabled if gate is not None else False
         result['active_revision'] = self.active_revision
         result['layout_available'] = self._active is not None and self.safety.layout is not None
         try:

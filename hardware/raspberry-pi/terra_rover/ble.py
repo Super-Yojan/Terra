@@ -176,6 +176,7 @@ class BlePeripheral:
             if priority is not None and priority[0] == self.generation:
                 generation, frame, received = priority
                 accepted = self.safety.accept(frame, received, time.monotonic())
+                if frame.kind in (CommandKind.DISARM, CommandKind.EMERGENCY_STOP): self.store.reset_bench()
                 self.loop.call_soon_threadsafe(self._emit, 'status', dict(schema_version=1, type='command_acceptance', session=frame.session, sequence=frame.sequence, accepted=accepted), generation)
                 priority = None
             for generation, kind, value, received in events:

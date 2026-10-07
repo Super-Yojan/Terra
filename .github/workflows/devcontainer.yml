@@ -23,10 +23,11 @@ jobs:
       # A parallel Bevy link can exceed the 16 GB GitHub-hosted runner.
       - name: Add swap
         run: |
-          sudo fallocate -l 16G /swapfile
-          sudo chmod 600 /swapfile
-          sudo mkswap /swapfile
-          sudo swapon /swapfile
+          swap_file="$(sudo mktemp /terra-ci-swap.XXXXXX)"
+          sudo fallocate -l 16G "$swap_file"
+          sudo chmod 600 "$swap_file"
+          sudo mkswap "$swap_file"
+          sudo swapon "$swap_file"
 
       - name: Build the dev container and test the simulator
         uses: devcontainers/ci@v0.3

@@ -14,7 +14,22 @@ Run `./scripts/build-ios.sh` on a Mac with Xcode, Cargo and Rust targets `aarch6
 
 The app offers a simulated sensor mode and a phone sensor mode, plus a repeatable Rust benchmark. Simulator mode exercises the same UniFFI controller without requiring a camera. Phone mode reads Core Motion's gravity-free acceleration and angular rate and estimates world velocity from ARKit poses. Camera permission and a device supporting AR world tracking are required for phone mode. Loss of tracking produces neutral effort. Leaving the foreground stops the controller.
 
+Which hardware link the connection UI shows depends on the run destination. See [Connection surfaces](#connection-surfaces).
+
 `./scripts/check-swift.sh` validates a real Swift → UniFFI → Rust call and runs the controller benchmark. `cargo test --workspace` checks the Rust modules; the simulator's headless physics test checks acceleration, turning and stopping through Avian motor forces.
+
+## Connection surfaces
+
+TerraPhone compiles one hardware link for each target. The check is `#if targetEnvironment(simulator)` in `ContentView` and `PhoneController`. On launch, `TerraPhoneApp` clears a saved Bevy endpoint through that same check. There is no setting that shows the Bevy section on a physical iPhone.
+
+| Target | Bevy simulator · Zenoh | Bluetooth actuators |
+| --- | --- | --- |
+| iOS Simulator | Shown. Endpoint and rover ID persist in the Simulator’s defaults. Connect still publishes `cmd_vel` and subscribes to that rover’s depth camera. | Hidden. The Simulator has no Bluetooth radio, so Discover and Connect cannot reach a rover. |
+| Physical iPhone | Hidden. The section is not in the device connection UI. Launch deletes any stored `zenohEndpoint` and `zenohRoverID` from an older build, and `startBevy` does not open a session. | Shown. This is the path to a real rover. |
+
+**Simulated rover** in the Controller section is the local motor plant. It stays on both targets. The Bevy process is the separate Zenoh section, and only the Simulator build includes that section. **Phone IMU + VIO** still needs a physical iPhone with ARKit.
+
+Bluetooth is omitted from the Simulator on purpose. CoreBluetooth is unsupported there (`CBCentralManager` cannot scan or connect), so those controls would sit next to the link that does work: Bevy at `tcp/127.0.0.1:7447` on the same Mac. A device that previously saved a Bevy endpoint or rover ID falls back to the Bluetooth section. It does not reconnect to Zenoh and does not show the saved endpoint.
 
 ## Sensor contract
 
@@ -98,7 +113,7 @@ Bevy Zenoh mode uses the same grid. It does not subscribe to an occupancy topic.
 
 ## Drive Bevy from TerraPhone over Zenoh
 
-TerraPhone now exposes the Rust `terra-transport` client through UniFFI. Use the **Bevy simulator · Zenoh** section to configure an endpoint and rover ID, then connect. This mode publishes either the velocity sliders or, after **Go to waypoint**, the phone follower's twist as simulator `cmd_vel`. The Bevy rover runs its own velocity feedback loop. Local phone IMU/VIO/motor effort readouts do not provide remote feedback. Connecting starts at zero. Stop, switching modes and leaving the foreground close the session with a final zero. The Rust publisher also expires its 250 ms command lease if Swift stops refreshing it; the simulator's independent 500 ms watchdog remains active.
+TerraPhone exposes the Rust `terra-transport` client through UniFFI in the **iOS Simulator** build only. Use the **Bevy simulator · Zenoh** section to configure an endpoint and rover ID, then connect. This mode publishes either the velocity sliders or, after **Go to waypoint**, the phone follower's twist as simulator `cmd_vel`. The Bevy rover runs its own velocity feedback loop. Local phone IMU/VIO/motor effort readouts do not provide remote feedback. Connecting starts at zero. Stop, switching modes and leaving the foreground close the session with a final zero. The Rust publisher also expires its 250 ms command lease if Swift stops refreshing it; the simulator's independent 500 ms watchdog remains active. A physical-device build does not include this section.
 
 Demo on one Mac:
 
@@ -107,7 +122,7 @@ cd simulator
 TERRA_ROVER_COUNT=2 cargo run
 ```
 
-Build/run TerraPhone in iOS Simulator, select `tcp/127.0.0.1:7447` and rover `0`, connect, then move the velocity sliders. Stop and check that the rover stops. Choose rover `1` to drive the second rover. To connect a physical iPhone, start Bevy with `TERRA_ZENOH_LISTEN=tcp/0.0.0.0:7447`, put the Mac and phone on the same network, enter `tcp/MAC_LAN_IP:7447`, allow local-network access, and allow incoming traffic to the simulator if prompted. Endpoint and ID are stored on the device; there is no automatic reconnect or automatic startup motion.
+Build/run TerraPhone in the iOS Simulator, select `tcp/127.0.0.1:7447` and rover `0`, connect, then move the velocity sliders. Stop and check that the rover stops. Choose rover `1` to drive the second rover. Endpoint and ID are stored in the Simulator; there is no automatic reconnect or automatic startup motion. A physical iPhone does not show this section, does not read a previously saved endpoint, and does not join the simulator over the LAN. Use Bluetooth on that phone.
 
 The default topic prefix is `terra/rover`. Session-open status confirms a transport session, not rover discovery or movement acknowledgement. The connection status counts posed depth frames as they arrive. Fleet/state and RGB subscriptions remain follow-ups. Remote mode builds the local occupancy map from `terra/rover/<id>/camera/depth` only; it does not mix in simulated-room or ARKit observations.
 
@@ -118,7 +133,7 @@ cd simulator
 TERRA_ROVER_COUNT=1 cargo run
 ```
 
-Build and run TerraPhone in the iOS Simulator (`./scripts/build-ios.sh`, then open `mobile/ios/TerraPhone.xcodeproj`). Select `tcp/127.0.0.1:7447` and rover `0`, then connect. The occupancy section starts at “Waiting for simulator depth and exposure pose”. After the simulator publishes a depth frame, the grid fills with free and occupied cells as the rover sees the world. Move the velocity sliders; the blue marker and the map window follow the published body pose. Stop disconnects and keeps the last grid. Rover `1` maps that rover only. A physical iPhone uses the same LAN setup as velocity control; the depth stream is about 1.9 MiB/s at the default 256×192 resolution, before protocol overhead.
+Build and run TerraPhone in the iOS Simulator (`./scripts/build-ios.sh`, then open `mobile/ios/TerraPhone.xcodeproj`). Select `tcp/127.0.0.1:7447` and rover `0`, then connect. The occupancy section starts at “Waiting for simulator depth and exposure pose”. After the simulator publishes a depth frame, the grid fills with free and occupied cells as the rover sees the world. Move the velocity sliders; the blue marker and the map window follow the published body pose. Stop disconnects and keeps the last grid. Rover `1` maps that rover only. The depth stream is about 1.9 MiB/s at the default 256×192 resolution, before protocol overhead. Only the Simulator build subscribes to it.
 
 Verification:
 
@@ -131,12 +146,14 @@ cargo test --manifest-path simulator/Cargo.toml depth_packet_pose_round_trips_in
 cargo test --manifest-path simulator/Cargo.toml mobile_adapter_drives_avian -- --ignored
 ```
 
-The Swift test exercises Swift → UniFFI → Rust → Zenoh against a real Python peer, checking the selected topic, payload, lease expiry and final zero. It also publishes one posed depth packet and checks that Swift integrates it into an occupied cell. `depth_packet_pose_round_trips_into_the_phone_decoder` checks that a simulator depth packet decodes to the same robotics pose the in-sim map uses, then occupies the expected cell. The ignored transport test checks that the phone client consumes each posed depth sequence once. The Bevy integration test uses the same transport to move an Avian rover and verifies stopping on disconnect. Physical iPhone networking has not been tested on a device. Seeing the grid in Simulator still requires the Bevy app to be running so the GPU depth camera can publish frames.
+The Swift test exercises Swift → UniFFI → Rust → Zenoh against a real Python peer, checking the selected topic, payload, lease expiry and final zero. It also publishes one posed depth packet and checks that Swift integrates it into an occupied cell. `depth_packet_pose_round_trips_into_the_phone_decoder` checks that a simulator depth packet decodes to the same robotics pose the in-sim map uses, then occupies the expected cell. The ignored transport test checks that the phone client consumes each posed depth sequence once. The Bevy integration test uses the same transport to move an Avian rover and verifies stopping on disconnect. Seeing the grid in the Simulator still requires the Bevy app to be running so the GPU depth camera can publish frames. The device app does not open that session.
 
 ## Bluetooth actuator control
 
-Bluetooth actuator hardware is configured through **Discover, configure and arm
-rover**. Scan, select the stable peripheral identifier/name, and connect explicitly.
+The **Bluetooth actuators** section and the **Discover, configure and arm
+rover** screen are compiled into physical-device builds only. The iOS Simulator
+does not show them: CoreBluetooth cannot scan or connect there. On a device,
+scan, select the stable peripheral identifier/name, and connect explicitly.
 Bonded owner access, periodic status, capabilities and the active layout must all
 be available before hardware becomes ready. Starting, stopping, switching modes,
 and leaving the app reset controls and disconnect hardware; reconnect never arms.
@@ -170,7 +187,8 @@ feedback requires a compatible layout, fresh Rust output and healthy IMU/VIO;
 tracking loss explicitly disarms. Commands are produced on one control queue at
 20 Hz with their monotonic production time. Bluetooth owns session and sequence
 and sends safe output during disarmed/arming states. Custom manual layouts disable
-waypoint/autonomy choices; existing simulation and Zenoh controls remain available.
+waypoint/autonomy choices. The local simulated plant remains available on both
+targets. Bevy Zenoh controls remain available in the iOS Simulator.
 
 This implementation has not been built or exercised on hardware. No tests,
 bindings generation, smoke scripts, screenshots, or hardware checks were performed
