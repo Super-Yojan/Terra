@@ -10,8 +10,9 @@ Group=terra-rover
 SupplementaryGroups=i2c bluetooth
 StateDirectory=terra-rover
 StateDirectoryMode=0700
-WorkingDirectory=/opt/terra/hardware/raspberry-pi
-ExecStart=/opt/terra/venv/bin/python -m terra_rover --config /var/lib/terra-rover/layout.json --owner /var/lib/terra-rover/owner.json --gate-file /run/terra-interlock/gate
+WorkingDirectory=/var/lib/terra-rover
+EnvironmentFile=/etc/terra-rover/rover.env
+ExecStart=/usr/local/bin/terra-rover --button-pairing --config /var/lib/terra-rover/layout.json --owner /var/lib/terra-rover/owner.json --gate-file ${TERRA_GATE_FILE} --pwm-ports ${TERRA_PWM_PORTS}
 Restart=on-failure
 RestartSec=2
 TimeoutStopSec=15
@@ -20,6 +21,9 @@ PrivateTmp=true
 ProtectHome=true
 ProtectSystem=strict
 ReadWritePaths=/var/lib/terra-rover
+# The Fusion HAT vendor driver exposes actuator controls through sysfs.
+ReadWritePaths=-/sys/class/fusion_hat
+UMask=0077
 
 [Install]
 WantedBy=multi-user.target

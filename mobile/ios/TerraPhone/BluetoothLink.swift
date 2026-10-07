@@ -1,6 +1,7 @@
 import Foundation
 import Combine
 import CoreBluetooth
+import OSLog
 
 final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate, CBPeripheralDelegate {
     @Published private(set) var isReady = false
@@ -15,8 +16,12 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
     @Published private(set) var layoutJSON = "{}"
     @Published private(set) var replyJSON = "{}"
     @Published private(set) var connectedIdentifier: UUID?
+    private let log = Logger(subsystem: "com.terra.phone", category: "Bluetooth")
+    private var lastStatusCallbackAt: TimeInterval?
+    private var acceptedStatusCount = 0
     private let queue = DispatchQueue(label: "terra.bluetooth")
     private var central: CBCentralManager!
+    private var advertisedNames: [UUID: String] = [:]
     private var found: [UUID: CBPeripheral] = [:]
     private var peripheral: CBPeripheral?
     private var retiring: CBPeripheral?
@@ -28,7 +33,6 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
     private var awaitingSafeSequence: UInt32?
     private var awaitingSafeAt: TimeInterval?
     private var usedRequests: Set<UInt32> = []
-    private var replyReadAt: TimeInterval = 0
     private let policy = BluetoothSession()
     private var callbackGeneration: UInt64 = 0
     private var characteristics: [CBUUID: CBCharacteristic] = [:]
@@ -81,6 +85,7 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
         policy.reset(); usedRequests.removeAll(); awaitingSafeAt = nil; safeValues = []; awaitingSafeSequence = nil; synchronizedRevision = nil; hasCapabilities = false; capabilityObject = [:]; characteristics.removeAll(); statusAssembly.clear(); replyAssembly.clear()
         active = nil; armSafe = nil; waitingRequest = nil; waitingRequestAt = nil; pendingDrive = nil; priority = nil; configuration.removeAll(); requests.removeAll()
         writeAt = nil; admitting = false; setup = false
+        lastStatusCallbackAt = nil; acceptedStatusCount = 0
         let generation = policy.generation
         DispatchQueue.main.async { self.connectionGeneration = generation; self.configurationReady = false; self.isReady = false; self.armed = false; self.arming = false; self.connectedIdentifier = nil; self.capabilitiesJSON = "{}"; self.layoutJSON = "{}"; self.statusJSON = "{}" }
     }
@@ -179,17 +184,22 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
         guard peripheral != nil, !setup else { return }
         if let started = awaitingSafeAt, now - started >= 0.3 { stop(); return }
         if let started = writeAt, now - started >= 0.1 { close("Bluetooth write stalled; reconnect required"); return }
-        if policy.stale(now: now) { close("Bluetooth status stalled; reconnect required"); return }
-        if let started = waitingRequestAt, now - started >= 2 { close("Configuration reply timed out; reconnect required"); return }
-        if waitingRequest != nil, now - replyReadAt >= 0.2, let replies = characteristics[repliesID], replies.isNotifying {
-            replyReadAt = now; peripheral?.readValue(for: replies)
+        if policy.stale(now: now) {
+            let callbackAge = lastStatusCallbackAt.map { String(format: "%.2fs", now - $0) } ?? "none"
+            let detail = "last status callback: \(callbackAge), accepted: \(acceptedStatusCount)"
+            log.error("Status timeout: \(detail, privacy: .public)")
+            close("Bluetooth status stalled; reconnect required (\(detail))"); return
         }
+        if let started = waitingRequestAt, now - started >= 2 { close("Configuration reply timed out; reconnect required"); return }
+        // Replies use application-fragmented notifications. Polling raw reads
+        // can truncate large capabilities documents and mix read bytes into the assembler.
         pump()
     }
     func centralManagerDidUpdateState(_ central: CBCentralManager) { if central.state != .poweredOn { close("Bluetooth unavailable") } }
     func centralManager(_ central: CBCentralManager, didDiscover p: CBPeripheral, advertisementData: [String: Any], rssi RSSI: NSNumber) {
         found[p.identifier] = p
-        let items = found.values.map { ["identifier": $0.identifier.uuidString, "name": $0.name ?? "Terra peripheral"] }
+        advertisedNames[p.identifier] = advertisementData[CBAdvertisementDataLocalNameKey] as? String ?? p.name ?? "Terra peripheral"
+        let items = found.values.map { ["identifier": $0.identifier.uuidString, "name": advertisedNames[$0.identifier] ?? $0.name ?? "Terra peripheral"] }
         if let data = try? JSONSerialization.data(withJSONObject: items) { DispatchQueue.main.async { self.peripheralsJSON = String(decoding: data, as: UTF8.self) } }
     }
     func centralManager(_ central: CBCentralManager, didConnect p: CBPeripheral) { guard current(p) else { return }; p.discoverServices([serviceID]) }
@@ -206,7 +216,7 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
         for c in service.characteristics ?? [] { characteristics[c.uuid] = c }
         guard let status = characteristics[statusID] else { close("Status unavailable"); return }
         setup = characteristics[driveID] == nil && characteristics[controlID] == nil && characteristics[repliesID] == nil
-        admitting = true; p.readValue(for: status); publish(setup ? "Confirm pairing code on phone and Pi" : "Authenticating owner")
+        admitting = true; p.readValue(for: status); publish(setup ? "Accept Bluetooth pairing on your phone" : "Authenticating owner")
     }
     func peripheral(_ p: CBPeripheral, didUpdateNotificationStateFor c: CBCharacteristic, error: Error?) {
         guard current(p), characteristics[c.uuid] === c else { return }
@@ -222,7 +232,12 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
     }
     func peripheral(_ p: CBPeripheral, didUpdateValueFor c: CBCharacteristic, error: Error?) {
         guard current(p), characteristics[c.uuid] === c else { return }
-        guard error == nil, let bytes = c.value else { close("Encrypted read/notification failed"); return }
+        if c.uuid == statusID { lastStatusCallbackAt = now }
+        guard error == nil, let bytes = c.value else {
+            let detail = error.map { "\(($0 as NSError).domain) \(($0 as NSError).code): \($0.localizedDescription)" } ?? "empty value"
+            log.error("Read failed for \(c.uuid.uuidString, privacy: .public): \(detail, privacy: .public)")
+            close("Encrypted read/notification failed: \(detail)"); return
+        }
         do {
             // CoreBluetooth delivers a completed ATT long read as one raw JSON value.
             let document: Data?
@@ -234,11 +249,15 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
             let text = String(decoding: document, as: UTF8.self)
             if setup {
                 guard object["type"] as? String == "setup", object["pairing_confirmed"] as? Bool == true else { throw BluetoothPolicyError.malformed }
-                close("Pairing saved. Start normal Pi service, then scan and reconnect explicitly."); return
+                close("Pairing saved. Rover is ready; find rovers and reconnect."); return
             }
             if c.uuid == statusID {
                 if object["type"] as? String == "status" {
-                    for effect in policy.status(object, now: now) { if case .state(let text) = effect { publish(text) } }
+                    let effects = policy.status(object, now: now)
+                    if effects.isEmpty {
+                        log.error("Status rejected: revision=\(String(describing: object["active_revision"]), privacy: .public), bytes=\(bytes.count)")
+                    } else { acceptedStatusCount += 1 }
+                    for effect in effects { if case .state(let text) = effect { publish(text) } }
                     if hasCapabilities, let revision = synchronizedRevision { policy.synchronized(revision: revision) }
                     let configReady = hasCapabilities && policy.session != nil
                     let ready = policy.ready, armed = policy.armed, arming = policy.arming
@@ -294,6 +313,9 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
                 }
                 pump()
             }
-        } catch { close("Malformed Bluetooth message; reconnect required") }
+        } catch {
+            log.error("Decode failed for \(c.uuid.uuidString, privacy: .public): \(String(describing: error), privacy: .public)")
+            close("Malformed Bluetooth message; reconnect required")
+        }
     }
 }

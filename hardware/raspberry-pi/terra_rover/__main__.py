@@ -7,13 +7,15 @@ from pathlib import Path
 import tempfile
 import time
 import sys
+from importlib import metadata
 
 from dbus_next import BusType, DBusError, Variant, PropertyAccess
 from dbus_next.aio import MessageBus
 from dbus_next.service import ServiceInterface, method, dbus_property
 from .backend import MockBackend, FusionHatBackend, file_gate_reader
 from .ble import (BlePeripheral, ROOT, SERVICE, SERVICE_UUID, STATUS_UUID,
-                  GattService, ObjectManager, Advertisement)
+                  )
+from .bless_transport import BlessTransport
 
 class SetupAgent(ServiceInterface):
     def __init__(self, expected, deadline):
@@ -82,27 +84,31 @@ async def setup(args):
     if args.gate_file is None or file_gate_reader(args.gate_file)():
         raise RuntimeError('setup requires a readable physical gate file showing 0')
     if args.gate_file.read_text().strip() != '0': raise RuntimeError('gate must explicitly show 0')
-    bus = await MessageBus(bus_type=BusType.SYSTEM).connect()
-    manager = bus.get_proxy_object('org.bluez', '/', await bus.introspect('org.bluez', '/')).get_interface('org.freedesktop.DBus.ObjectManager')
-    objects = await manager.call_get_managed_objects()
-    adapter = args.adapter or next(p for p,i in objects.items() if 'org.bluez.Adapter1' in i)
-    proxy = bus.get_proxy_object('org.bluez', adapter, await bus.introspect('org.bluez', adapter))
-    properties = proxy.get_interface('org.freedesktop.DBus.Properties')
-    agents = bus.get_proxy_object('org.bluez', '/org/bluez', await bus.introspect('org.bluez', '/org/bluez')).get_interface('org.bluez.AgentManager1')
-    deadline = time.monotonic()+args.setup_seconds
-    agent = SetupAgent(args.expected_peer.upper(), deadline)
-    path = ROOT+'/agent'; bus.export(path, agent)
-    registered = gatt_registered = advertised = False
-    gatt = proxy.get_interface('org.bluez.GattManager1')
-    advertising = proxy.get_interface('org.bluez.LEAdvertisingManager1')
-    status_path = SERVICE+'/status'
-    bus.export(SERVICE, GattService())
-    bus.export(status_path, SetupStatus(agent, args.gate_file))
-    tree = {SERVICE: {'org.bluez.GattService1': {'UUID': Variant('s', SERVICE_UUID), 'Primary': Variant('b', True)}},
-            status_path: {'org.bluez.GattCharacteristic1': {'UUID': Variant('s', STATUS_UUID), 'Service': Variant('o', SERVICE), 'Flags': Variant('as', ['read', 'encrypt-read'])}}}
-    bus.export(ROOT, ObjectManager(tree))
-    bus.export(ROOT+'/advertisement', Advertisement(args.name))
+    transport = BlessTransport(args.name, SERVICE_UUID, args.adapter)
+    await transport.prepare()
+    bus = transport.bus
+    registered = False
+    properties = agents = None
+    path = ROOT + "/agent"
     try:
+        manager = bus.get_proxy_object('org.bluez', '/', await bus.introspect('org.bluez', '/')).get_interface('org.freedesktop.DBus.ObjectManager')
+        objects = await manager.call_get_managed_objects()
+        adapter = transport.adapter.path
+        proxy = bus.get_proxy_object('org.bluez', adapter, await bus.introspect('org.bluez', adapter))
+        properties = proxy.get_interface('org.freedesktop.DBus.Properties')
+        agents = bus.get_proxy_object('org.bluez', '/org/bluez', await bus.introspect('org.bluez', '/org/bluez')).get_interface('org.bluez.AgentManager1')
+        deadline = time.monotonic()+args.setup_seconds
+        agent = SetupAgent(args.expected_peer.upper(), deadline)
+        path = ROOT+'/agent'; bus.export(path, agent)
+        registered = gatt_registered = advertised = False
+        gatt = proxy.get_interface('org.bluez.GattManager1')
+        advertising = proxy.get_interface('org.bluez.LEAdvertisingManager1')
+        status_path = SERVICE+'/status'
+        status = SetupStatus(agent, args.gate_file)
+        def read(options):
+            SetupStatus.ReadValue.__wrapped__(status, options)
+            return b'{"schema_version":1,"type":"setup","armed":false,"pairing_confirmed":true}'
+        await transport.add(STATUS_UUID, read=read)
         await agents.call_register_agent(path, 'DisplayYesNo'); registered = True
         await agents.call_request_default_agent(path)
         await properties.call_set('org.bluez.Adapter1', 'Powered', Variant('b', True))
@@ -110,8 +116,7 @@ async def setup(args):
         await properties.call_set('org.bluez.Adapter1', 'DiscoverableTimeout', Variant('u', args.setup_seconds))
         await properties.call_set('org.bluez.Adapter1', 'Pairable', Variant('b', True))
         await properties.call_set('org.bluez.Adapter1', 'Discoverable', Variant('b', True))
-        await gatt.call_register_application(ROOT, {}); gatt_registered = True
-        await advertising.call_register_advertisement(ROOT+'/advertisement', {}); advertised = True
+        await transport.start()
         print('Pair the expected phone now; compare the numeric code locally.', flush=True)
         while time.monotonic() < deadline:
             if args.gate_file.read_text().strip() != '0': raise RuntimeError('gate changed during setup')
@@ -136,17 +141,16 @@ async def setup(args):
     finally:
         # Attempt every cleanup even if BlueZ lost its bus/adapter mid-setup.
         for operation in (
-            lambda: properties.call_set('org.bluez.Adapter1', 'Pairable', Variant('b', False)),
-            lambda: properties.call_set('org.bluez.Adapter1', 'Discoverable', Variant('b', False)),
-            lambda: advertising.call_unregister_advertisement(ROOT+'/advertisement') if advertised else asyncio.sleep(0),
-            lambda: gatt.call_unregister_application(ROOT) if gatt_registered else asyncio.sleep(0),
+            lambda: properties.call_set('org.bluez.Adapter1', 'Pairable', Variant('b', False)) if properties else asyncio.sleep(0),
+            lambda: properties.call_set('org.bluez.Adapter1', 'Discoverable', Variant('b', False)) if properties else asyncio.sleep(0),
             lambda: agents.call_unregister_agent(path) if registered else asyncio.sleep(0)):
             try: await operation()
             except Exception: pass
-        bus.disconnect()
+        await transport.close()
 
 def main():
     parser = argparse.ArgumentParser(description='Terra owner-only actuator peripheral')
+    parser.add_argument('--check-bundle', action='store_true', help='verify bundled driver and D-Bus libraries without accessing hardware')
     parser.add_argument('--mock', action='store_true')
     parser.add_argument('--mock-gate-closed', action='store_true', help='explicit simulated motion interlock')
     parser.add_argument('--name', default='Terra Rover')
@@ -155,18 +159,47 @@ def main():
     parser.add_argument('--pwm-ports', default='', help='comma-separated physically exposed P0-P11 ports')
     parser.add_argument('--gate-file', type=Path)
     parser.add_argument('--adapter')
+    parser.add_argument('--button-pairing', action='store_true', help='Fusion HAT button first-owner enrollment; then normal operation')
+    parser.add_argument('--button-file', type=Path, default=Path('/sys/class/fusion_hat/fusion_hat/button'))
+    parser.add_argument('--led-file', type=Path, default=Path('/sys/class/fusion_hat/fusion_hat/led'))
+    parser.add_argument('--device-name-file', type=Path, default=Path('/var/lib/terra-rover/device-name.json'))
     parser.add_argument('--setup-owner', action='store_true')
     parser.add_argument('--expected-peer')
     parser.add_argument('--setup-seconds', type=int, default=60)
     args = parser.parse_args()
+    if args.check_bundle:
+        # Only imports and API checks: no PWM objects, radio connection or outputs.
+        backend = FusionHatBackend()
+        backend._prepare()
+        if metadata.version('dbus-next') != '0.2.3':
+            raise RuntimeError('unsupported dbus-next version')
+        for package, version in [('bless', '0.3.0'), ('bleak', '1.1.1')]:
+            if metadata.version(package) != version: raise RuntimeError('unsupported ' + package + ' version')
+        print(json.dumps({'bless': metadata.version('bless'), 'bleak': metadata.version('bleak'), 'fusion_hat': backend.capabilities()['library_version'],
+                          'dbus-next': metadata.version('dbus-next')}))
+        return
     if not 1 <= args.setup_seconds <= 60: parser.error('setup seconds must be 1 through 60')
+    if args.setup_owner and args.button_pairing: parser.error('choose one enrollment mode')
     if args.setup_owner: asyncio.run(setup(args)); return
+    if args.button_pairing:
+        from .lifecycle import run_customer_service
+        try:
+            asyncio.run(run_customer_service(args, run_normal))
+        except asyncio.CancelledError:
+            return
+    else:
+        from .onboarding import load_owner
+        if load_owner(args.owner) is None:
+            parser.error('no owner saved; use --button-pairing for customer enrollment or --setup-owner for terminal setup')
+        asyncio.run(run_normal(args, args.name))
+
+async def run_normal(args, name):
     ports = tuple(p.strip() for p in args.pwm_ports.split(',') if p.strip())
     if args.mock:
         backend = MockBackend(ports); backend.gate = args.mock_gate_closed
     else:
-        if args.gate_file is None: parser.error('real hardware requires --gate-file')
+        if args.gate_file is None: raise RuntimeError('real hardware requires --gate-file')
         backend = FusionHatBackend(ports, file_gate_reader(args.gate_file))
-    asyncio.run(BlePeripheral(args.name, args.adapter).run(backend, args.config, args.owner))
+    await BlePeripheral(name, args.adapter).run(backend, args.config, args.owner)
 
 if __name__ == '__main__': main()

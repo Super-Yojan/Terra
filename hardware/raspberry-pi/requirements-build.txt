@@ -1,0 +1,11 @@
+# Release toolchain; separate from the developer's uv environment.
+Nuitka==4.2.2
+ordered-set==4.1.0
+zstandard==0.25.0
+setuptools==80.9.0
+wheel==0.45.1
+dbus-next==0.2.3
+bless==0.3.0
+bleak==1.1.1
+dbus-fast==2.44.5; sys_platform == "linux"
+typing-extensions==4.16.0

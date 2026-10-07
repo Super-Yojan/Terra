@@ -1,0 +1,36 @@
+name: Raspberry Pi executable
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'hardware/raspberry-pi/**'
+      - 'packaging/rover/**'
+      - 'packaging/terra-rover.service'
+      - 'scripts/build-rover.sh'
+      - 'docs/hardware/INSTALL.md'
+      - '.github/workflows/rover-binary.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  arm64:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Compile and check ARM64 release
+        run: |
+          docker buildx build --platform linux/arm64 \
+            -f packaging/rover/Dockerfile \
+            --output type=local,dest=hardware/raspberry-pi/dist .
+      - name: Save installable release
+        uses: actions/upload-artifact@v4
+        with:
+          name: terra-rover-linux-arm64
+          path: |
+            hardware/raspberry-pi/dist/*.tar.gz
+            hardware/raspberry-pi/dist/*.sha256
+          if-no-files-found: error

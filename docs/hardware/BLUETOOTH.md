@@ -1,4 +1,20 @@
+## Customer enrollment
+
+The compiled customer service supports one Fusion HAT USR long press to open a
+60-second Just Works pairing window. Find the `terra-XXXXXX` name in TerraPhone,
+connect and accept pairing. The LED blinks slowly while available, quickly while
+enrolling, flashes three times when saved, then stays on. Reconnect in the app;
+the Pi switches to normal operation automatically. No SSH or expected peer address
+is needed. Existing owners cannot be replaced this way, and motor outputs are
+unavailable during enrollment. See [installation and enrollment](INSTALL.md).
+The terminal setup instructions below remain a developer alternative.
+
 # Terra Bluetooth actuator peripheral
+
+For the compiled ARM64 executable and boot service, use the
+[Raspberry Pi installation guide](INSTALL.md). The source/virtual-environment
+examples below remain available for development; use `terra-rover` instead of
+`python3 -m terra_rover` with the compiled installation.
 
 These are future deployment instructions, not execution evidence. No installation,
 radio session or hardware procedure was performed for this implementation.
@@ -18,13 +34,13 @@ environment interpreter for the CLI examples below. Before first setup, create
 the private owner directory and run provisioning as the normal service account
 with its BlueZ permissions; setup does not create that directory.
 
-The [service unit](../../packaging/terra-rover.service) uses that interpreter,
-defaults to no exposed PWM ports, and restarts on failure. Adapt its installation
-paths, gate source and `--pwm-ports` list to confirmed connectors. Its writable
+The [service unit](../../packaging/terra-rover.service) uses the compiled executable,
+defaults to no exposed PWM ports, and restarts on failure. Adapt its
+gate source and `--pwm-ports` list in `/etc/terra-rover/rover.env` to confirmed connectors. Its writable
 state directory is separate from the gate producer. Stop it before any standalone
 CLI invocation; two processes must not own the same hardware or GATT application.
 
-Linux BlueZ and Python 3.10+ are required. Install the `hardware/raspberry-pi` package in a virtual environment (dependency dbus-next 0.2.3); real hardware additionally requires deployment-approved `fusion_hat` 1.14.0. Enable bluetooth.service. Provision a terra-rover system user with I2C access, a private mode-0700 `/var/lib/terra-rover`, and BlueZ system-bus permission to register GATT/advertisements and set adapter properties. Install packaging/terra-rover.service after adapting `/opt/terra` to your installation. BlueZ system-bus policy varies by distribution; grant these actions only to the service account.
+Source deployment requires Linux BlueZ and Python 3.10+ and the `hardware/raspberry-pi` package in a virtual environment (dependencies Bless 0.3.0, Bleak 1.1.1 and dbus-next 0.2.3); real hardware additionally requires deployment-approved `fusion_hat` 1.14.0. Enable bluetooth.service. Provision a terra-rover system user with I2C access, a private mode-0700 `/var/lib/terra-rover`, and BlueZ system-bus permission to register GATT/advertisements and set adapter properties. For source deployment, provide a separate service override for the virtual-environment interpreter. The compiled installer creates the account, private state directory, bus policy and executable service; see [installation](INSTALL.md). BlueZ system-bus policy varies by distribution; grant these actions only to the service account.
 
 The independent physical gate producer writes ASCII `0` for confirmed isolated/open and `1` for closed. Other tokens/read failures forbid motion and configuration. The gate file must be protected from the service/phone and refreshed by supervised hardware input; a stale file is not detected by this adapter. Prefer a directly injected GPIO gate reader for production. Gate closure never arms. Outputs must be independently isolated before service termination: process exit cannot guarantee continuous ESC stop PWM.
 
@@ -90,7 +106,11 @@ Status JSON has type `status`, schema_version, transport generation, session, ac
 
 Control JSON: `{schema_version:1,request_id:u32,operation,payload}`. `capabilities`, `read_layout`, `reset_fault`, `reset_emergency_stop` use `{}`; `stage_layout` uses `{layout}` whose revision equals active base; `commit_layout` uses `{staged_revision,staged_request_id}` from exact stage. Replies: `{schema_version:1,request_id,result:"ok"|"error",active_revision,errors:[{actuator_id,code,message}],payload}`. Stage/commit IDs correlate within authenticated connection; reconnect clears pending stage/replay cache. Duplicate request bytes replay cached reply; changed bytes under reused ID reject. Read/capability responses can be historical: use fresh IDs.
 
-No tests, builds, syntax checks, smoke scripts or hardware checks were run for this implementation. Radio behavior and hardware timing remain unverified. API references: [BlueZ GATT](https://bluez.readthedocs.io/en/latest/gatt-api/) and [dbus-next service API](https://python-dbus-next.readthedocs.io/en/latest/high-level-service/index.html).
+The original actuator implementation's verification history is recorded in
+[evidence status](evidence/README.md). The compiled packaging path has separate
+build and installation checks; radio behavior and hardware timing remain
+unverified. API references: [BlueZ GATT](https://bluez.readthedocs.io/en/latest/gatt-api/)
+and [dbus-next service API](https://python-dbus-next.readthedocs.io/en/latest/high-level-service/index.html).
 
 `active_revision` is always the store's unsigned revision floor, including zero on
 first install and retained revisions after configuration failure. `layout_available`
@@ -102,3 +122,9 @@ faults remain latched after repair until explicit `reset_fault` while disarmed w
 the gate confirmed open; reset never arms. A predictable backend validation rejection
 before resource changes retains the prior layout and revision. Unidirectional ESC
 inversion is rejected by both validators.
+
+The rover uses Bless for GATT services and advertising. On Linux Bless uses BlueZ
+and D-Bus internally; BlueZ still handles bonding through the enrollment agent.
+A version-pinned characteristic adapter retains the requesting device identity
+(which Bless 0.3.0 omits from its public callbacks), encrypted access permissions,
+and owner-only subscriptions. The phone protocol and service UUIDs are unchanged.

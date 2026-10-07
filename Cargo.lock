@@ -2063,8 +2063,8 @@ name = "terra-mobile"
 version = "0.1.0"
 dependencies = [
  "serde",
- "terra-actuators",
  "serde_json",
+ "terra-actuators",
  "terra-autonomy",
  "terra-control",
  "terra-experiment",

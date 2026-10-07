@@ -11,3 +11,9 @@ simulator/.cache/
 
 /.superpowers/
 /simulator/runs/
+
+/hardware/raspberry-pi/.venv/
+/hardware/raspberry-pi/.build/
+/hardware/raspberry-pi/dist/
+/hardware/raspberry-pi/*.egg-info/
+/hardware/raspberry-pi/**/__pycache__/

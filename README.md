@@ -2,14 +2,14 @@
 
 Configurable Bluetooth actuator control is implemented for TerraPhone and a
 standalone Raspberry Pi peripheral. See [Bluetooth setup and protocol](docs/hardware/BLUETOOTH.md),
+[compiled Pi executable and installation](docs/hardware/INSTALL.md),
 [Fusion HAT resource requirements](docs/hardware/FUSION_HAT.md), and
 [mobile hardware controls](docs/MOBILE_CONTROL.md#bluetooth-actuator-control).
-This branch is implementation-only: no tests, builds, binding generation, radio
-sessions, or physical commissioning were performed. [Evidence status](docs/hardware/evidence/README.md)
-records the limits; the [optional future bench procedure](docs/hardware/BENCH.md)
-requires separate authorization. Timing targets and physical compatibility remain
-unverified. Commands elsewhere in this README are future developer instructions,
-not records of execution for this feature.
+The compiled packaging path has separate build and installation checks; see
+[evidence status](docs/hardware/evidence/README.md) for the original implementation
+history and current verification limits. Radio sessions, actuator timing and
+physical compatibility remain unverified. The [optional bench procedure](docs/hardware/BENCH.md)
+requires separate authorization.
 
 See the [mission-autonomy guide](docs/autonomy/README.md) for four shared-core levels, explicit waypoint authority, safety controls, and experiment logs.
 

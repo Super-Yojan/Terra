@@ -1,5 +1,10 @@
 # Bluetooth actuator evidence status
 
+The compiled ARM64 packaging was built and checked on 2026-10-07. See
+[compiled release validation](BINARY_BUILD.md) for the artifact digest, executed
+checks and limits. Radio and physical hardware verification remain outstanding.
+The record below describes the original implementation on 2026-10-06.
+
 Implementation only, as of 2026-10-06. The user's explicit no-testing instruction
 superseded the execution plan's acceptance steps. No tests, new test files, builds,
 binding generation, smoke/check scripts, screenshots, Linux BLE sessions or physical

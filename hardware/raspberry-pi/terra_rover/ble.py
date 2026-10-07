@@ -10,8 +10,8 @@ import threading
 import time
 
 from dbus_next import BusType, DBusError, Variant, PropertyAccess
-from dbus_next.aio import MessageBus
-from dbus_next.service import ServiceInterface, method, dbus_property
+from .bless_transport import BlessTransport
+
 
 from .configuration import ConfigurationStore
 from .safety import SafetyController
@@ -28,82 +28,6 @@ SERVICE = ROOT + '/service0'
 
 def denied(message):
     return DBusError('org.bluez.Error.NotAuthorized', message)
-
-class GattService(ServiceInterface):
-    def __init__(self): super().__init__('org.bluez.GattService1')
-    @dbus_property(access=PropertyAccess.READ)
-    def UUID(self) -> 's': return SERVICE_UUID
-    @dbus_property(access=PropertyAccess.READ)
-    def Primary(self) -> 'b': return True
-
-class Characteristic(ServiceInterface):
-    def __init__(self, peripheral, name, uuid, flags):
-        super().__init__('org.bluez.GattCharacteristic1')
-        self.peripheral, self.name, self.uuid, self.flags = peripheral, name, uuid, flags
-        self.value, self.notifying = b'', False
-    @dbus_property(access=PropertyAccess.READ)
-    def UUID(self) -> 's': return self.uuid
-    @dbus_property(access=PropertyAccess.READ)
-    def Service(self) -> 'o': return SERVICE
-    @dbus_property(access=PropertyAccess.READ)
-    def Flags(self) -> 'as': return self.flags
-    @dbus_property(access=PropertyAccess.READ)
-    def Value(self) -> 'ay': return self.value
-    @dbus_property(access=PropertyAccess.READ)
-    def Notifying(self) -> 'b': return self.notifying
-    @method()
-    def ReadValue(self, options: 'a{sv}') -> 'ay':
-        self.peripheral.authorize(options)
-        if self.name not in ('status', 'reply'): raise DBusError('org.bluez.Error.NotPermitted', 'not readable')
-        data = self.peripheral.status_bytes if self.name == 'status' else self.peripheral.reply_bytes
-        offset = options.get('offset', Variant('q', 0)).value
-        if offset > len(data): raise DBusError('org.bluez.Error.InvalidOffset', 'offset')
-        return data[offset:]
-    @method()
-    def WriteValue(self, value: 'ay', options: 'a{sv}'):
-        peer = self.peripheral.authorize(options)
-        if self.name in ('status', 'reply'): raise DBusError('org.bluez.Error.NotPermitted', 'not writable')
-        if options.get('offset', Variant('q', 0)).value or options.get('prepare-authorize', Variant('b', False)).value:
-            if self.name == 'drive': self.peripheral.malformed_drive(peer)
-            raise DBusError('org.bluez.Error.NotSupported', 'use application fragments')
-        try: self.peripheral.handle_write(peer, self.name, bytes(value), time.monotonic())
-        except ProtocolError as exc: raise DBusError('org.bluez.Error.InvalidValueLength', str(exc)) from exc
-    @method()
-    def StartNotify(self):
-        # BlueZ supplies no peer argument. Never infer admission from this call.
-        if 'notify' not in self.flags: raise DBusError('org.bluez.Error.NotSupported', 'not notifiable')
-        self.peripheral.require_single_owner()
-        self.notifying = True
-        self.emit_properties_changed({'Notifying': True})
-        if self.name == 'status': self.peripheral.enqueue('subscribe', True)
-    @method()
-    def StopNotify(self):
-        self.notifying = False
-        self.emit_properties_changed({'Notifying': False})
-        if self.name == 'status': self.peripheral.enqueue('subscribe', False)
-    def publish(self, data):
-        if self.notifying:
-            self.value = data
-            self.emit_properties_changed({'Value': data})
-
-class ObjectManager(ServiceInterface):
-    def __init__(self, objects):
-        super().__init__('org.freedesktop.DBus.ObjectManager'); self.objects = objects
-    @method()
-    def GetManagedObjects(self) -> 'a{oa{sa{sv}}}':
-        return self.objects
-
-class Advertisement(ServiceInterface):
-    def __init__(self, name):
-        super().__init__('org.bluez.LEAdvertisement1'); self.name = name
-    @dbus_property(access=PropertyAccess.READ)
-    def Type(self) -> 's': return 'peripheral'
-    @dbus_property(access=PropertyAccess.READ)
-    def ServiceUUIDs(self) -> 'as': return [SERVICE_UUID]
-    @dbus_property(access=PropertyAccess.READ)
-    def LocalName(self) -> 's': return self.name
-    @method()
-    def Release(self): pass
 
 class BlePeripheral:
     def __init__(self, name='Terra Rover', adapter=None):
@@ -302,72 +226,81 @@ class BlePeripheral:
         self.store.load(time.monotonic())
         self.loop = asyncio.get_running_loop(); self.last_status = 0
         self.notification_size = 20
-        self.bus = await MessageBus(bus_type=BusType.SYSTEM).connect()
-        manager = self.bus.get_proxy_object('org.bluez', '/', await self.bus.introspect('org.bluez', '/')).get_interface('org.freedesktop.DBus.ObjectManager')
-        objects = await manager.call_get_managed_objects()
-        self.devices = {p: {k: v.value for k, v in interfaces['org.bluez.Device1'].items()} for p, interfaces in objects.items() if 'org.bluez.Device1' in interfaces}
-        adapters = [p for p, i in objects.items() if 'org.bluez.GattManager1' in i and 'org.bluez.LEAdvertisingManager1' in i]
-        adapter = self.adapter or next(iter(adapters), None)
-        if adapter not in adapters: raise RuntimeError('no BlueZ GATT/advertising adapter')
-        proxy = self.bus.get_proxy_object('org.bluez', adapter, await self.bus.introspect('org.bluez', adapter))
-        props = proxy.get_interface('org.freedesktop.DBus.Properties')
-        await props.call_set('org.bluez.Adapter1', 'Pairable', Variant('b', False))
-        await props.call_set('org.bluez.Adapter1', 'Powered', Variant('b', True))
-        self.chars = {name: Characteristic(self, name, uuid, flags) for name, uuid, flags in [
-            ('drive', DRIVE_UUID, ['write', 'encrypt-write']),
-            ('control', CONTROL_UUID, ['write', 'encrypt-write']),
-            ('reply', REPLY_UUID, ['read', 'encrypt-read', 'notify']),
-            ('status', STATUS_UUID, ['read', 'encrypt-read', 'notify'])]}
-        tree = {SERVICE: {'org.bluez.GattService1': {'UUID': Variant('s', SERVICE_UUID), 'Primary': Variant('b', True)}}}
-        self.bus.export(SERVICE, GattService())
-        for name, char in self.chars.items():
-            path = SERVICE+'/'+name; self.bus.export(path, char)
-            tree[path] = {'org.bluez.GattCharacteristic1': {'UUID': Variant('s', char.uuid), 'Service': Variant('o', SERVICE), 'Flags': Variant('as', char.flags)}}
-        self.bus.export(ROOT, ObjectManager(tree))
-        self.bus.export(ROOT+'/advertisement', Advertisement(self.name))
-        def changed(message):
-            if message.interface != 'org.freedesktop.DBus.Properties' or message.member != 'PropertiesChanged': return
-            interface, updates, invalidated = message.body
-            if interface != 'org.bluez.Device1': return
-            device = self.devices.setdefault(message.path, {})
-            device.update({k: v.value for k, v in updates.items()})
-            for key in invalidated: device.pop(key, None)
-            if not device.get('Connected') or not device.get('Bonded'): self.disconnect(message.path, time.monotonic())
-            if message.path != self.peer and device.get('Connected') and self.peer is not None:
-                self.disconnect(self.peer, time.monotonic())
-        self.bus.add_message_handler(changed)
-        # ObjectManager changes cover newly discovered paired devices.
-        def added(path, interfaces):
-            if 'org.bluez.Device1' not in interfaces: return
-            self.devices[path] = {k: v.value for k, v in interfaces['org.bluez.Device1'].items()}
-            if self.peer is not None and path != self.peer and self.devices[path].get('Connected'):
-                self.disconnect(self.peer, time.monotonic())
-        manager.on_interfaces_added(added)
-        manager.on_interfaces_removed(lambda p, i: (self.disconnect(p, time.monotonic()), self.devices.pop(p, None)) if 'org.bluez.Device1' in i else None)
-        # Install bus match for Device1 property signals on the whole adapter tree.
-        dbus = self.bus.get_proxy_object('org.freedesktop.DBus', '/org/freedesktop/DBus', await self.bus.introspect('org.freedesktop.DBus', '/org/freedesktop/DBus')).get_interface('org.freedesktop.DBus')
-        await dbus.call_add_match("type='signal',sender='org.bluez',interface='org.freedesktop.DBus.Properties',member='PropertiesChanged',path_namespace='"+adapter+"'")
-        gatt = proxy.get_interface('org.bluez.GattManager1'); advertising = proxy.get_interface('org.bluez.LEAdvertisingManager1')
-        registered = advertised = False
+        transport = BlessTransport(self.name, SERVICE_UUID, self.adapter)
         worker = None
-        done = asyncio.Event()
-        for sig in (signal.SIGINT, signal.SIGTERM): self.loop.add_signal_handler(sig, done.set)
         try:
-            await gatt.call_register_application(ROOT, {}); registered = True
+            await transport.prepare()
+            self.bus = transport.bus
+            manager = self.bus.get_proxy_object('org.bluez', '/', await self.bus.introspect('org.bluez', '/')).get_interface('org.freedesktop.DBus.ObjectManager')
+            objects = await manager.call_get_managed_objects()
+            self.devices = {p: {k: v.value for k, v in interfaces['org.bluez.Device1'].items()} for p, interfaces in objects.items() if 'org.bluez.Device1' in interfaces}
+            adapters = [p for p, i in objects.items() if 'org.bluez.GattManager1' in i and 'org.bluez.LEAdvertisingManager1' in i]
+            adapter = transport.adapter.path
+            if adapter not in adapters: raise RuntimeError('no BlueZ GATT/advertising adapter')
+            proxy = self.bus.get_proxy_object('org.bluez', adapter, await self.bus.introspect('org.bluez', adapter))
+            props = proxy.get_interface('org.freedesktop.DBus.Properties')
+            await props.call_set('org.bluez.Adapter1', 'Pairable', Variant('b', False))
+            await props.call_set('org.bluez.Adapter1', 'Powered', Variant('b', True))
+            self.chars = {}
+            for role, uuid in [('drive', DRIVE_UUID), ('control', CONTROL_UUID),
+                               ('reply', REPLY_UUID), ('status', STATUS_UUID)]:
+                def read(options, role=role):
+                    self.authorize(options)
+                    return self.status_bytes if role == 'status' else self.reply_bytes
+                def write(value, options, role=role):
+                    peer = self.authorize(options)
+                    if options.get('offset', Variant('q', 0)).value or options.get('prepare-authorize', Variant('b', False)).value:
+                        if role == 'drive': self.malformed_drive(peer)
+                        raise DBusError('org.bluez.Error.NotSupported', 'use application fragments')
+                    try: self.handle_write(peer, role, value, time.monotonic())
+                    except ProtocolError as exc:
+                        raise DBusError('org.bluez.Error.InvalidValueLength', str(exc)) from exc
+                def invalid_write(options, role=role):
+                    peer = self.authorize(options)
+                    if role == 'drive': self.malformed_drive(peer)
+                def notify(enabled, role=role):
+                    if enabled: self.require_single_owner()
+                    if role == 'status': self.enqueue('subscribe', enabled)
+                readable = role in ('status', 'reply')
+                self.chars[role] = await transport.add(uuid, read=read if readable else None,
+                    write=None if readable else write, notify=notify if readable else None,
+                    invalid_write=invalid_write if not readable else None)
+            def changed(message):
+                if message.interface != 'org.freedesktop.DBus.Properties' or message.member != 'PropertiesChanged': return
+                interface, updates, invalidated = message.body
+                if interface != 'org.bluez.Device1': return
+                device = self.devices.setdefault(message.path, {})
+                device.update({k: v.value for k, v in updates.items()})
+                for key in invalidated: device.pop(key, None)
+                if not device.get('Connected') or not device.get('Bonded'): self.disconnect(message.path, time.monotonic())
+                if message.path != self.peer and device.get('Connected') and self.peer is not None:
+                    self.disconnect(self.peer, time.monotonic())
+            self.bus.add_message_handler(changed)
+            # ObjectManager changes cover newly discovered paired devices.
+            def added(path, interfaces):
+                if 'org.bluez.Device1' not in interfaces: return
+                self.devices[path] = {k: v.value for k, v in interfaces['org.bluez.Device1'].items()}
+                if self.peer is not None and path != self.peer and self.devices[path].get('Connected'):
+                    self.disconnect(self.peer, time.monotonic())
+            manager.on_interfaces_added(added)
+            manager.on_interfaces_removed(lambda p, i: (self.disconnect(p, time.monotonic()), self.devices.pop(p, None)) if 'org.bluez.Device1' in i else None)
+            # Install bus match for Device1 property signals on the whole adapter tree.
+            dbus = self.bus.get_proxy_object('org.freedesktop.DBus', '/org/freedesktop/DBus', await self.bus.introspect('org.freedesktop.DBus', '/org/freedesktop/DBus')).get_interface('org.freedesktop.DBus')
+            await dbus.call_add_match("type='signal',sender='org.bluez',interface='org.freedesktop.DBus.Properties',member='PropertiesChanged',path_namespace='"+adapter+"'")
+            done = asyncio.Event()
+            for sig in (signal.SIGINT, signal.SIGTERM): self.loop.add_signal_handler(sig, done.set)
             worker = threading.Thread(target=self._worker, name='terra-output', daemon=False); worker.start()
-            await advertising.call_register_advertisement(ROOT+'/advertisement', {}); advertised = True
+            await transport.start()
             disconnect_task = asyncio.create_task(self.bus.wait_for_disconnect())
             done_task = asyncio.create_task(done.wait())
             await asyncio.wait([disconnect_task, done_task], return_when=asyncio.FIRST_COMPLETED)
             for task in (disconnect_task, done_task): task.cancel()
         finally:
             self.stop.set()
-            if worker is not None: await asyncio.to_thread(worker.join)
-            else: backend.close()
-            if advertised:
-                try: await advertising.call_unregister_advertisement(ROOT+'/advertisement')
-                except Exception: pass
-            if registered:
-                try: await gatt.call_unregister_application(ROOT)
-                except Exception: pass
-            self.bus.disconnect()
+            try:
+                if worker is not None: await asyncio.to_thread(worker.join)
+                else: backend.close()
+            finally:
+                try: await transport.close()
+                finally:
+                    for sig in (signal.SIGINT, signal.SIGTERM): self.loop.remove_signal_handler(sig)

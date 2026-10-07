@@ -56,6 +56,7 @@ struct ActuatorLayoutView: View {
     var body: some View {
         Form {
             Section("Bluetooth rover") {
+                Text("First setup: hold the rover’s USR button for 3 seconds until its LED blinks. Find your terra- rover below and accept pairing on your phone.").font(.footnote)
                 Button("Find rovers") { brain.scanBluetooth() }
                 Picker("Rover", selection: $selected) {
                     Text("Select discovered rover").tag("")
