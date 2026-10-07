@@ -16,7 +16,12 @@ class BenchModeTests(unittest.TestCase):
         self.backend._gate_reader = self.backend.bench_gate
         self.safety = SafetyController(self.backend.capabilities())
         path = Path(self.temp.name) / 'layout.json'
-        layout = json.loads((Path(__file__).resolve().parents[3] / 'crates/terra-actuators/presets/terra-mini.json').read_text())
+        # Permission tests need a valid motor, not the repository's rover preset.
+        layout = dict(schema_version=1, revision=1, actuators=[dict(
+            id=0, name='Bench motor', port='M0', kind='dc_motor', inverted=False,
+            limits=dict(min=-.4, max=.4),
+            calibration=dict(type='dc_motor', max_power_fraction=.5),
+            route=dict(type='left_effort'), safe=dict(type='zero'))])
         path.write_text(json.dumps(layout))
         self.store = ConfigurationStore(path, self.safety, self.backend)
         self.store.load(0)
