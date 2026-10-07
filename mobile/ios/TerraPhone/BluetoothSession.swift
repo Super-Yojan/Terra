@@ -14,6 +14,7 @@ final class BluetoothSession {
     private var faulted = false
     private var statusAt: TimeInterval?
     private var armRequested = false
+    var motionRequested: Bool { armRequested }
     func reset() {
         generation &+= 1; session = nil; revision = 0; sequence = 0
         armed = false; arming = false; ready = false; layoutAvailable = false; faulted = false; statusAt = nil; armRequested = false
@@ -60,6 +61,9 @@ final class BluetoothSession {
         let frame = try control("arm"); armRequested = true; return frame
     }
     func stop() { armRequested = false; armed = false; arming = false }
+    func statusAge(now: TimeInterval) -> TimeInterval? {
+        statusAt.map { now - $0 }
+    }
     func stale(now: TimeInterval) -> Bool {
         guard let statusAt = statusAt else { return false }
         return now < statusAt || now - statusAt >= 0.3

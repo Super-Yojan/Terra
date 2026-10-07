@@ -178,3 +178,23 @@ commissioning. Those require the separate [bench procedure](BENCH.md).
 
 References: [Nuitka standalone/onefile modes](https://nuitka.net/user-documentation/user-manual.html),
 [pinned Fusion HAT source](https://github.com/sunfounder/fusion-hat/tree/4bd1018ad5a70ee113160536f969cdadd9f22918).
+
+## Supervised bench mode without a physical interlock
+
+For a supervised rover that has no physical cutoff, `--bench-mode` is an explicit
+alternative to `--gate-file`, using the real Fusion HAT backend. It is never the
+installer default and cannot be combined with a physical gate or mock mode. The
+status reports `gate_mode=bench`; TerraPhone shows the absence of a physical
+power cutoff and offers **Enable Bench Control**, followed by a separate **Arm**.
+A valid saved layout, cleared fault/Stop, authenticated owner and disarmed state
+are required for enabling. Software enable never arms or persists across service
+restart, disconnect, Disarm or Stop. Release sends zero; the existing 200 ms rover
+watchdog and explicit arming remain active. Configuration requires bench control
+to be disabled. Software stop cannot isolate power if software or electronics fail.
+
+On rover2 the source runtime is installed at `/opt/terra-bench/venv`, with a
+systemd override at `/etc/systemd/system/terra-rover.service.d/bench-mode.conf`.
+The confirmed initial layout is M2/M3 left and M0/M1 right, revision 1; its effort
+limits are ±0.4 with maximum power fraction 0.5. Wheel direction still requires
+physical observation. Remove the override and provide a real interlock before
+returning to the default physical-gate service.

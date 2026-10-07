@@ -202,6 +202,9 @@ def decode_control(data: bytes) -> dict:
         raise ProtocolError("operation must be string")
     if operation in ('capabilities', 'read_layout', 'reset_fault', 'reset_emergency_stop'):
         _keys(payload, ())
+    elif operation == 'set_bench_enabled':
+        _keys(payload, ('enabled',))
+        if type(payload['enabled']) is not bool: raise ProtocolError('enabled must be boolean')
     elif operation == 'commit_layout':
         _keys(payload, ('staged_revision', 'staged_request_id'))
         _uint(payload['staged_revision'], 32)

@@ -51,11 +51,17 @@ struct ActuatorLayoutView: View {
     @State private var dirty = false
     @State private var feedback = false
     @State private var selected: String = ""
+    @AppStorage("autoConnectHardware") private var autoConnectHardware = true
     private var caps: ActuatorCapabilities? { try? JSONDecoder().decode(ActuatorCapabilities.self, from: Data(brain.capabilitiesJSON.utf8)) }
     private var active: ActuatorLayoutDraft? { try? JSONDecoder().decode(ActuatorLayoutDraft.self, from: Data(brain.committedLayoutJSON.utf8)) }
     var body: some View {
         Form {
             Section("Bluetooth rover") {
+                Toggle("Connect Automatically", isOn: $autoConnectHardware)
+                    .onChange(of: autoConnectHardware) { _, enabled in
+                        if enabled { brain.autoConnectHardware() } else { brain.cancelAutoConnection() }
+                    }
+                Text("Reconnect to your last rover when the app opens. Motors remain disarmed until you arm them.").font(.footnote).foregroundStyle(.secondary)
                 Text("First setup: hold the rover’s USR button for 3 seconds until its LED blinks. Find your terra- rover below and accept pairing on your phone.").font(.footnote)
                 Button("Find rovers") { brain.scanBluetooth() }
                 Picker("Rover", selection: $selected) {
@@ -67,6 +73,13 @@ struct ActuatorLayoutView: View {
                 Text(brain.hardwareStatus)
                 Text(brain.hardwareReady ? "Layout and capabilities synchronized" : brain.hardwareConfigurationReady ? "Configuration available · motion requires a valid layout and cleared fault" : "Waiting for bonded owner access and capabilities")
                 Text("Manual mode commands normalized effort. Feedback requires a compatible left/right layout and healthy phone tracking.").font(.footnote)
+            }
+            if brain.hardwareBenchMode {
+                Section("Bench Mode") {
+                    Text("Software permission only; no physical power cutoff. Starts disabled on every connection.").font(.footnote)
+                    Button(brain.hardwareBenchEnabled ? "Disable bench control" : "Enable bench control") { brain.setBenchEnabled(!brain.hardwareBenchEnabled) }
+                        .disabled(!brain.hardwareReady || brain.hardwareArmed || brain.hardwareArming)
+                }
             }
             Section("Hardware safety") {
                 LabeledContent("Output", value: brain.hardwareArmed ? "Armed" : brain.hardwareArming ? "Arming at safe output" : "Disarmed")

@@ -44,6 +44,16 @@ class Backend(Protocol):
     def require_gate_open(self) -> None: ...
     def close(self) -> None: ...
 
+class BenchGate:
+    """Session-only software permission, never a physical power cutoff."""
+    def __init__(self): self.enabled = False
+    def __call__(self): return self.enabled
+    def reset(self): self.enabled = False
+    def set_enabled(self, enabled):
+        if type(enabled) is not bool: raise ValueError('bench enable must be boolean')
+        self.enabled = enabled
+
+
 def file_gate_reader(path):
     """Only an exact ASCII 1 (with surrounding whitespace) denotes closed gate."""
     gate_path = Path(path)
