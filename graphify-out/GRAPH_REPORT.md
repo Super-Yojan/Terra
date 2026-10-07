@@ -1,5 +1,9 @@
 # Graph Report - .  (2026-10-05)
 
+The Bevy world this snapshot indexed under `simulator/` now lives in [Zorvane](https://github.com/Super-Yojan/Zorvane). Run it with `cargo run -p zorvane`. The Zenoh prefix is still `terra/rover`.
+
+
+
 ## Corpus Check
 - 54 files · ~57,549 words
 - Verdict: corpus is large enough that graph structure adds value.

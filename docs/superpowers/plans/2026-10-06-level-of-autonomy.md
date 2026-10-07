@@ -14,6 +14,8 @@
 
 Implemented on `codex/mission-autonomy`. The [acceptance evidence](../../autonomy/evidence/README.md) maps the delivered runtime, mission, logging, phone binding, and companion dashboard checks. Original task checkboxes combine implementation with broader physical/study demonstrations; those demonstrations are not inferred from builds and remain explicitly listed in the evidence document.
 
+The Bevy world this plan called `simulator/` now lives in [Zorvane](https://github.com/Super-Yojan/Zorvane). Paths such as `simulator/src/zenoh_bridge.rs`, `simulator/src/velocity_controller.rs`, `simulator/src/occupancy_map.rs`, `simulator/src/mission.rs`, and `simulator/ZENOH.md` are in that repository. Run it with `TERRA_MISSION=1 cargo run -p zorvane`. The Zenoh prefix is still `terra/rover`, and the `TERRA_*` variables still apply. The shared arbiter crates stay in Terra.
+
 ## Findings from the current code
 
 Inspected Terra HEAD `79d6951`. `terra-control` provides a portable PI velocity controller with speed/effort limits, sensor-health stops, and target timeout. `terra-waypoint` supplies the shared geometric waypoint follower; `terra-mapping` supplies a rolling occupancy grid. There is no DWA planner or frontier explorer in these crates yet.
@@ -165,7 +167,7 @@ ARGOS companion: extend Rust contract/state/Zenoh/FFI crates and shared SwiftUI 
 - [ ] Subscribe/publish agreed autonomy/teleop/proposal/decision/safety/status keys. Preserve cmd_vel alias without bypass; retain and periodically republish authoritative application state.
 - [ ] Supply depth-derived occupancy, estimate/pose health, normalized contacts, and logging state. Record source timestamps and local control time; do not mix `Instant` values with Bevy simulation time without conversion.
 - [ ] Integration-test all four runtime selections, stale-input stops, goal progress, takeover, rejection, cancelled-goal behavior, late client connection, and per-rover isolation. Test fleet fan-out with one unreachable rover and independent acknowledgements; publish experiment status/time anchors.
-- [ ] Demonstrate an obstacle intervention in assisted mode and proposal -> approval -> motion in supervised mode. Run simulator tests from `simulator` and save logs; commit.
+- [ ] Demonstrate an obstacle intervention in assisted mode and proposal -> approval -> motion in supervised mode. Run `cargo test -p zorvane` in Zorvane and save logs; commit.
 
 ## Task 7: Integrate TerraPhone through UniFFI
 
@@ -191,7 +193,7 @@ Execute the companion ARGOS plan for issue #4 after the shared contract is final
 - [ ] Verify connected mode changes are acknowledged/displayed within approximately 1 s, fleet actions expose partial failures, keyboard release/connection loss stops teleop, and exported operator events join rover logs by token/session/run ID.
 - [ ] Run native UI flows selecting each level and observing representative behavior on one simulated rover; save screenshot/log evidence. Rust core stays portable and Python-free.
 - [ ] Replay shared fixtures through Bevy and UniFFI; compare authority output and core events. Record one complete run per level with identical task/map/controller configuration and documented initial state.
-- [ ] Map all five issue acceptance criteria to code/tests/evidence. Update Terra README, docs/MOBILE_CONTROL.md, simulator/ZENOH.md, and ARGOS setup docs; commit separately in each repository.
+- [ ] Map all five issue acceptance criteria to code/tests/evidence. Update Terra README, docs/MOBILE_CONTROL.md, Zorvane `simulator/ZENOH.md`, and ARGOS setup docs; commit separately in each repository.
 
 ## Delivery and completion
 

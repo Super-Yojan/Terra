@@ -1,7 +1,6 @@
 [workspace]
 resolver = "3"
 members = ["crates/terra-actuators", "crates/terra-autonomy", "crates/terra-navigation", "crates/terra-experiment", "crates/terra-types", "crates/terra-state", "crates/terra-control", "crates/terra-mobile", "crates/terra-motors","crates/terra-mapping", "crates/terra-transport", "crates/terra-waypoint"]
-exclude = ["simulator"]
 
 [workspace.package]
 version = "0.1.0"

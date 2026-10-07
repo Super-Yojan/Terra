@@ -19,6 +19,8 @@ struct SwiftSmoke {
         let cleared = try map.snapshot()
         precondition(cleared.occupancy.allSatisfy { $0 == -1 })
         if let endpoint = ProcessInfo.processInfo.environment["TERRA_ZENOH_SMOKE_ENDPOINT"] {
+            // Live depth and cmd_vel come from Zorvane (`cargo run -p zorvane`).
+            // This smoke still speaks terra/rover/9 against the Python peer.
             let remote = try MobileZenohClient(endpoint: endpoint, prefix: "terra/rover", roverId: 9)
             let deadline = Date().addingTimeInterval(3)
             var mapped = false
