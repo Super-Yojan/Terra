@@ -1,12 +1,29 @@
 import SwiftUI
 
+/// Keys for the Simulator-only Bevy session. Device builds delete them on
+/// launch and never bind them into the connection UI.
+enum TerraBevySessionStore {
+    static let endpointKey = "zenohEndpoint"
+    static let roverIDKey = "zenohRoverID"
+
+    static func discardOnDevice() {
+        #if !targetEnvironment(simulator)
+        let defaults = UserDefaults.standard
+        defaults.removeObject(forKey: endpointKey)
+        defaults.removeObject(forKey: roverIDKey)
+        #endif
+    }
+}
+
 struct ContentView: View {
     @StateObject private var brain = PhoneController()
     @Environment(\.scenePhase) private var scenePhase
     @State private var forward = 0.0
     @State private var yaw = 0.0
-    @AppStorage("zenohEndpoint") private var zenohEndpoint = "tcp/127.0.0.1:7447"
-    @AppStorage("zenohRoverID") private var zenohRoverID = "0"
+    #if targetEnvironment(simulator)
+    @AppStorage(TerraBevySessionStore.endpointKey) private var zenohEndpoint = "tcp/127.0.0.1:7447"
+    @AppStorage(TerraBevySessionStore.roverIDKey) private var zenohRoverID = "0"
+    #endif
     @AppStorage("waypointOriginLat") private var originLat = "38.8297"
     @AppStorage("waypointOriginLon") private var originLon = "-77.3075"
     @AppStorage("waypointGoalLat") private var goalLat = "38.82981"
@@ -17,10 +34,14 @@ struct ContentView: View {
     var body: some View {
         NavigationStack {
             Form {
+                // CoreBluetooth has no radio in the Simulator, so Discover/Connect
+                // cannot reach a rover there. Device builds are the Bluetooth path.
+                #if !targetEnvironment(simulator)
                 Section("Bluetooth actuators") {
                     NavigationLink("Discover, configure and arm rover") { ActuatorLayoutView(brain: brain) }
                     Text(brain.hardwareStatus).font(.footnote)
                 }
+                #endif
                 Section("Controller") {
                     LabeledContent("Source", value: brain.source)
                     LabeledContent("Status", value: brain.status)
@@ -31,6 +52,9 @@ struct ContentView: View {
                     }
                     Button("Stop controller", role: .destructive) { forward = 0; yaw = 0; brain.stop() }
                 }
+                // Compiled only for the iOS Simulator. A device build has no
+                // Bevy controls and does not read the stored endpoint.
+                #if targetEnvironment(simulator)
                 Section("Bevy simulator · Zenoh") {
                     TextField("Zenoh endpoint", text: $zenohEndpoint)
                         .textInputAutocapitalization(.never).autocorrectionDisabled()
@@ -42,9 +66,10 @@ struct ContentView: View {
                         forward = 0; yaw = 0
                         brain.startBevy(endpoint: zenohEndpoint, roverID: zenohRoverID)
                     }.disabled(brain.zenohConnecting)
-                    Text("Use localhost in iOS Simulator. On an iPhone, enter the Mac’s LAN address. Connect starts at zero and subscribes to that rover’s depth camera. The occupancy map below fills in from simulator depth and the exposure pose published with each frame. Stop or leaving the app disconnects.")
+                    Text("Use localhost (tcp/127.0.0.1:7447) on the same Mac as Bevy. Connect starts at zero and subscribes to that rover’s depth camera. The occupancy map below fills in from simulator depth and the exposure pose published with each frame. Stop or leaving the app disconnects.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
+                #endif
                 Section("Local occupancy map") {
                     OccupancyMapView(grid: brain.occupancy, rover: brain.mapPose, goal: selectedGoal) { north, west in
                         guard !brain.waypointActive,
@@ -65,7 +90,11 @@ struct ContentView: View {
                         Text(String(format: "%.0f × %.0f m · %.0f cm cells · world +X right, +Y up", Double(grid.width) * grid.resolution, Double(grid.height) * grid.resolution, grid.resolution * 100)).font(.caption)
                     }
                     Button("Clear map") { brain.clearMap() }
+                    #if targetEnvironment(simulator)
                     Text("Phone mapping uses scene depth when available. Initial camera height is assumed 0.5 m above flat ground; calibrate before using the map for navigation. Bevy Zenoh mode uses the simulator’s exposure-aligned camera pose instead, with ground at robotics Z = 0.").font(.footnote).foregroundStyle(.secondary)
+                    #else
+                    Text("Phone mapping uses scene depth when available. Initial camera height is assumed 0.5 m above flat ground; calibrate before using the map for navigation.").font(.footnote).foregroundStyle(.secondary)
+                    #endif
                 }
                 Section("Mission autonomy") {
                     Picker("Requested level",selection:Binding(get:{brain.autonomyLevel},set:{brain.setAutonomy($0)})) {Text("Teleop").tag("teleop");Text("Assisted teleop").tag("assisted_teleop");Text("Waypoint").tag("waypoint");Text("Supervised search").tag("supervised")}
@@ -111,8 +140,13 @@ struct ContentView: View {
                     if !entryNote.isEmpty {
                         Text(entryNote).font(.footnote).foregroundStyle(.red)
                     }
-                    Text("Tap the map to drop the goal. On that grid +X is north and +Y is west, the same frame as the blue rover marker. Select Waypoint autonomy before sending a goal. The shared Rust runtime selects motion locally; remote goals are sent to the simulator-owned arbiter.")
+                    #if targetEnvironment(simulator)
+                    Text("Tap the map to drop the goal. On that grid +X is north and +Y is west, the same frame as the blue rover marker. Select Waypoint autonomy before sending a goal. The shared Rust runtime selects motion locally; a Bevy connection sends the goal to the simulator-owned arbiter.")
                         .font(.footnote).foregroundStyle(.secondary)
+                    #else
+                    Text("Tap the map to drop the goal. On that grid +X is north and +Y is west, the same frame as the blue rover marker. Select Waypoint autonomy before sending a goal. The shared Rust runtime selects motion locally.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                    #endif
                 }
                 Section(brain.hardwareActive && !brain.hardwareFeedback ? "Normalized manual effort" : "Velocity target") {
                     LabeledContent("Forward", value: String(format: brain.hardwareActive && !brain.hardwareFeedback ? "%.2f effort" : "%.2f m/s", forward))
@@ -208,7 +242,13 @@ struct OccupancyMapView: View {
             }
         }
         .overlay {
-            if grid == nil { ContentUnavailableView("No map yet", systemImage: "map", description: Text("Start a rover or connect to Bevy to collect depth.")) }
+            if grid == nil {
+                #if targetEnvironment(simulator)
+                ContentUnavailableView("No map yet", systemImage: "map", description: Text("Start a rover or connect to Bevy to collect depth."))
+                #else
+                ContentUnavailableView("No map yet", systemImage: "map", description: Text("Start a rover to collect depth."))
+                #endif
+            }
         }
         .overlay {
             GeometryReader { geo in

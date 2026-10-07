@@ -110,7 +110,13 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, @unc
         let token = token.trimmingCharacters(in: .whitespacesAndNewlines)
         controlQueue.async {
             guard self.mode != .stopped, !self.bleActive || self.bleFeedback else {
-                DispatchQueue.main.async { self.waypointStatus = "Start a rover or connect to Bevy, then go" }
+                DispatchQueue.main.async {
+                    #if targetEnvironment(simulator)
+                    self.waypointStatus = "Start a rover or connect to Bevy, then go"
+                    #else
+                    self.waypointStatus = "Start a rover or connect over Bluetooth, then go"
+                    #endif
+                }
                 return
             }
             do {
@@ -155,6 +161,16 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, @unc
         }
     }
     func startBevy(endpoint: String, roverID: String) {
+        // Device builds have no Bevy connection UI. Ignore the call so a saved
+        // endpoint cannot open Zenoh; Bluetooth stays the link.
+        #if targetEnvironment(simulator)
+        connectBevySimulator(endpoint: endpoint, roverID: roverID)
+        #else
+        _ = (endpoint, roverID)
+        #endif
+    }
+    #if targetEnvironment(simulator)
+    private func connectBevySimulator(endpoint: String, roverID: String) {
         guard !zenohConnecting else { return }
         guard let id = UInt64(roverID.trimmingCharacters(in: .whitespacesAndNewlines)) else {
             zenohStatus = "Rover ID must be a nonnegative integer"; return
@@ -183,6 +199,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, @unc
             } catch { self.fail(error) }
         }
     }
+    #endif
     func startPhone() {
         stop()
         startPhoneSensors()
