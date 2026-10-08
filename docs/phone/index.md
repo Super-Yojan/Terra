@@ -2,6 +2,7 @@
 
 !!! tip "TL;DR"
     SwiftUI app in `mobile/ios/`.
+    Android shell in `mobile/android/`.
     Shared math is `terra-mobile`.
     Simulator talks to Zorvane. iPhone talks to the Pi.
     Tap-to-configure is not built.
@@ -29,7 +30,7 @@
 
 | Question | Page |
 | --- | --- |
-| How do I compile it? | [Xcode](build.md) |
+| How do I compile it? | [Xcode](build.md) or [Android](../MOBILE_ANDROID.md) |
 | Simulator or iPhone? | [Split](simulator.md) |
 | How do I pair? | [Bluetooth](bluetooth.md) |
 | Tap a part to configure? | [Planned](tap-to-configure.md) |

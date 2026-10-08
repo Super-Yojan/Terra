@@ -3,7 +3,7 @@
 Documentation: <https://super-yojan.dev/Terra/>
 
 Terra is the vehicle body and onboard autonomy: shared Rust crates, the TerraPhone
-iOS app, and the Raspberry Pi rover. The world simulator is
+iOS and Android apps, and the Raspberry Pi rover. The world simulator is
 [Zorvane](https://super-yojan.dev/Zorvane/). The fleet operator is
 [ARGOS](https://super-yojan.dev/ARGOS/). Both sit with this site under
 [super-yojan.dev](https://super-yojan.dev).
@@ -31,9 +31,9 @@ See the [mission-autonomy guide](docs/autonomy/README.md) for four shared-core l
 - `terra-motors`: signed wheel effort to PWM duty and direction, with a hardware enable gate and a command watchdog. See [motor adapter](docs/MOBILE_CONTROL.md#motor-adapter).
 - `terra-mapping`: rolling local occupancy grids from depth and camera poses. See [mapping API](crates/terra-mapping/README.md).
 - `terra-transport`: leased Zenoh velocity publishing. The default prefix is `terra/rover`.
-- `terra-mobile`: UniFFI interface shared by Swift and Rust.
+- `terra-mobile`: UniFFI interface shared by Swift, Kotlin, and Rust.
 
-See [mobile controller setup](docs/MOBILE_CONTROL.md) for the sensor contract, iOS build and validation.
+See [mobile controller setup](docs/MOBILE_CONTROL.md) for the sensor contract, and [TerraPhone for Android](docs/MOBILE_ANDROID.md) for the Kotlin shell.
 
 ## Simulation
 
@@ -57,4 +57,6 @@ cargo test --locked --workspace
 ./scripts/build-ios.sh
 ./scripts/check-swift.sh
 open mobile/ios/TerraPhone.xcodeproj
+./scripts/build-android.sh
+cd mobile/android && ./gradlew assembleDebug testDebugUnitTest
 ```

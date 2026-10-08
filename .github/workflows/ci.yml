@@ -31,3 +31,46 @@ jobs:
 
       - name: Cargo test
         run: cargo test --locked --workspace
+
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,x86_64-linux-android
+
+      - name: Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Android SDK and NDK
+        uses: android-actions/setup-android@v3
+
+      - name: SDK packages
+        run: |
+          yes | sdkmanager --licenses >/dev/null
+          sdkmanager --install "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018"
+          echo "ANDROID_NDK_HOME=${ANDROID_SDK_ROOT}/ndk/27.2.12479018" >> "$GITHUB_ENV"
+
+      - name: cargo-ndk
+        run: cargo install cargo-ndk --version 3.5.4 --locked
+
+      - name: Android libraries and Kotlin bindings
+        run: ./scripts/build-android.sh
+
+      - name: assembleDebug and JVM smoke test
+        working-directory: mobile/android
+        run: ./gradlew assembleDebug testDebugUnitTest --stacktrace
+
+      - name: Zenoh Python package
+        run: python3 -m pip install 'eclipse-zenoh==1.10.1' || python3 -m pip install --break-system-packages 'eclipse-zenoh==1.10.1'
+
+      - name: Kotlin Zenoh peer
+        run: python3 scripts/check-zenoh-kotlin.py

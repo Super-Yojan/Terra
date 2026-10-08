@@ -1,4 +1,30 @@
 use crate::*;
+
+/// Levels the shared arbiter accepts today.
+///
+/// The match is exhaustive. Frontier exploration (`explore`, issues #32 and
+/// #33) is intentionally absent: when that variant lands on `terra_autonomy::Level`,
+/// this function stops compiling until the wire name is added here. Phone UIs
+/// should render any name this list does not contain as unavailable.
+#[uniffi::export]
+pub fn supported_autonomy_levels() -> Vec<String> {
+    [
+        terra_autonomy::Level::Teleop,
+        terra_autonomy::Level::AssistedTeleop,
+        terra_autonomy::Level::Waypoint,
+        terra_autonomy::Level::Supervised,
+    ]
+    .into_iter()
+    .map(|level| match level {
+        terra_autonomy::Level::Teleop => "teleop",
+        terra_autonomy::Level::AssistedTeleop => "assisted_teleop",
+        terra_autonomy::Level::Waypoint => "waypoint",
+        terra_autonomy::Level::Supervised => "supervised",
+    })
+    .map(str::to_string)
+    .collect()
+}
+
 #[uniffi::export]
 impl MobileController {
     pub fn host_dashboard(
@@ -161,5 +187,20 @@ impl MobileController {
             })?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::supported_autonomy_levels;
+
+    #[test]
+    fn explore_stays_out_of_the_picker_until_the_arbiter_grows() {
+        let levels = supported_autonomy_levels();
+        assert_eq!(
+            levels,
+            vec!["teleop", "assisted_teleop", "waypoint", "supervised"]
+        );
+        assert!(!levels.iter().any(|level| level == "explore"));
     }
 }

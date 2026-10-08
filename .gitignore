@@ -8,6 +8,13 @@
 /mobile/ios/DerivedData/
 **/xcuserdata/
 
+/mobile/android/.gradle/
+/mobile/android/build/
+/mobile/android/app/build/
+/mobile/android/local.properties
+/mobile/android/app/src/main/jniLibs/
+/mobile/android/app/src/main/java/dev/superyojan/terra/core/
+
 /hardware/raspberry-pi/.venv/
 /hardware/raspberry-pi/.build/
 /hardware/raspberry-pi/dist/
