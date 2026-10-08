@@ -37,9 +37,13 @@ theme:
     - search.suggest
     - search.highlight
 
+extra_css:
+  - assets/extra.css
+
 markdown_extensions:
   - admonition
   - attr_list
+  - md_in_html
   - tables
   - toc:
       permalink: true

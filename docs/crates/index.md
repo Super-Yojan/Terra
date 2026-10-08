@@ -1,52 +1,44 @@
 # Crates
 
-The Cargo workspace is the onboard stack. `terra-mobile` is the UniFFI boundary TerraPhone links. The other crates stay free of UniFFI so Zorvane and tests can use them directly.
-
-Generated rustdoc for every workspace crate, built with `cargo doc --no-deps`, is published at [super-yojan.dev/Terra/api/](https://super-yojan.dev/Terra/api/).
-
-| Crate | Role |
-| --- | --- |
-| [terra-types](terra-types.md) | SI samples, body axes, velocity commands, motor effort, health. |
-| [terra-state](terra-state.md) | VIO-anchored velocity with bounded IMU prediction. |
-| [terra-control](terra-control.md) | Differential-drive velocity PI, feedforward, anti-windup. |
-| [terra-waypoint](terra-waypoint.md) | One lat/lon or local goal, followed as a body twist. |
-| [terra-transport](terra-transport.md) | Zenoh client for `cmd_vel` and depth, plus a loopback control plane. |
-| [terra-mapping](terra-mapping.md) | Rolling local occupancy grid from axial depth. |
-| [terra-navigation](terra-navigation.md) | Local planner, frontier search, observed clearance. |
-| [terra-autonomy](terra-autonomy.md) | Four authority levels, safety hold, proposals. |
-| [terra-experiment](terra-experiment.md) | JSONL run logs, mission observations, summaries. |
-| [terra-motors](terra-motors.md) | Effort to PWM, enable gate, watchdog, software bench sequence. |
-| [terra-actuators](terra-actuators.md) | Portable layouts, routing, Bluetooth framing. |
-| [terra-mobile](terra-mobile.md) | UniFFI objects the iOS app calls. |
+!!! tip "TL;DR"
+    Twelve workspace crates.
+    `terra-mobile` is the only UniFFI boundary.
+    The Pi reimplements Bluetooth in Python. It does not link these crates.
 
 ```mermaid
 flowchart LR
-  Types[terra-types]
-  State[terra-state]
-  Control[terra-control]
-  Way[terra-waypoint]
-  Map[terra-mapping]
-  Nav[terra-navigation]
-  Auto[terra-autonomy]
-  Exp[terra-experiment]
-  Motors[terra-motors]
-  Act[terra-actuators]
-  Transport[terra-transport]
-  Mobile[terra-mobile]
-  Types --> State --> Control --> Motors
-  Types --> Way
-  Types --> Map --> Nav
-  Way --> Auto
+  Types[terra-types] --> State[terra-state]
+  State --> Control[terra-control]
+  Control --> Motors[terra-motors]
+  Types --> Way[terra-waypoint]
+  Types --> Map[terra-mapping]
+  Map --> Nav[terra-navigation]
+  Way --> Auto[terra-autonomy]
   Nav --> Auto
-  Map --> Auto
-  Auto --> Exp
+  Auto --> Mobile[terra-mobile]
   Control --> Mobile
-  State --> Mobile
-  Way --> Mobile
   Map --> Mobile
-  Act --> Mobile
-  Transport --> Mobile
-  Auto --> Mobile
 ```
 
-The Pi service does not depend on these crates. It reimplements the Bluetooth layout protocol in `hardware/raspberry-pi/terra_rover/`.
+*Phone and Zorvane share the middle. PWM stays in `terra-motors`.*
+
+![Body axes shared by the crates](../assets/body-axes.svg)
+
+*+X forward, +Y left, +Z up.*
+
+| Crate | One line |
+| --- | --- |
+| [terra-types](terra-types.md) | Samples, axes, effort. |
+| [terra-state](terra-state.md) | VIO anchor, short IMU prediction. |
+| [terra-control](terra-control.md) | Differential PI. |
+| [terra-waypoint](terra-waypoint.md) | One goal, one twist. |
+| [terra-transport](terra-transport.md) | Zenoh client and loopback plane. |
+| [terra-mapping](terra-mapping.md) | Rolling occupancy grid. |
+| [terra-navigation](terra-navigation.md) | Local planner and frontiers. |
+| [terra-autonomy](terra-autonomy.md) | Four levels and a safety hold. |
+| [terra-experiment](terra-experiment.md) | JSONL logs and summaries. |
+| [terra-motors](terra-motors.md) | PWM, enable, watchdog, coast. |
+| [terra-actuators](terra-actuators.md) | Layouts and Bluetooth frames. |
+| [terra-mobile](terra-mobile.md) | Swift exports. |
+
+Rustdoc: [super-yojan.dev/Terra/api/](https://super-yojan.dev/Terra/api/).

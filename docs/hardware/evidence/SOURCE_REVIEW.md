@@ -1,5 +1,22 @@
 # Bluetooth implementation source review
 
+!!! tip "TL;DR"
+    Source was read. It was not run on a rover.
+    Later packaging checks are a different record.
+
+![Pairing flow under review.](../../assets/pairing.svg)
+
+*Pairing flow under review.*
+
+```mermaid
+flowchart LR
+  Phone[iPhone] -->|GATT| Pi[terra-rover]
+  Pi --> Hat[Fusion HAT]
+  Gate[gate file] --> Pi
+```
+
+*Gate closed is not the same as armed.*
+
 Implementation is retained locally on `codex/bluetooth-actuators`, forked at `557523d`. Product implementation and review fixes end at `fe2c231`.
 
 Independent source reviews covered portable Rust routing/protocol, Python layout/safety/Fusion HAT/configuration/BlueZ, Swift BLE/UI integration, and documentation. A whole-branch review and scoped correction review reported all identified Important and Critical findings addressed. This is source inspection, not executed verification.

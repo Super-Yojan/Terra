@@ -1,5 +1,24 @@
 # Acceptance evidence
 
+!!! tip "TL;DR"
+    This file records what was reviewed.
+    It does not record a physical mission.
+
+![Authority levels the evidence is about.](../../assets/levels.svg)
+
+*Authority levels the evidence is about.*
+
+```mermaid
+flowchart LR
+  T[teleop] --> A[arbiter]
+  S[assisted] --> A
+  W[waypoint] --> A
+  U[supervised] --> A
+  A --> Move[allowed twist or hold]
+```
+
+*One arbiter. Effective level is empty during a stop.*
+
 The local two-rover run used mission seed 42, the portable arbiter, the simulated PI motor path, depth-derived occupancy, and an ARGOS Rust/Zenoh client on `tcp/127.0.0.1:7448`. It exercised every level, leased held input/release, waypoint arrival, supervised proposal approval, and individually acknowledged fleet takeover/stop. JSON evidence is shared with the companion ARGOS branch at `docs/autonomy/live-control-evidence.json`.
 
 | Terra #17 requirement | Implementation and evidence |

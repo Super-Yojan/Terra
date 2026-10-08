@@ -1,5 +1,23 @@
 # Install Terra Rover on Raspberry Pi
 
+!!! tip "TL;DR"
+    64-bit Bookworm or newer.
+    The release is an ARM64 executable. No Python on the Pi.
+    Pair with the USR button. Pairing does not arm.
+
+![What the installer is aiming at.](../assets/pi-stack.svg)
+
+*What the installer is aiming at.*
+
+```mermaid
+flowchart LR
+  Phone[iPhone] -->|GATT| Pi[terra-rover]
+  Pi --> Hat[Fusion HAT]
+  Gate[gate file] --> Pi
+```
+
+*Gate closed is not the same as armed.*
+
 Target: **64-bit Raspberry Pi OS Bookworm or newer**, with systemd and Bluetooth.
 The release is a Nuitka-compiled ARM64 Linux executable. It includes the Python
 runtime, Bless 0.3.0, Bleak 1.1.1, dbus-next 0.2.3, and the Fusion HAT 1.14.0 Motor/PWM library. You do not
@@ -69,6 +87,15 @@ reload the bus, or operate host services. The image builder must provision the
 `terra-rover` user/group, its `i2c`/`bluetooth` group memberships, and ownership of
 `/var/lib/terra-rover` before boot.
 
+```mermaid
+flowchart LR
+  Phone[iPhone] -->|GATT| Pi[terra-rover]
+  Pi --> Hat[Fusion HAT]
+  Gate[gate file] --> Pi
+```
+
+*Gate closed is not the same as armed.*
+
 ## Configure the hardware
 
 The Fusion HAT vendor's matching kernel module and device-tree overlay must
@@ -113,14 +140,15 @@ service installed. No terminal or known phone Bluetooth address is needed:
    automatically switches to its normal service; tap **Find rovers** and reconnect.
    The LED stays on. Configure the actuator layout and arm explicitly when safe.
 
-Only one initial button hold is needed. The generated rover name persists across
-restarts. A timeout requires release and another hold; missing/unreadable HAT
-controls do not open pairing. Already-owned rovers ignore enrollment holds.
-First-owner enrollment uses Bluetooth Just Works: proximity plus the physical
-window authorizes the first phone, without numeric-code comparison or protection
-against an active nearby pairing attacker. Keep enrollment physically supervised.
-Pairing never arms or requires a gate file. Motor operation still requires the
-separate physical interlock described above.
+Only one initial button hold is needed.
+The generated rover name persists across restarts.
+A timeout requires release and another hold; missing/unreadable HAT controls do not open pairing.
+Already-owned rovers ignore enrollment holds.
+First-owner enrollment uses Bluetooth Just Works: proximity plus the physical window authorizes the first phone, without numeric-code comparison or protection against an active nearby pairing attacker.
+Keep enrollment physically supervised.
+Pairing never arms or requires a gate file.
+Motor operation still requires the separate physical interlock described above.
+
 
 The button and LED default to `/sys/class/fusion_hat/fusion_hat/button` and
 `/sys/class/fusion_hat/fusion_hat/led`. Override `--button-file` and `--led-file`
@@ -142,6 +170,17 @@ For a mock backend on a Linux host with a Bluetooth radio, use
 `--mock-gate-closed` only for mock testing. Never run two peripheral processes at
 once. Physically isolate actuator power before stopping or replacing the service;
 process exit cannot guarantee continuous ESC stop PWM.
+
+```mermaid
+stateDiagram-v2
+  [*] --> EnableOpen
+  EnableOpen --> AwaitCommand: switch closes
+  AwaitCommand --> Live: fresh command
+  Live --> Watchdog: 200 ms
+  Watchdog --> EnableOpen: switch opens
+```
+
+*Watchdog coasts and drops enable. It does not brake.*
 
 ## Upgrade or remove
 
@@ -175,6 +214,15 @@ corrupt, missing, or incompatible files. The build also executes `--help` and
 `--check-bundle` from outside the source directory. These checks do not establish
 radio behavior, real Pi kernel-driver compatibility, actuator timing, or physical
 commissioning. Those require the separate [bench procedure](BENCH.md).
+```mermaid
+flowchart LR
+  Phone[iPhone] --> BLE[Bluetooth]
+  BLE --> Pi[terra-rover]
+  Pi --> Hat[Fusion HAT]
+```
+
+*Physical path. Arming is still a separate step.*
+
 
 References: [Nuitka standalone/onefile modes](https://nuitka.net/user-documentation/user-manual.html),
 [pinned Fusion HAT source](https://github.com/sunfounder/fusion-hat/tree/4bd1018ad5a70ee113160536f969cdadd9f22918).

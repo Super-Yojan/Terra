@@ -1,59 +1,81 @@
 # Terra
 
-Terra is the vehicle body and the software that rides on it: shared Rust crates, the TerraPhone iOS app, and the Raspberry Pi rover service. It sits between the operator and the world.
+!!! tip "TL;DR"
+    Terra is the rover body: Rust crates, TerraPhone, and the Pi.
+    [ARGOS](https://super-yojan.dev/ARGOS/) commands the fleet.
+    [Zorvane](https://super-yojan.dev/Zorvane/) is the world.
+    Simulator uses Zenoh. A real iPhone uses Bluetooth.
 
-| Part | Role |
-| --- | --- |
-| [super-yojan.dev](https://super-yojan.dev) | Personal site. It links here, to ARGOS, and to Zorvane. |
-| [ARGOS](https://super-yojan.dev/ARGOS/) | Fleet operator. Map-level intent, commands, and the dashboard. |
-| Terra (this site) | Onboard autonomy, TerraPhone, and the Pi body. |
-| [Zorvane](https://super-yojan.dev/Zorvane/) | World simulator, extracted from Terra. |
+![TerraPhone app icon: a six-wheeled rover on a forest road](assets/terra-icon.png){ width="240" }
 
-Zenoh topics keep the prefix `terra/rover`. A simulated rover and a physical rover are different links: the iOS Simulator talks to Zorvane over Zenoh, and a physical iPhone talks to the Pi over Bluetooth.
+*Shipped app icon from `Assets.xcassets`. This is the rover artwork in the iOS app.*
 
 ```mermaid
 flowchart LR
-  subgraph operator [Operator]
-    ARGOS[ARGOS]
-  end
-  subgraph vehicle [Terra]
-    Phone[TerraPhone]
-    Crates[Rust crates]
-    Pi[Pi terra-rover]
-  end
-  subgraph world [World]
-    Zorvane[Zorvane]
-  end
-  ARGOS -->|Zenoh terra/rover| Zorvane
-  Phone -->|Simulator: Zenoh| Zorvane
-  Phone -->|iPhone: Bluetooth| Pi
-  Crates --- Phone
-  Crates --- Zorvane
+  ARGOS[ARGOS] -->|Zenoh terra/rover| Z[Zorvane]
+  Sim[iOS Simulator] -->|cmd_vel| Z
+  Phone[iPhone] -->|Bluetooth| Pi[Pi]
+  Pi --> Hat[Fusion HAT]
 ```
 
-## What is in this repository
+*One prefix, `terra/rover`. Two different phone links.*
 
-- **Rust workspace** (`crates/`): types, state, velocity control, waypoints, Zenoh transport, mapping, local planning, the autonomy arbiter, experiment logs, motor PWM, actuator layouts, and the UniFFI phone boundary.
-- **TerraPhone** (`mobile/ios/`): SwiftUI app. Shared control code comes from `terra-mobile`.
-- **Raspberry Pi service** (`hardware/raspberry-pi/`, `packaging/rover/`): a compiled ARM64 executable that exposes the actuator protocol over Bluetooth and drives a Fusion HAT.
+## Pick a path
 
-The Bevy world that used to live in `simulator/` is [Zorvane](https://super-yojan.dev/Zorvane/). Run it from that checkout with `cargo run -p zorvane`.
+<div class="grid cards" markdown>
 
-## Read next
+-   **Architecture**
 
-- [Architecture](architecture.md) for the onboard pipeline and the phone/Pi split.
-- [Getting started](getting-started.md) for tests, the iOS build, and the simulator.
-- [Crates](crates/index.md) for each workspace member.
-- [Zenoh](zenoh.md) for keys under `terra/rover`.
-- [TerraPhone](phone/index.md) for Xcode, Simulator versus iPhone, pairing, and planned tap-to-configure.
-- [Hardware](hardware/index.md) for the Pi installer, Bluetooth, and the wheels-up bench.
-- [Rust API](https://super-yojan.dev/Terra/api/) for `cargo doc` of the workspace crates.
+    ---
 
-## What is built, and what is still planned
+    Crates, phone split, and the Pi.
 
-The crates, the TerraPhone connection split, the Pi packaging path, and the Bluetooth protocol are in the tree. A few things are still ahead of the code, or have not been exercised on hardware:
+    [Open the map](architecture.md)
 
-- **Planned:** 3D tap-to-configure and a vehicle description format that maps model parts to actuators ([Terra #27](https://github.com/Super-Yojan/Terra/issues/27)). Configuration today is a list form.
-- **Planned:** fleet and RGB Zenoh subscriptions, and a reconnection UI, called out as follow-ups in `terra-transport`.
-- **Loopback only:** the phone dashboard endpoint accepts `tcp/127.0.0.1` and refuses other addresses.
-- **Unverified on hardware:** radio sessions, actuator timing, and physical commissioning. The [evidence record](hardware/evidence/README.md) separates source review and the compiled-binary checks from a bench that has not been run. The [bench procedure](hardware/BENCH.md) needs separate authorization.
+-   **TerraPhone**
+
+    ---
+
+    Xcode, Simulator, Bluetooth, planned tap-to-configure.
+
+    [Open the phone guide](phone/index.md)
+
+-   **Zenoh keys**
+
+    ---
+
+    `cmd_vel`, depth, goals, autonomy.
+
+    [Open the key list](zenoh.md)
+
+-   **Pi hardware**
+
+    ---
+
+    Install, pairing, gate, bench.
+
+    [Open the Pi guide](hardware/index.md)
+
+</div>
+
+![Generated mountain splash used behind the TerraPhone home screen](assets/mountain-banner.jpg)
+
+*Generated splash in `MountainBackdrop`. The interactive model is separate: `rover.usdz`.*
+
+## What is already in the tree
+
+- Rust workspace under `crates/`. Version `0.1.0`.
+- TerraPhone in `mobile/ios/`.
+- Pi service `terra-rover` `0.2.0` in `hardware/raspberry-pi/`.
+
+The old `simulator/` tree is gone. Run the world from Zorvane: `cargo run -p zorvane`.
+
+## Still ahead
+
+!!! warning "Planned or unverified"
+    Tap-to-configure and a vehicle-description format are [Terra #27](https://github.com/Super-Yojan/Terra/issues/27).
+    RGB Zenoh and a reconnection UI are follow-ups.
+    The phone dashboard listens only on `tcp/127.0.0.1`.
+    Radio sessions and the physical bench have not been run. See [evidence](hardware/evidence/README.md).
+
+Rust API docs: [super-yojan.dev/Terra/api/](https://super-yojan.dev/Terra/api/).

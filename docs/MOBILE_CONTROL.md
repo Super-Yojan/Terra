@@ -1,5 +1,24 @@
 # Phone velocity controller
 
+!!! tip "TL;DR"
+    IMU plus VIO becomes left and right effort.
+    Simulator Zenoh and iPhone Bluetooth are different builds.
+    Zero effort coasts. It is not a brake.
+
+![Wireframe of the controller this page describes. Not a Simulator capture.](assets/phone-home.svg)
+
+*Wireframe of the controller this page describes. Not a Simulator capture.*
+
+```mermaid
+flowchart LR
+  IMU[IMU] --> Est[terra-state]
+  VIO[VIO] --> Est
+  Est --> Ctrl[terra-control]
+  Ctrl --> Effort[left and right]
+```
+
+*Onboard loop this section sits on.*
+
 See the [mission-autonomy guide](autonomy/README.md) for four shared-core levels, explicit waypoint authority, safety controls, and experiment logs.
 
 The reusable pipeline is IMU + VIO → estimated body velocity → velocity controller → signed left/right motor effort. Both efforts are normalized to [-1, 1]; positive effort drives forward. The `terra-motors` adapter maps magnitude to PWM duty and sign to direction, after a hardware enable gate and an independent command watchdog. It does not toggle GPIO itself. TerraPhone also implements Zenoh simulator control and Bluetooth actuator commands; the Pi backend owns physical output writes.
@@ -35,11 +54,21 @@ Bluetooth is omitted from the Simulator on purpose. CoreBluetooth is unsupported
 
 All timestamps are seconds on the same monotonic clock. IMU and VIO samples must increase independently; delayed VIO is replayed against recent IMU history. Body axes are X forward, Y left, Z up. Acceleration is in m/s² with gravity removed; gyro is in rad/s. VIO supplies position and velocity in a consistent world frame and an XYZW quaternion rotating body vectors into that world frame. Samples and configuration are validated at the Rust boundary.
 
-The estimator anchors velocity to VIO and integrates IMU only between fresh VIO updates. It is not a visual odometry implementation or a full bias-estimating filter. The default IMU timeout is 100 ms and VIO timeout 350 ms; the target timeout is 500 ms. Missing, stale, invalid or untracked inputs yield zero motor effort. The controller accepts forward velocity and yaw rate, limits targets, mixes the two PI outputs into wheel efforts, preserves their ratio on saturation, and uses back-calculation anti-windup.
+The estimator anchors velocity to VIO and integrates IMU only between fresh VIO updates.
+It is not a visual odometry implementation or a full bias-estimating filter.
+The default IMU timeout is 100 ms and VIO timeout 350 ms; the target timeout is 500 ms.
+Missing, stale, invalid or untracked inputs yield zero motor effort.
+The controller accepts forward velocity and yaw rate, limits targets, mixes the two PI outputs into wheel efforts, preserves their ratio on saturation, and uses back-calculation anti-windup.
+
 
 ## Mounting and tuning
 
-The starter app assumes the phone lies flat, screen upward, with its top edge pointing forward. Core Motion phone axes are converted to rover axes; ARKit poses are converted into a Z-up world and the same body frame. The app treats the sensor origin as the rover origin. Before physical motor integration, calibrate the mount rotation and sensor offset, account for offset-induced rotational velocity, and tune gains, feedforward, limits and sensor filtering for the actual rover. Defaults are tuned for the included simulated motor plant.
+The starter app assumes the phone lies flat, screen upward, with its top edge pointing forward.
+Core Motion phone axes are converted to rover axes; ARKit poses are converted into a Z-up world and the same body frame.
+The app treats the sensor origin as the rover origin.
+Before physical motor integration, calibrate the mount rotation and sensor offset, account for offset-induced rotational velocity, and tune gains, feedforward, limits and sensor filtering for the actual rover.
+Defaults are tuned for the included simulated motor plant.
+
 
 Zero effort means coast, not a mechanical brake. The motor adapter, enable switch, and command watchdog are specified in [Motor adapter](#motor-adapter). Physical phone sensing and hardware actuation have not been validated on a rover.
 
@@ -60,6 +89,16 @@ try controller.setTarget(target: TwistSetpoint(timestamp: now, forward: step.for
 ```
 
 `setGoal` returns false when the origin is missing or the point lies outside `halfExtent`. `cancel` drops the latch. `step` reports `latitude` and `longitude` of the goal; `localX` and `localY` are the tangent-plane metres the follower is steering toward. `tangentMetres` and `geographicPosition` are the same projection the map tap uses. Zorvane's Zenoh bridge calls this crate when a goal arrives on `terra/rover/<id>/goal`, so a headless run uses the same follower.
+
+```mermaid
+flowchart LR
+  IMU[IMU] --> Est[terra-state]
+  VIO[VIO] --> Est
+  Est --> Ctrl[terra-control]
+  Ctrl --> Effort[left and right]
+```
+
+*Onboard loop this section sits on.*
 
 ## Motor adapter
 
@@ -100,6 +139,14 @@ Wheels off the ground. No autonomy stack. Logic power until the enable path is c
 7. Stopping the phone link or the control process follows step 5 when stamps stop advancing. The chassis is not braked.
 
 ## Simulation
+```mermaid
+flowchart LR
+  Sensors[IMU and VIO] --> Effort[left and right effort]
+  Effort --> Coast[zero coasts]
+```
+
+*The phone shows effort. The Pi or Zorvane applies it.*
+
 
 That closed loop now runs in [Zorvane](https://super-yojan.dev/Zorvane/) (`cargo run -p zorvane`). Each rover gets its own estimator and controller. Avian velocity and orientation provide synthetic IMU and 20 Hz VIO feedback, while controller effort produces forces and yaw torque. This tests the control loop rather than calculating VIO from rendered images. `VelocitySimulationConfig` exposes sensor enable switches, sensor frequency, motor force and drag for experiments. Disabling its `enabled` field restores the existing ideal drive model. Fleet changes and Zenoh velocity commands on `terra/rover/<id>/cmd_vel` remain supported. `TERRA_*` variables still apply.
 
@@ -107,7 +154,13 @@ That closed loop now runs in [Zorvane](https://super-yojan.dev/Zorvane/) (`cargo
 
 The app shows the Rust local occupancy grid, rover position/heading, map scale and a clear action. Simulated mode generates room-wall depth observations at 10 Hz through the same UniFFI mapping object. Phone mode requests ARKit `sceneDepth` only when supported, rescales camera intrinsics to depth resolution, filters low-confidence returns and passes each depth map with that ARFrame's camera pose and timestamp. Mapping pauses while tracking is lost. Unsupported devices retain velocity control and show that depth is unavailable.
 
-The map is world-aligned: +X right and +Y upward on screen. Free cells are green, occupied cells use the primary foreground, unknown cells are faint gray and uncertain observed cells are darker gray. The blue marker indicates rover pose. Initial phone camera height is assumed to be 0.5 m over a flat ground reference; physical mounting and ground height require calibration. Phone depth comes from the rear camera's optical pose, independently of the rover-body mounting rotation. Stop preserves the map; starting either mode creates a new map.
+The map is world-aligned: +X right and +Y upward on screen.
+Free cells are green, occupied cells use the primary foreground, unknown cells are faint gray and uncertain observed cells are darker gray.
+The blue marker indicates rover pose.
+Initial phone camera height is assumed to be 0.5 m over a flat ground reference; physical mounting and ground height require calibration.
+Phone depth comes from the rear camera's optical pose, independently of the rover-body mounting rotation.
+Stop preserves the map; starting either mode creates a new map.
+
 
 Bevy Zenoh mode uses the same grid. It does not subscribe to an occupancy topic. Each Zorvane depth packet carries the exposure-aligned optical camera pose and the rover body pose in the robotics frame (the same conversion Zorvane uses for its own per-rover map). The phone recenters on the body position, integrates axial depth through `MobileOccupancyMap`, and draws the body heading. Ground is robotics Z = 0, which is the world floor (Bevy Y = 0); the 0.5 m phone-height assumption is not used. Depth packets without an exposure pose are ignored. Body pose is sampled with the camera at exposure time, so the marker matches the depth frame rather than a later odometry estimate. There is still no published map snapshot for ARGOS or other operators.
 
@@ -151,15 +204,33 @@ cargo test -p zorvane mobile_adapter_drives_avian -- --ignored
 
 The Swift test exercises Swift → UniFFI → Rust → Zenoh against a real Python peer, checking the selected topic, payload, lease expiry and final zero. It also publishes one posed depth packet and checks that Swift integrates it into an occupied cell. `depth_packet_pose_round_trips_into_the_phone_decoder` checks that a Zorvane depth packet decodes to the same robotics pose the in-world map uses, then occupies the expected cell. The ignored transport test checks that the phone client consumes each posed depth sequence once. The Bevy integration test uses the same transport to move an Avian rover and verifies stopping on disconnect. Seeing the grid in the iOS Simulator still requires Zorvane to be running so the GPU depth camera can publish frames. The device app does not open that session.
 
+```mermaid
+stateDiagram-v2
+  [*] --> EnableOpen
+  EnableOpen --> AwaitCommand: switch closes
+  AwaitCommand --> Live: fresh command
+  Live --> Watchdog: 200 ms
+  Watchdog --> EnableOpen: switch opens
+```
+
+*Watchdog coasts and drops enable. It does not brake.*
+
 ## Bluetooth actuator control
 
-The **Bluetooth actuators** section and the **Discover, configure and arm
-rover** screen are compiled into physical-device builds only. The iOS Simulator
-does not show them: CoreBluetooth cannot scan or connect there. On a device,
-scan, select the stable peripheral identifier/name, and connect explicitly.
-Bonded owner access, periodic status, capabilities and the active layout must all
-be available before hardware becomes ready. Starting, stopping, switching modes,
-and leaving the app reset controls and disconnect hardware; reconnect never arms.
+The **Bluetooth actuators** section and the **Discover, configure and arm rover** screen are compiled into physical-device builds only.
+The iOS Simulator does not show them: CoreBluetooth cannot scan or connect there.
+On a device, scan, select the stable peripheral identifier/name, and connect explicitly.
+Bonded owner access, periodic status, capabilities and the active layout must all be available before hardware becomes ready.
+Starting, stopping, switching modes, and leaving the app reset controls and disconnect hardware; reconnect never arms.
+
+```mermaid
+flowchart LR
+  Sensors[IMU and VIO] --> Effort[left and right effort]
+  Effort --> Coast[zero coasts]
+```
+
+*The phone shows effort. The Pi or Zorvane applies it.*
+
 
 The form supports up to sixteen independently named actuators with arbitrary
 unique IDs from 0–255. Choose output kinds and physical ports from the connected

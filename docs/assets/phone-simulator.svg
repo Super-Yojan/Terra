@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 280 520" width="280" role="img">
+<title>iOS Simulator</title>
+<rect width="280" height="520" rx="28" fill="#0e1418"/>
+<rect x="10" y="10" width="260" height="500" rx="22" fill="#12181c" stroke="#37474f"/>
+<rect x="10" y="10" width="260" height="36" rx="22" fill="#ffb300"/>
+<rect x="10" y="28" width="260" height="18" fill="#ffb300"/>
+<text x="140" y="32" text-anchor="middle" font-family="ui-sans-serif,sans-serif" font-size="11" font-weight="700" fill="#1a1a1a">PLACEHOLDER · not a Simulator capture</text>
+<text x="140" y="62" text-anchor="middle" font-family="ui-sans-serif,sans-serif" font-size="15" font-weight="700" fill="#eceff1">iOS Simulator</text>
+<g font-family="ui-sans-serif,sans-serif">
+<text x="36" y="78" font-size="11" font-weight="700" fill="#90a4ae">BEVY SIMULATOR · ZENOH</text>
+<rect x="32" y="82" width="216" height="26" rx="6" fill="#263238"/>
+<text x="40" y="99" font-size="12" fill="#eceff1">tcp/127.0.0.1:7447</text>
+<rect x="32" y="116" width="216" height="26" rx="6" fill="#263238"/>
+<text x="40" y="133" font-size="12" fill="#eceff1">Rover ID 0</text>
+<rect x="32" y="150" width="216" height="28" rx="8" fill="#1b5e20"/>
+<text x="140" y="168" text-anchor="middle" font-size="13" fill="#fff">Connect to Bevy rover</text>
+<text x="36" y="202" font-size="11" font-weight="700" fill="#90a4ae">CONTROLLER</text>
+<rect x="32" y="206" width="216" height="28" rx="8" fill="#1b5e20"/>
+<text x="140" y="224" text-anchor="middle" font-size="13" fill="#fff">Simulated rover</text>
+<text x="36" y="258" font-size="11" fill="#b0bec5">Bluetooth Discover is hidden</text>
+<text x="36" y="274" font-size="11" font-weight="700" fill="#90a4ae">LOCAL OCCUPANCY MAP</text>
+<text x="36" y="292" font-size="11" fill="#b0bec5">Fills from camera/depth</text>
+</g>
+<text x="140" y="498" text-anchor="middle" font-family="ui-sans-serif,sans-serif" font-size="10" fill="#78909c">Compiled only with targetEnvironment(simulator)</text>
+</svg>

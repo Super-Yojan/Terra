@@ -1,5 +1,23 @@
 # Terra Bluetooth actuator layouts
 
+!!! tip "TL;DR"
+    Spec for portable layouts and the Fusion HAT map.
+    Presets with `SELECT_*` markers are drafts.
+
+![Where a committed layout is applied.](../../assets/pi-stack.svg)
+
+*Where a committed layout is applied.*
+
+```mermaid
+flowchart LR
+  M0[M0 P11 P10] --> HAT[100 Hz]
+  M1[M1 P9 P8] --> HAT
+  M2[M2 P6 P7] --> HAT
+  M3[M3 P4 P5] --> HAT
+```
+
+*Do not share a timer group with 50 Hz pulses.*
+
 ## Purpose and scope
 
 TerraPhone controls a user-designed Terra chassis over BLE without Bevy. The phone computes actuator commands; the Raspberry Pi applies them through Fusion HAT and independently enforces safety. Keep the existing Rust sensing, control, autonomy, and Zenoh simulator path. Use a Python Pi service to access SunFounder's native library.
@@ -42,9 +60,25 @@ A versioned JSON layout contains a revision and up to 16 actuator entries. Each 
 
 Require a user-selected safe policy for each positional servo. Reject hold-last as the loss-of-link policy in version 1. Writing a safe position can cause motion; bench verification must confirm it is appropriate. All servo/ESC channels use 50 Hz in this version. Do not interpret zero ESC effort as zero pulse width.
 
-The phone supports explicit routing from existing left/right efforts (including duplication across several actuators), configurable bounded forward/turn coefficients for manual effort control, and individual servo sliders. Rust clamps the final commands; the rover independently validates them. Existing differential feedback/autonomy modes are offered only for compatible left/right propulsion routing. Custom layouts can use manual effort mode without claiming closed-loop velocity or autonomous navigation support. Commands carry normalized actuator values, never chassis velocity targets. Servo position is distinguished from motor effort by the committed layout.
+The phone supports explicit routing from existing left/right efforts (including duplication across several actuators), configurable bounded forward/turn coefficients for manual effort control, and individual servo sliders.
+Rust clamps the final commands; the rover independently validates them.
+Existing differential feedback/autonomy modes are offered only for compatible left/right propulsion routing.
+Custom layouts can use manual effort mode without claiming closed-loop velocity or autonomous navigation support.
+Commands carry normalized actuator values, never chassis velocity targets.
+Servo position is distinguished from motor effort by the committed layout.
+
 
 Example presets: terra-mini assigns M2/M3 to left effort and M0/M1 to right effort; an ESC template lets the user choose exposed PWM ports and calibration. Presets start disarmed with conservative effort limits. No automatic ESC endpoint calibration or assumed bidirectional ESC behavior.
+
+```mermaid
+flowchart LR
+  M0[M0 P11 P10] --> HAT[100 Hz]
+  M1[M1 P9 P8] --> HAT
+  M2[M2 P6 P7] --> HAT
+  M3[M3 P4 P5] --> HAT
+```
+
+*Do not share a timer group with 50 Hz pulses.*
 
 ## Fusion HAT resources
 
@@ -72,11 +106,42 @@ Require encrypted bonded access for drive and configuration. Provision an owner 
 
 Binary drive frames are little-endian: ASCII `TA` (2 bytes), protocol version 1 (u8), kind (u8: drive 1, arm 2, disarm 3, emergency stop 4), session token (u32), layout revision (u32), sequence (u32), then zero or more `(actuator_id u8, normalized_value f32)` records. Drive records must cover every configured actuator exactly once. Reject nonfinite values, unknown or repeated IDs, out-of-range commands, incorrect lengths, wrong revisions, sessions, and non-increasing sequences. Control frames have no records. Retire the session before sequence exhaustion.
 
-The rover issues a fresh session token on connection and publishes it in status. Tokens identify sessions; encrypted owner access provides authentication. Never accept an arm frame until configuration is valid, the hardware gate is closed, status is subscribed, and all propulsion values have been confirmed safe. Arming holds ESCs at neutral/stop for the configured interval and reports arming until completed. Subsequent fresh drive frames activate outputs. Disarm and emergency stop invalidate pending motion; emergency stop remains latched until an explicit reset while disarmed.
+The rover issues a fresh session token on connection and publishes it in status.
+Tokens identify sessions; encrypted owner access provides authentication.
+Never accept an arm frame until configuration is valid, the hardware gate is closed, status is subscribed, and all propulsion values have been confirmed safe.
+Arming holds ESCs at neutral/stop for the configured interval and reports arming until completed.
+Subsequent fresh drive frames activate outputs.
+Disarm and emergency stop invalidate pending motion; emergency stop remains latched until an explicit reset while disarmed.
 
-Frames may exceed the minimum ATT payload. Use application fragmentation on all writes/replies: message ID u16, fragment index u8, count u8, followed by bytes. Maximum logical drive size is 96 bytes; maximum JSON configuration/reply size is 16 KiB. Permit one assembly per characteristic, expire after 100 ms, and reject duplicate/conflicting/out-of-order fragments. Disarm/stop takes priority and clears incomplete drive assembly. Incomplete frames never refresh the watchdog. Check negotiated write size; never assume a larger MTU. Dispatch only the latest complete frame, stamped at completion, with a connection generation and bounded age.
 
-Configuration/control JSON uses schema version 1 and request IDs. Operations: capabilities, read layout, stage layout, commit layout, reset fault, and reset emergency stop. All replies include request ID, result, active revision, and structured validation errors. Stage and commit require disarmed state. Commit revalidates resources, initializes safe outputs, atomically persists the layout, and increments revision; failure preserves the previous valid layout or faults if hardware rollback fails. Phone routing is saved with the layout so another phone can reproduce it. Drive remains inhibited until the phone reads the committed revision. No partial configuration is applied.
+Frames may exceed the minimum ATT payload.
+Use application fragmentation on all writes/replies: message ID u16, fragment index u8, count u8, followed by bytes.
+Maximum logical drive size is 96 bytes; maximum JSON configuration/reply size is 16 KiB.
+Permit one assembly per characteristic, expire after 100 ms, and reject duplicate/conflicting/out-of-order fragments.
+Disarm/stop takes priority and clears incomplete drive assembly.
+Incomplete frames never refresh the watchdog.
+Check negotiated write size; never assume a larger MTU.
+Dispatch only the latest complete frame, stamped at completion, with a connection generation and bounded age.
+
+```mermaid
+flowchart LR
+  Phone[iPhone] --> BLE[Bluetooth]
+  BLE --> Pi[terra-rover]
+  Pi --> Hat[Fusion HAT]
+```
+
+*Physical path. Arming is still a separate step.*
+
+
+Configuration/control JSON uses schema version 1 and request IDs.
+Operations: capabilities, read layout, stage layout, commit layout, reset fault, and reset emergency stop.
+All replies include request ID, result, active revision, and structured validation errors.
+Stage and commit require disarmed state.
+Commit revalidates resources, initializes safe outputs, atomically persists the layout, and increments revision; failure preserves the previous valid layout or faults if hardware rollback fails.
+Phone routing is saved with the layout so another phone can reproduce it.
+Drive remains inhibited until the phone reads the committed revision.
+No partial configuration is applied.
+
 
 Status at 10 Hz and on transitions includes session, revision, last accepted sequence, armed/arming state, hardware gate, watchdog, emergency stop, fault, and command age. Battery is nullable with an explicit unavailable reason until supported measurement is implemented. Notifications report applied service state, not proof that a physical wheel moved. GATT write completion alone is not an actuator acknowledgement.
 
@@ -84,9 +149,22 @@ Status at 10 Hz and on transitions includes session, revision, last accepted seq
 
 Send complete actuator frames at 20 Hz with at most one write outstanding and one replaceable pending frame. Keep the original production time in the phone queue; discard samples older than 100 ms instead of retransmitting them as new effort. If transport completion or telemetry stalls, stop sending motion, disarm best-effort, and require operator recovery. Never refresh an old phone effort just to keep the rover enabled.
 
-The Pi independently checks command freshness every 10 ms. A valid frame expires at age >=200 ms measured on the Pi monotonic clock; safe outputs must be requested within 210 ms of the last accepted frame. Delayed local mailbox entries keep their original receive timestamp. Watchdog expiry disarms, and fresh commands alone cannot rearm. Disconnect, open hardware gate, stop, malformed active drive frame, and backend fault request safe outputs immediately on the next motor tick. Configuration traffic and notifications never refresh drive freshness.
+The Pi independently checks command freshness every 10 ms.
+A valid frame expires at age >=200 ms measured on the Pi monotonic clock; safe outputs must be requested within 210 ms of the last accepted frame.
+Delayed local mailbox entries keep their original receive timestamp.
+Watchdog expiry disarms, and fresh commands alone cannot rearm.
+Disconnect, open hardware gate, stop, malformed active drive frame, and backend fault request safe outputs immediately on the next motor tick.
+Configuration traffic and notifications never refresh drive freshness.
 
-The phone stops on background, tracking loss in feedback mode, explicit stop, mode switch, and connection loss. Each reconnect creates a fresh session and requires configuration synchronization and explicit arming; targets reset to safe values. The hardware gate must be able to cut propulsion power independently of Python. Without a configured/readable gate, real-hardware arming is blocked; mock mode supplies a simulated gate. ESC neutral is distinct from physically removing motor power. A Python watchdog cannot cover OS/process hangs or power loss; the 210 ms bound applies to a running service and excludes device I/O stalls. Require an external cutoff and document the actual hardware timing during bench verification.
+
+The phone stops on background, tracking loss in feedback mode, explicit stop, mode switch, and connection loss.
+Each reconnect creates a fresh session and requires configuration synchronization and explicit arming; targets reset to safe values.
+The hardware gate must be able to cut propulsion power independently of Python.
+Without a configured/readable gate, real-hardware arming is blocked; mock mode supplies a simulated gate.
+ESC neutral is distinct from physically removing motor power.
+A Python watchdog cannot cover OS/process hangs or power loss; the 210 ms bound applies to a running service and excludes device I/O stalls.
+Require an external cutoff and document the actual hardware timing during bench verification.
+
 
 ## Verification and acceptance
 
@@ -97,6 +175,17 @@ The phone stops on background, tracking loss in feedback mode, explicit stop, mo
 5. Physical iPhone/Pi bench: verify port ownership, motor direction, servo limits, measured ESC pulses, neutral arming, hardware cutoff, and timeout with raised wheels. Record library/board versions and measured latency. Host tests do not count as this physical verification.
 
 Issue #10 is complete when the profile is documented, TerraPhone drives a named peripheral, the documented Pi mock/backend applies safety rules, status round-trips without Bevy, and verification clearly distinguishes automated checks from hardware results.
+
+```mermaid
+stateDiagram-v2
+  [*] --> EnableOpen
+  EnableOpen --> AwaitCommand: switch closes
+  AwaitCommand --> Live: fresh command
+  Live --> Watchdog: 200 ms
+  Watchdog --> EnableOpen: switch opens
+```
+
+*Watchdog coasts and drops enable. It does not brake.*
 
 ## References
 

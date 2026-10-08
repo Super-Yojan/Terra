@@ -1,5 +1,22 @@
 # Compiled Raspberry Pi release validation
 
+!!! tip "TL;DR"
+    Records the artifact that was built.
+    It does not claim a radio session or a moving rover.
+
+![Install target for the checked bundle.](../../assets/pi-stack.svg)
+
+*Install target for the checked bundle.*
+
+```mermaid
+flowchart LR
+  Phone[iPhone] -->|GATT| Pi[terra-rover]
+  Pi --> Hat[Fusion HAT]
+  Gate[gate file] --> Pi
+```
+
+*Gate closed is not the same as armed.*
+
 Date: 2026-10-07. Scope: compiled packaging and single-button customer enrollment.
 This updates packaging evidence, without changing the historical record for the
 original actuator implementation or claiming physical commissioning.
@@ -45,6 +62,15 @@ The GitHub workflow was added but has not been dispatched or published.
 See [installation instructions](../INSTALL.md) and the separately authorized
 [bench procedure](../BENCH.md).
 
+```mermaid
+flowchart LR
+  Phone[iPhone] -->|GATT| Pi[terra-rover]
+  Pi --> Hat[Fusion HAT]
+  Gate[gate file] --> Pi
+```
+
+*Gate closed is not the same as armed.*
+
 ## Advertisement correction — version 0.1.2
 
 Physical rover2 logs exposed an interface-name collision: the advertising local
@@ -67,13 +93,10 @@ adapter preserves BlueZ's device/MTU/offset options for encrypted owner checks;
 the library's published callbacks omit those options. BlueZ pairing agents and
 bond inspection remain necessary for the physical enrollment flow.
 
-The 37 source tests pass, including enrollment through the actual Bless backend
-objects on a simulated BlueZ bus, advertisement interface/name/UUID inspection,
-partial registration cleanup, owner persistence before confirmation, encrypted
-request identity, prepared-write rejection/disarm callbacks, and subscription
-reset. Independent code review found two startup cleanup/adapter-selection issues;
-both were corrected and rechecked. Phone discovery and radio behavior on rover2
-remain unverified until the new package is installed there.
+The 37 source tests pass, including enrollment through the actual Bless backend objects on a simulated BlueZ bus, advertisement interface/name/UUID inspection, partial registration cleanup, owner persistence before confirmation, encrypted request identity, prepared-write rejection/disarm callbacks, and subscription reset.
+Independent code review found two startup cleanup/adapter-selection issues; both were corrected and rechecked.
+Phone discovery and radio behavior on rover2 remain unverified until the new package is installed there.
+
 
 The final ARM64 Docker build passed all 37 tests and compiled with Nuitka 4.2.2.
 A clean Debian Bookworm ARM64 verification stage with no Python installed passed

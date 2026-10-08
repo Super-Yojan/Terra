@@ -1,21 +1,37 @@
 # terra-types
 
-Shared geometry and control samples. Later crates depend on this one and do not redefine the axes.
+!!! tip "TL;DR"
+    Shared geometry and samples.
+    Body axes: +X forward, +Y left, +Z up.
+    Motor effort is −1…+1. Zero coasts.
+
+![Top-view chassis and body axes](../assets/body-axes.svg)
+
+*Source of the axes. Later crates do not redefine them.*
 
 [API](https://super-yojan.dev/Terra/api/terra_types/index.html) · [source](https://github.com/Super-Yojan/Terra/blob/main/crates/terra-types/src/lib.rs)
 
-## Frames
+## What you pass around
 
-Rover body axes are **+X forward, +Y left, +Z up**. Timestamps are seconds on one monotonic clock. `Vector3` and `Quaternion` are the only geometry types. `Quaternion::rotate` expects a normalized quaternion. `from_rotation_vector` builds one from an axis-angle vector in radians.
+```mermaid
+flowchart LR
+  IMU[ImuSample] --> Est[VelocityEstimate]
+  VIO[VioSample] --> Est
+  Target[VelocityTarget] --> Out[MotorOutput]
+  Est --> Out
+```
 
-## Samples
+*One monotonic clock, in seconds.*
 
-| Type | Fields that matter |
+| Type | Keep |
 | --- | --- |
-| `ImuSample` | Gravity-removed acceleration in body axes, m/s², and body angular velocity, rad/s. |
-| `VioSample` | Position, body-to-world orientation, world-frame velocity, and `tracked`. World is metric and +Z up. |
-| `VelocityTarget` | `forward` in m/s and `yaw_rate` in rad/s. |
-| `VelocityEstimate` | Body forward speed, yaw rate, and a `Health` value. |
-| `MotorOutput` | Signed `left` and `right` effort in `[-1, 1]`. Positive is forward. Zero is coast, which is not a mechanical brake. `stop_reason` explains a neutral output. |
+| `ImuSample` | Gravity-free m/s². Gyro in rad/s. |
+| `VioSample` | Pose, world velocity, `tracked`. |
+| `VelocityTarget` | `forward` m/s and `yaw_rate` rad/s. |
+| `MotorOutput` | `left` and `right` effort. `stop_reason` if neutral. |
 
-`Health` covers a missing or stale IMU, a missing or stale VIO sample, lost tracking, and an invalid clock. `StopReason` is the controller's view of the same failures, plus a stale target. `InputError` is what push and configure methods return for non-finite values, a bad quaternion, out-of-order timestamps, out-of-range magnitudes, or an invalid configuration.
+`Health` is missing, stale, or untracked sensors.
+
+`InputError` is a bad number, a bad quaternion, or a clock that went backwards.
+
+`Quaternion::rotate` wants a normalized quaternion.

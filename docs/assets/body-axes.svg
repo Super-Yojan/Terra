@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 300" width="640" role="img">
+<title>Rover body axes, top view</title>
+<rect width="640" height="300" rx="16" fill="#f4f6f8"/>
+<text x="24" y="36" font-family="ui-sans-serif,sans-serif" font-size="16" font-weight="700" fill="#263238">Body axes · top view</text>
+<text x="24" y="58" font-family="ui-sans-serif,sans-serif" font-size="13" fill="#546e7a">+X forward · +Y left · +Z up · zero effort coasts</text>
+<g transform="translate(250,70)">
+  <rect x="70" y="20" width="28" height="50" rx="6" fill="#37474f"/>
+  <rect x="70" y="150" width="28" height="50" rx="6" fill="#37474f"/>
+  <rect x="202" y="20" width="28" height="50" rx="6" fill="#37474f"/>
+  <rect x="202" y="150" width="28" height="50" rx="6" fill="#37474f"/>
+  <rect x="98" y="40" width="104" height="140" rx="16" fill="#ffb300"/>
+  <text x="150" y="118" text-anchor="middle" font-family="ui-sans-serif,sans-serif" font-size="14" font-weight="700" fill="#1a1a1a">chassis</text>
+  <polygon points="150,8 138,28 162,28" fill="#1565c0"/>
+  <text x="150" y="0" text-anchor="middle" font-family="ui-sans-serif,sans-serif" font-size="13" font-weight="700" fill="#1565c0">+X forward</text>
+  <polygon points="8,110 28,98 28,122" fill="#2e7d32"/>
+  <text x="-4" y="150" font-family="ui-sans-serif,sans-serif" font-size="13" font-weight="700" fill="#2e7d32">+Y left</text>
+</g>
+<text x="500" y="120" font-family="ui-sans-serif,sans-serif" font-size="13" fill="#263238">Left wheel</text>
+<text x="500" y="142" font-family="ui-sans-serif,sans-serif" font-size="13" fill="#263238">Right wheel</text>
+<text x="500" y="180" font-family="ui-sans-serif,sans-serif" font-size="13" fill="#546e7a">Positive yaw turns left.</text>
+<text x="500" y="202" font-family="ui-sans-serif,sans-serif" font-size="13" fill="#546e7a">Effort is −1…+1.</text>
+</svg>
