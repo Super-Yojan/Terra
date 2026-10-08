@@ -1,5 +1,24 @@
 # Fusion HAT actuator backend
 
+!!! tip "TL;DR"
+    Library pin is fusion_hat 1.14.0.
+    M0–M3 own fixed pin pairs at 100 Hz.
+    A version string is not electrical proof.
+
+![HAT sits at the end of the Bluetooth path.](../assets/pi-stack.svg)
+
+*HAT sits at the end of the Bluetooth path.*
+
+```mermaid
+flowchart LR
+  M0[M0 P11 P10] --> HAT[100 Hz]
+  M1[M1 P9 P8] --> HAT
+  M2[M2 P6 P7] --> HAT
+  M3[M3 P4 P5] --> HAT
+```
+
+*Do not share a timer group with 50 Hz pulses.*
+
 Hardware operation and calibration remain physically unverified. Source compatibility
 is based on SunFounder fusion_hat 1.14.0:
 [version](https://github.com/sunfounder/fusion-hat/blob/HEAD/fusion_hat/_version.py),
@@ -55,15 +74,24 @@ physical gate and power isolation remain necessary. Close requests safe outputs,
 retains objects and keeps ESC safe pulses enabled; do not call vendor PWM.close
 until downstream equipment is independently isolated.
 
+```mermaid
+flowchart LR
+  M0[M0 P11 P10] --> HAT[100 Hz]
+  M1[M1 P9 P8] --> HAT
+  M2[M2 P6 P7] --> HAT
+  M3[M3 P4 P5] --> HAT
+```
+
+*Do not share a timer group with 50 Hz pulses.*
+
 ## Required physical commissioning (not performed)
 
-With propulsion isolated, confirm installed source/version, board exposed pins and
-resource ownership; measure shared timer periods and pulses with an instrument.
-Check min/center/max or stop/neutral/full calibration against each actuator's approved
-range. Confirm inversion once, safe output on gate opening, disconnect/watchdog,
-write failure, restart and shutdown. Record board/library identities and measured
-results separately. Source capability checks and saved JSON are not physical
-verification or calibration certification.
+With propulsion isolated, confirm installed source/version, board exposed pins and resource ownership; measure shared timer periods and pulses with an instrument.
+Check min/center/max or stop/neutral/full calibration against each actuator's approved range.
+Confirm inversion once, safe output on gate opening, disconnect/watchdog, write failure, restart and shutdown.
+Record board/library identities and measured results separately.
+Source capability checks and saved JSON are not physical verification or calibration certification.
+
 
 Ordinary close retains safe ESC output objects; process exit and object destruction
 can disable pulses, so continuity cannot be guaranteed after service termination.

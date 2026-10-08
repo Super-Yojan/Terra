@@ -1,19 +1,34 @@
 # terra-state
 
-`VelocityEstimator` keeps a short IMU history and the latest VIO sample, then reports body forward speed and yaw rate. The crate describes itself as a VIO velocity anchor with bounded IMU prediction.
+!!! tip "TL;DR"
+    VIO anchors velocity.
+    IMU fills the gap until the next VIO sample.
+    Stale or untracked input reports zero.
+
+```mermaid
+flowchart LR
+  VIO[VIO sample] --> Hold[Hold velocity]
+  IMU[IMU since that stamp] --> Hold
+  Hold --> Body[Body forward and yaw rate]
+```
+
+*Not a visual-odometry stack. Not a bias EKF.*
 
 [API](https://super-yojan.dev/Terra/api/terra_state/index.html) · [source](https://github.com/Super-Yojan/Terra/blob/main/crates/terra-state/src/lib.rs)
 
-## Defaults
+## Timeouts
 
-`EstimatorConfig` defaults to an IMU timeout of **0.1 s** and a VIO timeout of **0.35 s**. `vio_timeout` must be finite, positive, and at most 2 s.
+| Input | Default |
+| --- | --- |
+| IMU | 0.1 s |
+| VIO | 0.35 s |
 
-## What `estimate` returns
+`vio_timeout` must be at most 2 s.
 
-`estimate(now)` returns zero speed and a `Health` value when the clock is invalid, VIO is missing or untracked, IMU is missing, either sample is stale, or no IMU sample exists at or before the VIO timestamp.
+![Axes the body velocity is expressed in](../assets/body-axes.svg)
 
-When the inputs are fresh, the estimator replays IMU samples from the VIO timestamp up to `now`: it rotates the gravity-free acceleration into the world, integrates velocity, and then projects that velocity back into the body. Reported `forward` is body X. Reported `yaw_rate` is the latest IMU's body Z rate.
+*`forward` is body X. `yaw_rate` is the latest gyro Z.*
 
-Samples must be finite and increasing in time. Acceleration above 1000 m/s², angular rate above 100 rad/s, or VIO speed above 100 m/s is `OutOfRange`. The IMU buffer keeps 512 samples.
+`estimate` returns zero when VIO is missing, tracking is lost, IMU is missing, or either sample is stale.
 
-Phone mode is expected to fill these samples from Core Motion and ARKit. Zorvane can feed synthetic IMU and VIO from the physics body. Neither path is a visual-odometry implementation inside this crate.
+The IMU buffer keeps 512 samples. Acceleration above 1000 m/s² or spin above 100 rad/s is rejected.

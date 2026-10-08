@@ -1,0 +1,27 @@
+.md-typeset img {
+  display: block;
+  height: auto;
+  max-width: min(100%, 720px);
+  margin: 0.6rem auto 0.2rem;
+  border-radius: 12px;
+}
+
+.md-typeset p:has(> img) + p > em:only-child {
+  display: block;
+  margin: 0 auto 1rem;
+  color: var(--md-default-fg-color--light);
+  font-size: 0.82rem;
+  text-align: center;
+}
+
+.md-typeset .mermaid {
+  margin: 0.4rem auto 0.2rem;
+}
+
+.md-typeset .admonition {
+  margin: 0.8rem 0 1rem;
+}
+
+.md-typeset .grid.cards {
+  margin-top: 0.6rem;
+}

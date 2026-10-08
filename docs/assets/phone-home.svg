@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 280 520" width="280" role="img">
+<title>TerraPhone · Home</title>
+<rect width="280" height="520" rx="28" fill="#0e1418"/>
+<rect x="10" y="10" width="260" height="500" rx="22" fill="#12181c" stroke="#37474f"/>
+<rect x="10" y="10" width="260" height="36" rx="22" fill="#ffb300"/>
+<rect x="10" y="28" width="260" height="18" fill="#ffb300"/>
+<text x="140" y="32" text-anchor="middle" font-family="ui-sans-serif,sans-serif" font-size="11" font-weight="700" fill="#1a1a1a">PLACEHOLDER · not a Simulator capture</text>
+<text x="140" y="62" text-anchor="middle" font-family="ui-sans-serif,sans-serif" font-size="15" font-weight="700" fill="#eceff1">TerraPhone · Home</text>
+<g font-family="ui-sans-serif,sans-serif">
+<text x="36" y="78" font-size="11" font-weight="700" fill="#90a4ae">ROVER</text>
+<text x="36" y="96" font-size="11" fill="#b0bec5">3D model · drag to orbit</text>
+<text x="36" y="112" font-size="11" font-weight="700" fill="#90a4ae">MANUAL CONTROL</text>
+<rect x="32" y="116" width="216" height="28" rx="8" fill="#1b5e20"/>
+<text x="140" y="134" text-anchor="middle" font-size="13" fill="#fff">Joystick · Arm · Stop</text>
+<text x="36" y="168" font-size="11" font-weight="700" fill="#90a4ae">LINKS DEPEND ON THE TARGET</text>
+<rect x="32" y="174" width="216" height="22" rx="11" fill="#37474f"/>
+<text x="140" y="189" text-anchor="middle" font-size="11" fill="#ffe082">See Simulator or iPhone frame</text>
+</g>
+<text x="140" y="498" text-anchor="middle" font-family="ui-sans-serif,sans-serif" font-size="10" fill="#78909c">Wireframe of sections in ContentView</text>
+</svg>

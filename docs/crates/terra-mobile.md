@@ -1,33 +1,39 @@
 # terra-mobile
 
-UniFFI boundary for TerraPhone. The robotics crates stay free of UniFFI. This crate wraps them in objects Swift can call. Bindings are generated on a Mac and are not committed.
+!!! tip "TL;DR"
+    UniFFI boundary for TerraPhone.
+    Other crates stay free of UniFFI.
+    Bindings are generated on a Mac and are not committed.
 
-[API](https://super-yojan.dev/Terra/api/terra_mobile/index.html) · [iOS build](../phone/build.md)
+```mermaid
+flowchart LR
+  Swift[SwiftUI] --> FFI[terra-mobile]
+  FFI --> Ctrl[control and autonomy]
+  FFI --> Map[mapping]
+  FFI --> Zen[Zenoh client]
+  FFI --> Act[actuators]
+```
 
-## What Swift calls
+*[Build steps](../phone/build.md). Deployment target is iOS 17.*
 
-| Export | Wraps |
+[API](https://super-yojan.dev/Terra/api/terra_mobile/index.html)
+
+| Swift name | Rust |
 | --- | --- |
-| `MobileController` | Estimator, velocity controller, autonomy arbiter, experiment recorder. |
-| `default_control_settings` | The combined control and estimator configuration. |
-| `MobileWaypoint` | `terra-waypoint`, including `setOrigin`, `setGoal`, and `step`. |
+| `MobileController` | Estimator, PI, arbiter, recorder. |
+| `MobileWaypoint` | `terra-waypoint`. |
 | `MobileOccupancyMap` | `terra-mapping`. |
-| `actuator_validate_layout`, `actuator_route`, `actuator_encode_frame` | `terra-actuators`. |
-| `MobileZenohClient` | `RoverConnection` in `terra-transport`. |
-| `host_dashboard` | Loopback `ControlPlane`. The endpoint must be `tcp/127.0.0.1`. |
+| `MobileZenohClient` | `RoverConnection`. Simulator path. |
+| `host_dashboard` | Loopback `ControlPlane`. |
+| `actuator_route` | `route_commands`. |
 
-`run_velocity_benchmark` runs the controller against the in-crate plant and returns a `BenchmarkReport`. `./scripts/check-swift.sh` calls through the generated Swift bindings into that path.
+![Wireframe of the screen that calls these objects](../assets/phone-home.svg){ width="240" }
 
-## Dashboard publish
+*Placeholder. The real view is SwiftUI in `ContentView`.*
 
-When `host_dashboard` has opened the loopback plane, each control tick can publish:
+When the dashboard is open, ticks can publish `autonomy/status`, `goal/status`, `map/occupancy` (at most every 0.2 s), and `pose`.
 
-- `experiment/status`, `autonomy/status`, `goal/status`, `goal/proposal`
-- `map/occupancy` at most every 0.2 s, via `occupancy_telemetry`
-- `pose` with rover id, sequence, `x`, `y`, and `yaw`
-
-`autonomy_request` accepts `autonomy`, `safety`, `goal`, and `goal/decision` and feeds the arbiter. Other kinds are rejected.
-
-## Build
-
-`./scripts/build-ios.sh` builds `terra-mobile` for the host, runs `terra-bindgen` for Swift, then builds static libraries for `aarch64-apple-ios`, `aarch64-apple-ios-sim`, and `x86_64-apple-ios` and packs them into `mobile/ios/Generated/TerraCore.xcframework`. That script needs Xcode (`xcodebuild`, `xcrun lipo`) and the three Rust targets. Generated artifacts are gitignored.
+```sh
+./scripts/build-ios.sh
+./scripts/check-swift.sh
+```

@@ -1,5 +1,25 @@
 # Optional future Bluetooth actuator bench
 
+!!! tip "TL;DR"
+    Not performed.
+    Wheels up. Independent cutoff. Separate authorization.
+    Do not treat this page as a pass.
+
+![Axes for the wheels-up check.](../assets/body-axes.svg)
+
+*Axes for the wheels-up check.*
+
+```mermaid
+stateDiagram-v2
+  [*] --> EnableOpen
+  EnableOpen --> AwaitCommand: switch closes
+  AwaitCommand --> Live: fresh command
+  Live --> Watchdog: 200 ms
+  Watchdog --> EnableOpen: switch opens
+```
+
+*Watchdog coasts and drops enable. It does not brake.*
+
 Not performed. The user authorized implementation only and prohibited tests,
 builds, smoke scripts, screenshots and hardware checks. This procedure is a future
 commissioning outline requiring separate authorization; it is not an acceptance
@@ -43,14 +63,15 @@ itself cause movement; choose it with linkage and travel constraints in mind.
    referencing that exact `staged_request_id` and `staged_revision`. Record replies,
    active revision and `hardware_gate_open_confirmed`; re-read with fresh IDs.
 3. With power isolated, measure DC safe output, ESC stop/neutral and servo safe
-   position/disabled PWM. The disarmed service emits only safe values. To establish
-   endpoints before connecting equipment, use a separate isolated pulse generator
-   with the service stopped and its signal outputs disconnected; never share output
-   ownership. Record that generator's settings separately from service measurements.
-   Determine approved calibration before enabling power. Service endpoint measurements
-   belong to the later explicitly armed, controlled-power step. Confirm inversion
-   exactly once and shared-timer behavior. Example 1000/1500/2000 µs values are
-   placeholders for calibration decisions, not universal actuator specifications.
+   position/disabled PWM.
+   The disarmed service emits only safe values.
+   To establish endpoints before connecting equipment, use a separate isolated pulse generator with the service stopped and its signal outputs disconnected; never share output ownership.
+   Record that generator's settings separately from service measurements.
+   Determine approved calibration before enabling power.
+   Service endpoint measurements belong to the later explicitly armed, controlled-power step.
+   Confirm inversion exactly once and shared-timer behavior.
+   Example 1000/1500/2000 µs values are placeholders for calibration decisions, not universal actuator specifications.
+
 4. Under controlled power, close the independent gate without arming. Observe
    whether outputs remain safe. Explicitly arm after a fresh complete safe DRIVE;
    distinguish transport acknowledgement from command acceptance and armed status.

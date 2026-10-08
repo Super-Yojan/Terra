@@ -1,44 +1,47 @@
 # Simulation
 
-The world simulator is [Zorvane](https://super-yojan.dev/Zorvane/). Terra PR #28 removed `simulator/` from this repository. Cameras, physics, tiles, and the Zenoh bridge live there. Terra keeps the crates those components call: state, control, waypoint following, mapping, local planning, the autonomy arbiter, and experiment logs.
+!!! tip "TL;DR"
+    The world is [Zorvane](https://super-yojan.dev/Zorvane/).
+    Command: `cargo run -p zorvane`.
+    Prefix stays `terra/rover`.
+    Only the iOS Simulator joins that peer.
 
-From a Zorvane checkout:
-
-```sh
-cargo run -p zorvane
+```mermaid
+flowchart LR
+  Z[Zorvane] -->|depth and physics| Sim[iOS Simulator]
+  Sim -->|cmd_vel| Z
+  Crates[Terra crates] --- Z
+  Phone[iPhone] -->|Bluetooth| Pi[Pi]
 ```
 
-The Zenoh prefix stays `terra/rover`. `TERRA_*` variables still select the fleet, tiles, mission, and listen address. `TERRA_ZENOH_LISTEN` defaults to `tcp/127.0.0.1:7447`.
+*Terra keeps the follower, mapper, planner, and arbiter. Zorvane keeps cameras and physics.*
 
-Tile worlds and the bridge contract are documented in that repo:
+![Placeholder of the Bevy connection fields](assets/phone-simulator.svg){ width="240" }
 
-- [simulator/WORLD.md](https://github.com/Super-Yojan/Zorvane/blob/main/simulator/WORLD.md)
-- [simulator/ZENOH.md](https://github.com/Super-Yojan/Zorvane/blob/main/simulator/ZENOH.md)
+*Same Mac: `TERRA_ZENOH_LISTEN=tcp/0.0.0.0:7447`. Phone field: `tcp/127.0.0.1:7447`.*
 
-## Drive it from TerraPhone
-
-Only the **iOS Simulator** build shows **Bevy simulator · Zenoh**. A physical iPhone uses Bluetooth and does not join this peer over the LAN.
-
-On the Mac that is running the Simulator:
-
-```sh
-TERRA_ROVER_COUNT=1 TERRA_ZENOH_LISTEN=tcp/0.0.0.0:7447 cargo run -p zorvane
-```
-
-In TerraPhone, connect to `tcp/127.0.0.1:7447` and rover `0`. Details are in [Simulator and iPhone](phone/simulator.md).
-
-## Mission scenario
-
-The reference search runs in Zorvane. The arbiter stays in Terra.
+## Mission
 
 ```sh
 TERRA_MISSION=1 TERRA_MISSION_SEED=42 TERRA_ROVER_COUNT=2 cargo run -p zorvane
 ```
 
-`TERRA_HEADLESS=1` is for background rendering and local checks. The depth renderer still runs. Levels, safety, and log fields are in the [mission guide](autonomy/README.md). Summarize a JSONL log with `cargo run -p terra-experiment --bin terra-run-summary` from this checkout.
+![Four authority levels](assets/levels.svg)
 
-## What moved, and what did not
+*Pick a level before a waypoint. Stop stays latched until reset.*
 
-The Docker image and dev container that used to launch the Bevy world moved with the simulator. This repo's container is the Pi rover image. See [Containers](DOCKER.md) and [Develop without a Mac](DEVELOP-WITHOUT-MAC.md).
+Summarize a log from this repo:
 
-**Simulated rover** inside TerraPhone is a local motor plant. It does not start Zorvane. **Phone IMU + VIO** reads the handset. Neither one is a substitute for the Zorvane process.
+```sh
+cargo run -p terra-experiment --bin terra-run-summary -- /path/to/run.jsonl
+```
+
+Tile and bridge notes stay in Zorvane: [WORLD.md](https://github.com/Super-Yojan/Zorvane/blob/main/simulator/WORLD.md) and [ZENOH.md](https://github.com/Super-Yojan/Zorvane/blob/main/simulator/ZENOH.md).
+
+## Not the simulator
+
+**Simulated rover** inside TerraPhone is a local plant.
+
+**Phone IMU + VIO** reads the handset.
+
+Neither one starts Zorvane. The Docker world image moved with the simulator. This repo's image is the Pi. See [Containers](DOCKER.md).

@@ -1,5 +1,22 @@
 # Headless customer pairing with the Fusion HAT button
 
+!!! tip "TL;DR"
+    Spec for headless first-owner pairing.
+    The button opens a window. It does not arm.
+
+![Customer steps from the spec.](../../assets/pairing.svg)
+
+*Customer steps from the spec.*
+
+```mermaid
+flowchart LR
+  Hold[Hold USR 3 s] --> Find[Find terra-XXXXXX]
+  Find --> Save[LED flashes 3 times]
+  Save --> Back[Reconnect]
+```
+
+*Pairing window is 60 seconds. Motors stay off.*
+
 ## Approved customer intent
 
 A new customer receives a provisioned Raspberry Pi with a Fusion HAT, installs
@@ -8,13 +25,13 @@ or knowledge of either Bluetooth address. Holding the HAT's USR button opens
 pairing; its LED indicates pairing mode. The advertised name is
 `terra-` followed by random alphanumeric characters.
 
-The user explicitly chose **one initial long press only**. There is no second
-button confirmation and no numeric-code comparison on the Pi. The implementation
-uses Bluetooth Just Works bonding with a physically opened, limited pairing
-window. This provides encrypted communication after bonding but not the
-man-in-the-middle protection of numeric comparison. The random device name is
-a discovery identifier, not a password or proof of identity. Another nearby
-phone can compete for the pairing window; only one candidate may be accepted.
+The user explicitly chose **one initial long press only**.
+There is no second button confirmation and no numeric-code comparison on the Pi.
+The implementation uses Bluetooth Just Works bonding with a physically opened, limited pairing window.
+This provides encrypted communication after bonding but not the man-in-the-middle protection of numeric comparison.
+The random device name is a discovery identifier, not a password or proof of identity.
+Another nearby phone can compete for the pairing window; only one candidate may be accepted.
+
 
 ## Customer experience
 
@@ -44,6 +61,15 @@ Discovery also uses CoreBluetooth's advertised local name so cached peripheral
 names do not obscure the new name. The app identifies reconnect targets using
 the existing stable CoreBluetooth peripheral identifier, not name alone.
 
+```mermaid
+flowchart LR
+  Hold[Hold USR 3 s] --> Find[Find terra-XXXXXX]
+  Find --> Save[LED flashes 3 times]
+  Save --> Back[Reconnect]
+```
+
+*Pairing window is 60 seconds. Motors stay off.*
+
 ## Ownership and service lifecycle
 
 Separate the background lifecycle from the current terminal provisioning path.
@@ -55,6 +81,15 @@ Pairing exposes setup status only and no drive, arm or configuration write API.
 The physical motor-gate file is not required to discover and pair an unowned
 device. It remains mandatory for real motor operation and layout changes after
 pairing. Button authorization is not the motor safety gate.
+```mermaid
+flowchart LR
+  Phone[iPhone] --> BLE[Bluetooth]
+  BLE --> Pi[terra-rover]
+  Pi --> Hat[Fusion HAT]
+```
+
+*Physical path. Arming is still a separate step.*
+
 
 Once owned, retain the current owner-only admission, interlock, layout validation
 and explicit arming behavior. A missing/unavailable motor gate must keep motion
@@ -91,6 +126,17 @@ Read/write paths can be overridden for portable tests and alternative hardware;
 the customer service defaults to the HAT paths. No evdev, GPIO library, audio or
 voice dependencies are added. The existing bundled actuator library is retained.
 
+```mermaid
+stateDiagram-v2
+  [*] --> EnableOpen
+  EnableOpen --> AwaitCommand: switch closes
+  AwaitCommand --> Live: fresh command
+  Live --> Watchdog: 200 ms
+  Watchdog --> EnableOpen: switch opens
+```
+
+*Watchdog coasts and drops enable. It does not brake.*
+
 ## Pairing boundary and persistence
 
 Register a setup agent with the headless `NoInputNoOutput` capability. Authorization
@@ -98,6 +144,15 @@ is permitted only during the locally triggered window. Claim a single BlueZ
 device path when handling the incoming pairing authorization; subsequent callbacks
 must match that exact candidate and setup generation. Never accept callbacks
 outside the deadline, after cancellation, or for a different candidate.
+```mermaid
+flowchart LR
+  Phone[iPhone] --> BLE[Bluetooth]
+  BLE --> Pi[terra-rover]
+  Pi --> Hat[Fusion HAT]
+```
+
+*Physical path. Arming is still a separate step.*
+
 
 Owner persistence requires all of the following: agent approval for this window,
 matching candidate identity, BlueZ `Paired` and `Bonded`, a completed setup-status
@@ -105,13 +160,14 @@ read by that candidate, and a still-live deadline. If the platform does not invo
 the expected authorization callback, fail closed rather than infer local approval.
 This behavior must be verified on Raspberry Pi BlueZ with iOS.
 
-Reject other connected centrals during setup. Clean up newly created unsuccessful
-candidate bonds on failure; never remove a pre-existing bond belonging to another
-device. Record pre-window bond state to distinguish them. A previously bonded
-candidate without fresh authorization is not eligible for first-owner enrollment.
-Timeout/failure clears transient candidate state and exports. Attempt all cleanup
-operations even if the adapter or bus disappears. Disable pairability and
-discoverability on every exit, and apply BlueZ's own timeout as an additional bound.
+Reject other connected centrals during setup.
+Clean up newly created unsuccessful candidate bonds on failure; never remove a pre-existing bond belonging to another device.
+Record pre-window bond state to distinguish them.
+A previously bonded candidate without fresh authorization is not eligible for first-owner enrollment.
+Timeout/failure clears transient candidate state and exports.
+Attempt all cleanup operations even if the adapter or bus disappears.
+Disable pairability and discoverability on every exit, and apply BlueZ's own timeout as an additional bound.
+
 
 Save `owner.json` with mode 0600 using an atomic write, file fsync, rename and
 directory fsync. Save identity address and address type as the normal peripheral
@@ -137,7 +193,24 @@ Rebuild the ARM64 Nuitka bundle and update installation instructions to remove
 SSH/terminal provisioning from the customer flow. Include defaults and source in
 the release, preserving the existing reproducible build and clean-runtime checks.
 
+```mermaid
+flowchart LR
+  Op[ARGOS or phone] -->|cmd_vel goal autonomy safety| Rover[terra/rover/id]
+  Rover -->|status pose map| Op
+```
+
+*Keys hang off `terra/rover/<id>/`.*
+
 ## Verification and acceptance
+```mermaid
+flowchart LR
+  Phone[iPhone] --> BLE[Bluetooth]
+  BLE --> Pi[terra-rover]
+  Pi --> Hat[Fusion HAT]
+```
+
+*Physical path. Arming is still a separate step.*
+
 
 Use fake time and temporary input files for the button/LED state machine. Test
 debounce, startup-held button, the exact hold threshold, one window per release,

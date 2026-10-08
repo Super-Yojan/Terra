@@ -1,15 +1,35 @@
 # Hardware
 
-The body side of Terra is a 64-bit Raspberry Pi running `terra-rover`, a compiled ARM64 executable, and a Fusion HAT motor and PWM board. TerraPhone on a physical iPhone is the controller. The Rust crates do not run on the Pi. The Python package in `hardware/raspberry-pi/` implements the Bluetooth protocol and the HAT backend.
+!!! tip "TL;DR"
+    64-bit Pi. Executable `terra-rover`. Fusion HAT.
+    TerraPhone on an iPhone is the controller.
+    The Rust crates do not run on the Pi.
 
-| Guide | What it covers |
+![Phone, Bluetooth, Pi, HAT](../assets/pi-stack.svg)
+
+*Gate `0` means open. Gate `1` means closed. Closing it does not arm.*
+
+![App icon of the rover this service is meant to drive](../assets/terra-icon.png){ width="200" }
+
+*Artwork from the iOS catalog, not a bench photo.*
+
+| Guide | Use it for |
 | --- | --- |
-| [Install on a Pi](INSTALL.md) | Docker or on-Pi build, `install.sh`, `rover.env`, USR-button enrollment, bench mode. |
-| [Bluetooth peripheral](BLUETOOTH.md) | GATT services, framing, owner admission, configuration operations. |
-| [Fusion HAT](FUSION_HAT.md) | Library 1.14.0, motor pin map, timer groups, gate file. |
-| [Bench procedure](BENCH.md) | Wheels-up commissioning outline. **Not performed.** It needs separate authorization. |
-| [Evidence](evidence/README.md) | What was checked in the compiled bundle, and what remains unverified. |
+| [Install](INSTALL.md) | Build, `install.sh`, USR enrollment. |
+| [Bluetooth](BLUETOOTH.md) | GATT, frames, owner admission. |
+| [Fusion HAT](FUSION_HAT.md) | Pins, timers, library 1.14.0. |
+| [Bench](BENCH.md) | Wheels-up outline. Not performed. |
+| [Evidence](evidence/README.md) | What was checked, and what was not. |
 
-The software stand-in for the motor adapter, `software_bench_sequence`, and the matching wheels-up checklist are in [terra-motors](../crates/terra-motors.md). That unit test does not power a driver.
+Software twin of the motor checklist: [terra-motors](../crates/terra-motors.md).
 
-Radio sessions, pulse timing, and electrical compatibility are unverified. A gate file is an input to software. The cutoff that removes propulsion power has to work when this process is not running. Zero effort and a dropped enable are coast, which is not a brake.
+```mermaid
+stateDiagram-v2
+  [*] --> EnableOpen
+  EnableOpen --> AwaitCommand: switch closes
+  AwaitCommand --> Live: fresh command
+  Live --> Watchdog: 200 ms
+  Watchdog --> EnableOpen: switch opens
+```
+
+*Zero effort coasts. A dropped enable still coasts. It does not brake.*

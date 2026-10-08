@@ -1,24 +1,42 @@
 # TerraPhone
 
-TerraPhone is the iOS app in `mobile/ios/`. SwiftUI draws the rover, the drive joystick, the waypoint section, and the occupancy grid. Shared control, mapping, waypoints, actuators, and Zenoh go through `terra-mobile`.
+!!! tip "TL;DR"
+    SwiftUI app in `mobile/ios/`.
+    Shared math is `terra-mobile`.
+    Simulator talks to Zorvane. iPhone talks to the Pi.
+    Tap-to-configure is not built.
 
-| Topic | Page |
+![TerraPhone app icon](../assets/terra-icon.png){ width="220" }
+
+*Real asset. The frames below are wireframes, not Simulator captures.*
+
+![Home sections: rover, drive, and a link that depends on the target](../assets/phone-home.svg){ width="260" }
+
+*One controller backs every screen. Connection never arms the motors.*
+
+## What you can do today
+
+- Orbit the bundled `rover.usdz`. Pinch to zoom. Reset View restores the camera.
+- Drive with a joystick, Arm, and Stop. Dead zone is 8%.
+- Pick teleop, assisted, waypoint, or supervised search.
+- See a local occupancy grid.
+
+![Generated splash behind the home screen](../assets/mountain-banner.jpg)
+
+*`MountainBackdrop` is generated art. The CAD model is the rover, not this photo.*
+
+## Where to go
+
+| Question | Page |
 | --- | --- |
-| Xcode build and the UniFFI framework | [Building in Xcode](build.md) |
-| Which link exists in the Simulator and on an iPhone | [Simulator and iPhone](simulator.md) |
-| Pairing with the Pi | [Bluetooth pairing](bluetooth.md) |
-| 3D tap-to-configure | [Tap to configure](tap-to-configure.md) — **planned** |
+| How do I compile it? | [Xcode](build.md) |
+| Simulator or iPhone? | [Split](simulator.md) |
+| How do I pair? | [Bluetooth](bluetooth.md) |
+| Tap a part to configure? | [Planned](tap-to-configure.md) |
 
-The long-form sensor contract, motor-adapter notes, and Bluetooth command rules are in [Phone controller](../MOBILE_CONTROL.md). The app README in the tree is [`mobile/ios/README.md`](https://github.com/Super-Yojan/Terra/blob/main/mobile/ios/README.md).
+Long-form sensor notes: [Phone controller](../MOBILE_CONTROL.md).
 
-## What the home screen does
-
-One controller backs every view. Home shows the rover model, with shortcuts for manual control, missions, the depth map, telemetry, and configuration. The model is `TerraPhone/Models/rover.usdz`. Drag orbits, pinch zooms, and Reset View restores the camera. The viewer converts CAD Z-up to SceneKit Y-up. Tapping a part does not open actuator settings. That interaction is the planned tap-to-configure mode.
-
-Drive starts disarmed. The joystick is a circular pad with an 8% dead zone. Hardware output needs an explicit Arm and the rover's armed acknowledgement. Emergency Stop inhibits touch input. Backgrounding disconnects and disarms. Connection never arms the motors or starts a mission.
-
-**Simulated rover** is a local motor plant inside the app. It is available in the Simulator and on an iPhone. It is not Zorvane.
-
-**Phone IMU + VIO** needs a physical iPhone with ARKit world tracking. The starter mount is the phone flat, screen up, top edge forward. Core Motion is converted into rover axes. Loss of tracking commands neutral effort. That mount and the 0.5 m camera-height assumption still need calibration on a real vehicle.
-
-Battery, radio strength, temperature, video, and mission-completion percentage are not on the controller, so the connected dashboard shows the depth map, velocity, turn rate, motor effort, and waypoint distance that do exist.
+!!! note "Mount"
+    Flat phone. Screen up. Top edge forward.
+    Loss of ARKit tracking commands neutral effort.
+    Calibrate before the wheels touch the ground.

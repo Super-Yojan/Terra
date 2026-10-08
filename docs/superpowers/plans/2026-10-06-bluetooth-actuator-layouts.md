@@ -1,5 +1,22 @@
 # Terra Bluetooth Actuator Layouts Implementation Plan
 
+!!! tip "TL;DR"
+    Design note for layout JSON and GATT.
+    Implementation landed later. This page keeps the original plan.
+
+![Phone to HAT path the plan specified.](../../assets/pi-stack.svg)
+
+*Phone to HAT path the plan specified.*
+
+```mermaid
+flowchart LR
+  Phone[iPhone] -->|GATT| Pi[terra-rover]
+  Pi --> Hat[Fusion HAT]
+  Gate[gate file] --> Pi
+```
+
+*Gate closed is not the same as armed.*
+
 ## Execution status and overriding instruction
 
 Tasks 1–8 are implemented and independently source-reviewed. Task 9 delivered
@@ -42,6 +59,15 @@ service. Source reviews and fix commits are recorded in the SDD ledger/reports.
 - Require encrypted bonded owner access for command/configuration; pairing setup is explicit, time limited, and disarmed.
 - TurboPi, legacy RV v2 support, camera streaming, and new arbitrary-geometry autonomy are excluded.
 - iOS deployment target remains 17.0. Generated Swift/FFI artifacts stay ignored and are regenerated through existing build tooling.
+
+```mermaid
+flowchart LR
+  Phone[iPhone] -->|GATT| Pi[terra-rover]
+  Pi --> Hat[Fusion HAT]
+  Gate[gate file] --> Pi
+```
+
+*Gate closed is not the same as armed.*
 
 ## Review Focus
 
@@ -172,6 +198,17 @@ Tasks form one vertical feature with shared contracts, so retain one plan. Each 
 - [ ] Run raised-wheel Fusion HAT bench with terra-mini and ESC/servo template: inspect library pulse units/resources; measure neutral/full configured pulses; verify inversion, cutoff, timeout, partial-backend failure handling, and no startup/reconnect motion. Record actual results; do not assume the mock proves hardware behavior.
 - [ ] Update docs with achieved evidence and remaining physical gaps; perform whole-branch review focused on safety, owner security, resource conflicts, timestamp freshness, and Zenoh regression. Fix confirmed defects and rerun only affected checks.
 - [ ] Commit as `test: verify Bluetooth actuator round trips`.
+
+```mermaid
+stateDiagram-v2
+  [*] --> EnableOpen
+  EnableOpen --> AwaitCommand: switch closes
+  AwaitCommand --> Live: fresh command
+  Live --> Watchdog: 200 ms
+  Watchdog --> EnableOpen: switch opens
+```
+
+*Watchdog coasts and drops enable. It does not brake.*
 
 ## Execution handoff
 

@@ -1,5 +1,22 @@
 # Headless Button Pairing Implementation Plan
 
+!!! tip "TL;DR"
+    Plan for USR-button enrollment.
+    Customer pairing is Just Works inside a 60-second window.
+
+![Steps the plan asked for.](../../assets/pairing.svg)
+
+*Steps the plan asked for.*
+
+```mermaid
+flowchart LR
+  Hold[Hold USR 3 s] --> Find[Find terra-XXXXXX]
+  Find --> Save[LED flashes 3 times]
+  Save --> Back[Reconnect]
+```
+
+*Pairing window is 60 seconds. Motors stay off.*
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Ship a rebuilt Pi executable that enrolls its first phone after one Fusion HAT button hold, with LED feedback and no SSH or known peer address.
@@ -48,6 +65,15 @@
 - [ ] Implement the interfaces using strict sysfs tokens, monotonic state and private temporary files; never create PWM objects here.
 - [ ] Run the task tests and existing packaging tests; fix failures before moving on.
 
+```mermaid
+flowchart LR
+  Hold[Hold USR 3 s] --> Find[Find terra-XXXXXX]
+  Find --> Save[LED flashes 3 times]
+  Save --> Back[Reconnect]
+```
+
+*Pairing window is 60 seconds. Motors stay off.*
+
 ## Task 2: Bounded button-authorized BLE enrollment
 
 **Files:** Create `hardware/raspberry-pi/terra_rover/pairing.py` and `hardware/raspberry-pi/tests/test_pairing.py`; consume existing BLE service/advertisement definitions.
@@ -93,6 +119,17 @@
 - [ ] Verify the installed systemd unit, artifact checksums, and bundled source/configuration in a disposable ARM64 Linux container.
 - [ ] Request an independent code review; fix actionable issues and rerun affected checks.
 - [ ] Record the final archive path/hash and executed checks. Explicitly mark Pi/HAT button/LED, BlueZ/iPhone pairing and physical motor behavior unverified without those devices.
+
+```mermaid
+stateDiagram-v2
+  [*] --> EnableOpen
+  EnableOpen --> AwaitCommand: switch closes
+  AwaitCommand --> Live: fresh command
+  Live --> Watchdog: 200 ms
+  Watchdog --> EnableOpen: switch opens
+```
+
+*Watchdog coasts and drops enable. It does not brake.*
 
 ## Delivery
 

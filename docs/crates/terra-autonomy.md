@@ -1,28 +1,36 @@
 # terra-autonomy
 
-The arbiter answers which operator level is allowed to move the rover right now. It does not pick an optimal level by itself.
+!!! tip "TL;DR"
+    Four levels. The arbiter does not pick a favorite.
+    Stop latches until a healthy reset.
+    Reset does not restore the old goal.
 
-[API](https://super-yojan.dev/Terra/api/terra_autonomy/index.html) · [contract](../autonomy/PROTOCOL.md) · [mission guide](../autonomy/README.md)
+![teleop, assisted, waypoint, supervised](../assets/levels.svg)
 
-## Levels
+*Effective level is empty during a hold.*
 
-`Level` serializes as snake_case:
+[API](https://super-yojan.dev/Terra/api/terra_autonomy/index.html) · [contract](../autonomy/PROTOCOL.md) · [mission](../autonomy/README.md)
 
-| Level | What moves the rover |
+```mermaid
+flowchart TD
+  Req[level request] --> Arb[AutonomyArbiter]
+  Stick[teleop] --> Arb
+  Goal[goal] --> Arb
+  Prop[proposal decision] --> Arb
+  Stop[safety stop] --> Arb
+  Arb --> Twist[allowed twist]
+  Arb --> Stat[autonomy/status]
+```
+
+*Tokens are 1–64 characters from letters, digits, and `. _ : -`.*
+
+| Level | Motion |
 | --- | --- |
-| `teleop` | Held operator input. Commands expire. |
-| `assisted_teleop` | Operator intent, passed through the shared obstacle and braking check. |
-| `waypoint` | An operator-selected goal, followed by `terra-waypoint` and checked by `terra-navigation`. |
-| `supervised` | A frontier proposal. Motion waits for approval. |
+| `teleop` | Held input. It expires. |
+| `assisted_teleop` | Held input, after the obstacle check. |
+| `waypoint` | One operator goal. |
+| `supervised` | A frontier. Wait for approval. |
 
-`AutonomyStatus` keeps the assigned level, the requested level, and the effective level on separate fields. Effective level is empty during a safety hold. A takeover clears the old goal and teleop intent. Emergency stop stays latched until a healthy explicit reset. Reset does not restore the previous goal.
+`occupancy_telemetry` publishes observed cells only. Hidden mission targets stay out of the packet.
 
-Tokens are 1–64 ASCII characters from `A-Z`, `a-z`, `0-9`, and `. _ : -`. Codecs reject unknown JSON fields and payloads over 2048 bytes. A 128-entry token cache drops replays. A new run id starts a new cache.
-
-## Requests the arbiter accepts
-
-`decode_level`, `decode_safety`, `decode_teleop`, and `decode_decision` are the codecs. Safety actions are `stop` and `reset`. Proposal decisions are `approve`, `reject`, and `resume`. Approval rechecks the current free space. It does not require the map revision to be unchanged.
-
-`occupancy_telemetry` builds the JSON body for `map/occupancy`: schema version, rover id, run id, map sequence, size, resolution, origin, and the observed cell array. Hidden mission targets are not included.
-
-The reference disaster-search scenario runs in Zorvane (`TERRA_MISSION=1`). Mission rules, trial variables, and log fields are in the [mission guide](../autonomy/README.md). Physical navigation, braking calibration, and real survivor detection are not inferred from a Zorvane run.
+Run the reference search in Zorvane with `TERRA_MISSION=1`.

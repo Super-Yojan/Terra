@@ -1,5 +1,25 @@
 # Terra Level-of-Autonomy Implementation Plan
 
+!!! tip "TL;DR"
+    Design note for the four levels.
+    The Bevy world now lives in Zorvane.
+    Unchecked boxes are not a claim that hardware passed.
+
+![Levels this plan introduced.](../../assets/levels.svg)
+
+*Levels this plan introduced.*
+
+```mermaid
+flowchart LR
+  T[teleop] --> A[arbiter]
+  S[assisted] --> A
+  W[waypoint] --> A
+  U[supervised] --> A
+  A --> Move[allowed twist or hold]
+```
+
+*One arbiter. Effective level is empty during a stop.*
+
 > **For agentic workers:** Use superpowers:executing-plans after implementation is requested. Track steps with the checkboxes below. This plan is a proposed design; it does not authorize implementation.
 
 **Goal:** Make four per-rover autonomy levels selectable at runtime, route every motion request through one shared Rust arbiter in Bevy and TerraPhone, and record enough experiment data to compare levels.
@@ -26,18 +46,32 @@ The simulator already maintains a per-rover occupancy map in `simulator/src/occu
 
 ## Mission-first simulation and autonomy evaluation
 
-The research question is how much autonomy is needed to complete a mission under specific conditions, rather than whether four mode buttons work. Use a disaster search-and-rescue scenario as the initial reference mission: search assigned sectors, locate simulated survivors, confirm/report their locations, and return safely within a time/resource budget. Battlefield-relevant conditions can inform terrain, visibility, communication loss, and operator load; weapon engagement is outside this dashboard/navigation scope.
+The research question is how much autonomy is needed to complete a mission under specific conditions, rather than whether four mode buttons work.
+Use a disaster search-and-rescue scenario as the initial reference mission: search assigned sectors, locate simulated survivors, confirm/report their locations, and return safely within a time/resource budget.
+Battlefield-relevant conditions can inform terrain, visibility, communication loss, and operator load; weapon engagement is outside this dashboard/navigation scope.
 
-A mission definition records objectives, success/failure criteria, starting positions, search boundaries, survivor placements, traversability/hazards, visibility/depth availability, communication profile, rover count, time budget, and scenario seed/version. Use traversable corridors, rubble chokepoints, blocked routes, open search areas, and degraded visibility with reachable objectives. Separate the simulator's hidden ground truth from rover observations and operator-visible information; no planner or dashboard may discover survivors through ground-truth access. Define detection/confirmation rules and sensor range/occlusion explicitly before measuring search effectiveness.
 
-Each autonomy level serves a mission need: teleop for precise operator-directed movement, assisted teleop for maneuvering with obstacle support, waypoint for transit to operator-selected locations, and supervised exploration for searching unobserved space while the operator supervises priorities. Frontier exploration is a navigation policy, not survivor detection or mission completion. Add mission observations/reporting as a distinct simulator capability; it must not silently alter the navigation arbiter or expose hidden information.
+A mission definition records objectives, success/failure criteria, starting positions, search boundaries, survivor placements, traversability/hazards, visibility/depth availability, communication profile, rover count, time budget, and scenario seed/version.
+Use traversable corridors, rubble chokepoints, blocked routes, open search areas, and degraded visibility with reachable objectives.
+Separate the simulator's hidden ground truth from rover observations and operator-visible information; no planner or dashboard may discover survivors through ground-truth access.
+Define detection/confirmation rules and sensor range/occlusion explicitly before measuring search effectiveness.
+
+
+Each autonomy level serves a mission need: teleop for precise operator-directed movement, assisted teleop for maneuvering with obstacle support, waypoint for transit to operator-selected locations, and supervised exploration for searching unobserved space while the operator supervises priorities.
+Frontier exploration is a navigation policy, not survivor detection or mission completion.
+Add mission observations/reporting as a distinct simulator capability; it must not silently alter the navigation arbiter or expose hidden information.
+
 
 Compare two trial designs separately:
 
 - **Fixed assigned-level trials:** identical mission conditions/configuration across levels, with multiple recorded seeds and balanced trial order. Takeover and emergency stop remain available and are logged as deviations from the assigned condition. These trials estimate the effect of a level; they do not prove an optimal switching policy.
 - **Adaptive trials:** operators may switch levels to meet mission demands. Record requested/effective level, mission phase, observable conditions, and operator-stated reason when supplied. Switching remains immediate; reason entry is optional and never blocks takeover/stop. Compare adaptive runs against fixed-level baselines; distinguish operator choice from safety holds or automatic changes.
 
-Evaluate objective completion, confirmed discoveries/false reports, time to first discovery and mission completion, searched observable area, distance/resource use, collision/near-miss exposure, safety stops, interventions, and operator active-control duration. Record denominators and unavailable measurements. Predefine success and an acceptable safety/performance threshold before trials; report the lowest tested autonomy level meeting it per condition, with uncertainty, rather than claiming one universal required level. Interaction counts alone do not measure workload; add a separate validated workload measure if that is a thesis outcome.
+Evaluate objective completion, confirmed discoveries/false reports, time to first discovery and mission completion, searched observable area, distance/resource use, collision/near-miss exposure, safety stops, interventions, and operator active-control duration.
+Record denominators and unavailable measurements.
+Predefine success and an acceptable safety/performance threshold before trials; report the lowest tested autonomy level meeting it per condition, with uncertainty, rather than claiming one universal required level.
+Interaction counts alone do not measure workload; add a separate validated workload measure if that is a thesis outcome.
+
 
 Add a mission configuration/manifest and deterministic search/report events in `simulator/src/mission.rs`, scenario fixtures under `tests/fixtures/missions`, and mission metadata/events in `terra-experiment`. Test reachable objectives, seeded reproducibility, occluded detection, duplicate reports, completion criteria, and separation of ground truth from telemetry. ARGOS displays the mission objective, progress, phase, constraints, and reported observations alongside autonomy controls. Mission machinery is a linked deliverable needed for the research study; it expands beyond the control-only acceptance criteria of Terra #17.
 
@@ -66,16 +100,49 @@ All modes use the same estimator, motor controller, speed/acceleration limits, e
 - Invalid/nonmonotonic time, nonfinite inputs, stale estimates, and stale teleop leases never refresh a valid command. Source timestamps are recorded, but local monotonic receive times govern network freshness.
 
 ### Shared navigation
+```mermaid
+flowchart LR
+  Teleop --> Arbiter
+  Waypoint --> Arbiter
+  Supervised --> Arbiter
+  Arbiter --> Hold[move or hold]
+```
+
+*Stop dominates the tick.*
+
 
 Add `terra-navigation` for DWA and frontier selection, using existing `MapSnapshot` (-1 unknown, 0–100 occupancy). Keep planner configuration identical across platforms and levels during a run. Candidate sampling, tie-breaking, and scoring are deterministic.
 
-DWA samples reachable velocity pairs under acceleration limits, simulates swept robot footprints, and rejects collisions and trajectories that cannot brake safely within observed free space. Include the current-to-zero braking trajectory. Assisted teleop minimizes departure from operator intent; waypoint modes score progress/heading plus clearance. Both share the same admissibility checker. Unknown/out-of-grid space is not certified free; include the robot's known present footprint as traversable so an unobserved current cell does not deadlock every plan.
+DWA samples reachable velocity pairs under acceleration limits, simulates swept robot footprints, and rejects collisions and trajectories that cannot brake safely within observed free space.
+Include the current-to-zero braking trajectory.
+Assisted teleop minimizes departure from operator intent; waypoint modes score progress/heading plus clearance.
+Both share the same admissibility checker.
+Unknown/out-of-grid space is not certified free; include the robot's known present footprint as traversable so an unobserved current cell does not deadlock every plan.
+
 
 Proposed initial planning parameters for review, not empirically validated safety claims: 10 Hz replanning, 2 s rollout horizon, <=0.1 s rollout steps, map/pose freshness 0.5 s, occupancy >=65 considered blocked. Obtain footprint dimensions from the rover configuration. Record acceleration, braking, inflation, speed/yaw caps, map resolution, and every scoring weight in the run manifest. Calibrate stopping-distance and clearance margins before physical trials.
 
-Frontiers are free cells adjacent to unknown cells. Choose a reachable free-space vantage near a frontier using a shared grid search; use footprint-inflated collision constraints. Rank by deterministic travel-cost/information-gain scoring; never put a goal inside unknown space. Emit one pending proposal at a time. Approval revalidates the proposal against current pose/map; stale, superseded, unreachable, or already-decided proposals cannot launch motion. Rejecting a frontier applies a configurable cooldown rather than proposing it continuously. No reachable frontier means hold with an explicit reason, not fabricate motion.
+Frontiers are free cells adjacent to unknown cells.
+Choose a reachable free-space vantage near a frontier using a shared grid search; use footprint-inflated collision constraints.
+Rank by deterministic travel-cost/information-gain scoring; never put a goal inside unknown space.
+Emit one pending proposal at a time.
+Approval revalidates the proposal against current pose/map; stale, superseded, unreachable, or already-decided proposals cannot launch motion.
+Rejecting a frontier applies a configurable cooldown rather than proposing it continuously.
+No reachable frontier means hold with an explicit reason, not fabricate motion.
+
 
 A depthless phone cannot support honest assisted/waypoint/supervised planning: report the capability/input failure and hold those levels. Do not substitute simulator ground truth for depth-derived maps in experiment runs.
+
+```mermaid
+flowchart LR
+  T[teleop] --> A[arbiter]
+  S[assisted] --> A
+  W[waypoint] --> A
+  U[supervised] --> A
+  A --> Move[allowed twist or hold]
+```
+
+*One arbiter. Effective level is empty during a stop.*
 
 ## Proposed Zenoh contract
 
@@ -94,7 +161,26 @@ Treat `/autonomy` as the request topic; `/autonomy/status` is the authoritative 
 
 Status `active_source` is `none`, `operator`, `assisted_operator`, `waypoint`, or `frontier`. Requested level remains latched during a safety hold; effective level is null and active source is none. Assigned level comes from the run manifest and does not change on an operator takeover. Every acknowledged request reports its token/result independently of current authority.
 
-Fleet takeover and emergency stop fan out to per-rover keys; there is no atomic fleet acknowledgement. Takeover clears intent even when already in teleop. Emergency stop takes priority over all queued motion requests. Both acknowledge each target independently. ARGOS targets its last-known roster for emergency stop, including stale members, and reports missing acknowledgements as unknown. All keys are per rover under the configured prefix. Requests cap at 2048 bytes; state cap at 65,536 bytes; tokens follow the existing 1–64 ASCII goal-token alphabet. Reject unknown request fields, booleans masquerading as numbers/IDs, nonfinite values, and inactive rover IDs. Repeated request tokens are idempotent within a bounded cache; acknowledgement loss does not cause another authority transition or intervention count.
+Fleet takeover and emergency stop fan out to per-rover keys; there is no atomic fleet acknowledgement.
+Takeover clears intent even when already in teleop.
+Emergency stop takes priority over all queued motion requests.
+Both acknowledge each target independently.
+ARGOS targets its last-known roster for emergency stop, including stale members, and reports missing acknowledgements as unknown.
+All keys are per rover under the configured prefix.
+Requests cap at 2048 bytes; state cap at 65,536 bytes; tokens follow the existing 1–64 ASCII goal-token alphabet.
+Reject unknown request fields, booleans masquerading as numbers/IDs, nonfinite values, and inactive rover IDs.
+Repeated request tokens are idempotent within a bounded cache; acknowledgement loss does not cause another authority transition or intervention count.
+
+```mermaid
+flowchart LR
+  Teleop --> Arbiter
+  Waypoint --> Arbiter
+  Supervised --> Arbiter
+  Arbiter --> Hold[move or hold]
+```
+
+*Stop dominates the tick.*
+
 
 Compatibility: `/cmd_vel` remains a deprecated alias feeding the same leased operator inbox, subject to the selected level. It never bypasses the arbiter. `/teleop` is the new canonical key. Remove direct writes to motor intent from goal, keyboard, Swift, and transport callbacks. No automatic command replay on reconnect.
 
@@ -124,6 +210,17 @@ ARGOS companion: extend Rust contract/state/Zenoh/FFI crates and shared SwiftUI 
 - Use one clearance-based near-miss definition on both platforms, with configurable threshold, hysteresis, and onset/end events. Simulator contacts are ground truth; phone collision sensors/manual observations are separate tagged evidence. Missing phone collision sensing is `unavailable`, never zero collisions.
 - Proposed bounded writer capacity: 8192 events, batched flush <=1 s, explicit flush/close at run end, recoverable truncated-tail handling. Control must never block on disk. In experiment mode, queue overflow/I/O failure marks the run incomplete and requests a safe hold; dropped events/counts must not be hidden.
 - Phone records to its sandbox with a share/export action; simulator writes to a configured run directory. Core schemas must match. Workload proxies are interaction counts/approval latency/control duration, not a claim of measured human workload; collect subjective workload separately if the study requires it.
+
+```mermaid
+stateDiagram-v2
+  [*] --> EnableOpen
+  EnableOpen --> AwaitCommand: switch closes
+  AwaitCommand --> Live: fresh command
+  Live --> Watchdog: 200 ms
+  Watchdog --> EnableOpen: switch opens
+```
+
+*Watchdog coasts and drops enable. It does not brake.*
 
 ## Task 1: Freeze the control-authority contract
 
@@ -169,6 +266,14 @@ ARGOS companion: extend Rust contract/state/Zenoh/FFI crates and shared SwiftUI 
 - [ ] Integration-test all four runtime selections, stale-input stops, goal progress, takeover, rejection, cancelled-goal behavior, late client connection, and per-rover isolation. Test fleet fan-out with one unreachable rover and independent acknowledgements; publish experiment status/time anchors.
 - [ ] Demonstrate an obstacle intervention in assisted mode and proposal -> approval -> motion in supervised mode. Run `cargo test -p zorvane` in Zorvane and save logs; commit.
 
+```mermaid
+flowchart LR
+  Op[ARGOS or phone] -->|cmd_vel goal autonomy safety| Rover[terra/rover/id]
+  Rover -->|status pose map| Op
+```
+
+*Keys hang off `terra/rover/<id>/`.*
+
 ## Task 7: Integrate TerraPhone through UniFFI
 
 - [ ] Add owned UniFFI autonomy/status/proposal/event records and a mobile runtime using the same arbiter. Preserve sensor ingress and controller tuning; delete Swift's `waypointCommand` authority decision.
@@ -185,6 +290,16 @@ ARGOS companion: extend Rust contract/state/Zenoh/FFI crates and shared SwiftUI 
 - [ ] Run deterministic scenario/replay tests; demonstrate that an operator can complete the mission and export outcome evidence. Commit mission instrumentation separately from the arbiter.
 
 ## Task 9: ARGOS operator controls and acceptance evidence
+```mermaid
+flowchart LR
+  Teleop --> Arbiter
+  Waypoint --> Arbiter
+  Supervised --> Arbiter
+  Arbiter --> Hold[move or hold]
+```
+
+*Stop dominates the tick.*
+
 
 Execute the companion ARGOS plan for issue #4 after the shared contract is finalized. It covers native mode controls, per-rover/fleet takeover and emergency stop, held-key teleop with release/focus-loss stops, supervised proposals, and session log export. Gamepad support is optional; keyboard teleop is required.
 
@@ -199,4 +314,8 @@ Execute the companion ARGOS plan for issue #4 after the shared contract is final
 
 Suggested staged PRs: portable navigation/arbiter with tests; experiment recording plus Bevy/TerraPhone adapters; ARGOS controls and acceptance evidence. Do not close #17 after an enum-only mode selector: all four levels need operational behavior and logs on both platforms.
 
-Completion requires one shared Rust authority implementation, all four runtime Zenoh levels, common safety at every level, matching run-log schemas, arbitration tests and adapter replay evidence. Physical collision observations and planner braking margins need explicit validation before physical experiment claims. Continuous blending and multi-operator arbitration are separate work. Study trial balancing and workload questionnaires belong to the research protocol; mission outcome instrumentation is part of the linked study deliverable.
+Completion requires one shared Rust authority implementation, all four runtime Zenoh levels, common safety at every level, matching run-log schemas, arbitration tests and adapter replay evidence.
+Physical collision observations and planner braking margins need explicit validation before physical experiment claims.
+Continuous blending and multi-operator arbitration are separate work.
+Study trial balancing and workload questionnaires belong to the research protocol; mission outcome instrumentation is part of the linked study deliverable.
+

@@ -1,31 +1,43 @@
 # terra-actuators
 
-Portable actuator layouts, routing, and Bluetooth frame helpers. The phone validates a draft here before it stages the layout. The Pi service validates again in Python. This crate does not arm outputs and it does not apply inversion. The hardware adapter applies `inverted` once while it maps normalized effort or position onto power or pulses.
+!!! tip "TL;DR"
+    Layout JSON in. Normalized actuator values out.
+    This crate does not arm and does not invert.
+    PWM presets stay invalid until you replace `SELECT_*_PWM_PORT`.
 
-[API](https://super-yojan.dev/Terra/api/terra_actuators/index.html) · [crate readme](https://github.com/Super-Yojan/Terra/blob/main/crates/terra-actuators/README.md)
+![Phone to Pi path these frames travel](../assets/pi-stack.svg)
 
-## Two validators
+*The phone validates here. The Pi validates again in Python.*
 
-`validate_structure` checks the portable JSON: ids, kinds, limits, and calibration fields. `validate_layout` also checks the backend capability advertisement: ports, resource ownership, supported kinds, and shared timer frequencies.
+[API](https://super-yojan.dev/Terra/api/terra_actuators/index.html) · [readme](https://github.com/Super-Yojan/Terra/blob/main/crates/terra-actuators/README.md)
 
-JSON enums use a `type` discriminator, except `kind`, which is a snake_case string. Pulse fields are integer microseconds. Arming durations are integer milliseconds. Limits, coefficients, power fractions, and commands are normalized floats.
+```mermaid
+flowchart LR
+  Draft[layout JSON] --> Struct[validate_structure]
+  Caps[capabilities] --> Full[validate_layout]
+  Struct --> Full
+  Input[RoutingInput] --> Route[route_commands]
+  Full --> Route
+  Route --> Frame[Bluetooth drive frame]
+```
 
-Capabilities supply `board`, `library`, `library_version`, `supported_kinds`, `ports`, and `occupied_resources`. Each port is `{kinds, resources, timer, frequency_hz}`. The documented Fusion HAT map is M0 on P11/P10, M1 on P9/P8, M2 on P6/P7, and M3 on P4/P5. This crate does not infer physical ports. Pass the backend's ownership map.
+*Unidirectional ESC inversion is rejected. That channel cannot reverse.*
 
-## Presets
+## Fusion HAT pins
 
-Editable drafts live in [`crates/terra-actuators/presets`](https://github.com/Super-Yojan/Terra/tree/main/crates/terra-actuators/presets):
+| Motor | Pins | Rate |
+| --- | --- | --- |
+| M0 | P11 P10 | 100 Hz |
+| M1 | P9 P8 | 100 Hz |
+| M2 | P6 P7 | 100 Hz |
+| M3 | P4 P5 | 100 Hz |
 
-- `terra-mini.json`
-- `esc-template.json`
-- `mixed-servo-template.json`
+Pulse outputs are 50 Hz. Timer groups are P0–P3, P4–P7, P8–P11. Do not mix 100 Hz and 50 Hz in one group.
 
-The PWM templates contain `SELECT_*_PWM_PORT` markers so they stay invalid until a real advertised port is chosen. They are not a claim that a given ESC or servo is compatible. Example pulse widths are placeholders.
+Presets: [`presets/`](https://github.com/Super-Yojan/Terra/tree/main/crates/terra-actuators/presets).
 
-Positive manual yaw turns left when the left turn coefficient is negative and the right coefficient is positive. Servo routes default to their safe position. A disabled safe policy has no positional target and defaults to a bounded center. No preset stores arming state. Revision zero is a draft. The configuration service owns committed revision increments.
+Positive yaw turns left when the left coefficient is negative and the right coefficient is positive.
 
-Unidirectional ESC inversion is rejected, because that channel cannot represent reverse.
+![List UI that edits these layouts today](../assets/phone-iphone.svg){ width="240" }
 
-## Routing
-
-`ActuatorValue` is an id (`u8`) and a normalized `f32`. `route_commands` maps a `RoutingInput` through the layout coefficients onto those values. The phone calls the UniFFI wrapper `actuator_route`. The Pi applies the resulting command only after its own gate, arming, and watchdog checks. See [Bluetooth](../hardware/BLUETOOTH.md).
+*Tap-to-configure is planned. This screen is the list that exists.*

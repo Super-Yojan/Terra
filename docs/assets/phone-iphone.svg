@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 280 520" width="280" role="img">
+<title>Physical iPhone</title>
+<rect width="280" height="520" rx="28" fill="#0e1418"/>
+<rect x="10" y="10" width="260" height="500" rx="22" fill="#12181c" stroke="#37474f"/>
+<rect x="10" y="10" width="260" height="36" rx="22" fill="#ffb300"/>
+<rect x="10" y="28" width="260" height="18" fill="#ffb300"/>
+<text x="140" y="32" text-anchor="middle" font-family="ui-sans-serif,sans-serif" font-size="11" font-weight="700" fill="#1a1a1a">PLACEHOLDER · not a Simulator capture</text>
+<text x="140" y="62" text-anchor="middle" font-family="ui-sans-serif,sans-serif" font-size="15" font-weight="700" fill="#eceff1">Physical iPhone</text>
+<g font-family="ui-sans-serif,sans-serif">
+<text x="36" y="78" font-size="11" font-weight="700" fill="#90a4ae">BLUETOOTH ACTUATORS</text>
+<rect x="32" y="82" width="216" height="28" rx="8" fill="#1b5e20"/>
+<text x="140" y="100" text-anchor="middle" font-size="13" fill="#fff">Discover, configure and arm</text>
+<text x="36" y="134" font-size="11" fill="#b0bec5">Find rovers · terra-XXXXXX</text>
+<text x="36" y="150" font-size="11" font-weight="700" fill="#90a4ae">CONTROLLER</text>
+<rect x="32" y="154" width="216" height="28" rx="8" fill="#1b5e20"/>
+<text x="140" y="172" text-anchor="middle" font-size="13" fill="#fff">Phone IMU + VIO</text>
+<rect x="32" y="192" width="216" height="28" rx="8" fill="#1b5e20"/>
+<text x="140" y="210" text-anchor="middle" font-size="13" fill="#fff">Simulated rover</text>
+<text x="36" y="244" font-size="11" font-weight="700" fill="#90a4ae">HIDDEN ON DEVICE</text>
+<rect x="32" y="250" width="216" height="22" rx="11" fill="#37474f"/>
+<text x="140" y="265" text-anchor="middle" font-size="11" fill="#ffe082">No Bevy / Zenoh section</text>
+</g>
+<text x="140" y="498" text-anchor="middle" font-family="ui-sans-serif,sans-serif" font-size="10" fill="#78909c">startBevy does not open a session</text>
+</svg>
