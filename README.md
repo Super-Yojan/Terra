@@ -1,8 +1,12 @@
 # Terra
 
+Documentation: <https://super-yojan.dev/Terra/>
+
 Terra is the vehicle body and onboard autonomy: shared Rust crates, the TerraPhone
 iOS app, and the Raspberry Pi rover. The world simulator is
-[Zorvane](https://github.com/Super-Yojan/Zorvane). ARGOS is the fleet operator.
+[Zorvane](https://super-yojan.dev/Zorvane/). The fleet operator is
+[ARGOS](https://super-yojan.dev/ARGOS/). Both sit with this site under
+[super-yojan.dev](https://super-yojan.dev).
 
 Configurable Bluetooth actuator control is implemented for TerraPhone and a
 standalone Raspberry Pi peripheral. See [Bluetooth setup and protocol](docs/hardware/BLUETOOTH.md),
@@ -34,7 +38,7 @@ See [mobile controller setup](docs/MOBILE_CONTROL.md) for the sensor contract, i
 ## Simulation
 
 World, cameras, physics, and the Zenoh bridge live in
-[Zorvane](https://github.com/Super-Yojan/Zorvane). From a checkout of that repo:
+[Zorvane](https://super-yojan.dev/Zorvane/). From a checkout of that repo:
 
 ```sh
 cargo run -p zorvane

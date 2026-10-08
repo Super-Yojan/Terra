@@ -1,0 +1,114 @@
+site_name: Terra
+site_url: https://super-yojan.dev/Terra/
+site_description: Vehicle body, onboard autonomy, TerraPhone, and the Raspberry Pi rover.
+repo_url: https://github.com/Super-Yojan/Terra
+repo_name: Super-Yojan/Terra
+edit_uri: edit/main/docs/
+docs_dir: docs
+strict: true
+
+theme:
+  name: material
+  custom_dir: overrides
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: blue grey
+      accent: amber
+      toggle:
+        icon: material/weather-night
+        name: Dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: blue grey
+      accent: amber
+      toggle:
+        icon: material/weather-sunny
+        name: Light mode
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.sections
+    - navigation.expand
+    - navigation.indexes
+    - navigation.footer
+    - toc.follow
+    - content.code.copy
+    - search.suggest
+    - search.highlight
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+
+plugins:
+  - search
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/Super-Yojan/Terra
+
+nav:
+  - Home: index.md
+  - Architecture: architecture.md
+  - Getting started: getting-started.md
+  - Crates:
+      - crates/index.md
+      - terra-types: crates/terra-types.md
+      - terra-state: crates/terra-state.md
+      - terra-control: crates/terra-control.md
+      - terra-waypoint: crates/terra-waypoint.md
+      - terra-transport: crates/terra-transport.md
+      - terra-mapping: crates/terra-mapping.md
+      - terra-navigation: crates/terra-navigation.md
+      - terra-autonomy: crates/terra-autonomy.md
+      - terra-experiment: crates/terra-experiment.md
+      - terra-motors: crates/terra-motors.md
+      - terra-actuators: crates/terra-actuators.md
+      - terra-mobile: crates/terra-mobile.md
+  - Zenoh: zenoh.md
+  - TerraPhone:
+      - phone/index.md
+      - Building in Xcode: phone/build.md
+      - Simulator and iPhone: phone/simulator.md
+      - Bluetooth pairing: phone/bluetooth.md
+      - Tap to configure: phone/tap-to-configure.md
+  - Hardware:
+      - hardware/index.md
+      - Install on a Pi: hardware/INSTALL.md
+      - Bluetooth peripheral: hardware/BLUETOOTH.md
+      - Fusion HAT: hardware/FUSION_HAT.md
+      - Bench procedure: hardware/BENCH.md
+      - Evidence:
+          - Status: hardware/evidence/README.md
+          - Binary build: hardware/evidence/BINARY_BUILD.md
+          - Source review: hardware/evidence/SOURCE_REVIEW.md
+  - Autonomy:
+      - Guide: autonomy/README.md
+      - Contract: autonomy/PROTOCOL.md
+      - Evidence: autonomy/evidence/README.md
+  - Simulation: simulation.md
+  - Development:
+      - Without a Mac: DEVELOP-WITHOUT-MAC.md
+      - Containers: DOCKER.md
+      - Phone controller: MOBILE_CONTROL.md
+  - Design notes:
+      - Autonomy plan: superpowers/plans/2026-10-06-level-of-autonomy.md
+      - Actuator layout plan: superpowers/plans/2026-10-06-bluetooth-actuator-layouts.md
+      - Actuator layout spec: superpowers/specs/2026-10-06-bluetooth-actuator-layouts-design.md
+      - Button pairing plan: superpowers/plans/2026-10-07-button-pairing.md
+      - Button pairing spec: superpowers/specs/2026-10-07-button-pairing-design.md
+  - Rust API: https://super-yojan.dev/Terra/api/
+  - super-yojan.dev: https://super-yojan.dev
+  - ARGOS: https://super-yojan.dev/ARGOS/
+  - Zorvane: https://super-yojan.dev/Zorvane/

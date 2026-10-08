@@ -1,6 +1,6 @@
 # Develop the world without a Mac
 
-The Bevy world simulator is [Zorvane](https://github.com/Super-Yojan/Zorvane), not this repository. Terra keeps the vehicle body, onboard autonomy, TerraPhone, and the Pi rover.
+The Bevy world simulator is [Zorvane](https://super-yojan.dev/Zorvane/), not this repository. Terra keeps the vehicle body, onboard autonomy, TerraPhone, and the Pi rover.
 
 From a Zorvane checkout:
 

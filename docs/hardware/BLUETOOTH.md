@@ -34,7 +34,7 @@ environment interpreter for the CLI examples below. Before first setup, create
 the private owner directory and run provisioning as the normal service account
 with its BlueZ permissions; setup does not create that directory.
 
-The [service unit](../../packaging/terra-rover.service) uses the compiled executable,
+The [service unit](https://github.com/Super-Yojan/Terra/blob/main/packaging/terra-rover.service) uses the compiled executable,
 defaults to no exposed PWM ports, and restarts on failure. Adapt its
 gate source and `--pwm-ports` list in `/etc/terra-rover/rover.env` to confirmed connectors. Its writable
 state directory is separate from the gate producer. Stop it before any standalone
@@ -70,9 +70,9 @@ fresh normalized effort and individual servo positions; feedback mode requires a
 compatible left/right propulsion layout and healthy sensors. See
 [mobile controls](../MOBILE_CONTROL.md#bluetooth-actuator-control).
 
-The [terra-mini](../../crates/terra-actuators/presets/terra-mini.json),
-[ESC](../../crates/terra-actuators/presets/esc-template.json) and
-[mixed servo](../../crates/terra-actuators/presets/mixed-servo-template.json)
+The [terra-mini](https://github.com/Super-Yojan/Terra/blob/main/crates/terra-actuators/presets/terra-mini.json),
+[ESC](https://github.com/Super-Yojan/Terra/blob/main/crates/terra-actuators/presets/esc-template.json) and
+[mixed servo](https://github.com/Super-Yojan/Terra/blob/main/crates/terra-actuators/presets/mixed-servo-template.json)
 examples are drafts. `SELECT_*_PWM_PORT` markers intentionally make the JSON
 templates invalid until capability ports are selected. Replace them and the base
 revision before staging. Resource validation rejects direct aliases and shared

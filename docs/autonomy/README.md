@@ -2,7 +2,7 @@
 
 The runtime answers a mission question: which level of operator support is sufficient to finish a task safely under the conditions being tested? It does not automatically choose an optimal level.
 
-Run the reference disaster-search scenario from a [Zorvane](https://github.com/Super-Yojan/Zorvane) checkout. The arbiter crates stay in Terra. The Zenoh prefix stays `terra/rover`, and the `TERRA_*` variables still select the mission:
+Run the reference disaster-search scenario from a [Zorvane](https://super-yojan.dev/Zorvane/) checkout. The arbiter crates stay in Terra. The Zenoh prefix stays `terra/rover`, and the `TERRA_*` variables still select the mission:
 
 ```sh
 TERRA_MISSION=1 TERRA_MISSION_SEED=42 TERRA_ROVER_COUNT=2 cargo run -p zorvane
