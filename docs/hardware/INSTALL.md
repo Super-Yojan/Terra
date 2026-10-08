@@ -13,10 +13,10 @@
 flowchart LR
   Phone[iPhone] -->|GATT| Pi[terra-rover]
   Pi --> Hat[Fusion HAT]
-  Gate[gate file] --> Pi
+  Battery[Battery switch] -->|power cutoff| Hat
 ```
 
-*Gate closed is not the same as armed.*
+*The battery switch is external. Connecting does not arm.*
 
 Target: **64-bit Raspberry Pi OS Bookworm or newer**, with systemd and Bluetooth.
 The release is a Nuitka-compiled ARM64 Linux executable. It includes the Python
@@ -91,10 +91,10 @@ reload the bus, or operate host services. The image builder must provision the
 flowchart LR
   Phone[iPhone] -->|GATT| Pi[terra-rover]
   Pi --> Hat[Fusion HAT]
-  Gate[gate file] --> Pi
+  Battery[Battery switch] -->|power cutoff| Hat
 ```
 
-*Gate closed is not the same as armed.*
+*An optional Pi interlock can be configured separately.*
 
 ## Configure the hardware
 
@@ -113,17 +113,19 @@ See [Fusion HAT deployment requirements](FUSION_HAT.md).
 Edit `/etc/terra-rover/rover.env`:
 
 ```ini
-TERRA_GATE_FILE=/run/terra-interlock/gate
 TERRA_PWM_PORTS=
 ```
 
 Set `TERRA_PWM_PORTS` only to verified exposed connectors, for example `P0,P1`.
-An empty list still permits the board's M0–M3 motor capabilities. The independent,
-supervised physical interlock producer must provide a readable gate file: `0`
-for confirmed open/isolated, `1` for closed. Make it readable by `terra-rover` and
-unwritable by that account. The installer does not create a simulated gate file.
-Gate closure does not arm the rover. A stale file is not detected by this adapter;
-the hardware supervisor must keep the input current and fail open.
+An empty list still permits the board's M0–M3 motor capabilities. The default
+service uses the battery's external power cutoff and requires no Pi switch signal.
+Configuration requires disarm, and motion requires explicit arming and fresh
+commands. The Pi cannot measure the battery switch position.
+
+For an optional Pi-connected interlock, add `--gate-file /path/to/gate` to the
+service command. Its producer must provide `0` for confirmed open/isolated and
+`1` for closed. Missing/unreadable state blocks configuration and motion in that
+explicit mode. The installer does not create a simulated gate file.
 
 ## Pair the owner and run
 
@@ -147,7 +149,7 @@ Already-owned rovers ignore enrollment holds.
 First-owner enrollment uses Bluetooth Just Works: proximity plus the physical window authorizes the first phone, without numeric-code comparison or protection against an active nearby pairing attacker.
 Keep enrollment physically supervised.
 Pairing never arms or requires a gate file.
-Motor operation still requires the separate physical interlock described above.
+Motor operation requires a valid layout and explicit arming.
 
 
 The button and LED default to `/sys/class/fusion_hat/fusion_hat/button` and
@@ -162,7 +164,7 @@ processes at once.
 To run in the foreground instead, keep the service stopped and use:
 
 ```sh
-sudo -u terra-rover terra-rover --gate-file /run/terra-interlock/gate --pwm-ports P0,P1
+sudo -u terra-rover terra-rover --pwm-ports P0,P1
 ```
 
 For a mock backend on a Linux host with a Bluetooth radio, use
@@ -244,5 +246,5 @@ On rover2 the source runtime is installed at `/opt/terra-bench/venv`, with a
 systemd override at `/etc/systemd/system/terra-rover.service.d/bench-mode.conf`.
 The confirmed initial layout is M2/M3 left and M0/M1 right, revision 1; its effort
 limits are ±0.4 with maximum power fraction 0.5. Wheel direction still requires
-physical observation. Remove the override and provide a real interlock before
-returning to the default physical-gate service.
+physical observation. The default service uses the external battery cutoff;
+physical-gate installations explicitly supply `--gate-file`.

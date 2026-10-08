@@ -112,11 +112,16 @@ class _Adapter:
     def capabilities(self): return deepcopy(self._caps)
 
     def read_gate(self):
-        if self._closed or self._gate_reader is None: return False
+        if self._closed: return False
+        # External battery cutoff has no sensor. This is output permission,
+        # not a claim that battery power or switch state has been measured.
+        if getattr(self, 'external_power_cutoff', False): return True
+        if self._gate_reader is None: return False
         try: return self._gate_reader() is True
         except Exception: return False
 
     def require_gate_open(self):
+        if not self._closed and getattr(self, 'external_power_cutoff', False): return
         if self._closed or self._gate_reader is None:
             raise BackendError(None, 'gate', 'gate state unavailable')
         try:
@@ -236,7 +241,11 @@ class MockBackend(_Adapter):
 
 class FusionHatBackend(_Adapter):
     def __init__(self, pwm_ports=(), gate_reader=None, *, supported_library_versions=('1.14.0',),
-                 motor_factory=None, pwm_factory=None, library_version=None, occupied_resources=()):
+                 motor_factory=None, pwm_factory=None, library_version=None, occupied_resources=(),
+                 external_power_cutoff=False):
+        if external_power_cutoff and gate_reader is not None:
+            raise ValueError('external battery cutoff cannot also use a Pi gate')
+        self.external_power_cutoff = external_power_cutoff
         self._versions = tuple(supported_library_versions)
         self._motor_factory, self._pwm_factory = motor_factory, pwm_factory
         self._version = library_version

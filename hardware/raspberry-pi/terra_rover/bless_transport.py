@@ -5,12 +5,37 @@ version-pinned adapter so encrypted requests can still enforce owner identity.
 """
 import asyncio
 import inspect
-from dbus_next import DBusError, Variant
-from dbus_next.service import method
+import os
+from dbus_next import DBusError, Variant, PropertyAccess
+from dbus_next.service import method, dbus_property
 from bless.backends.bluezdbus.server import BlessServerBlueZDBus
 from bless.backends.bluezdbus.dbus.characteristic import BlueZGattCharacteristic, Flags
 from bless.backends.attribute import GATTAttributePermissions as Permissions
 from bless.backends.characteristic import GATTCharacteristicProperties as Properties
+from bless.backends.bluezdbus.dbus.service import BlueZGattService
+
+
+class StableGattService(BlueZGattService):
+    """Optional commissioned handle prevents relocation across service restarts."""
+    def __init__(self, original, handle):
+        if type(handle) is not int or not 0 <= handle <= 65535:
+            raise ValueError('GATT service handle must be an unsigned 16-bit integer')
+        super().__init__(original.UUID, original.Primary,
+                         int(original.path.rsplit('service', 1)[1], 16), original.app)
+        self._requested_handle = handle
+
+    @dbus_property(access=PropertyAccess.READWRITE)
+    def Handle(self) -> 'q':
+        return self._requested_handle
+
+    @Handle.setter
+    def Handle(self, value: 'q'):
+        self._requested_handle = value
+
+    async def get_obj(self):
+        result = await super().get_obj()
+        result['Handle'] = Variant('q', self._requested_handle)
+        return result
 
 class PeerCharacteristic(BlueZGattCharacteristic):
     def __init__(self, original, read=None, write=None, notify=None, invalid_write=None):
@@ -89,6 +114,15 @@ class BlessTransport:
             self.bus = self.server.bus
             self.adapter = self.server.adapter
             await self.server.add_new_service(self.service_uuid)
+            configured_handle = os.environ.get('TERRA_GATT_SERVICE_HANDLE')
+            if configured_handle is not None:
+                service = self.server.services[self.service_uuid.lower()]
+                original = service.gatt
+                stable = StableGattService(original, int(configured_handle, 0))
+                self.bus.unexport(original.path, original)
+                self.server.app.services[self.server.app.services.index(original)] = stable
+                service.gatt = service.obj = stable
+                self.bus.export(stable.path, stable)
         except BaseException:
             if hasattr(self.server, "bus"): self.server.bus.disconnect()
             raise

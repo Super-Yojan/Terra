@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		AC0000000000000000000001 /* ActuatorConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC0000000000000000000002; };
 		DB0000000000000000000001 /* DriveControlPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = DB0000000000000000000002; };
 		DB0000000000000000000003 /* DriveJoystickCommand.swift in Sources */ = {isa = PBXBuildFile; fileRef = DB0000000000000000000004; };
 		DA0000000000000000000009 /* TerraAutoConnectionPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA0000000000000000000010; };
@@ -30,6 +31,7 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		AC0000000000000000000002 /* ActuatorConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActuatorConfiguration.swift; sourceTree = "<group>"; };
 		DB0000000000000000000002 /* DriveControlPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DriveControlPanel.swift; sourceTree = "<group>"; };
 		DB0000000000000000000004 /* DriveJoystickCommand.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DriveJoystickCommand.swift; sourceTree = "<group>"; };
 		DA0000000000000000000010 /* TerraAutoConnectionPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerraAutoConnectionPolicy.swift; sourceTree = "<group>"; };
@@ -125,6 +127,7 @@
 				9C2FA04187CC39D929F3A531 /* PhoneController.swift */,
 				B100000000000000000000002 /* BluetoothLink.swift */,
 				B100000000000000000000004 /* ActuatorLayoutView.swift */,
+				AC0000000000000000000002 /* ActuatorConfiguration.swift */,
 				B100000000000000000000001 /* BluetoothSession.swift */,
 				543C3C67B32982AE4FA32C81 /* Info.plist */,
 			);
@@ -213,6 +216,7 @@
 				08906BAF4104CBE47B269B2D /* PhoneController.swift in Sources */,
 				B200000000000000000000002 /* BluetoothLink.swift in Sources */,
 				B200000000000000000000004 /* ActuatorLayoutView.swift in Sources */,
+				AC0000000000000000000001 /* ActuatorConfiguration.swift in Sources */,
 				B200000000000000000000001 /* BluetoothSession.swift in Sources */,
 				B801C8002482FB48C25D7908 /* TerraCore.swift in Sources */,
 			);

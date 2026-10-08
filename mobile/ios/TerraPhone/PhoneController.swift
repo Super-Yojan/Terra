@@ -694,8 +694,11 @@ extension PhoneController {
         } catch { revokeHardwareMotion() }
     }
     var configurationAllowed: Bool {
-        let status = (try? JSONSerialization.jsonObject(with: Data(bluetooth.statusJSON.utf8))) as? [String: Any]
-        return hardwareConfigurationReady && status?["armed"] as? Bool == false && status?["arming"] as? Bool == false && status?["hardware_gate_open_confirmed"] as? Bool == true
+        configurationBlockingReason == nil
+    }
+    var configurationBlockingReason: String? {
+        let status = (try? JSONSerialization.jsonObject(with: Data(bluetooth.statusJSON.utf8))) as? [String: Any] ?? [:]
+        return ActuatorConfigurationPolicy.blockingReason(ready: hardwareConfigurationReady, status: status)
     }
     @discardableResult private func sendConfiguration(_ operation: String, payload: [String: Any]) -> UInt32? {
         guard nextRequest < 0x7fffffff else { return nil }
@@ -710,13 +713,13 @@ extension PhoneController {
         sendConfiguration("set_bench_enabled", payload: ["enabled": enabled])
     }
     func resetHardwareFault() {
-        guard configurationAllowed else { configurationStatus = "Disarm and open the hardware gate before resetting a fault"; return }
+        guard configurationAllowed else { configurationStatus = configurationBlockingReason ?? "Configuration unavailable"; return }
         resetFaultRequest = sendConfiguration("reset_fault", payload: [:])
         configurationStatus = "Waiting for fault reset acknowledgement · remains disarmed"
     }
     func stageActuatorLayout(json: String) {
         staged = nil; stageRequest = nil
-        guard configurationAllowed else { configurationStatus = "Disarm and open the hardware gate before configuration"; return }
+        guard configurationAllowed else { configurationStatus = configurationBlockingReason ?? "Configuration unavailable"; return }
         do {
             let errors = try actuatorValidateLayout(layoutJson: json, capabilitiesJson: capabilitiesJSON)
             guard errors == "[]" else { configurationStatus = errors; return }
@@ -730,7 +733,7 @@ extension PhoneController {
     func invalidateStagedLayout() { staged = nil; stageRequest = nil; configurationStatus = "Draft changed · stage again" }
     var hasStagedLayout: Bool { staged != nil }
     func commitActuatorLayout() {
-        guard configurationAllowed, let staged else { configurationStatus = "Stage a valid draft while disarmed with the gate open"; return }
+        guard configurationAllowed, let staged else { configurationStatus = configurationBlockingReason ?? "Validate and stage the draft first"; return }
         commitRequest = sendConfiguration("commit_layout", payload: ["staged_revision": staged.revision, "staged_request_id": staged.request])
         configurationStatus = "Waiting for commit acknowledgement"
     }

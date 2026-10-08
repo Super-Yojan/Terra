@@ -79,8 +79,11 @@ swiftc mobile/ios/TerraPhone/DriveJoystickCommand.swift \
 Bench-capable rovers advertise `gate_mode=bench` and `bench_enabled` in status.
 Drive displays **Enable Bench Control** separately from Arm, explains the absence
 of a physical power cutoff, and uses rover acknowledgement to enable Arm. Stop,
-Disarm and disconnect clear the rover's session-only bench permission. The normal
-physical gate remains required for rovers that do not explicitly use bench mode.
+Disarm and disconnect clear the rover's session-only bench permission. Rovers
+using an external battery cutoff omit `--gate-file`; they report
+`gate_mode=external_power_cutoff` and `configuration_allowed` without claiming
+to measure a switch. Explicit physical-gate installations retain their interlock
+checks. See [rover1 configuration](../../docs/phone/rover1-configuration.md).
 
 Bluetooth transport acknowledgements have a separate 2-second liveness timeout.
 Fresh command packets still expire at 100 ms, and the rover disarms after 200 ms

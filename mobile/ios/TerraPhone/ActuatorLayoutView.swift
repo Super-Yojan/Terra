@@ -1,53 +1,8 @@
 import SwiftUI
 
-struct ActuatorLayoutDraft: Codable, Equatable {
-    var schema_version = 1
-    var revision: UInt32 = 0
-    var actuators: [ActuatorDraft] = []
-}
-struct ActuatorDraft: Codable, Equatable {
-    var id: Int
-    var name: String
-    var port = ""
-    var kind = "dc_motor"
-    var inverted = false
-    var limits = ActuatorLimits(min: -1, max: 1)
-    var calibration = ActuatorCalibration(type: "dc_motor", max_power_fraction: 0.5)
-    var route = ActuatorRoute(type: "manual", forward_coefficient: 1, turn_coefficient: 0)
-    var safe = ActuatorSafe(type: "zero")
-    mutating func changeKind(_ value: String) {
-        kind = value
-        if value == "unidirectional_esc" { inverted = false }
-        limits = ActuatorLimits(min: value == "unidirectional_esc" ? 0 : -1, max: 1)
-        route = value == "positional_servo" ? ActuatorRoute(type: "servo") : ActuatorRoute(type: "manual", forward_coefficient: 1, turn_coefficient: 0)
-        safe = ActuatorSafe(type: value == "positional_servo" ? "position" : "zero", value: value == "positional_servo" ? 0 : nil)
-        switch value {
-        case "bidirectional_esc": calibration = ActuatorCalibration(type: value, reverse_us: 1000, neutral_us: 1500, forward_us: 2000, arming_duration_ms: 2000)
-        case "unidirectional_esc": calibration = ActuatorCalibration(type: value, stop_us: 1000, full_power_us: 2000, arming_duration_ms: 2000)
-        case "positional_servo": calibration = ActuatorCalibration(type: value, min_us: 1000, center_us: 1500, max_us: 2000)
-        default: calibration = ActuatorCalibration(type: value, max_power_fraction: 0.5)
-        }
-    }
-}
-struct ActuatorLimits: Codable, Equatable { var min: Double; var max: Double }
-struct ActuatorCalibration: Codable, Equatable {
-    var type: String
-    var max_power_fraction: Double?
-    var reverse_us: Int?; var neutral_us: Int?; var forward_us: Int?
-    var stop_us: Int?; var full_power_us: Int?; var arming_duration_ms: Int?
-    var min_us: Int?; var center_us: Int?; var max_us: Int?
-}
-struct ActuatorRoute: Codable, Equatable { var type: String; var forward_coefficient: Double?; var turn_coefficient: Double? }
-struct ActuatorSafe: Codable, Equatable { var type: String; var value: Double? }
-struct ActuatorCapabilities: Decodable {
-    struct Port: Decodable { var kinds: [String]; var resources: [String]; var frequency_hz: Int }
-    var board: String; var library: String; var library_version: String
-    var supported_kinds: [String]; var ports: [String: Port]
-}
-
 struct ActuatorLayoutView: View {
     @ObservedObject var brain: PhoneController
-    @State private var draft = ActuatorLayoutDraft()
+    @State private var draft = ActuatorLayoutDraft.rover1()
     @State private var dirty = false
     @State private var feedback = false
     @State private var selected: String = ""
@@ -89,7 +44,7 @@ struct ActuatorLayoutView: View {
                 if let fault = brain.hardwareFault { Text("Fault: \(fault)").textSelection(.enabled) }
                 Button("Reset fault") { brain.resetHardwareFault() }.disabled(!brain.configurationAllowed || brain.hardwareFault == nil)
                 Button("Reset emergency stop") { brain.emergencyStop(reset: true) }
-                Text("Reset does not arm. Arming resets propulsion and positional servo targets to their safe defaults. Open the independent hardware gate before editing or committing configuration.").font(.footnote)
+                Text("Reset does not arm. Apply configuration while disarmed. The battery switch is the external power cutoff for rover1; no switch signal to the Pi is required.").font(.footnote)
             }
             if let active {
                 Section("Active layout · revision \(active.revision)") {
@@ -103,6 +58,7 @@ struct ActuatorLayoutView: View {
                 }
             }
             Section("Draft configuration") {
+                Button("Rover1 · two ESCs on P0 and P1") { draft = .rover1(revision: brain.activeLayoutRevision) }
                 if let caps { Text("\(caps.board) · \(caps.library) \(caps.library_version)") }
                 Text("Active revision \(brain.activeLayoutRevision); draft base revision \(draft.revision)")
                 Button("Load active layout") { if let active { draft = active; dirty = false } }.disabled(active == nil)
@@ -123,6 +79,7 @@ struct ActuatorLayoutView: View {
             }
             Section("Apply configuration") {
                 Text(brain.configurationStatus).textSelection(.enabled)
+                if let reason = brain.configurationBlockingReason { Text(reason).font(.footnote).foregroundStyle(.orange) }
                 Button("Validate and stage draft") {
                     if let data = try? JSONEncoder().encode(draft) { brain.stageActuatorLayout(json: String(decoding: data, as: UTF8.self)) }
                 }.disabled(!brain.configurationAllowed)
@@ -131,7 +88,7 @@ struct ActuatorLayoutView: View {
             }
         }
         .navigationTitle("Actuator layouts")
-        .onAppear { if !dirty { draft = active ?? ActuatorLayoutDraft(revision: brain.activeLayoutRevision) } }
+        .onAppear { if !dirty { draft = active ?? .rover1(revision: brain.activeLayoutRevision) } }
         .onChange(of: brain.activeLayoutRevision) { _, revision in if !dirty { draft.revision = revision } }
         .onChange(of: selected) { _, _ in if brain.hardwareActive { brain.stop() } }
         .onChange(of: brain.acknowledgedCommitRevision) { _, revision in

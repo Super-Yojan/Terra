@@ -370,7 +370,7 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
                 if operation == "read_layout", object["payload"] is NSNull {
                     synchronizedRevision = nil; safeValues = []; policy.invalidateLayout()
                     DispatchQueue.main.async { self.isReady = false; self.layoutJSON = "{}" }
-                    publish("No active layout · configure while disarmed with gate open")
+                    publish("No active layout · choose a preset and apply while disarmed")
                     pump(); return
                 }
                 if object["result"] as? String == "ok", let payload = object["payload"] as? [String: Any], let data = try? JSONSerialization.data(withJSONObject: payload) {

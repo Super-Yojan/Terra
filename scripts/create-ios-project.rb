@@ -5,7 +5,7 @@ project_path = File.join(root, 'mobile/ios/TerraPhone.xcodeproj')
 project = Xcodeproj::Project.new(project_path)
 app = project.new_target(:application, 'TerraPhone', :ios, '17.0')
 sources = project.main_group.new_group('TerraPhone', 'TerraPhone')
-%w[TerraPhoneApp.swift ContentView.swift TerraDashboard.swift RoverModelView.swift TerraAutoConnectionPolicy.swift DriveControlPanel.swift DriveJoystickCommand.swift PhoneController.swift BluetoothSession.swift BluetoothLink.swift ActuatorLayoutView.swift].each do |name|
+%w[TerraPhoneApp.swift ContentView.swift TerraDashboard.swift RoverModelView.swift TerraAutoConnectionPolicy.swift DriveControlPanel.swift DriveJoystickCommand.swift PhoneController.swift BluetoothSession.swift BluetoothLink.swift ActuatorConfiguration.swift ActuatorLayoutView.swift].each do |name|
   app.source_build_phase.add_file_reference(sources.new_file(name))
 end
 sources.new_file('Info.plist')

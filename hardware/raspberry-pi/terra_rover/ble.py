@@ -29,6 +29,22 @@ SERVICE = ROOT + '/service0'
 def denied(message):
     return DBusError('org.bluez.Error.NotAuthorized', message)
 
+def status_read_document(payload):
+    # ATT attribute reads are capped at 512 bytes. Full diagnostics use the
+    # existing fragmented notifications; admission needs only these fields.
+    keys = ('schema_version', 'type', 'session', 'active_revision', 'armed', 'arming',
+            'layout_available', 'fault', 'emergency_stop', 'gate_mode', 'bench_enabled',
+            'hardware_gate_open_confirmed', 'configuration_allowed')
+    compact = {key: payload[key] for key in keys if key in payload}
+    raw = json.dumps(compact, separators=(',', ':'), allow_nan=False).encode()
+    if len(raw) > 512 and isinstance(compact.get('fault'), str):
+        compact['fault'] = 'rover_fault'
+        raw = json.dumps(compact, separators=(',', ':'), allow_nan=False).encode()
+    if len(raw) > 512:
+        raise ProtocolError('admission status exceeds ATT read limit')
+    return raw
+
+
 class BlePeripheral:
     def __init__(self, name='Terra Rover', adapter=None):
         self.name, self.adapter = name, adapter
@@ -211,7 +227,7 @@ class BlePeripheral:
             if now-self.last_status >= .1:
                 status = self.store.status(time.monotonic())
                 status.update(type='status', generation=self.generation)
-                self.status_bytes = json.dumps(status, separators=(',', ':')).encode()
+                self.status_bytes = status_read_document(status)
                 self.loop.call_soon_threadsafe(self._emit, 'status', status, self.generation)
                 self.last_status = now
             self.stop.wait(max(0, .010-(time.monotonic()-started)))

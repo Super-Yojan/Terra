@@ -157,7 +157,7 @@ def main():
     parser.add_argument('--config', type=Path, default=Path('/var/lib/terra-rover/layout.json'))
     parser.add_argument('--owner', type=Path, default=Path('/var/lib/terra-rover/owner.json'))
     parser.add_argument('--pwm-ports', default='', help='comma-separated physically exposed P0-P11 ports')
-    parser.add_argument('--gate-file', type=Path)
+    parser.add_argument('--gate-file', type=Path, help='optional Pi-connected interlock; omitted for an external battery cutoff')
     parser.add_argument('--bench-mode', action='store_true', help='supervised real-hardware bench mode with session-only software enable; no physical cutoff')
     parser.add_argument('--adapter')
     parser.add_argument('--button-pairing', action='store_true', help='Fusion HAT button first-owner enrollment; then normal operation')
@@ -206,8 +206,9 @@ async def run_normal(args, name):
             backend.bench_gate = gate
             print('BENCH MODE: software enable only; no physical power cutoff. Starts disabled.', flush=True)
         else:
-            if args.gate_file is None: raise RuntimeError('real hardware requires --gate-file')
-            backend = FusionHatBackend(ports, file_gate_reader(args.gate_file))
+            backend = FusionHatBackend(ports,
+                file_gate_reader(args.gate_file) if args.gate_file is not None else None,
+                external_power_cutoff=args.gate_file is None)
     await BlePeripheral(name, args.adapter).run(backend, args.config, args.owner)
 
 if __name__ == '__main__': main()

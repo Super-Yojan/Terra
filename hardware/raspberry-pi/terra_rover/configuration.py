@@ -306,15 +306,17 @@ class ConfigurationStore:
     def status(self, now):
         result = self.safety.status(now)
         gate = getattr(self.backend, 'bench_gate', None)
-        result['gate_mode'] = 'bench' if gate is not None else 'physical'
+        external_cutoff = getattr(self.backend, 'external_power_cutoff', False)
+        result['gate_mode'] = 'external_power_cutoff' if external_cutoff else 'bench' if gate is not None else 'physical'
         result['bench_enabled'] = gate.enabled if gate is not None else False
         result['active_revision'] = self.active_revision
         result['layout_available'] = self._active is not None and self.safety.layout is not None
         try:
             self.backend.require_gate_open()
-            result['hardware_gate_open_confirmed'] = True
+            result['hardware_gate_open_confirmed'] = not external_cutoff
         except Exception:
             result['hardware_gate_open_confirmed'] = False
+        result['configuration_allowed'] = not bool(self._gate_errors(now))
         result.update(service_state='fault' if result['fault'] else 'armed' if result['armed'] else 'arming' if result['arming'] else 'disarmed',
                       configuration_errors=deepcopy(self.errors), battery=None, battery_reason='unsupported')
         return result

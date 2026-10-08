@@ -78,7 +78,7 @@ Run the service or a standalone mock (a Linux Bluetooth radio is still required)
 python3 -m terra_rover --mock --name 'Terra Rover' --config /var/lib/terra-rover/mock-layout.json --owner /var/lib/terra-rover/owner.json --pwm-ports P0,P1 --mock-gate-closed
 ```
 
-Mock gate defaults open; --mock-gate-closed explicitly enables its simulated interlock. Real hardware requires --gate-file and defaults to M0–M3 capabilities. Supply --pwm-ports only for physically confirmed exposed P0–P11 ports. Timer/resource conflicts are validated before activation. Persisted layout load fails closed and advertises faults if gate is closed/unavailable; reconnect never restores arming.
+Mock gate defaults open; --mock-gate-closed explicitly enables its simulated interlock. Real hardware defaults to an external battery cutoff and M0–M3 capabilities, with no Pi switch signal required. Supply --pwm-ports only for physically confirmed exposed P0–P11 ports. Optional --gate-file installations retain physical interlock checks. Timer/resource conflicts are validated before activation; reconnect never restores arming.
 
 ```mermaid
 flowchart LR
