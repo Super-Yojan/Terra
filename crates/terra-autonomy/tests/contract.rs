@@ -2,6 +2,14 @@ use terra_autonomy::*;
 #[test]
 fn strict_requests_and_correlation() {
     assert!(decode_level(br#"{"level":"teleop","token":"switch-1"}"#).is_some());
+    let explore =
+        decode_level(br#"{"level":"explore","token":"explore-1","budget_minutes":2}"#).unwrap();
+    assert_eq!(explore.resolved_budget_seconds(), Some(120.));
+    assert!(
+        decode_level(br#"{"level":"explore","token":"bad","budget_seconds":1,"budget_minutes":1}"#)
+            .is_none()
+    );
+    assert!(decode_level(br#"{"level":"explore","token":"bad","budget_seconds":0}"#).is_none());
     for b in [
         br#"{"level":"magic","token":"x"}"#.as_slice(),
         br#"{"level":"teleop","token":""}"#,

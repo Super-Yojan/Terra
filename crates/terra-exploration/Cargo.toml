@@ -1,11 +1,8 @@
 [package]
-name = "terra-autonomy"
+name = "terra-exploration"
 version.workspace = true
 edition.workspace = true
 [dependencies]
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-terra-navigation.workspace = true
-terra-exploration.workspace = true
 terra-mapping.workspace = true
-terra-waypoint.workspace = true
+terra-navigation.workspace = true

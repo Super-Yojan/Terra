@@ -2,6 +2,10 @@ mod contract;
 pub use contract::*;
 mod arbiter;
 pub use arbiter::*;
+pub use terra_exploration::{
+    Detection, EndReason, ExplorationConfig, ExplorationStatus, ExplorePhase, FindTargetsObjective,
+    FrontierTarget, MissionObjective,
+};
 
 /// Dashboard telemetry for observed cells only; never includes simulator ground truth.
 pub fn occupancy_telemetry(

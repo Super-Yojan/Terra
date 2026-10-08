@@ -2029,6 +2029,7 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+ "terra-exploration",
  "terra-mapping",
  "terra-navigation",
  "terra-waypoint",
@@ -2049,6 +2050,15 @@ dependencies = [
  "serde",
  "serde_json",
  "terra-mapping",
+]
+
+[[package]]
+name = "terra-exploration"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "terra-mapping",
+ "terra-navigation",
 ]
 
 [[package]]

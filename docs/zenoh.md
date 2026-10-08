@@ -52,8 +52,9 @@ M[map/occupancy pose goal/status]
 | `goal/status` | `idle`, `active`, `arrived`. |
 | `goal/proposal` | A supervised target. `null` means none. |
 | `goal/decision` | `approve`, `reject`, or `resume`. |
-| `autonomy` | `teleop`, `assisted_teleop`, `waypoint`, `supervised`. |
-| `autonomy/status` | Assigned, requested, effective. |
+| `autonomy` | `teleop`, `assisted_teleop`, `waypoint`, `supervised`, `explore`. |
+| `autonomy/status` | Assigned, requested, effective. Includes `exploration` once a run has started. |
+| `exploration/status` | Budget, target, coverage, end reason. Omitted while idle. |
 | `safety` | `stop` or `reset`. |
 | `camera/depth` | Version 1, `32FC1_LE`, then f32 metres. |
 | `pose` | `x`, `y`, `yaw`. |

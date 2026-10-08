@@ -30,6 +30,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, @unc
     private var zenoh: MobileZenohClient?
     @Published private(set) var autonomyLevel="teleop"
     @Published private(set) var autonomyReason="Idle"
+    @Published private(set) var explorationSummary=""
     @Published var runLog:URL?
     @Published private(set) var proposedGoal:UInt64?
     private var proposalRun=""
@@ -470,11 +471,17 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, @unc
     }
     func session(_ session: ARSession, didFailWithError error: Error) { fail(error) }
     func sessionWasInterrupted(_ session: ARSession) { fail(NSError(domain: "Terra", code: 1, userInfo: [NSLocalizedDescriptionKey: "AR session interrupted"])) }
-    func setAutonomy(_ level:String) {
+    func setAutonomy(_ level:String, budgetSeconds: Double? = nil) {
         controlQueue.async {
             guard !self.bleActive || self.bleFeedback else { return }
             self.target=(0,0)
-            do {let payload=String(decoding:try JSONSerialization.data(withJSONObject:["level":level,"token":UUID().uuidString]),as:UTF8.self)
+            do {
+                var body: [String: Any] = ["level": level, "token": UUID().uuidString]
+                if level == "explore" {
+                    let budget = budgetSeconds ?? 120
+                    if budget.isFinite, budget > 0 { body["budget_seconds"] = budget }
+                }
+                let payload=String(decoding:try JSONSerialization.data(withJSONObject:body),as:UTF8.self)
                 if self.mode == .remote {try self.zenoh?.sendAction(kind:"autonomy",payload:payload)}else{try self.controller?.autonomyRequest(kind:"autonomy",payload:payload,timestamp:self.mode == .simulation ? self.simulatedTime:CACurrentMediaTime())}
             }catch{DispatchQueue.main.async{self.autonomyReason=error.localizedDescription}}
         }
@@ -505,7 +512,21 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, @unc
         let level=status["requested_level"] as? String ?? "teleop", reason=status["reason"] as? String ?? "Unknown"
         let goal=object["goal"] as? [String:Any]
         let proposal=object["proposal"] as? [String:Any]
-        DispatchQueue.main.async {self.autonomyLevel=level;self.autonomyReason=reason;self.proposalRun=proposal?["run_id"] as? String ?? "";self.proposedGoal=(proposal?["proposal_id"] as? NSNumber)?.uint64Value;self.proposalText=proposal.map{String(format:"Search target %.1f, %.1f m",$0["x"] as? Double ?? 0,$0["y"] as? Double ?? 0)} ?? "";if let goal{self.waypointActive=(goal["state"] as? String)=="active";self.waypointDistance=goal["distance"] as? Double ?? 0;self.waypointStatus=goal["state"] as? String ?? "Unknown"}}
+        let exploration=(object["exploration"] as? [String:Any]) ?? (status["exploration"] as? [String:Any])
+        let summary: String = {
+            guard let exploration, let phase=exploration["phase"] as? String, phase != "idle" else { return "" }
+            let remaining=exploration["remaining_seconds"] as? Double ?? 0
+            let coverage=exploration["coverage_m2"] as? Double ?? 0
+            if let end=exploration["end_reason"] as? String {
+                return String(format:"Explore ended · %@ · %.1f m² observed", end.replacingOccurrences(of:"_", with:" "), coverage)
+            }
+            if let target=exploration["target"] as? [String:Any] {
+                let x=target["x"] as? Double ?? 0, y=target["y"] as? Double ?? 0
+                return String(format:"Exploring · %.0f s left · %.1f m² · target %.1f, %.1f m", remaining, coverage, x, y)
+            }
+            return String(format:"Exploring · %.0f s left · %.1f m²", remaining, coverage)
+        }()
+        DispatchQueue.main.async {self.autonomyLevel=level;self.autonomyReason=reason;self.explorationSummary=summary;self.proposalRun=proposal?["run_id"] as? String ?? "";self.proposedGoal=(proposal?["proposal_id"] as? NSNumber)?.uint64Value;self.proposalText=proposal.map{String(format:"Search target %.1f, %.1f m",$0["x"] as? Double ?? 0,$0["y"] as? Double ?? 0)} ?? "";if let goal{self.waypointActive=(goal["state"] as? String)=="active";self.waypointDistance=goal["distance"] as? Double ?? 0;self.waypointStatus=goal["state"] as? String ?? "Unknown"}}
     }
     private func publish(_ output: ControlOutput) {
         DispatchQueue.main.async {

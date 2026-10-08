@@ -355,6 +355,7 @@ private struct TerraHomeView: View {
         case "waypoint": return "Waypoint Navigation"
         case "assisted_teleop": return "Assisted Control"
         case "supervised": return "Supervised Search"
+        case "explore": return "Autonomous Explore"
         default: return "Manual Control"
         }
     }

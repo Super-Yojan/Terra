@@ -7,12 +7,55 @@ pub enum Level {
     AssistedTeleop,
     Waypoint,
     Supervised,
+    /// Time-bounded frontier exploration. Goals are not held for approval.
+    Explore,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LevelRequest {
     pub level: Level,
     pub token: String,
+    /// Seconds to explore. Omit both budget fields to reuse [`crate::AutonomyArbiter::set_exploration_budget`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub budget_seconds: Option<f64>,
+    /// Minutes to explore. Mutually exclusive with `budget_seconds`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub budget_minutes: Option<f64>,
+}
+impl LevelRequest {
+    pub fn new(level: Level, token: impl Into<String>) -> Self {
+        Self {
+            level,
+            token: token.into(),
+            budget_seconds: None,
+            budget_minutes: None,
+        }
+    }
+    pub fn with_budget_seconds(mut self, seconds: f64) -> Self {
+        self.budget_seconds = Some(seconds);
+        self.budget_minutes = None;
+        self
+    }
+    pub fn resolved_budget_seconds(&self) -> Option<f64> {
+        match (self.budget_seconds, self.budget_minutes) {
+            (Some(seconds), None) if seconds.is_finite() && seconds > 0. && seconds <= 86_400. => {
+                Some(seconds)
+            }
+            (None, Some(minutes))
+                if minutes.is_finite() && minutes > 0. && minutes * 60. <= 86_400. =>
+            {
+                Some(minutes * 60.)
+            }
+            _ => None,
+        }
+    }
+}
+pub fn budget_fields_valid(request: &LevelRequest) -> bool {
+    match (request.budget_seconds, request.budget_minutes) {
+        (None, None) => true,
+        (Some(_), None) | (None, Some(_)) => request.resolved_budget_seconds().is_some(),
+        (Some(_), Some(_)) => false,
+    }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -76,6 +119,9 @@ pub struct AutonomyStatus {
     pub request_reason: Option<String>,
     pub supported_levels: Vec<Level>,
     pub paused: bool,
+    /// Present once an exploration run has started, including after it ends.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exploration: Option<terra_exploration::ExplorationStatus>,
 }
 pub fn valid_token(s: &str) -> bool {
     (1..=64).contains(&s.len())
@@ -89,7 +135,7 @@ fn decode<T: serde::de::DeserializeOwned>(b: &[u8]) -> Option<T> {
     serde_json::from_slice(b).ok()
 }
 pub fn decode_level(b: &[u8]) -> Option<LevelRequest> {
-    decode::<LevelRequest>(b).filter(|r| valid_token(&r.token))
+    decode::<LevelRequest>(b).filter(|r| valid_token(&r.token) && budget_fields_valid(r))
 }
 pub fn decode_safety(b: &[u8]) -> Option<SafetyRequest> {
     decode::<SafetyRequest>(b).filter(|r| valid_token(&r.token))

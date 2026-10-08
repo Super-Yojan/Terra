@@ -29,6 +29,7 @@ struct ControllerDetailView: View {
     @AppStorage("waypointGoalLat") private var goalLat = "38.82981"
     @AppStorage("waypointGoalLon") private var goalLon = "-77.3075"
     @AppStorage("waypointToken") private var waypointToken = "gmu-north"
+    @AppStorage("exploreBudgetSeconds") private var exploreSeconds = "120"
     @State private var entryNote = ""
     private let waypointReach = 49.0
     var body: some View {
@@ -101,9 +102,13 @@ struct ControllerDetailView: View {
                     #endif
                 }.id(TerraDestination.live)
                 Section("Mission autonomy") {
-                    Picker("Requested level",selection:Binding(get:{brain.autonomyLevel},set:{brain.setAutonomy($0)})) {Text("Teleop").tag("teleop");Text("Assisted teleop").tag("assisted_teleop");Text("Waypoint").tag("waypoint");Text("Supervised search").tag("supervised")}
+                    TextField("Explore budget (seconds)", text: $exploreSeconds)
+                        .keyboardType(.decimalPad)
+                        .accessibilityLabel("Explore budget seconds")
+                    Picker("Requested level",selection:Binding(get:{brain.autonomyLevel},set:{brain.setAutonomy($0, budgetSeconds: Double(exploreSeconds))})) {Text("Teleop").tag("teleop");Text("Assisted teleop").tag("assisted_teleop");Text("Waypoint").tag("waypoint");Text("Supervised search").tag("supervised");Text("Autonomous explore").tag("explore")}
                         .disabled(brain.hardwareActive && !brain.hardwareFeedback)
                     Text(brain.autonomyReason)
+                    if !brain.explorationSummary.isEmpty { Text(brain.explorationSummary).font(.footnote) }
                     if let proposal=brain.proposedGoal {Text(brain.proposalText);HStack {Button("Approve search target") {brain.decideProposal(proposal,approve:true)};Button("Reject") {brain.decideProposal(proposal,approve:false)}}}
                     Button("Take over") {forward=0;yaw=0;brain.setAutonomy("teleop")}
                     Button("Emergency stop",role:.destructive) {forward=0;yaw=0;brain.emergencyStop()}
