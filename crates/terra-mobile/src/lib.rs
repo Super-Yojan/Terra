@@ -412,6 +412,12 @@ impl MobileController {
                 "goal/proposal",
                 serde_json::to_string(&wire_proposal).unwrap(),
             );
+            if let Some(exploration) = &output.exploration {
+                d.publish(
+                    "exploration/status",
+                    serde_json::to_string(exploration).unwrap(),
+                );
+            }
             if publish_map && let Some((grid, _, sequence)) = map.as_ref() {
                 d.publish(
                     "map/occupancy",
@@ -422,10 +428,10 @@ impl MobileController {
             d.publish("pose",serde_json::json!({"rover_id":d.rover_id,"sequence":brain.sequence,"x":pose.0.x,"y":pose.0.y,"yaw":pose.0.yaw}).to_string());
         }
         brain.autonomy_json =
-            serde_json::json!({"status":output.status,"goal":output.goal,"proposal":wire_proposal})
+            serde_json::json!({"status":output.status,"goal":output.goal,"proposal":wire_proposal,"exploration":output.exploration})
                 .to_string();
         if let Some(r) = brain.recorder.as_ref() {
-            let _=r.record(serde_json::json!({"kind":"control_tick","time":timestamp-start,"source_time":timestamp,"sequence":brain.sequence,"clearance":clearance,"selected":output.twist,"source_command":output.intent,"status":output.status,"goal":output.goal,"proposal":wire_proposal,"run_id":brain.run_id,"events":output.events}));
+            let _=r.record(serde_json::json!({"kind":"control_tick","time":timestamp-start,"source_time":timestamp,"sequence":brain.sequence,"clearance":clearance,"selected":output.twist,"source_command":output.intent,"status":output.status,"goal":output.goal,"proposal":wire_proposal,"exploration":output.exploration,"run_id":brain.run_id,"events":output.events}));
         }
         if output.reset_controller {
             brain.controller.reset();

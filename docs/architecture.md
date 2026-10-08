@@ -16,6 +16,8 @@ flowchart TB
   State --> Ctrl[terra-control]
   Goal[terra-waypoint] --> Auto[terra-autonomy]
   Map[terra-mapping] --> Nav[terra-navigation]
+  Nav --> Exp[terra-exploration]
+  Exp --> Auto
   Nav --> Auto
   Auto --> Ctrl
   Ctrl --> Mot[terra-motors]

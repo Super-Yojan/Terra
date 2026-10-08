@@ -31,7 +31,7 @@ flowchart LR
 
 *Placeholder. The real view is SwiftUI in `ContentView`.*
 
-When the dashboard is open, ticks can publish `autonomy/status`, `goal/status`, `map/occupancy` (at most every 0.2 s), and `pose`.
+When the dashboard is open, ticks can publish `autonomy/status`, `goal/status`, `exploration/status` while a run is active, `map/occupancy` (at most every 0.2 s), and `pose`. The mission picker can request `explore` with a budget in seconds.
 
 ```sh
 ./scripts/build-ios.sh

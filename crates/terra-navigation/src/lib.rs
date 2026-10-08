@@ -209,7 +209,24 @@ impl LocalPlanner {
         .unwrap_or(stop)
     }
 }
+/// Grid index of a world point. `None` when the map or the point is unusable.
+pub fn grid_cell(m: &MapSnapshot, x: f64, y: f64) -> Option<(usize, usize)> {
+    cell(m, x, y)
+}
+/// Footprint clearance on observed cells. Unknown cells count as blocked outside `current`.
+pub fn footprint_clear(
+    m: &MapSnapshot,
+    x: f64,
+    y: f64,
+    radius: f64,
+    current: Option<Pose>,
+) -> bool {
+    clear(m, x, y, radius, current)
+}
 /// Breadth-first search through inflated observed free cells. Stable ordering breaks ties.
+///
+/// Supervised mode proposes this point and waits for approval. Time-bounded autonomous
+/// exploration lives in `terra-exploration` and uses the same clearance helpers.
 pub fn frontier(
     m: &MapSnapshot,
     pose: Pose,

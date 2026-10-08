@@ -1,6 +1,7 @@
 use crate::*;
 use serde::Serialize;
 use std::collections::VecDeque;
+use terra_exploration::{EndReason, ExplorationStatus, ExploreAction, ExploreTick, Explorer};
 use terra_mapping::MapSnapshot;
 use terra_navigation::{LocalPlanner, Pose, Twist, frontier};
 use terra_waypoint::{GoalCommand, GoalState, WaypointConfig, WaypointController, WaypointStatus};
@@ -27,6 +28,7 @@ pub struct ArbiterOutput {
     pub status: AutonomyStatus,
     pub goal: WaypointStatus,
     pub proposal: Option<GoalProposal>,
+    pub exploration: Option<ExplorationStatus>,
     pub events: Vec<DecisionEvent>,
     pub reset_controller: bool,
 }
@@ -53,6 +55,11 @@ pub struct AutonomyArbiter {
     reset: bool,
     last_plan: Option<(f64, Twist, &'static str)>,
     last_frontier: f64,
+    pub explorer: Explorer,
+    exploration_budget: Option<f64>,
+    explore_blocked: bool,
+    explore_stale_since: Option<f64>,
+    explore_unhealthy_since: Option<f64>,
 }
 impl Default for AutonomyArbiter {
     fn default() -> Self {
@@ -79,6 +86,11 @@ impl Default for AutonomyArbiter {
             reset: true,
             last_plan: None,
             last_frontier: -1.,
+            explorer: Explorer::default(),
+            exploration_budget: None,
+            explore_blocked: false,
+            explore_stale_since: None,
+            explore_unhealthy_since: None,
         }
     }
 }
@@ -141,17 +153,60 @@ impl AutonomyArbiter {
         self.reset = true;
         self.last_plan = None;
     }
+    /// Store a budget used when an `explore` level request omits one. `seconds` must be in `(0, 86400]`.
+    pub fn set_exploration_budget(&mut self, seconds: f64) -> bool {
+        if seconds.is_finite() && seconds > 0. && seconds <= 86_400. {
+            self.exploration_budget = Some(seconds);
+            true
+        } else {
+            false
+        }
+    }
+    /// Phase 2 hook. Ignored unless an exploration run is already in progress.
+    pub fn notify_detection(&mut self, detection: terra_exploration::Detection) {
+        self.explorer.notify_detection(detection);
+    }
     pub fn set_level(&mut self, r: LevelRequest) {
-        let fp = format!("level:{:?}", r.level);
+        let fp = format!(
+            "level:{:?}:{:?}:{:?}",
+            r.level, r.budget_seconds, r.budget_minutes
+        );
         if !valid_token(&r.token) || self.duplicate(&r.token, &fp) {
             return;
+        }
+        if !budget_fields_valid(&r) {
+            self.acknowledge(r.token, fp, false, "invalid_budget");
+            return;
+        }
+        let budget = r
+            .resolved_budget_seconds()
+            .or(if r.level == Level::Explore {
+                self.exploration_budget
+            } else {
+                None
+            });
+        if r.level == Level::Explore && budget.is_none() {
+            self.acknowledge(r.token, fp, false, "budget_required");
+            return;
+        }
+        if r.level != Level::Explore && self.explorer.is_running() {
+            self.explorer.stop(EndReason::OperatorTakeover);
         }
         let changed = self.level != r.level;
         self.clear();
         self.level = r.level;
         self.paused = false;
+        self.explore_blocked = false;
+        self.explore_stale_since = None;
+        self.explore_unhealthy_since = None;
         if r.level == Level::Teleop {
             self.event("takeover", Some(r.token.clone()), "operator_takeover");
+        }
+        if r.level == Level::Explore
+            && let Some(seconds) = budget
+        {
+            self.exploration_budget = Some(seconds);
+            self.explorer.start(seconds, &self.run_id);
         }
         self.acknowledge(
             r.token,
@@ -208,6 +263,9 @@ impl AutonomyArbiter {
     }
     pub fn accept_goal(&mut self, g: &GoalCommand, extent: f64) -> bool {
         if matches!(g, GoalCommand::Cancel) {
+            if self.level == Level::Explore && self.explorer.is_running() {
+                self.explorer.stop(EndReason::OperatorStop);
+            }
             self.clear();
             if self.level == Level::Waypoint {
                 self.level = Level::Teleop;
@@ -290,6 +348,9 @@ impl AutonomyArbiter {
         }
         let ok = r.action == SafetyAction::Stop || healthy;
         if ok {
+            if r.action == SafetyAction::Stop && self.explorer.is_running() {
+                self.explorer.stop(EndReason::OperatorStop);
+            }
             self.clear();
             self.stopped = r.action == SafetyAction::Stop;
         }
@@ -380,7 +441,7 @@ impl AutonomyArbiter {
         if valid_time {
             self.last_time = Some(input.now);
         }
-        let goal = self
+        let mut goal = self
             .follower
             .step(input.pose.x, input.pose.y, input.pose.yaw)
             .status;
@@ -397,6 +458,7 @@ impl AutonomyArbiter {
             safety = "emergency_stop";
             reason = "operator_stop";
             held = true;
+            self.halt_explore(EndReason::OperatorStop);
         } else if !input.healthy
             || !input.pose.finite()
             || !fresh(input.now, Some(input.pose_time), 0.5)
@@ -405,119 +467,158 @@ impl AutonomyArbiter {
         {
             reason = "sensor_unhealthy";
             held = true;
+            self.note_safety_hold(input.now);
         } else if self.level != Level::Teleop
             && (input.map.is_none() || !fresh(input.now, input.map_time, 0.5))
         {
             reason = "map_stale";
             held = true;
+            self.note_map_stale(input.now);
         } else if self.paused {
             reason = "supervision_paused";
             held = true;
         } else {
-            let intent = match self.level {
-                Level::Teleop | Level::AssistedTeleop => self
-                    .operator
-                    .as_ref()
-                    .filter(|(_, t)| fresh(input.now, Some(*t), 0.5))
-                    .map(|(r, _)| {
-                        source = if self.level == Level::Teleop {
-                            "operator"
-                        } else {
-                            "assisted_operator"
-                        };
-                        Twist {
-                            linear: r.linear.clamp(-2., 2.),
-                            angular: r.angular.clamp(-2., 2.),
-                        }
-                    })
-                    .unwrap_or_default(),
-                _ => {
-                    let out = self
-                        .follower
-                        .step(input.pose.x, input.pose.y, input.pose.yaw);
-                    if out.status.state == GoalState::Active {
-                        source = if self.level == Level::Supervised {
-                            "frontier"
-                        } else {
-                            "waypoint"
-                        };
-                    }
-                    Twist {
-                        linear: out.linear,
-                        angular: out.angular,
-                    }
-                }
+            self.explore_stale_since = None;
+            self.explore_unhealthy_since = None;
+            let explore_hold = if self.level == Level::Explore {
+                let why = self.drive_explore(&input);
+                goal = self
+                    .follower
+                    .step(input.pose.x, input.pose.y, input.pose.yaw)
+                    .status;
+                why
+            } else {
+                None
             };
-            intent_command = intent;
-            if self.level == Level::Teleop {
-                twist = intent;
-                if source != "none" {
-                    reason = "active";
-                }
-            } else if source != "none" {
-                if intent == Twist::default() {
+            if let Some(why) = explore_hold {
+                reason = why;
+                held = true;
+                self.explore_blocked = false;
+            } else {
+                let intent = match self.level {
+                    Level::Teleop | Level::AssistedTeleop => self
+                        .operator
+                        .as_ref()
+                        .filter(|(_, t)| fresh(input.now, Some(*t), 0.5))
+                        .map(|(r, _)| {
+                            source = if self.level == Level::Teleop {
+                                "operator"
+                            } else {
+                                "assisted_operator"
+                            };
+                            Twist {
+                                linear: r.linear.clamp(-2., 2.),
+                                angular: r.angular.clamp(-2., 2.),
+                            }
+                        })
+                        .unwrap_or_default(),
+                    _ => {
+                        let out = self
+                            .follower
+                            .step(input.pose.x, input.pose.y, input.pose.yaw);
+                        if out.status.state == GoalState::Active {
+                            source = match self.level {
+                                Level::Supervised => "frontier",
+                                Level::Explore => "explore",
+                                _ => "waypoint",
+                            };
+                        }
+                        Twist {
+                            linear: out.linear,
+                            angular: out.angular,
+                        }
+                    }
+                };
+                intent_command = intent;
+                if self.level == Level::Teleop {
                     twist = intent;
-                    reason = "active";
-                    self.last_plan = None;
-                } else if let Some((at, output, why)) =
-                    self.last_plan.filter(|p| input.now - p.0 < 0.1)
-                {
-                    let _ = at;
-                    twist = output;
-                    reason = why;
-                } else {
-                    let planned = self.planner.plan(
-                        input.map.unwrap(),
-                        input.pose,
-                        input.measured,
-                        intent,
-                        0.1,
-                    );
-                    twist = planned.twist;
-                    reason = planned.reason;
-                    self.last_plan = Some((input.now, twist, reason));
-                }
-                if reason == "obstacle_blocked" {
-                    held = true;
-                    source = "none";
-                }
-            }
-            if self.level == Level::Supervised && goal.state != GoalState::Active {
-                self.rejected.retain(|(_, _, expiry)| *expiry > input.now);
-                if self
-                    .proposal
-                    .as_ref()
-                    .is_some_and(|p| p.expires_at <= input.now)
-                {
-                    self.proposal = None;
-                }
-                if self.proposal.is_none() && input.now - self.last_frontier >= 0.1 {
-                    self.last_frontier = input.now;
-                    let excluded: Vec<_> = self.rejected.iter().map(|&(x, y, _)| (x, y)).collect();
-                    if let Some((x, y)) = frontier(
-                        input.map.unwrap(),
-                        input.pose,
-                        self.planner.config.radius,
-                        &excluded,
-                    ) {
-                        self.next_proposal += 1;
-                        self.proposal = Some(GoalProposal {
-                            proposal_id: self.next_proposal,
-                            run_id: self.run_id.clone(),
-                            x,
-                            y,
-                            map_revision: input.map_revision,
-                            expires_at: input.now + 30.,
-                            reason: "search_unobserved_sector".into(),
-                        });
-                        self.event("proposal_created", None, "frontier");
+                    if source != "none" {
+                        reason = "active";
+                    }
+                } else if source != "none" {
+                    if intent == Twist::default() {
+                        twist = intent;
+                        reason = "active";
+                        self.last_plan = None;
+                    } else if let Some((at, output, why)) =
+                        self.last_plan.filter(|p| input.now - p.0 < 0.1)
+                    {
+                        let _ = at;
+                        twist = output;
+                        reason = why;
+                    } else {
+                        let planned = if self.level == Level::Explore {
+                            let mut planner = self.planner.clone();
+                            let cap = self.explorer.config().approach_horizon;
+                            if cap.is_finite() && cap > 0. {
+                                planner.config.horizon = planner.config.horizon.min(cap);
+                            }
+                            planner.plan(
+                                input.map.unwrap(),
+                                input.pose,
+                                input.measured,
+                                intent,
+                                0.1,
+                            )
+                        } else {
+                            self.planner.plan(
+                                input.map.unwrap(),
+                                input.pose,
+                                input.measured,
+                                intent,
+                                0.1,
+                            )
+                        };
+                        twist = planned.twist;
+                        reason = planned.reason;
+                        self.last_plan = Some((input.now, twist, reason));
+                    }
+                    if reason == "obstacle_blocked" {
+                        held = true;
+                        source = "none";
                     }
                 }
-                reason = if self.proposal.is_some() {
-                    "awaiting_approval"
-                } else {
-                    "no_reachable_frontier"
-                };
+                if self.level == Level::Supervised && goal.state != GoalState::Active {
+                    self.rejected.retain(|(_, _, expiry)| *expiry > input.now);
+                    if self
+                        .proposal
+                        .as_ref()
+                        .is_some_and(|p| p.expires_at <= input.now)
+                    {
+                        self.proposal = None;
+                    }
+                    if self.proposal.is_none() && input.now - self.last_frontier >= 0.1 {
+                        self.last_frontier = input.now;
+                        let excluded: Vec<_> =
+                            self.rejected.iter().map(|&(x, y, _)| (x, y)).collect();
+                        if let Some((x, y)) = frontier(
+                            input.map.unwrap(),
+                            input.pose,
+                            self.planner.config.radius,
+                            &excluded,
+                        ) {
+                            self.next_proposal += 1;
+                            self.proposal = Some(GoalProposal {
+                                proposal_id: self.next_proposal,
+                                run_id: self.run_id.clone(),
+                                x,
+                                y,
+                                map_revision: input.map_revision,
+                                expires_at: input.now + 30.,
+                                reason: "search_unobserved_sector".into(),
+                            });
+                            self.event("proposal_created", None, "frontier");
+                        }
+                    }
+                    reason = if self.proposal.is_some() {
+                        "awaiting_approval"
+                    } else {
+                        "no_reachable_frontier"
+                    };
+                }
+                if self.level == Level::Explore {
+                    self.explore_blocked = reason == "obstacle_blocked";
+                }
             }
         }
         if held {
@@ -551,19 +652,118 @@ impl AutonomyArbiter {
                 Level::AssistedTeleop,
                 Level::Waypoint,
                 Level::Supervised,
+                Level::Explore,
             ],
             paused: self.paused,
+            exploration: self.exploration_report(input.now),
         };
+        let exploration = status.exploration.clone();
+        self.drain_explore_events();
         ArbiterOutput {
             intent: intent_command,
             twist,
             status,
             goal,
             proposal: self.proposal.clone(),
+            exploration,
             events: std::mem::take(&mut self.events),
             reset_controller: std::mem::take(&mut self.reset),
         }
     }
+    fn exploration_report(&self, now: f64) -> Option<ExplorationStatus> {
+        let status = self.explorer.status(now);
+        (status.phase != terra_exploration::ExplorePhase::Idle).then_some(status)
+    }
+    fn drain_explore_events(&mut self) {
+        for event in self.explorer.take_events() {
+            self.event(event.kind, None, &event.reason);
+        }
+    }
+    fn halt_explore(&mut self, reason: EndReason) {
+        if self.level == Level::Explore {
+            self.explorer.stop(reason);
+        }
+    }
+    fn note_map_stale(&mut self, now: f64) {
+        if self.level == Level::Explore
+            && self.explorer.is_running()
+            && sustained(
+                &mut self.explore_stale_since,
+                now,
+                self.explorer.config().map_stale_timeout,
+            )
+        {
+            self.explorer.stop(EndReason::MapStale);
+        }
+    }
+    fn note_safety_hold(&mut self, now: f64) {
+        if self.level == Level::Explore
+            && self.explorer.is_running()
+            && sustained(
+                &mut self.explore_unhealthy_since,
+                now,
+                self.explorer.config().safety_hold_timeout,
+            )
+        {
+            self.explorer.stop(EndReason::SafetyHold);
+        }
+    }
+    /// `Some` when exploration itself is holding or finished. `None` when the follower should move.
+    fn drive_explore(&mut self, input: &ArbiterInput<'_>) -> Option<&'static str> {
+        self.explorer.set_footprint(self.planner.config.radius);
+        let preview = self
+            .follower
+            .step(input.pose.x, input.pose.y, input.pose.yaw);
+        let action = self.explorer.step(ExploreTick {
+            now: input.now,
+            pose: input.pose,
+            map: input.map,
+            planner_blocked: self.explore_blocked,
+            goal_active: preview.status.state == GoalState::Active,
+            goal_arrived: preview.status.state == GoalState::Arrived,
+            goal_x: preview.status.x,
+            goal_y: preview.status.y,
+            goal_distance: preview.status.distance,
+        });
+        match action {
+            ExploreAction::Seek { x, y } => {
+                let same = matches!(preview.status.state, GoalState::Active | GoalState::Arrived)
+                    && (preview.status.x - x).hypot(preview.status.y - y) < 0.05;
+                if !same {
+                    let token = format!("explore-{}", self.explorer.frontiers_attempted());
+                    let _ = self.follower.accept(
+                        &GoalCommand::Local {
+                            x,
+                            y,
+                            yaw: None,
+                            token: Some(token),
+                        },
+                        20_000.,
+                    );
+                    self.last_plan = None;
+                }
+                None
+            }
+            ExploreAction::Hold => {
+                self.follower.cancel();
+                self.last_plan = None;
+                Some("frontier_retry")
+            }
+            ExploreAction::Finished(reason) => {
+                self.follower.cancel();
+                self.last_plan = None;
+                Some(reason.as_str())
+            }
+            ExploreAction::Idle => Some("exploration_idle"),
+        }
+    }
+}
+fn sustained(since: &mut Option<f64>, now: f64, timeout: f64) -> bool {
+    if !now.is_finite() {
+        return false;
+    }
+    let start = *since.get_or_insert(now);
+    now - start >= timeout.max(0.)
 }
 fn fresh(now: f64, time: Option<f64>, limit: f64) -> bool {
     time.is_some_and(|t| t.is_finite() && t >= 0. && now >= t && now - t < limit)

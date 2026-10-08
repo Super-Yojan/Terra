@@ -1,13 +1,13 @@
 # Mission autonomy
 
 !!! tip "TL;DR"
-    Four levels share one arbiter.
+    Five levels share one arbiter.
     Stop latches until reset.
     The reference mission runs in Zorvane, not in this repo.
 
 ![teleop, assisted teleop, waypoint, supervised.](../assets/levels.svg)
 
-*teleop, assisted teleop, waypoint, supervised.*
+*teleop, assisted teleop, waypoint, supervised, and autonomous explore.*
 
 ```mermaid
 flowchart LR
@@ -15,6 +15,7 @@ flowchart LR
   S[assisted] --> A
   W[waypoint] --> A
   U[supervised] --> A
+  E[explore] --> A
   A --> Move[allowed twist or hold]
 ```
 
@@ -43,6 +44,42 @@ Connect native ARGOS to `tcp/127.0.0.1:7447`. Explicitly choose a level before s
 - Assisted teleop: operator intent goes through the shared obstacle/braking checker.
 - Waypoint: operator-selected targets use the shared follower and local planner.
 - Supervised: reachable frontier targets are proposed; approval is required before motion. Reject, redirect, cancel/pause, or take over as mission conditions require.
+- Explore: the same frontiers are goals immediately. There is no per-goal approval. The run stops when the budget ends, no frontier remains, the operator stops or takes over, or the map or safety hold ends it.
+
+## Start an exploration run
+
+Publish on `terra/rover/<id>/autonomy`. Use seconds or minutes, not both:
+
+```json
+{"level":"explore","token":"explore-1","budget_seconds":180}
+```
+
+```json
+{"level":"explore","token":"explore-2","budget_minutes":5}
+```
+
+The rover must already have a fresh pose and occupancy map. The budget clock starts on the next arbiter step. TerraPhone has an **Autonomous explore** level and an explore-budget field. In process code, `set_exploration_budget(180.0)` lets a later level request omit the budget.
+
+Stop the run with any of these:
+
+- `{"level":"teleop","token":"take-1"}` on `autonomy` (takeover)
+- `{"action":"stop","token":"stop-1"}` on `safety`
+- `{"cancel":true}` on `goal`
+
+`terra/rover/<id>/exploration/status` reports elapsed and remaining time, the current target, observed free area, and `end_reason`. The same object is nested in `autonomy/status` under `exploration`. While the run is moving, `active_source` is `explore`.
+
+Run logs stay JSONL via `RunRecorder`. Each control tick already stores `events`. Exploration adds `exploration_started`, `frontier_selected`, `frontier_blocked`, `exploration_progress` (coverage, elapsed, remaining about once a second), `exploration_ended`, and `detection_reported`. TerraPhone also stores the status object on the tick. Summarize with `terra-run-summary` as before.
+
+Zorvane applies the twist from the arbiter as soon as it depends on this crate. It already forwards `autonomy` and serializes `autonomy/status`, so the nested `exploration` object appears without a bridge change. To publish the dedicated key, add this next to the other status puts in `drive_autonomy`:
+
+```rust
+(
+    "exploration/status",
+    serde_json::to_value(&output.exploration).unwrap(),
+),
+```
+
+And include `"exploration": output.exploration` on the `control_tick` record. Phase 2 can call `arbiter.notify_detection` when a simulated survivor is observed. `FindTargetsObjective` is the stub. It is not a detector.
 
 Safety holds, requested/effective authority, and the assigned trial condition are distinct.
 A takeover clears old goal and teleop intent, including when already in teleop.
