@@ -1,5 +1,3 @@
-simulator/target/
-simulator/.cache/
 .DS_Store
 *.swp
 
@@ -8,9 +6,6 @@ simulator/.cache/
 /mobile/ios/build/
 /mobile/ios/DerivedData/
 **/xcuserdata/
-
-/.superpowers/
-/simulator/runs/
 
 /hardware/raspberry-pi/.venv/
 /hardware/raspberry-pi/.build/

@@ -1,0 +1,33 @@
+name: Rust
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: terra-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: System packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config build-essential cmake
+
+      - name: Cargo build
+        run: cargo build --locked --workspace
+
+      - name: Cargo test
+        run: cargo test --locked --workspace

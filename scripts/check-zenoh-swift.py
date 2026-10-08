@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Run the actual Swift UniFFI client against a local Python Zenoh peer."""
+"""Run the actual Swift UniFFI client against a local Python Zenoh peer.
+
+The live world is Zorvane (`cargo run -p zorvane` in
+https://github.com/Super-Yojan/Zorvane). This check does not start it.
+Topics stay `terra/rover/9/cmd_vel` and `terra/rover/9/camera/depth`.
+"""
 import json
 import math
 import os

@@ -16,7 +16,7 @@ The app offers a simulated sensor mode and a phone sensor mode, plus a repeatabl
 
 Which hardware link the connection UI shows depends on the run destination. See [Connection surfaces](#connection-surfaces).
 
-`./scripts/check-swift.sh` validates a real Swift → UniFFI → Rust call and runs the controller benchmark. `cargo test --workspace` checks the Rust modules; the simulator's headless physics test checks acceleration, turning and stopping through Avian motor forces.
+`./scripts/check-swift.sh` validates a real Swift → UniFFI → Rust call and runs the controller benchmark. `cargo test --workspace` checks the Rust modules. Acceleration, turning, and stopping through Avian motor forces are covered by Zorvane's headless physics tests (`cargo test -p zorvane` in that repo).
 
 ## Connection surfaces
 
@@ -49,7 +49,7 @@ Zero effort means coast, not a mechanical brake. The motor adapter, enable switc
 
 Start **Simulated rover**, **Phone IMU + VIO**, or **Connect to Bevy rover**. Then set the origin and the goal, or tap the occupancy map. The orange marker is the goal in the same metres as the blue rover: +X north, +Y west. **Johnson Center, 12 m north** fills latitude 38.82981, longitude −77.3075, about 12 m north of the George W. Johnson Center. **Go to waypoint** calls `setOrigin` and `setGoal`. While that goal is latched the phone steps the follower and the velocity sliders stay idle. **Cancel waypoint** returns to the sliders. Stop, or leaving the app, drops the latch.
 
-On a Bevy connection the pose comes from the depth frame's body position, and the twist is published as `cmd_vel`. Leave `terra/rover/<id>/goal` idle during this run. A goal latched inside the simulator owns the wheels until `{"cancel":true}`. With `TERRA_TILES=1` the simulator origin is the Johnson Center, which matches the default fields. The reachable square is 49 m from the origin.
+On a Bevy connection the pose comes from the depth frame's body position, and the twist is published as `cmd_vel`. Leave `terra/rover/<id>/goal` idle during this run. A goal latched inside Zorvane owns the wheels until `{"cancel":true}`. With `TERRA_TILES=1` the world origin is the Johnson Center, which matches the default fields. The reachable square is 49 m from the origin. Keys stay `terra/rover/<id>/…`.
 
 ```swift
 let follower = try MobileWaypoint(settings: defaultWaypointSettings())
@@ -59,11 +59,11 @@ let step = try follower.step(x: vioNorth, y: vioWest, yaw: heading)
 try controller.setTarget(target: TwistSetpoint(timestamp: now, forward: step.forward, yawRate: step.yawRate))
 ```
 
-`setGoal` returns false when the origin is missing or the point lies outside `halfExtent`. `cancel` drops the latch. `step` reports `latitude` and `longitude` of the goal; `localX` and `localY` are the tangent-plane metres the follower is steering toward. `tangentMetres` and `geographicPosition` are the same projection the map tap uses. The simulator's Zenoh bridge calls this crate when a goal arrives on `terra/rover/<id>/goal`, so a headless run uses the same follower.
+`setGoal` returns false when the origin is missing or the point lies outside `halfExtent`. `cancel` drops the latch. `step` reports `latitude` and `longitude` of the goal; `localX` and `localY` are the tangent-plane metres the follower is steering toward. `tangentMetres` and `geographicPosition` are the same projection the map tap uses. Zorvane's Zenoh bridge calls this crate when a goal arrives on `terra/rover/<id>/goal`, so a headless run uses the same follower.
 
 ## Motor adapter
 
-`terra-motors` sits behind `MotorOutput`. `map_effort` converts one signed effort to a PWM duty in `[0, 1]` and a direction. `MotorAdapter` applies that to both wheels and returns a `ChassisPwm` to write to the driver. The iOS UI does not call it. The simulator still turns controller effort into Avian forces rather than PWM. Run `cargo test -p terra-motors` for the mapping, enable gate, and watchdog tests. Crate details and the bench checklist are in [crates/terra-motors/README.md](../crates/terra-motors/README.md).
+`terra-motors` sits behind `MotorOutput`. `map_effort` converts one signed effort to a PWM duty in `[0, 1]` and a direction. `MotorAdapter` applies that to both wheels and returns a `ChassisPwm` to write to the driver. The iOS UI does not call it. Zorvane turns controller effort into Avian forces rather than PWM. Run `cargo test -p terra-motors` for the mapping, enable gate, and watchdog tests. Crate details and the bench checklist are in [crates/terra-motors/README.md](../crates/terra-motors/README.md).
 
 ### PWM
 
@@ -101,7 +101,7 @@ Wheels off the ground. No autonomy stack. Logic power until the enable path is c
 
 ## Simulation
 
-Each rover gets its own estimator and controller. Avian velocity and orientation provide synthetic IMU and 20 Hz VIO feedback, while controller effort produces forces and yaw torque. This tests the control loop rather than calculating VIO from rendered images. `VelocitySimulationConfig` exposes sensor enable switches, sensor frequency, motor force and drag for experiments. Disabling its `enabled` field restores the existing ideal drive model. Existing fleet changes and Zenoh velocity commands remain supported.
+That closed loop now runs in [Zorvane](https://github.com/Super-Yojan/Zorvane) (`cargo run -p zorvane`). Each rover gets its own estimator and controller. Avian velocity and orientation provide synthetic IMU and 20 Hz VIO feedback, while controller effort produces forces and yaw torque. This tests the control loop rather than calculating VIO from rendered images. `VelocitySimulationConfig` exposes sensor enable switches, sensor frequency, motor force and drag for experiments. Disabling its `enabled` field restores the existing ideal drive model. Fleet changes and Zenoh velocity commands on `terra/rover/<id>/cmd_vel` remain supported. `TERRA_*` variables still apply.
 
 ## iOS occupancy view
 
@@ -109,31 +109,29 @@ The app shows the Rust local occupancy grid, rover position/heading, map scale a
 
 The map is world-aligned: +X right and +Y upward on screen. Free cells are green, occupied cells use the primary foreground, unknown cells are faint gray and uncertain observed cells are darker gray. The blue marker indicates rover pose. Initial phone camera height is assumed to be 0.5 m over a flat ground reference; physical mounting and ground height require calibration. Phone depth comes from the rear camera's optical pose, independently of the rover-body mounting rotation. Stop preserves the map; starting either mode creates a new map.
 
-Bevy Zenoh mode uses the same grid. It does not subscribe to an occupancy topic. Each simulator depth packet carries the exposure-aligned optical camera pose and the rover body pose in the robotics frame (the same conversion the simulator uses for its own per-rover map). The phone recenters on the body position, integrates axial depth through `MobileOccupancyMap`, and draws the body heading. Ground is robotics Z = 0, which is the simulator floor (Bevy Y = 0); the 0.5 m phone-height assumption is not used. Depth packets without an exposure pose are ignored. Body pose is sampled with the camera at exposure time, so the marker matches the depth frame rather than a later odometry estimate. There is still no published map snapshot for ARGOS or other operators.
+Bevy Zenoh mode uses the same grid. It does not subscribe to an occupancy topic. Each Zorvane depth packet carries the exposure-aligned optical camera pose and the rover body pose in the robotics frame (the same conversion Zorvane uses for its own per-rover map). The phone recenters on the body position, integrates axial depth through `MobileOccupancyMap`, and draws the body heading. Ground is robotics Z = 0, which is the world floor (Bevy Y = 0); the 0.5 m phone-height assumption is not used. Depth packets without an exposure pose are ignored. Body pose is sampled with the camera at exposure time, so the marker matches the depth frame rather than a later odometry estimate. There is still no published map snapshot for ARGOS or other operators.
 
 ## Drive Bevy from TerraPhone over Zenoh
 
-TerraPhone exposes the Rust `terra-transport` client through UniFFI in the **iOS Simulator** build only. Use the **Bevy simulator · Zenoh** section to configure an endpoint and rover ID, then connect. This mode publishes either the velocity sliders or, after **Go to waypoint**, the phone follower's twist as simulator `cmd_vel`. The Bevy rover runs its own velocity feedback loop. Local phone IMU/VIO/motor effort readouts do not provide remote feedback. Connecting starts at zero. Stop, switching modes and leaving the foreground close the session with a final zero. The Rust publisher also expires its 250 ms command lease if Swift stops refreshing it; the simulator's independent 500 ms watchdog remains active. A physical-device build does not include this section.
+TerraPhone exposes the Rust `terra-transport` client through UniFFI in the **iOS Simulator** build only. Use the **Bevy simulator · Zenoh** section to configure an endpoint and rover ID, then connect. This mode publishes either the velocity sliders or, after **Go to waypoint**, the phone follower's twist as `cmd_vel` on `terra/rover/<id>/cmd_vel`. The Zorvane rover runs its own velocity feedback loop. Local phone IMU/VIO/motor effort readouts do not provide remote feedback. Connecting starts at zero. Stop, switching modes and leaving the foreground close the session with a final zero. The Rust publisher also expires its 250 ms command lease if Swift stops refreshing it; Zorvane's independent 500 ms watchdog remains active. A physical-device build does not include this section.
 
-Demo on one Mac:
+Demo on one Mac. Start the world from a [Zorvane](https://github.com/Super-Yojan/Zorvane) checkout:
 
 ```sh
-cd simulator
-TERRA_ROVER_COUNT=2 cargo run
+TERRA_ROVER_COUNT=2 TERRA_ZENOH_LISTEN=tcp/0.0.0.0:7447 cargo run -p zorvane
 ```
 
-Build/run TerraPhone in the iOS Simulator, select `tcp/127.0.0.1:7447` and rover `0`, connect, then move the velocity sliders. Stop and check that the rover stops. Choose rover `1` to drive the second rover. Endpoint and ID are stored in the Simulator; there is no automatic reconnect or automatic startup motion. A physical iPhone does not show this section, does not read a previously saved endpoint, and does not join the simulator over the LAN. Use Bluetooth on that phone.
+Build/run TerraPhone in the iOS Simulator, select `tcp/127.0.0.1:7447` and rover `0`, connect, then move the velocity sliders. Stop and check that the rover stops. Choose rover `1` to drive the second rover. Endpoint and ID are stored in the Simulator; there is no automatic reconnect or automatic startup motion. A physical iPhone does not show this section, does not read a previously saved endpoint, and does not join Zorvane over the LAN. Use Bluetooth on that phone.
 
 The default topic prefix is `terra/rover`. Session-open status confirms a transport session, not rover discovery or movement acknowledgement. The connection status counts posed depth frames as they arrive. Fleet/state and RGB subscriptions remain follow-ups. Remote mode builds the local occupancy map from `terra/rover/<id>/camera/depth` only; it does not mix in simulated-room or ARKit observations.
 
-One-Mac occupancy demo:
+One-Mac occupancy demo, from a Zorvane checkout:
 
 ```sh
-cd simulator
-TERRA_ROVER_COUNT=1 cargo run
+TERRA_ROVER_COUNT=1 TERRA_ZENOH_LISTEN=tcp/0.0.0.0:7447 cargo run -p zorvane
 ```
 
-Build and run TerraPhone in the iOS Simulator (`./scripts/build-ios.sh`, then open `mobile/ios/TerraPhone.xcodeproj`). Select `tcp/127.0.0.1:7447` and rover `0`, then connect. The occupancy section starts at “Waiting for simulator depth and exposure pose”. After the simulator publishes a depth frame, the grid fills with free and occupied cells as the rover sees the world. Move the velocity sliders; the blue marker and the map window follow the published body pose. Stop disconnects and keeps the last grid. Rover `1` maps that rover only. The depth stream is about 1.9 MiB/s at the default 256×192 resolution, before protocol overhead. Only the Simulator build subscribes to it.
+Build and run TerraPhone in the iOS Simulator (`./scripts/build-ios.sh`, then open `mobile/ios/TerraPhone.xcodeproj`). Select `tcp/127.0.0.1:7447` and rover `0`, then connect. The occupancy section starts at “Waiting for simulator depth and exposure pose”. After Zorvane publishes a depth frame, the grid fills with free and occupied cells as the rover sees the world. Move the velocity sliders; the blue marker and the map window follow the published body pose. Stop disconnects and keeps the last grid. Rover `1` maps that rover only. The depth stream is about 1.9 MiB/s at the default 256×192 resolution, before protocol overhead. Only the Simulator build subscribes to it. Depth keys stay `terra/rover/<id>/camera/depth`.
 
 Verification:
 
@@ -142,11 +140,16 @@ Verification:
 python3 scripts/check-zenoh-swift.py # requires eclipse-zenoh Python package
 cargo test -p terra-transport
 cargo test -p terra-transport -- --ignored
-cargo test --manifest-path simulator/Cargo.toml depth_packet_pose_round_trips_into_the_phone_decoder
-cargo test --manifest-path simulator/Cargo.toml mobile_adapter_drives_avian -- --ignored
 ```
 
-The Swift test exercises Swift → UniFFI → Rust → Zenoh against a real Python peer, checking the selected topic, payload, lease expiry and final zero. It also publishes one posed depth packet and checks that Swift integrates it into an occupied cell. `depth_packet_pose_round_trips_into_the_phone_decoder` checks that a simulator depth packet decodes to the same robotics pose the in-sim map uses, then occupies the expected cell. The ignored transport test checks that the phone client consumes each posed depth sequence once. The Bevy integration test uses the same transport to move an Avian rover and verifies stopping on disconnect. Seeing the grid in the Simulator still requires the Bevy app to be running so the GPU depth camera can publish frames. The device app does not open that session.
+In a Zorvane checkout, the moved world tests are:
+
+```sh
+cargo test -p zorvane depth_packet_pose_round_trips_into_the_phone_decoder
+cargo test -p zorvane mobile_adapter_drives_avian -- --ignored
+```
+
+The Swift test exercises Swift → UniFFI → Rust → Zenoh against a real Python peer, checking the selected topic, payload, lease expiry and final zero. It also publishes one posed depth packet and checks that Swift integrates it into an occupied cell. `depth_packet_pose_round_trips_into_the_phone_decoder` checks that a Zorvane depth packet decodes to the same robotics pose the in-world map uses, then occupies the expected cell. The ignored transport test checks that the phone client consumes each posed depth sequence once. The Bevy integration test uses the same transport to move an Avian rover and verifies stopping on disconnect. Seeing the grid in the iOS Simulator still requires Zorvane to be running so the GPU depth camera can publish frames. The device app does not open that session.
 
 ## Bluetooth actuator control
 

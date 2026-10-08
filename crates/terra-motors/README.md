@@ -8,7 +8,7 @@ PWM adapter between `MotorOutput` effort and a motor driver. It depends only on 
 cargo test -p terra-motors
 ```
 
-This crate does not toggle GPIO and does not speak Zenoh. The iOS app still only displays effort. The simulator still turns effort into Avian forces.
+This crate does not toggle GPIO and does not speak Zenoh. The iOS app still only displays effort. Zorvane turns effort into Avian forces.
 
 ## What to write to the driver
 
