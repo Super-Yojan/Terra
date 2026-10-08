@@ -95,16 +95,17 @@ python3 scripts/check-zenoh-kotlin.py   # needs the eclipse-zenoh Python package
 
 ## What was verified, and what was not
 
-Verified on Linux, without a phone and without a Zorvane process:
+Verified on Linux, without a phone:
 
 - `cargo test --locked --workspace`.
 - `./scripts/build-android.sh` for `aarch64-linux-android` and `x86_64-linux-android`.
 - `./gradlew assembleDebug` and `testDebugUnitTest`.
 - `scripts/check-zenoh-kotlin.py` against a Python Zenoh peer (topic, payload, lease zero, disconnect zero, depth integration).
+- A headless Zorvane process (`TERRA_HEADLESS=1`, `TERRA_ZENOH_LISTEN=tcp/0.0.0.0:7447`) published `terra/rover/0/camera/depth`. A Zenoh client on `tcp/127.0.0.1:7447` received that frame, and a forward `cmd_vel` moved the rover body. The same `MobileZenohClient` the app uses connected from the host JVM, published a reverse target, and the sampled body pose moved backward. Depth delivery on that session was sparse (a handful of frames), so this was not a UI drive and not a measured closed-loop run.
 
 Not verified:
 
-- An Android emulator UI session, including sliders and a waypoint driving a live Zorvane rover. No emulator demo was recorded.
+- An Android emulator UI session. An API 35 AVD was created and QEMU started with KVM, but the process never created vCPUs and adb stayed offline, so the APK was not installed. No demo was recorded.
 - ARCore tracking, depth, or the flat-phone mount on hardware.
 - Bluetooth. The GATT client is a follow-up. Rust framing (`actuator_route`, `actuator_encode_frame`, `actuator_fragment`) is already what that client should call.
 - The iOS app after the Swift call sites moved onto the new UniFFI functions. Rebuild with `./scripts/build-ios.sh` on a Mac before running TerraPhone there. The new functions are additive. Swift still sends a waypoint as an arbiter `goal` rather than stepping `MobileWaypoint` itself.
