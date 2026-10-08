@@ -38,7 +38,7 @@ itself cause movement; choose it with linkage and travel constraints in mind.
    P4–P7, P8–P11. Reject aliases and mixed 100/50 Hz users of a group. Confirm
    `--pwm-ports` against physical connectors rather than the numeric channel range.
 2. With cutoff open and service disarmed, read capabilities and layout. Replace
-   `SELECT_*` markers in [examples](../../crates/terra-actuators/presets/) and use
+   `SELECT_*` markers in [examples](https://github.com/Super-Yojan/Terra/tree/main/crates/terra-actuators/presets) and use
    the current active revision. Stage with a fresh numeric request ID, then commit
    referencing that exact `staged_request_id` and `staged_revision`. Record replies,
    active revision and `hardware_gate_open_confirmed`; re-read with fresh IDs.

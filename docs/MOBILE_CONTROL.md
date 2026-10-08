@@ -63,7 +63,7 @@ try controller.setTarget(target: TwistSetpoint(timestamp: now, forward: step.for
 
 ## Motor adapter
 
-`terra-motors` sits behind `MotorOutput`. `map_effort` converts one signed effort to a PWM duty in `[0, 1]` and a direction. `MotorAdapter` applies that to both wheels and returns a `ChassisPwm` to write to the driver. The iOS UI does not call it. Zorvane turns controller effort into Avian forces rather than PWM. Run `cargo test -p terra-motors` for the mapping, enable gate, and watchdog tests. Crate details and the bench checklist are in [crates/terra-motors/README.md](../crates/terra-motors/README.md).
+`terra-motors` sits behind `MotorOutput`. `map_effort` converts one signed effort to a PWM duty in `[0, 1]` and a direction. `MotorAdapter` applies that to both wheels and returns a `ChassisPwm` to write to the driver. The iOS UI does not call it. Zorvane turns controller effort into Avian forces rather than PWM. Run `cargo test -p terra-motors` for the mapping, enable gate, and watchdog tests. Crate details and the bench checklist are in [crates/terra-motors/README.md](https://github.com/Super-Yojan/Terra/blob/main/crates/terra-motors/README.md).
 
 ### PWM
 
@@ -101,7 +101,7 @@ Wheels off the ground. No autonomy stack. Logic power until the enable path is c
 
 ## Simulation
 
-That closed loop now runs in [Zorvane](https://github.com/Super-Yojan/Zorvane) (`cargo run -p zorvane`). Each rover gets its own estimator and controller. Avian velocity and orientation provide synthetic IMU and 20 Hz VIO feedback, while controller effort produces forces and yaw torque. This tests the control loop rather than calculating VIO from rendered images. `VelocitySimulationConfig` exposes sensor enable switches, sensor frequency, motor force and drag for experiments. Disabling its `enabled` field restores the existing ideal drive model. Fleet changes and Zenoh velocity commands on `terra/rover/<id>/cmd_vel` remain supported. `TERRA_*` variables still apply.
+That closed loop now runs in [Zorvane](https://super-yojan.dev/Zorvane/) (`cargo run -p zorvane`). Each rover gets its own estimator and controller. Avian velocity and orientation provide synthetic IMU and 20 Hz VIO feedback, while controller effort produces forces and yaw torque. This tests the control loop rather than calculating VIO from rendered images. `VelocitySimulationConfig` exposes sensor enable switches, sensor frequency, motor force and drag for experiments. Disabling its `enabled` field restores the existing ideal drive model. Fleet changes and Zenoh velocity commands on `terra/rover/<id>/cmd_vel` remain supported. `TERRA_*` variables still apply.
 
 ## iOS occupancy view
 
@@ -115,7 +115,7 @@ Bevy Zenoh mode uses the same grid. It does not subscribe to an occupancy topic.
 
 TerraPhone exposes the Rust `terra-transport` client through UniFFI in the **iOS Simulator** build only. Use the **Bevy simulator · Zenoh** section to configure an endpoint and rover ID, then connect. This mode publishes either the velocity sliders or, after **Go to waypoint**, the phone follower's twist as `cmd_vel` on `terra/rover/<id>/cmd_vel`. The Zorvane rover runs its own velocity feedback loop. Local phone IMU/VIO/motor effort readouts do not provide remote feedback. Connecting starts at zero. Stop, switching modes and leaving the foreground close the session with a final zero. The Rust publisher also expires its 250 ms command lease if Swift stops refreshing it; Zorvane's independent 500 ms watchdog remains active. A physical-device build does not include this section.
 
-Demo on one Mac. Start the world from a [Zorvane](https://github.com/Super-Yojan/Zorvane) checkout:
+Demo on one Mac. Start the world from a [Zorvane](https://super-yojan.dev/Zorvane/) checkout:
 
 ```sh
 TERRA_ROVER_COUNT=2 TERRA_ZENOH_LISTEN=tcp/0.0.0.0:7447 cargo run -p zorvane
@@ -168,9 +168,9 @@ ESC stop/neutral/end pulses and arming duration, or servo min/center/max pulses 
 safe position/disabled PWM. Presets are editable drafts and require explicit port
 selection. Disabled-safe servos start controls at center bounded by their limits.
 
-The repository [terra-mini](../crates/terra-actuators/presets/terra-mini.json),
-[ESC template](../crates/terra-actuators/presets/esc-template.json), and
-[mixed servo template](../crates/terra-actuators/presets/mixed-servo-template.json)
+The repository [terra-mini](https://github.com/Super-Yojan/Terra/blob/main/crates/terra-actuators/presets/terra-mini.json),
+[ESC template](https://github.com/Super-Yojan/Terra/blob/main/crates/terra-actuators/presets/esc-template.json), and
+[mixed servo template](https://github.com/Super-Yojan/Terra/blob/main/crates/terra-actuators/presets/mixed-servo-template.json)
 are editable examples. The JSON templates intentionally contain `SELECT_*_PWM_PORT`
 selection markers and are invalid layouts until each is replaced with an exposed,
 nonconflicting capability port. The mobile presets present capability-driven port

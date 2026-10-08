@@ -14,7 +14,7 @@
 
 Implemented on `codex/mission-autonomy`. The [acceptance evidence](../../autonomy/evidence/README.md) maps the delivered runtime, mission, logging, phone binding, and companion dashboard checks. Original task checkboxes combine implementation with broader physical/study demonstrations; those demonstrations are not inferred from builds and remain explicitly listed in the evidence document.
 
-The Bevy world this plan called `simulator/` now lives in [Zorvane](https://github.com/Super-Yojan/Zorvane). Paths such as `simulator/src/zenoh_bridge.rs`, `simulator/src/velocity_controller.rs`, `simulator/src/occupancy_map.rs`, `simulator/src/mission.rs`, and `simulator/ZENOH.md` are in that repository. Run it with `TERRA_MISSION=1 cargo run -p zorvane`. The Zenoh prefix is still `terra/rover`, and the `TERRA_*` variables still apply. The shared arbiter crates stay in Terra.
+The Bevy world this plan called `simulator/` now lives in [Zorvane](https://super-yojan.dev/Zorvane/). Paths such as `simulator/src/zenoh_bridge.rs`, `simulator/src/velocity_controller.rs`, `simulator/src/occupancy_map.rs`, `simulator/src/mission.rs`, and `simulator/ZENOH.md` are in that repository. Run it with `TERRA_MISSION=1 cargo run -p zorvane`. The Zenoh prefix is still `terra/rover`, and the `TERRA_*` variables still apply. The shared arbiter crates stay in Terra.
 
 ## Findings from the current code
 
