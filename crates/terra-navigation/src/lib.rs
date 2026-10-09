@@ -1,4 +1,6 @@
 //! Deterministic local planning over observed occupancy, shared by phone and Bevy.
+mod search;
+pub use search::*;
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use terra_mapping::MapSnapshot;

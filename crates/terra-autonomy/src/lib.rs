@@ -1,3 +1,7 @@
+mod search;
+pub use search::*;
+mod search_contract;
+pub use search_contract::*;
 mod contract;
 pub use contract::*;
 mod arbiter;
