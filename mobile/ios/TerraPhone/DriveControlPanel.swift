@@ -17,7 +17,7 @@ struct DriveControlPanel: View {
         DriveJoystickSafety.canArm(ready: ready, manual: manual, stopped: stopRequested, foreground: scenePhase == .active)
             && !brain.hardwareArming && (!hardware || !brain.hardwareBenchMode || brain.hardwareBenchEnabled)
     }
-    private var canDrive: Bool { canArm && locallyArmed && (!hardware || brain.hardwareArmed) }
+    private var canDrive: Bool { canArm && locallyArmed && (!hardware || brain.hardwareArmed) && !brain.dashboardConnected }
     private var armPending: Bool { hardware && locallyArmed && !brain.hardwareArmed }
     var body: some View {
         VStack(spacing: 18) {
@@ -81,6 +81,9 @@ struct DriveControlPanel: View {
                 }
                 .disabled(hardware && !brain.configurationAllowed)
                 Text("Reset leaves the rover disarmed. Arm again when ready.").font(.caption).foregroundStyle(.secondary)
+            } else if brain.dashboardConnected {
+                Text("ARGOS controls movement while the fleet session is connected. Disconnect the fleet from Home to use the local debugging joystick.")
+                    .font(.caption).foregroundStyle(.secondary)
             } else if !manual {
                 Button("Take Over Manual Control") {
                     locallyArmed = false; neutralize()
@@ -94,6 +97,14 @@ struct DriveControlPanel: View {
         .padding(.vertical, 10)
         .onAppear { locallyArmed = brain.hardwareArmed }
         .onChange(of: canDrive) { _, enabled in if !enabled { neutralize() } }
+        .task(id: armPending) {
+            guard armPending else { return }
+            do { try await Task.sleep(for: .seconds(3)) } catch { return }
+            if !brain.hardwareArmed && !brain.hardwareArming { locallyArmed = false; neutralize() }
+        }
+        .onChange(of: brain.hardwareArming) { _, arming in
+            if !arming && !brain.hardwareArmed { locallyArmed = false; neutralize() }
+        }
         .onChange(of: brain.hardwareArmed) { _, armed in if !armed && !brain.hardwareArming { locallyArmed = false; neutralize() } }
         .onChange(of: brain.source) { _, source in if source == "Stopped" { locallyArmed = false; neutralize() } }
         .onChange(of: scenePhase) { _, phase in
@@ -105,6 +116,7 @@ struct DriveControlPanel: View {
         if stopRequested { return "Stopped · Reset Required" }
         if brain.hardwareArming { return "Arming at Safe Output…" }
         if armPending { return "Waiting for Arm Acknowledgement…" }
+        if brain.dashboardConnected { return brain.hardwareArmed ? "ARGOS Control · Hardware Armed" : "ARGOS Control · Disarmed" }
         if canDrive { return hardware ? "Hardware Armed · Manual Control" : "Manual Control Enabled" }
         if !manual { return "Autonomy Active · Joystick Locked" }
         return ready ? "Connected · Disarmed" : "No Rover Connected"

@@ -41,7 +41,8 @@ final class BluetoothSession {
         }
         if let fault = value["fault"] as? String { return [.state("Fault: \(fault) · disarmed")] }
         if value["emergency_stop"] as? Bool == true { return [.state("Emergency stop latched · disarmed")] }
-        return [.state(armed ? "Armed" : arming ? "Arming at safe output" : "Disarmed")]
+        let disarmed = value["stop_reason"] as? String == "watchdog" ? "Disarmed · command stream stopped" : "Disarmed"
+        return [.state(armed ? "Armed" : arming ? "Arming at safe output" : disarmed)]
     }
     func control(_ kind: String) throws -> Data {
         guard let session = session, sequence < UInt32.max - 1 else { throw BluetoothPolicyError.unavailable }

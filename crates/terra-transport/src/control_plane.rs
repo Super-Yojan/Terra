@@ -1,4 +1,4 @@
-//! Loopback-only dashboard endpoint. Transport queues intent, never motor authority.
+//! Dashboard endpoint or outbound router client. Transport queues intent, never motor authority.
 use crate::TransportError;
 use std::{
     collections::{BTreeMap, VecDeque},
@@ -11,9 +11,12 @@ use std::{
 };
 use zenoh::Wait;
 type Inbox = Arc<Mutex<VecDeque<(String, Vec<u8>, Instant)>>>;
+type States = Arc<Mutex<BTreeMap<String, (String, Instant)>>>;
+const TELEMETRY_TTL: Duration = Duration::from_millis(500);
 pub struct ControlPlane {
     inbox: Inbox,
-    states: Arc<Mutex<BTreeMap<String, String>>>,
+    states: States,
+    batches: Arc<Mutex<BTreeMap<String,(Vec<String>,Instant)>>>,
     stop: Arc<AtomicBool>,
     failed: Arc<AtomicBool>,
     worker: Option<JoinHandle<()>>,
@@ -25,10 +28,35 @@ impl ControlPlane {
         if !endpoint.starts_with("tcp/127.0.0.1:") {
             return Err(TransportError::InvalidSettings);
         }
+        Self::open(endpoint, prefix, id, false)
+    }
+    /// Outbound TCP session, suitable for an explicitly configured Tailscale router.
+    /// No listeners, multicast discovery, or automatic application command retries.
+    pub fn connect(endpoint: &str, prefix: &str, id: u64) -> Result<Self, TransportError> {
+        crate::validate(endpoint, prefix)?;
+        Self::open(endpoint, prefix, id, true)
+    }
+    fn open(endpoint: &str, prefix: &str, id: u64, outbound: bool) -> Result<Self, TransportError> {
         let mut config = zenoh::Config::default();
+        if outbound {
+            for (key, value) in [
+                ("mode", "\"client\""),
+                ("listen/endpoints", "[]"),
+                ("connect/timeout_ms", "3000"),
+                ("connect/exit_on_failure", "true"),
+            ] {
+                config
+                    .insert_json5(key, value)
+                    .map_err(|e| TransportError::Network(e.to_string()))?;
+            }
+        }
         config
             .insert_json5(
-                "listen/endpoints",
+                if outbound {
+                    "connect/endpoints"
+                } else {
+                    "listen/endpoints"
+                },
                 &serde_json::json!([endpoint]).to_string(),
             )
             .map_err(|e| TransportError::Network(e.to_string()))?;
@@ -39,7 +67,7 @@ impl ControlPlane {
             .wait()
             .map_err(|e| TransportError::Network(e.to_string()))?;
         let inbox: Inbox = Arc::new(Mutex::new(VecDeque::new()));
-        let states = Arc::new(Mutex::new(BTreeMap::<String, String>::new()));
+        let states: States = Arc::new(Mutex::new(BTreeMap::new()));
         let stop = Arc::new(AtomicBool::new(false));
         let failed = Arc::new(AtomicBool::new(false));
         let base = format!("{prefix}/{id}");
@@ -55,10 +83,7 @@ impl ControlPlane {
                 else {
                     return;
                 };
-                if !matches!(
-                    kind,
-                    "autonomy" | "safety" | "goal" | "goal/decision" | "teleop" | "cmd_vel"
-                ) {
+                if !crate::is_control_topic(kind) {
                     return;
                 }
                 let bytes = sample.payload().to_bytes();
@@ -75,13 +100,28 @@ impl ControlPlane {
             })
             .wait()
             .map_err(|e| TransportError::Network(e.to_string()))?;
+        let batches:Arc<Mutex<BTreeMap<String,(Vec<String>,Instant)>>>=Default::default();
+        let batch_state=batches.clone();
         let state = states.clone();
         let stopped = stop.clone();
         let fault = failed.clone();
         let fleet = format!("{prefix}/fleet/state");
         let worker = thread::spawn(move || {
+            let mut last_batch=Instant::now()-Duration::from_secs(1);
             while !stopped.load(Ordering::Acquire) {
+                if outbound && session.info().routers_zid().wait().next().is_none() {
+                    fault.store(true, Ordering::Release);
+                    break;
+                }
                 let snapshots = state.lock().unwrap().clone();
+                // A stalled/backgrounded controller must not look freshly observed.
+                if !snapshots
+                    .values()
+                    .any(|(_, at)| at.elapsed() < TELEMETRY_TTL)
+                {
+                    thread::sleep(Duration::from_millis(100));
+                    continue;
+                }
                 if session
                     .put(
                         &fleet,
@@ -93,10 +133,17 @@ impl ControlPlane {
                     fault.store(true, Ordering::Release);
                     break;
                 }
-                for (kind, value) in snapshots {
+                for (kind, (value, at)) in snapshots {
+                    if at.elapsed() >= TELEMETRY_TTL {
+                        continue;
+                    }
                     if session.put(format!("{base}/{kind}"), value).wait().is_err() {
                         fault.store(true, Ordering::Release);
                     }
+                }
+                if last_batch.elapsed()>=Duration::from_secs(1) {
+                    last_batch=Instant::now();let batches=batch_state.lock().unwrap().clone();
+                    for (kind,(values,at)) in batches {if at.elapsed()<TELEMETRY_TTL {for value in values {if session.put(format!("{base}/{kind}"),value).wait().is_err(){fault.store(true,Ordering::Release);}}}}
                 }
                 thread::sleep(Duration::from_millis(100));
             }
@@ -106,6 +153,7 @@ impl ControlPlane {
         Ok(Self {
             inbox,
             states,
+            batches,
             stop,
             failed,
             worker: Some(worker),
@@ -113,15 +161,33 @@ impl ControlPlane {
         })
     }
     pub fn take_actions(&self) -> Vec<(String, Vec<u8>, f64)> {
+        if self.failed() {
+            self.inbox.lock().unwrap().clear();
+            return vec![];
+        }
         crate::drain_control_actions(&mut self.inbox.lock().unwrap())
             .into_iter()
             .map(|(kind, payload, received)| (kind, payload, received.elapsed().as_secs_f64()))
             .collect()
     }
     pub fn publish(&self, kind: &str, value: String) {
-        if value.len() <= 65536 {
-            self.states.lock().unwrap().insert(kind.into(), value);
+        // Dense visualization snapshots exceed the ordinary state-message budget.
+        // Keep action/small telemetry limits unchanged and bound only these two topics higher.
+        let limit = if matches!(kind, "pointcloud" | "map/occupancy") {
+            262144
+        } else {
+            65536
+        };
+        if value.len() <= limit {
+            self.states
+                .lock()
+                .unwrap()
+                .insert(kind.into(), (value, Instant::now()));
         }
+    }
+    /// Fair replay of bounded outstanding records on one contractual topic.
+    pub fn publish_batch(&self,kind:&str,values:Vec<String>){
+        if kind=="search/report" && values.len()<=128 && values.iter().all(|v|v.len()<=65536) {self.batches.lock().unwrap().insert(kind.into(),(values,Instant::now()));}
     }
     pub fn failed(&self) -> bool {
         self.failed.load(Ordering::Acquire)

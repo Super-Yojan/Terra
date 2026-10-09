@@ -24,6 +24,9 @@ struct State {
     target: Option<(f64, f64, Instant)>,
     actions: std::collections::VecDeque<(String, String)>,
     authority: String,
+    authority_received: Option<Instant>,
+    search: Option<(serde_json::Value,Instant)>,
+    reports: std::collections::BTreeMap<(String,String,String),(serde_json::Value,Instant)>,
     shutdown: bool,
     error: Option<String>,
 }
@@ -242,13 +245,17 @@ impl RoverConnection {
                 };
                 let status_shared = shared.clone();
                 let authority = session
-                    .declare_subscriber(format!("{base}/autonomy/status"))
+                    .declare_subscriber(format!("{base}/**"))
                     .callback(move |sample| {
+                        let key=sample.key_expr().as_str();
+                        if !key.ends_with("/autonomy/status")&&!key.ends_with("/search/status")&&!key.ends_with("/search/report"){return;}
                         let bytes = sample.payload().to_bytes();
                         if bytes.len() <= 65536
                             && let Ok(text) = String::from_utf8(bytes.to_vec())
                         {
-                            status_shared.lock().unwrap().authority = text;
+                            let mut state=status_shared.lock().unwrap();
+                            if key.ends_with("/search/report"){if let Ok(value)=serde_json::from_str::<serde_json::Value>(&text){let ids=(value["run_id"].as_str(),value["search_id"].as_str(),value["report_id"].as_str());if let (Some(run),Some(search),Some(report))=ids {state.reports.retain(|_,(_,at)|at.elapsed().as_secs_f64()<2.5);let key=(run.into(),search.into(),report.into());if state.reports.len()<128||state.reports.contains_key(&key){state.reports.insert(key,(value,Instant::now()));}}}}
+                            else if key.ends_with("/search/status"){if let Ok(value)=serde_json::from_str::<serde_json::Value>(&text){state.search=Some((value,Instant::now()));}}else{state.authority=text;state.authority_received=Some(Instant::now());}
                         }
                     })
                     .wait()
@@ -316,7 +323,7 @@ impl RoverConnection {
         Ok(())
     }
     pub fn send_action(&self, kind: &str, payload: &str) -> Result<(), TransportError> {
-        if !matches!(kind, "autonomy" | "safety" | "goal" | "goal/decision")
+        if !matches!(kind, "autonomy" | "safety" | "goal" | "goal/decision" | "search" | "search/action" | "search/report/ack")
             || payload.len() > 2048
             || serde_json::from_str::<serde_json::Value>(payload).is_err()
         {
@@ -333,7 +340,12 @@ impl RoverConnection {
         Ok(())
     }
     pub fn autonomy_status(&self) -> String {
-        self.state.lock().unwrap().authority.clone()
+        let state=self.state.lock().unwrap();let mut value:serde_json::Value=serde_json::from_str(&state.authority).unwrap_or_else(|_|serde_json::json!({}));
+        if !value.is_object(){return "{}".into();}
+        value["age"]=serde_json::json!(state.authority_received.map(|t|t.elapsed().as_secs_f64()));
+        if let Some((search,at))=state.search.as_ref(){value["search"]=search.clone();value["search_age"]=serde_json::json!(at.elapsed().as_secs_f64());}
+        value["reports"]=serde_json::json!(state.reports.values().filter(|(_,at)|at.elapsed().as_secs_f64()<2.5).map(|(v,_)|v).collect::<Vec<_>>());
+        value.to_string()
     }
     pub fn status(&self) -> String {
         let state = self.state.lock().unwrap();
@@ -547,6 +559,12 @@ pub use control_plane::ControlPlane;
 /// Bounded intent inbox with protected distinct emergency stops.
 pub type ControlAction = (String, Vec<u8>, Instant);
 fn stop_token(a: &ControlAction) -> Option<String> {
+    if a.0 == "hardware" {
+        let v: serde_json::Value = serde_json::from_slice(&a.1).ok()?;
+        let token = v["token"].as_str()?;
+        return (v["action"] == "disarm" && (1..=64).contains(&token.len()))
+            .then(|| format!("hardware:{token}"));
+    }
     if a.0 != "safety" {
         return None;
     }
@@ -591,3 +609,6 @@ pub fn drain_control_actions(
     actions.sort_by_key(is_stop);
     actions
 }
+
+/// Operator intents only. Sensor evidence is supplied by the onboard adapter.
+pub fn is_control_topic(kind:&str)->bool{matches!(kind,"autonomy"|"safety"|"goal"|"goal/decision"|"teleop"|"cmd_vel"|"hardware"|"search"|"search/action"|"search/report/ack")}

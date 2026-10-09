@@ -10,7 +10,7 @@ Connect the phone to its rover and to the ARGOS fleet management dashboard. Make
 
 ## Confirmed workflows
 
-New rover pairing requires explicit consent. Reconnect to the remembered rover automatically, then connect to the saved fleet router. Configure router and hardware settings occasionally. Manual driving is rarely used and belongs in Debug tools. Home does not need maps or mission controls.
+New rover pairing requires explicit consent. Reconnect to the remembered rover automatically, then connect to the saved fleet router. Once connected to ARGOS, phone tracking turns on automatically in every autonomy mode and turns off when the fleet session ends. Configure router and hardware settings occasionally. Manual driving is rarely used and belongs in Debug tools. Home does not need maps or mission controls.
 
 ## Constraints
 

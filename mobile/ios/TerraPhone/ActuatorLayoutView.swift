@@ -4,30 +4,14 @@ struct ActuatorLayoutView: View {
     @ObservedObject var brain: PhoneController
     @State private var draft = ActuatorLayoutDraft.rover1()
     @State private var dirty = false
-    @State private var feedback = false
-    @State private var selected: String = ""
-    @AppStorage("autoConnectHardware") private var autoConnectHardware = true
     private var caps: ActuatorCapabilities? { try? JSONDecoder().decode(ActuatorCapabilities.self, from: Data(brain.capabilitiesJSON.utf8)) }
     private var active: ActuatorLayoutDraft? { try? JSONDecoder().decode(ActuatorLayoutDraft.self, from: Data(brain.committedLayoutJSON.utf8)) }
     var body: some View {
         Form {
-            Section("Bluetooth rover") {
-                Toggle("Connect Automatically", isOn: $autoConnectHardware)
-                    .onChange(of: autoConnectHardware) { _, enabled in
-                        if enabled { brain.autoConnectHardware() } else { brain.cancelAutoConnection() }
-                    }
-                Text("Reconnect to your last rover when the app opens. Motors remain disarmed until you arm them.").font(.footnote).foregroundStyle(.secondary)
-                Text("First setup: hold the rover’s USR button for 3 seconds until its LED blinks. Find your terra- rover below and accept pairing on your phone.").font(.footnote)
-                Button("Find rovers") { brain.scanBluetooth() }
-                Picker("Rover", selection: $selected) {
-                    Text("Select discovered rover").tag("")
-                    ForEach(brain.discoveredRovers) { rover in Text("\(rover.name) · \(rover.identifier)").tag(rover.identifier) }
-                }
-                Toggle("Phone feedback", isOn: $feedback)
-                Button("Connect selected rover") { if let id = UUID(uuidString: selected) { brain.startBluetooth(identifier: id, feedback: feedback) } }.disabled(UUID(uuidString: selected) == nil)
-                Text(brain.hardwareStatus)
-                Text(brain.hardwareReady ? "Layout and capabilities synchronized" : brain.hardwareConfigurationReady ? "Configuration available · motion requires a valid layout and cleared fault" : "Waiting for bonded owner access and capabilities")
-                Text("Manual mode commands normalized effort. Feedback requires a compatible left/right layout and healthy phone tracking.").font(.footnote)
+            Section("Rover configuration") {
+                Text(brain.roverDisplayName).font(.headline)
+                Text(brain.hardwareConfigurationReady ? "Configuration available" : "Connect the rover from Home to read its configuration.")
+                    .font(.subheadline).foregroundStyle(.secondary)
             }
             if brain.hardwareBenchMode {
                 Section("Bench Mode") {
@@ -38,7 +22,6 @@ struct ActuatorLayoutView: View {
             }
             Section("Hardware safety") {
                 LabeledContent("Output", value: brain.hardwareArmed ? "Armed" : brain.hardwareArming ? "Arming at safe output" : "Disarmed")
-                Button("Arm hardware") { brain.armHardware() }.disabled(!brain.hardwareReady || brain.hardwareArmed || brain.hardwareArming)
                 Button("Disarm", role: .destructive) { brain.disarmHardware() }
                 Button("Emergency stop", role: .destructive) { brain.emergencyStop() }
                 if let fault = brain.hardwareFault { Text("Fault: \(fault)").textSelection(.enabled) }
@@ -90,7 +73,6 @@ struct ActuatorLayoutView: View {
         .navigationTitle("Actuator layouts")
         .onAppear { if !dirty { draft = active ?? .rover1(revision: brain.activeLayoutRevision) } }
         .onChange(of: brain.activeLayoutRevision) { _, revision in if !dirty { draft.revision = revision } }
-        .onChange(of: selected) { _, _ in if brain.hardwareActive { brain.stop() } }
         .onChange(of: brain.acknowledgedCommitRevision) { _, revision in
             if let revision { draft.revision = revision }
         }
