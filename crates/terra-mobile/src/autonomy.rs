@@ -1,6 +1,50 @@
 use crate::*;
 #[uniffi::export]
 impl MobileController {
+    /// Bounded world-space visualization points; never a source of motor authority.
+    pub fn publish_point_cloud(&self, payload: String) -> Result<(), ControllerError> {
+        if payload.len() > 262144 {
+            return Err(ControllerError::InvalidInput {
+                message: "point cloud too large".into(),
+            });
+        }
+        let value: serde_json::Value =
+            serde_json::from_str(&payload).map_err(|_| ControllerError::Internal)?;
+        if value["version"].as_u64() != Some(1)
+            || value["points"].as_array().is_none_or(|p| p.len() > 4096)
+        {
+            return Err(ControllerError::InvalidInput {
+                message: "invalid point cloud".into(),
+            });
+        }
+        let brain = self.brain.lock().map_err(|_| ControllerError::Internal)?;
+        if let Some(dashboard) = brain.dashboard.as_ref() {
+            dashboard.publish("pointcloud", payload);
+        }
+        Ok(())
+    }
+    /// Publish positioning quality without changing the controller's local motion frame.
+    pub fn publish_localization(&self, payload: String) -> Result<(), ControllerError> {
+        if payload.len() > 4096 {
+            return Err(ControllerError::InvalidInput {
+                message: "localization payload too large".into(),
+            });
+        }
+        let value: serde_json::Value =
+            serde_json::from_str(&payload).map_err(|_| ControllerError::InvalidInput {
+                message: "invalid localization JSON".into(),
+            })?;
+        if value["version"].as_u64() != Some(1) {
+            return Err(ControllerError::InvalidInput {
+                message: "unsupported localization version".into(),
+            });
+        }
+        let brain = self.brain.lock().map_err(|_| ControllerError::Internal)?;
+        if let Some(dashboard) = brain.dashboard.as_ref() {
+            dashboard.publish("localization", payload);
+        }
+        Ok(())
+    }
     pub fn host_dashboard(
         &self,
         endpoint: String,
@@ -18,6 +62,92 @@ impl MobileController {
             .map_err(|_| ControllerError::Internal)?
             .dashboard = Some(service);
         Ok(())
+    }
+    /// Attach an outbound dashboard session to this controller; no hardware arming.
+    pub fn connect_dashboard(
+        &self,
+        endpoint: String,
+        prefix: String,
+        rover_id: u64,
+    ) -> Result<(), ControllerError> {
+        self.disconnect_dashboard()?;
+        let service = terra_transport::ControlPlane::connect(&endpoint, &prefix, rover_id)
+            .map_err(|e| ControllerError::InvalidInput {
+                message: e.to_string(),
+            })?;
+        self.brain
+            .lock()
+            .map_err(|_| ControllerError::Internal)?
+            .dashboard = Some(service);
+        Ok(())
+    }
+    /// Drop network transport without clearing an accepted local mission.
+    pub fn detach_dashboard_link(&self) -> Result<(), ControllerError> {
+        let mut b = self.brain.lock().map_err(|_| ControllerError::Internal)?;
+        let service = b.dashboard.take();
+        b.hardware_requests.clear(); b.hardware_tokens.clear();
+        drop(b);
+        // Network teardown must not stall the phone control/Bluetooth producer.
+        if let Some(service) = service { std::thread::spawn(move || drop(service)); }
+        Ok(())
+    }
+    pub fn reconnect_dashboard(&self, endpoint: String, prefix: String, rover_id: u64) -> Result<(), ControllerError> {
+        self.detach_dashboard_link()?;
+        let service = terra_transport::ControlPlane::connect(&endpoint, &prefix, rover_id)
+            .map_err(|e| ControllerError::InvalidInput { message: e.to_string() })?;
+        self.brain.lock().map_err(|_| ControllerError::Internal)?.dashboard = Some(service);
+        Ok(())
+    }
+    /// Clear remote intent while preserving sensors, recording and a latched emergency stop.
+    pub fn disconnect_dashboard(&self) -> Result<(), ControllerError> {
+        let mut brain = self.brain.lock().map_err(|_| ControllerError::Internal)?;
+        let service = brain.dashboard.take();
+        brain.hardware_requests.clear();
+        brain.hardware_tokens.clear();
+        brain.sequence += 1;
+        let token = format!("dashboard-detach-{}", brain.sequence);
+        brain.autonomy.set_level(terra_autonomy::LevelRequest {
+            level: terra_autonomy::Level::Teleop,
+            token,
+        });
+        brain.controller.reset();
+        drop(brain);
+        drop(service);
+        Ok(())
+    }
+    pub fn take_hardware_request(&self) -> String {
+        let Ok(mut b) = self.brain.lock() else { return String::new(); };
+        let authority = serde_json::from_str(&b.autonomy_json).unwrap_or_default();
+        while let Some((raw, received)) = b.hardware_requests.pop_front() {
+            let age = received.elapsed().as_secs_f64();
+            if let Some(mut request) = super::admit_hardware_request(raw.as_bytes(), age, &authority) {
+                request["valid_for"] = serde_json::json!((0.5 - age).max(0.));
+                return request.to_string();
+            }
+        }
+        String::new()
+    }
+    pub fn publish_hardware_status(&self, payload: String) -> Result<(), ControllerError> {
+        if payload.len() > 4096 || serde_json::from_str::<serde_json::Value>(&payload).is_err() {
+            return Err(ControllerError::InvalidInput { message: "invalid hardware status".into() });
+        }
+        let b = self.brain.lock().map_err(|_| ControllerError::Internal)?;
+        if let Some(d) = b.dashboard.as_ref() { d.publish("hardware/status", payload); }
+        Ok(())
+    }
+    /// Transport connectivity only, not acknowledgement by an ARGOS operator.
+    pub fn dashboard_status(&self) -> String {
+        self.brain
+            .lock()
+            .map(|brain| {
+                match brain.dashboard.as_ref() {
+                    None => "disconnected",
+                    Some(service) if service.failed() => "failed",
+                    Some(_) => "connected",
+                }
+                .to_string()
+            })
+            .unwrap_or_else(|_| "failed".into())
     }
     pub fn autonomy_request(
         &self,
@@ -69,6 +199,7 @@ impl MobileController {
                     },
                 );
             }
+            "search" | "search/action" | "search/report/ack" => search::dispatch_search(&mut b,&kind,payload.as_bytes(),timestamp)?,
             _ => return Err(invalid()),
         }
         Ok(())
@@ -161,5 +292,91 @@ impl MobileController {
             })?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod dashboard_tests {
+    use super::*;
+    #[test]
+    fn dashboard_disconnect_clears_goal_and_authority_without_resetting_sensors() {
+        let controller = MobileController::new(default_control_settings()).unwrap();
+        controller
+            .push_imu(ImuReading {
+                timestamp: 1.,
+                acceleration_forward: 0.,
+                acceleration_left: 0.,
+                acceleration_up: 0.,
+                gyro_roll: 0.,
+                gyro_pitch: 0.,
+                gyro_yaw: 0.,
+            })
+            .unwrap();
+        controller
+            .push_vio(VioReading {
+                timestamp: 1.,
+                position_x: 0.,
+                position_y: 0.,
+                position_z: 0.,
+                quaternion_x: 0.,
+                quaternion_y: 0.,
+                quaternion_z: 0.,
+                quaternion_w: 1.,
+                velocity_x: 0.,
+                velocity_y: 0.,
+                velocity_z: 0.,
+                tracked: true,
+            })
+            .unwrap();
+        controller
+            .autonomy_request(
+                "autonomy".into(),
+                r#"{"level":"waypoint","token":"level"}"#.into(),
+                1.,
+            )
+            .unwrap();
+        controller
+            .autonomy_request(
+                "goal".into(),
+                r#"{"frame":"local","x":2,"y":0,"token":"goal"}"#.into(),
+                1.,
+            )
+            .unwrap();
+        controller.disconnect_dashboard().unwrap();
+        controller.step(1.).unwrap();
+        let status: serde_json::Value =
+            serde_json::from_str(&controller.autonomy_status()).unwrap();
+        assert_eq!(status["status"]["requested_level"], "teleop");
+        assert_eq!(status["goal"]["state"], "idle");
+        assert_eq!(controller.dashboard_status(), "disconnected");
+        assert_eq!(
+            controller
+                .brain
+                .lock()
+                .unwrap()
+                .estimator
+                .estimate(1.)
+                .health,
+            Health::Ready
+        );
+        controller.disconnect_dashboard().unwrap();
+    }
+    #[test]
+    fn dashboard_disconnect_preserves_emergency_stop() {
+        let controller = MobileController::new(default_control_settings()).unwrap();
+        controller
+            .autonomy_request(
+                "safety".into(),
+                r#"{"action":"stop","token":"stop"}"#.into(),
+                1.,
+            )
+            .unwrap();
+        controller.disconnect_dashboard().unwrap();
+        let output = controller.step(1.).unwrap();
+        assert_eq!(output.left_effort, 0.);
+        assert_eq!(output.right_effort, 0.);
+        let status: serde_json::Value =
+            serde_json::from_str(&controller.autonomy_status()).unwrap();
+        assert_eq!(status["status"]["safety"], "emergency_stop");
     }
 }

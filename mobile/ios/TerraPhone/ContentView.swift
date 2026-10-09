@@ -30,32 +30,31 @@ struct ControllerDetailView: View {
     @AppStorage("waypointGoalLon") private var goalLon = "-77.3075"
     @AppStorage("waypointToken") private var waypointToken = "gmu-north"
     @State private var entryNote = ""
+    @State private var searchClass = "survivor"
+    @State private var searchMinX = "-20"
+    @State private var searchMinY = "-20"
+    @State private var searchMaxX = "20"
+    @State private var searchMaxY = "20"
+    @State private var searchBudget = "600"
     private let waypointReach = 49.0
     var body: some View {
-        ScrollViewReader { proxy in
-            Form {
+        Form {
                 if destination == .drive {
                     Section("Manual Control") { DriveControlPanel(brain: brain) }
                         .id(TerraDestination.drive)
                 }
-                // CoreBluetooth has no radio in the Simulator, so Discover/Connect
-                // cannot reach a rover there. Device builds are the Bluetooth path.
-                #if !targetEnvironment(simulator)
-                Section("Bluetooth actuators") {
-                    NavigationLink("Discover, configure and arm rover") { ActuatorLayoutView(brain: brain) }
-                    Text(brain.hardwareStatus).font(.footnote)
-                }
-                #endif
+                if destination == .settings || destination == .telemetry {
                 Section("Controller") {
                     LabeledContent("Source", value: brain.source)
                     LabeledContent("Status", value: brain.status)
-                    HStack {
-                        Button("Simulated rover") { brain.startSimulation() }
-                        Spacer()
-                        Button("Phone IMU + VIO") { brain.startPhone() }
+                    if destination == .settings {
+                        Button("Start local simulation") { brain.startSimulation() }
+                        Button("Start phone sensors") { brain.startPhone() }
+                        Button("Stop controller", role: .destructive) { forward = 0; yaw = 0; brain.stop() }
                     }
-                    Button("Stop controller", role: .destructive) { forward = 0; yaw = 0; brain.stop() }
                 }
+                }
+                if destination == .settings {
                 // Compiled only for the iOS Simulator. A device build has no
                 // Bevy controls and does not read the stored endpoint.
                 #if targetEnvironment(simulator)
@@ -74,6 +73,8 @@ struct ControllerDetailView: View {
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 #endif
+                }
+                if destination == .live || destination == .missions {
                 Section("Local occupancy map") {
                     OccupancyMapView(grid: brain.occupancy, rover: brain.mapPose, goal: selectedGoal) { north, west in
                         guard !brain.waypointActive,
@@ -95,13 +96,15 @@ struct ControllerDetailView: View {
                     }
                     Button("Clear map") { brain.clearMap() }
                     #if targetEnvironment(simulator)
-                    Text("Phone mapping uses scene depth when available. Initial camera height is assumed 0.5 m above flat ground; calibrate before using the map for navigation. Bevy Zenoh mode uses the simulator’s exposure-aligned camera pose instead, with ground at robotics Z = 0.").font(.footnote).foregroundStyle(.secondary)
+                    Text("Phone mapping uses scene depth when available. Mapping waits for a stable detected floor; point the camera toward the ground during startup. Bevy Zenoh mode uses the simulator’s exposure-aligned camera pose instead, with ground at robotics Z = 0.").font(.footnote).foregroundStyle(.secondary)
                     #else
-                    Text("Phone mapping uses scene depth when available. Initial camera height is assumed 0.5 m above flat ground; calibrate before using the map for navigation.").font(.footnote).foregroundStyle(.secondary)
+                    Text("Phone mapping uses scene depth when available. Mapping waits for a stable detected floor; point the camera toward the ground during startup.").font(.footnote).foregroundStyle(.secondary)
                     #endif
                 }.id(TerraDestination.live)
+                }
+                if destination == .missions {
                 Section("Mission autonomy") {
-                    Picker("Requested level",selection:Binding(get:{brain.autonomyLevel},set:{brain.setAutonomy($0)})) {Text("Teleop").tag("teleop");Text("Assisted teleop").tag("assisted_teleop");Text("Waypoint").tag("waypoint");Text("Supervised search").tag("supervised")}
+                    Picker("Requested level",selection:Binding(get:{brain.autonomyLevel},set:{brain.setAutonomy($0)})) {Text("Teleop").tag("teleop");Text("Assisted teleop").tag("assisted_teleop");Text("Waypoint").tag("waypoint");Text("Supervised search").tag("supervised");if brain.searchAvailable {Text("L4 target search").tag("target_search")}}
                         .disabled(brain.hardwareActive && !brain.hardwareFeedback)
                     Text(brain.autonomyReason)
                     if let proposal=brain.proposedGoal {Text(brain.proposalText);HStack {Button("Approve search target") {brain.decideProposal(proposal,approve:true)};Button("Reject") {brain.decideProposal(proposal,approve:false)}}}
@@ -111,6 +114,23 @@ struct ControllerDetailView: View {
                     Button("Finish run log") {brain.exportRun()}
                     if let log=brain.runLog {ShareLink("Share run log",item:log)}
                 }.id(TerraDestination.missions)
+                Section("Target search") {
+                    if brain.searchAvailable {
+                        TextField("Target class",text:$searchClass).textInputAutocapitalization(.never).autocorrectionDisabled().accessibilityLabel("Target class")
+                        Text("Bounds in rover local metres").font(.caption)
+                        HStack {TextField("Min x",text:$searchMinX).accessibilityLabel("Search minimum x");TextField("Max x",text:$searchMaxX).accessibilityLabel("Search maximum x")}.keyboardType(.numbersAndPunctuation)
+                        HStack {TextField("Min y",text:$searchMinY).accessibilityLabel("Search minimum y");TextField("Max y",text:$searchMaxY).accessibilityLabel("Search maximum y")}.keyboardType(.numbersAndPunctuation)
+                        TextField("Time budget in seconds",text:$searchBudget).keyboardType(.numbersAndPunctuation).accessibilityLabel("Search time budget in seconds")
+                        Button("Start search") {
+                            guard let a=Double(searchMinX),let b=Double(searchMinY),let c=Double(searchMaxX),let d=Double(searchMaxY),let t=Double(searchBudget) else {entryNote="Enter numeric search bounds and budget";return}
+                            brain.startTargetSearch(targetClass:searchClass,minX:a,minY:b,maxX:c,maxY:d,budget:t)
+                        }.disabled(brain.autonomyLevel != "target_search" || !brain.searchTerminal)
+                    }else {Text("Target search requires a registered target detector.").font(.caption).foregroundStyle(.secondary)}
+                    if !brain.searchPhase.isEmpty {Text(brain.searchPhase.replacingOccurrences(of:"_",with:" ").capitalized)}
+                    if !brain.searchReportText.isEmpty {Text(brain.searchReportText).textSelection(.enabled)}
+                    if !brain.searchReportHistory.isEmpty {DisclosureGroup("Confirmed reports") {ForEach(Array(brain.searchReportHistory.enumerated()),id:\.offset) { _,report in Text(report).textSelection(.enabled)}}}
+                    HStack {Button("Pause") {brain.targetSearchAction("pause")};Button("Resume") {brain.targetSearchAction("resume")};Button("Cancel",role:.destructive) {brain.targetSearchAction("cancel")}}.disabled(brain.searchTerminal)
+                }
                 Section("Waypoint") {
                     TextField("Origin latitude", text: $originLat).keyboardType(.numbersAndPunctuation)
                         .accessibilityLabel("Origin latitude")
@@ -152,7 +172,8 @@ struct ControllerDetailView: View {
                         .font(.footnote).foregroundStyle(.secondary)
                     #endif
                 }
-                if destination != .drive {
+                }
+                if destination == .settings {
                 Section(brain.hardwareActive && !brain.hardwareFeedback ? "Normalized manual effort" : "Velocity target") {
                     LabeledContent("Forward", value: String(format: brain.hardwareActive && !brain.hardwareFeedback ? "%.2f effort" : "%.2f m/s", forward))
                     Slider(value: $forward, in: -1...1, step: 0.05)
@@ -166,6 +187,7 @@ struct ControllerDetailView: View {
                         .disabled(brain.waypointActive)
                 }
                 }
+                if destination == .telemetry {
                 Section("Feedback") {
                     LabeledContent("Measured forward", value: String(format: "%.2f m/s", brain.measuredForward))
                     LabeledContent("Measured turn", value: String(format: "%.2f rad/s", brain.measuredYaw))
@@ -174,6 +196,17 @@ struct ControllerDetailView: View {
                     Text("Motor effort is normalized from −1 to +1 (unidirectional ESCs use 0 to 1). Bluetooth hardware requires explicit arming and an independent enable gate. Zero effort is not a brake.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }.id(TerraDestination.telemetry)
+                Section("Connection details") {
+                    Text(brain.hardwareStatus)
+                    Text(brain.dashboardStatus)
+                    Text(brain.autonomyReason)
+                }
+                Section("Run recording") {
+                    Button("Finish run log") { brain.exportRun() }
+                    if let log = brain.runLog { ShareLink("Share run log", item: log) }
+                }
+                }
+                if destination == .settings {
                 Section("Shared Rust test") {
                     Button("Run velocity benchmark") { brain.runBenchmark() }
                     Text(brain.benchmark).font(.footnote)
@@ -184,16 +217,18 @@ struct ControllerDetailView: View {
                     Text("ARKit needs a physical supported iPhone and visual features. Use Simulated rover on the iOS simulator.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }.id(TerraDestination.settings)
-            }
-            .navigationTitle(destination.title)
-            .onAppear { proxy.scrollTo(destination, anchor: .top) }
-            .onChange(of: destination) { _, value in proxy.scrollTo(value, anchor: .top) }
+                }
         }
+        .navigationTitle(destination.title)
         .onChange(of: brain.hardwareArmed) { _, _ in forward = 0; yaw = 0 }
         .onChange(of: brain.hardwareActive) { _, _ in forward = 0; yaw = 0 }
         .onChange(of: forward) { _, _ in brain.setTarget(forward: forward, yaw: yaw) }
         .onChange(of: yaw) { _, _ in brain.setTarget(forward: forward, yaw: yaw) }
-        .onDisappear { forward = 0; yaw = 0; brain.stop(keepBluetooth: true) }
+        .onDisappear {
+            if destination == .drive || destination == .settings {
+                forward = 0; yaw = 0; brain.setTarget(forward: 0, yaw: 0); brain.disarmHardware()
+            }
+        }
     }
     private var selectedGoal: SIMD2<Double>? {
         guard let originLatitude = Double(originLat), let originLongitude = Double(originLon),

@@ -13,7 +13,8 @@
 <key>UILaunchScreen</key><dict/>
 <key>UISupportedInterfaceOrientations</key><array><string>UIInterfaceOrientationPortrait</string></array>
 <key>NSCameraUsageDescription</key><string>Terra uses visual motion tracking to estimate rover velocity.</string>
+<key>NSLocationWhenInUseUsageDescription</key><string>Terra uses GPS and heading while tracking to align the rover with the ARGOS geographic scene. Local tracking remains available without location access.</string>
 <key>NSMotionUsageDescription</key><string>Terra combines phone motion with visual tracking for rover velocity control.</string>
-<key>NSLocalNetworkUsageDescription</key><string>Terra sends rover velocity commands to the simulator over your local network.</string>
+<key>NSLocalNetworkUsageDescription</key><string>Terra connects to the ARGOS dashboard router and simulator to share rover telemetry and receive operator requests.</string>
 <key>NSBluetoothAlwaysUsageDescription</key><string>Terra connects to your bonded rover to configure and control its actuators.</string>
 </dict></plist>

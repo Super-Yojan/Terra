@@ -43,3 +43,7 @@ The seeded mission component tests verify hidden targets remain absent from publ
 - Automatic approval review rejected a new unauthenticated listener on all phone interfaces. The phone control-plane implementation enforces loopback; physical-phone LAN hosting remains unimplemented pending that boundary decision.
 
 Native device focus/touch behavior, physical braking, complete fixed/adaptive trials, and workload questionnaires remain empirical study work. The implementation supplies mission outcome and interaction proxies without presenting them as measured human workload.
+
+## L4 target search
+
+See [L4 replay evidence](l4/README.md) for the implemented search path, deterministic confirmation trace, verification and remaining platform validation. Physical detector support is gated separately.

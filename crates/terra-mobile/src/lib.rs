@@ -7,6 +7,8 @@ uniffi::setup_scaffolding!();
 mod actuators;
 pub use actuators::*;
 mod autonomy;
+mod search;
+pub use search::{MobileSearchRequest,MobileTargetObservation,MobileSearchSnapshot};
 mod mapping;
 mod transport;
 mod waypoint;
@@ -174,6 +176,8 @@ struct Brain {
     sequence: u64,
     last_map_publish: Option<f64>,
     dashboard: Option<terra_transport::ControlPlane>,
+    hardware_requests: std::collections::VecDeque<(String, std::time::Instant)>,
+    hardware_tokens: std::collections::VecDeque<String>,
 }
 #[derive(uniffi::Object)]
 pub struct MobileController {
@@ -204,6 +208,8 @@ impl MobileController {
                 sequence: 0,
                 last_map_publish: None,
                 dashboard: None,
+                hardware_requests: Default::default(),
+                hardware_tokens: Default::default(),
             }),
         }))
     }
@@ -315,6 +321,19 @@ impl MobileController {
             .unwrap_or_default();
         for (kind, bytes, age) in incoming {
             match kind.as_str() {
+                "hardware" => {
+                    let authority: serde_json::Value = serde_json::from_str(&brain.autonomy_json).unwrap_or_default();
+                    if let Some(request) = admit_hardware_request(&bytes, age, &authority) {
+                        let token = request["token"].as_str().unwrap().to_string();
+                        if !brain.hardware_tokens.contains(&token) {
+                            if brain.hardware_tokens.len() >= 64 { brain.hardware_tokens.pop_front(); }
+                            brain.hardware_tokens.push_back(token);
+                            // Disarm takes priority and cancels queued arming.
+                            if request["action"] == "disarm" { brain.hardware_requests.clear(); }
+                            if brain.hardware_requests.len() < 8 { brain.hardware_requests.push_back((request.to_string(), std::time::Instant::now() - std::time::Duration::from_secs_f64(if request["action"] == "arm" { age } else { 0. }))); }
+                        }
+                    }
+                }
                 "autonomy" => {
                     if let Some(r) = terra_autonomy::decode_level(&bytes) {
                         brain.autonomy.set_level(r);
@@ -337,6 +356,7 @@ impl MobileController {
                             .set_safety(r, estimate.health == Health::Ready);
                     }
                 }
+                "search" | "search/action" | "search/report/ack" => {if age<0.5 {let _=search::dispatch_search(&mut brain,&kind,&bytes,timestamp);}}
                 "goal/decision" => {
                     if let Some(r) = terra_autonomy::decode_decision(&bytes) {
                         brain.autonomy.decide_proposal(
@@ -360,8 +380,10 @@ impl MobileController {
                 _ => {}
             }
         }
+        let previous: serde_json::Value = serde_json::from_str(&brain.autonomy_json).unwrap_or_default();
+        let local_waypoint = previous["status"]["requested_level"] == "waypoint" && previous["goal"]["state"] == "active";
         let healthy = estimate.health == Health::Ready
-            && brain.dashboard.as_ref().is_none_or(|d| !d.failed())
+            && (local_waypoint || brain.dashboard.as_ref().is_none_or(|d| !d.failed()))
             && brain.recorder.as_ref().is_none_or(|r| !r.failed());
         brain.autonomy.run_id = brain.run_id.clone();
         let mut output = brain.autonomy.step(terra_autonomy::ArbiterInput {
@@ -407,6 +429,8 @@ impl MobileController {
                 "autonomy/status",
                 serde_json::to_string(&output.status).unwrap(),
             );
+            d.publish("search/status",serde_json::to_string(&output.search).unwrap());
+            d.publish_batch("search/report",output.pending_reports.iter().map(|r|serde_json::to_string(r).unwrap()).collect());
             d.publish("goal/status", serde_json::to_string(&output.goal).unwrap());
             d.publish(
                 "goal/proposal",
@@ -419,13 +443,18 @@ impl MobileController {
                         .to_string(),
                 );
             }
-            d.publish("pose",serde_json::json!({"rover_id":d.rover_id,"sequence":brain.sequence,"x":pose.0.x,"y":pose.0.y,"yaw":pose.0.yaw}).to_string());
+            if brain.pose.is_some()
+                && estimate.health == Health::Ready
+                && timestamp - pose.1 <= 0.35
+            {
+                d.publish("pose",serde_json::json!({"rover_id":d.rover_id,"sequence":brain.sequence,"x":pose.0.x,"y":pose.0.y,"yaw":pose.0.yaw}).to_string());
+            }
         }
         brain.autonomy_json =
-            serde_json::json!({"status":output.status,"goal":output.goal,"proposal":wire_proposal})
+            serde_json::json!({"status":output.status,"goal":output.goal,"proposal":wire_proposal,"search":output.search,"pending_reports":output.pending_reports,"twist":output.twist})
                 .to_string();
         if let Some(r) = brain.recorder.as_ref() {
-            let _=r.record(serde_json::json!({"kind":"control_tick","time":timestamp-start,"source_time":timestamp,"sequence":brain.sequence,"clearance":clearance,"selected":output.twist,"source_command":output.intent,"status":output.status,"goal":output.goal,"proposal":wire_proposal,"run_id":brain.run_id,"events":output.events}));
+            let _=r.record(serde_json::json!({"kind":"control_tick","time":timestamp-start,"source_time":timestamp,"sequence":brain.sequence,"clearance":clearance,"selected":output.twist,"source_command":output.intent,"status":output.status,"goal":output.goal,"proposal":wire_proposal,"run_id":brain.run_id,"search":output.search,"events":output.events}));
         }
         if output.reset_controller {
             brain.controller.reset();
@@ -534,5 +563,59 @@ mod tests {
         let mut settings = default_control_settings();
         settings.max_effort = 1.5;
         assert!(MobileController::new(settings).is_err());
+    }
+}
+
+fn admit_hardware_request(bytes: &[u8], age: f64, authority: &serde_json::Value) -> Option<serde_json::Value> {
+    let r: serde_json::Value = serde_json::from_slice(bytes).ok()?;
+    let token = r["token"].as_str()?;
+    if !terra_autonomy::valid_token(token) { return None; }
+    match r["action"].as_str()? {
+        "disarm" => Some(r),
+        "arm" if age.is_finite() && (0.0..0.5).contains(&age)
+            && r["run_id"].is_string() && r["run_id"] == authority["status"]["run_id"]
+            && r["authority_revision"].is_u64() && r["authority_revision"] == authority["status"]["revision"]
+            && authority["status"]["safety"] == "clear" => Some(r),
+        _ => None,
+    }
+}
+#[cfg(test)]
+mod hardware_request_tests {
+    use super::*;
+    #[test] fn hardware_disarm_dominates_same_tick_arm() {
+        let mut q = std::collections::VecDeque::new();
+        terra_transport::enqueue_control_action(&mut q, "hardware".into(), br#"{"action":"disarm","token":"stop"}"#.to_vec(), std::time::Instant::now());
+        terra_transport::enqueue_control_action(&mut q, "hardware".into(), br#"{"action":"arm","token":"arm"}"#.to_vec(), std::time::Instant::now());
+        let actions = terra_transport::drain_control_actions(&mut q);
+        let final_request: serde_json::Value = serde_json::from_slice(&actions.last().unwrap().1).unwrap();
+        assert_eq!(final_request["action"], "disarm");
+    }
+    #[test] fn queued_arm_is_revalidated_before_consumption() {
+        let c = MobileController::new(default_control_settings()).unwrap();
+        let r = r#"{"action":"arm","token":"one","run_id":"run","authority_revision":2}"#;
+        {
+            let mut b = c.brain.lock().unwrap();
+            b.autonomy_json = r#"{"status":{"run_id":"run","revision":3,"safety":"clear"}}"#.into();
+            b.hardware_requests.push_back((r.into(), std::time::Instant::now()));
+        }
+        assert!(c.take_hardware_request().is_empty());
+        {
+            let mut b = c.brain.lock().unwrap();
+            b.autonomy_json = r#"{"status":{"run_id":"run","revision":2,"safety":"clear"}}"#.into();
+            b.hardware_requests.push_back((r.into(), std::time::Instant::now() - std::time::Duration::from_secs(1)));
+            b.hardware_requests.push_back((r#"{"action":"disarm","token":"stop"}"#.into(), std::time::Instant::now() - std::time::Duration::from_secs(1)));
+        }
+        assert!(c.take_hardware_request().contains("disarm"));
+        assert!(c.take_hardware_request().is_empty());
+    }
+    #[test] fn arm_requires_current_run_revision_and_fresh_receipt() {
+        let a = serde_json::json!({"status":{"run_id":"run","revision":2,"safety":"clear"}});
+        let r = br#"{"action":"arm","token":"one","run_id":"run","authority_revision":2}"#;
+        assert!(admit_hardware_request(r, 0.1, &a).is_some());
+        assert!(admit_hardware_request(r, 0.5, &a).is_none());
+        assert!(admit_hardware_request(r, 0.1, &serde_json::json!({"status":{"run_id":"other","revision":2,"safety":"clear"}})).is_none());
+        assert!(admit_hardware_request(r, 0.1, &serde_json::json!({"status":{"run_id":"run","revision":3,"safety":"clear"}})).is_none());
+        assert!(admit_hardware_request(r, 0.1, &serde_json::json!({"status":{"run_id":"run","revision":2,"safety":"emergency_stop"}})).is_none());
+        assert!(admit_hardware_request(br#"{"action":"disarm","token":"stop"}"#, 8., &a).is_some());
     }
 }
