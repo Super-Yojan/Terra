@@ -16,6 +16,7 @@ from .backend import MockBackend, FusionHatBackend, file_gate_reader, BenchGate
 from .ble import (BlePeripheral, ROOT, SERVICE, SERVICE_UUID, STATUS_UUID,
                   )
 from .bless_transport import BlessTransport
+from .onboarding import pairing_name
 
 class SetupAgent(ServiceInterface):
     def __init__(self, expected, deadline):
@@ -84,7 +85,7 @@ async def setup(args):
     if args.gate_file is None or file_gate_reader(args.gate_file)():
         raise RuntimeError('setup requires a readable physical gate file showing 0')
     if args.gate_file.read_text().strip() != '0': raise RuntimeError('gate must explicitly show 0')
-    transport = BlessTransport(args.name, SERVICE_UUID, args.adapter)
+    transport = BlessTransport(pairing_name(args.name), SERVICE_UUID, args.adapter)
     await transport.prepare()
     bus = transport.bus
     registered = False

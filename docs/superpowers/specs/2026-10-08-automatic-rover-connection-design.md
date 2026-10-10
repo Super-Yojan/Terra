@@ -1,7 +1,7 @@
 # Automatic rover pairing, reconnection, and router connection
 
 Date: 2026-10-08
-Status: Design direction approved; written specification awaiting review.
+Status: Approved; implemented and software-verified. Physical acceptance pending.
 
 ## Intended outcome
 
@@ -58,7 +58,7 @@ Manual stop, explicit disconnect, and disabling automatic connection suspend rec
 
 ## Automatic Zenoh router connection
 
-Use the existing saved `dashboardEndpoint`, `dashboardPrefix`, and `dashboardRoverID`. This refers to the ARGOS router, not the simulator-only Bevy connection. A blank endpoint shows “Set router endpoint in Settings” and performs no connection attempts. Invalid endpoint or ID settings show an actionable status and wait for correction.
+Use the existing saved `dashboardRouterEndpoint`, `dashboardTopicPrefix`, and `dashboardRoverID`. This refers to the ARGOS router, not the simulator-only Bevy connection. A blank endpoint shows “Set router endpoint in Settings” and performs no connection attempts. Invalid endpoint or ID settings show an actionable status and wait for correction.
 
 After Bluetooth owner authentication and configuration availability, ensure a Rust `MobileController` exists and connect its dashboard transport using the existing interface. Router startup must also work in Bluetooth manual mode: it must not require AR tracking, enable feedback, or change manual effort routing. Service transport polling and connection-failure observation in that mode so the new session actually remains live; preserve the existing behavior for phone feedback mode. Avoid replacing a live controller just to connect its dashboard.
 
