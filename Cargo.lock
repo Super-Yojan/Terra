@@ -2076,6 +2076,7 @@ dependencies = [
  "terra-waypoint",
  "thiserror",
  "uniffi",
+ "zenoh",
 ]
 
 [[package]]

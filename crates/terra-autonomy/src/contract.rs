@@ -6,7 +6,9 @@ pub enum Level {
     Teleop,
     AssistedTeleop,
     Waypoint,
+    WaypointDirect,
     Supervised,
+    TargetSearch,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

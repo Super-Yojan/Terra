@@ -5,8 +5,12 @@ project_path = File.join(root, 'mobile/ios/TerraPhone.xcodeproj')
 project = Xcodeproj::Project.new(project_path)
 app = project.new_target(:application, 'TerraPhone', :ios, '17.0')
 sources = project.main_group.new_group('TerraPhone', 'TerraPhone')
-%w[TerraPhoneApp.swift ContentView.swift TerraDashboard.swift RoverModelView.swift TerraAutoConnectionPolicy.swift DriveControlPanel.swift DriveJoystickCommand.swift PhoneController.swift BluetoothSession.swift BluetoothLink.swift ActuatorConfiguration.swift ActuatorLayoutView.swift].each do |name|
-  app.source_build_phase.add_file_reference(sources.new_file(name))
+Dir.glob(File.join(root, 'mobile/ios/TerraPhone/*.swift')).sort.each do |path|
+  app.source_build_phase.add_file_reference(sources.new_file(File.basename(path)))
+end
+views = sources.new_group('Views', 'Views')
+Dir.glob(File.join(root, 'mobile/ios/TerraPhone/Views/*.swift')).sort.each do |path|
+  app.source_build_phase.add_file_reference(views.new_file(File.basename(path)))
 end
 sources.new_file('Info.plist')
 app.resources_build_phase.add_file_reference(sources.new_file('Assets.xcassets'))
@@ -18,7 +22,7 @@ app.source_build_phase.add_file_reference(generated.new_file('TerraCore.swift'))
 framework = generated.new_file('TerraCore.xcframework')
 framework.last_known_file_type = 'wrapper.xcframework'
 app.frameworks_build_phase.add_file_reference(framework)
-%w[ARKit CoreMotion SwiftUI CoreBluetooth].each { |name| app.add_system_framework(name) }
+%w[ARKit CoreMotion CoreLocation SwiftUI CoreBluetooth].each { |name| app.add_system_framework(name) }
 app.build_configurations.each do |config|
   config.build_settings['PRODUCT_BUNDLE_IDENTIFIER'] = 'org.terra.robotics.phone'
   config.build_settings['INFOPLIST_FILE'] = 'TerraPhone/Info.plist'

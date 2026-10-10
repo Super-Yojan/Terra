@@ -55,3 +55,9 @@ class OnboardingTests(unittest.TestCase):
             with patch('terra_rover.onboarding.os.fsync',side_effect=failing):
                 with self.assertRaises(OSError): o.save_owner(p,{'address':'AA:BB:CC:DD:EE:FF','address_type':'random'})
             self.assertFalse(p.exists())
+
+class PairingNameTests(unittest.TestCase):
+    def test_pairing_name(self):
+        from terra_rover.onboarding import pairing_name
+        self.assertEqual(pairing_name("terra-ABC123"), "terra-ABC123-pair")
+        self.assertEqual(pairing_name("terra-ABC123-pair"), "terra-ABC123-pair")

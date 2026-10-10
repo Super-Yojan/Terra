@@ -1,20 +1,5 @@
 import SwiftUI
 
-/// Keys for the Simulator-only Bevy session. Device builds delete them on
-/// launch and never bind them into the connection UI.
-enum TerraBevySessionStore {
-    static let endpointKey = "zenohEndpoint"
-    static let roverIDKey = "zenohRoverID"
-
-    static func discardOnDevice() {
-        #if !targetEnvironment(simulator)
-        let defaults = UserDefaults.standard
-        defaults.removeObject(forKey: endpointKey)
-        defaults.removeObject(forKey: roverIDKey)
-        #endif
-    }
-}
-
 struct ControllerDetailView: View {
     @ObservedObject var brain: PhoneController
     var destination: TerraDestination = .drive
@@ -30,32 +15,31 @@ struct ControllerDetailView: View {
     @AppStorage("waypointGoalLon") private var goalLon = "-77.3075"
     @AppStorage("waypointToken") private var waypointToken = "gmu-north"
     @State private var entryNote = ""
+    @State private var searchClass = "person"
+    @State private var searchMinX = "-20"
+    @State private var searchMinY = "-20"
+    @State private var searchMaxX = "20"
+    @State private var searchMaxY = "20"
+    @State private var searchBudget = "600"
     private let waypointReach = 49.0
     var body: some View {
-        ScrollViewReader { proxy in
-            Form {
+        Form {
                 if destination == .drive {
                     Section("Manual Control") { DriveControlPanel(brain: brain) }
                         .id(TerraDestination.drive)
                 }
-                // CoreBluetooth has no radio in the Simulator, so Discover/Connect
-                // cannot reach a rover there. Device builds are the Bluetooth path.
-                #if !targetEnvironment(simulator)
-                Section("Bluetooth actuators") {
-                    NavigationLink("Discover, configure and arm rover") { ActuatorLayoutView(brain: brain) }
-                    Text(brain.hardwareStatus).font(.footnote)
-                }
-                #endif
+                if destination == .settings || destination == .telemetry {
                 Section("Controller") {
                     LabeledContent("Source", value: brain.source)
                     LabeledContent("Status", value: brain.status)
-                    HStack {
-                        Button("Simulated rover") { brain.startSimulation() }
-                        Spacer()
-                        Button("Phone IMU + VIO") { brain.startPhone() }
+                    if destination == .settings {
+                        Button("Start local simulation") { brain.startSimulation() }
+                        Button("Start phone sensors") { brain.startPhone() }
+                        Button("Stop controller", role: .destructive) { forward = 0; yaw = 0; brain.stop() }
                     }
-                    Button("Stop controller", role: .destructive) { forward = 0; yaw = 0; brain.stop() }
                 }
+                }
+                if destination == .settings {
                 // Compiled only for the iOS Simulator. A device build has no
                 // Bevy controls and does not read the stored endpoint.
                 #if targetEnvironment(simulator)
@@ -74,6 +58,8 @@ struct ControllerDetailView: View {
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 #endif
+                }
+                if destination == .live || destination == .missions {
                 Section("Local occupancy map") {
                     OccupancyMapView(grid: brain.occupancy, rover: brain.mapPose, goal: selectedGoal) { north, west in
                         guard !brain.waypointActive,
@@ -95,13 +81,15 @@ struct ControllerDetailView: View {
                     }
                     Button("Clear map") { brain.clearMap() }
                     #if targetEnvironment(simulator)
-                    Text("Phone mapping uses scene depth when available. Initial camera height is assumed 0.5 m above flat ground; calibrate before using the map for navigation. Bevy Zenoh mode uses the simulator’s exposure-aligned camera pose instead, with ground at robotics Z = 0.").font(.footnote).foregroundStyle(.secondary)
+                    Text("Phone mapping uses scene depth when available. Mapping waits for a stable detected floor; point the camera toward the ground during startup. Bevy Zenoh mode uses the simulator’s exposure-aligned camera pose instead, with ground at robotics Z = 0.").font(.footnote).foregroundStyle(.secondary)
                     #else
-                    Text("Phone mapping uses scene depth when available. Initial camera height is assumed 0.5 m above flat ground; calibrate before using the map for navigation.").font(.footnote).foregroundStyle(.secondary)
+                    Text("Phone mapping uses scene depth when available. Mapping waits for a stable detected floor; point the camera toward the ground during startup.").font(.footnote).foregroundStyle(.secondary)
                     #endif
                 }.id(TerraDestination.live)
+                }
+                if destination == .missions {
                 Section("Mission autonomy") {
-                    Picker("Requested level",selection:Binding(get:{brain.autonomyLevel},set:{brain.setAutonomy($0)})) {Text("Teleop").tag("teleop");Text("Assisted teleop").tag("assisted_teleop");Text("Waypoint").tag("waypoint");Text("Supervised search").tag("supervised")}
+                    Picker("Requested level",selection:Binding(get:{brain.autonomyLevel},set:{brain.setAutonomy($0)})) {Text("Teleop").tag("teleop");Text("Assisted teleop").tag("assisted_teleop");Text("L2 · Direct waypoint").tag("waypoint_direct");Text("L3 · Obstacle-aware waypoint").tag("waypoint");Text("Supervised search").tag("supervised");if brain.searchAvailable {Text("L4 target search").tag("target_search")}}
                         .disabled(brain.hardwareActive && !brain.hardwareFeedback)
                     Text(brain.autonomyReason)
                     if let proposal=brain.proposedGoal {Text(brain.proposalText);HStack {Button("Approve search target") {brain.decideProposal(proposal,approve:true)};Button("Reject") {brain.decideProposal(proposal,approve:false)}}}
@@ -111,6 +99,25 @@ struct ControllerDetailView: View {
                     Button("Finish run log") {brain.exportRun()}
                     if let log=brain.runLog {ShareLink("Share run log",item:log)}
                 }.id(TerraDestination.missions)
+                Section("Target search") {
+                    if brain.searchAvailable {
+                        TextField("Target class",text:$searchClass).textInputAutocapitalization(.never).autocorrectionDisabled().accessibilityLabel("Target class")
+                        Text("Bounds in rover local metres").font(.caption)
+                        HStack {TextField("Min x",text:$searchMinX).accessibilityLabel("Search minimum x");TextField("Max x",text:$searchMaxX).accessibilityLabel("Search maximum x")}.keyboardType(.numbersAndPunctuation)
+                        HStack {TextField("Min y",text:$searchMinY).accessibilityLabel("Search minimum y");TextField("Max y",text:$searchMaxY).accessibilityLabel("Search maximum y")}.keyboardType(.numbersAndPunctuation)
+                        TextField("Time budget in seconds",text:$searchBudget).keyboardType(.numbersAndPunctuation).accessibilityLabel("Search time budget in seconds")
+                        Button("Start search") {
+                            guard let a=Double(searchMinX),let b=Double(searchMinY),let c=Double(searchMaxX),let d=Double(searchMaxY),let t=Double(searchBudget) else {entryNote="Enter numeric search bounds and budget";return}
+                            brain.startTargetSearch(targetClass:searchClass,minX:a,minY:b,maxX:c,maxY:d,budget:t)
+                        }.disabled(brain.autonomyLevel != "target_search" || !brain.searchTerminal)
+                    }else {Text("L4 people search requires a LiDAR phone with live camera tracking and scene depth.").font(.caption).foregroundStyle(.secondary)}
+                    Text(brain.personDetectorStatus).font(.caption).foregroundStyle(.secondary)
+                    if brain.autonomyLevel == "waypoint_direct" { Text("L2 follows directly without obstacle avoidance.").font(.caption) }
+                    if !brain.searchPhase.isEmpty {Text(brain.searchPhase.replacingOccurrences(of:"_",with:" ").capitalized)}
+                    if !brain.searchReportText.isEmpty {Text(brain.searchReportText).textSelection(.enabled)}
+                    if !brain.searchReportHistory.isEmpty {DisclosureGroup("Confirmed reports") {ForEach(Array(brain.searchReportHistory.enumerated()),id:\.offset) { _,report in Text(report).textSelection(.enabled)}}}
+                    HStack {Button("Pause") {brain.targetSearchAction("pause")};Button("Resume") {brain.targetSearchAction("resume")};Button("Cancel",role:.destructive) {brain.targetSearchAction("cancel")}}.disabled(brain.searchTerminal)
+                }
                 Section("Waypoint") {
                     TextField("Origin latitude", text: $originLat).keyboardType(.numbersAndPunctuation)
                         .accessibilityLabel("Origin latitude")
@@ -152,7 +159,8 @@ struct ControllerDetailView: View {
                         .font(.footnote).foregroundStyle(.secondary)
                     #endif
                 }
-                if destination != .drive {
+                }
+                if destination == .settings {
                 Section(brain.hardwareActive && !brain.hardwareFeedback ? "Normalized manual effort" : "Velocity target") {
                     LabeledContent("Forward", value: String(format: brain.hardwareActive && !brain.hardwareFeedback ? "%.2f effort" : "%.2f m/s", forward))
                     Slider(value: $forward, in: -1...1, step: 0.05)
@@ -166,6 +174,7 @@ struct ControllerDetailView: View {
                         .disabled(brain.waypointActive)
                 }
                 }
+                if destination == .telemetry {
                 Section("Feedback") {
                     LabeledContent("Measured forward", value: String(format: "%.2f m/s", brain.measuredForward))
                     LabeledContent("Measured turn", value: String(format: "%.2f rad/s", brain.measuredYaw))
@@ -174,6 +183,17 @@ struct ControllerDetailView: View {
                     Text("Motor effort is normalized from −1 to +1 (unidirectional ESCs use 0 to 1). Bluetooth hardware requires explicit arming and an independent enable gate. Zero effort is not a brake.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }.id(TerraDestination.telemetry)
+                Section("Connection details") {
+                    Text(brain.hardwareStatus)
+                    Text(brain.dashboardStatus)
+                    Text(brain.autonomyReason)
+                }
+                Section("Run recording") {
+                    Button("Finish run log") { brain.exportRun() }
+                    if let log = brain.runLog { ShareLink("Share run log", item: log) }
+                }
+                }
+                if destination == .settings {
                 Section("Shared Rust test") {
                     Button("Run velocity benchmark") { brain.runBenchmark() }
                     Text(brain.benchmark).font(.footnote)
@@ -184,16 +204,18 @@ struct ControllerDetailView: View {
                     Text("ARKit needs a physical supported iPhone and visual features. Use Simulated rover on the iOS simulator.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }.id(TerraDestination.settings)
-            }
-            .navigationTitle(destination.title)
-            .onAppear { proxy.scrollTo(destination, anchor: .top) }
-            .onChange(of: destination) { _, value in proxy.scrollTo(value, anchor: .top) }
+                }
         }
+        .navigationTitle(destination.title)
         .onChange(of: brain.hardwareArmed) { _, _ in forward = 0; yaw = 0 }
         .onChange(of: brain.hardwareActive) { _, _ in forward = 0; yaw = 0 }
         .onChange(of: forward) { _, _ in brain.setTarget(forward: forward, yaw: yaw) }
         .onChange(of: yaw) { _, _ in brain.setTarget(forward: forward, yaw: yaw) }
-        .onDisappear { forward = 0; yaw = 0; brain.stop(keepBluetooth: true) }
+        .onDisappear {
+            if destination == .drive || destination == .settings {
+                forward = 0; yaw = 0; brain.setTarget(forward: 0, yaw: 0); brain.disarmHardware()
+            }
+        }
     }
     private var selectedGoal: SIMD2<Double>? {
         guard let originLatitude = Double(originLat), let originLongitude = Double(originLon),
@@ -211,108 +233,5 @@ struct ControllerDetailView: View {
         }
         entryNote = ""
         brain.engageWaypoint(originLatitude: originLatitude, originLongitude: originLongitude, latitude: latitude, longitude: longitude, token: waypointToken, halfExtent: waypointReach)
-    }
-}
-
-
-struct OccupancyMapView: View {
-    let grid: OccupancyGrid?
-    let rover: SIMD3<Double>
-    var goal: SIMD2<Double>?
-    var onSelect: ((Double, Double) -> Void)?
-    var body: some View {
-        Canvas { context, size in
-            guard let grid, let layout = MapLayout(size: size, grid: grid) else { return }
-            var unknown = Path(), free = Path(), occupied = Path(), uncertain = Path()
-            for row in 0..<Int(grid.height) {
-                for col in 0..<Int(grid.width) {
-                    let rect = layout.cell(col: col, row: row)
-                    let value = grid.occupancy[row * Int(grid.width) + col]
-                    if value < 0 { unknown.addRect(rect) }
-                    else if value < 45 { free.addRect(rect) }
-                    else if value > 65 { occupied.addRect(rect) }
-                    else { uncertain.addRect(rect) }
-                }
-            }
-            context.fill(unknown, with: .color(.gray.opacity(0.18)))
-            context.fill(free, with: .color(.green.opacity(0.25)))
-            context.fill(uncertain, with: .color(.gray.opacity(0.4)))
-            context.fill(occupied, with: .foreground)
-            if let goal, let point = layout.screen(x: goal.x, y: goal.y, grid: grid) {
-                context.fill(Path(ellipseIn: CGRect(x: point.x - 6, y: point.y - 6, width: 12, height: 12)), with: .color(.orange))
-            }
-            if let point = layout.screen(x: rover.x, y: rover.y, grid: grid) {
-                context.fill(Path(ellipseIn: CGRect(x: point.x - 5, y: point.y - 5, width: 10, height: 10)), with: .color(.blue))
-                var heading = Path(); heading.move(to: point)
-                heading.addLine(to: CGPoint(x: point.x + 16 * cos(rover.z), y: point.y - 16 * sin(rover.z)))
-                context.stroke(heading, with: .color(.blue), lineWidth: 3)
-            }
-        }
-        .overlay {
-            if grid == nil {
-                #if targetEnvironment(simulator)
-                ContentUnavailableView("No map yet", systemImage: "map", description: Text("Start a rover or connect to Bevy to collect depth."))
-                #else
-                ContentUnavailableView("No map yet", systemImage: "map", description: Text("Start a rover to collect depth."))
-                #endif
-            }
-        }
-        .overlay {
-            GeometryReader { geo in
-                Color.clear.contentShape(Rectangle())
-                    .gesture(SpatialTapGesture().onEnded { value in
-                        guard let grid, let layout = MapLayout(size: geo.size, grid: grid),
-                              let point = layout.world(at: value.location, grid: grid) else { return }
-                        onSelect?(point.x, point.y)
-                    })
-            }
-        }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Local occupancy map")
-        .accessibilityValue(accessibilitySummary)
-        .accessibilityHint("Tap to choose a waypoint")
-    }
-    private var accessibilitySummary: String {
-        guard let grid else { return "No depth observations yet" }
-        let known = grid.occupancy.filter { $0 >= 0 }.count
-        let occupied = grid.occupancy.filter { $0 > 65 }.count
-        return "\(known) observed cells, \(occupied) occupied cells. Rover position \(String(format: "%.1f", rover.x)), \(String(format: "%.1f", rover.y)) metres."
-    }
-}
-
-private struct MapLayout {
-    let scale: Double
-    let left: Double
-    let top: Double
-    let gridWidth: Int
-    let gridHeight: Int
-    init?(size: CGSize, grid: OccupancyGrid) {
-        guard grid.width > 0, grid.height > 0, grid.resolution > 0,
-              grid.occupancy.count == Int(grid.width) * Int(grid.height) else { return nil }
-        let scale = min(size.width / Double(grid.width), size.height / Double(grid.height))
-        guard scale > 0 else { return nil }
-        self.scale = scale
-        left = (size.width - Double(grid.width) * scale) / 2
-        top = (size.height - Double(grid.height) * scale) / 2
-        gridWidth = Int(grid.width)
-        gridHeight = Int(grid.height)
-    }
-    func cell(col: Int, row: Int) -> CGRect {
-        CGRect(x: left + Double(col) * scale, y: top + Double(gridHeight - 1 - row) * scale, width: scale, height: scale)
-    }
-    func screen(x: Double, y: Double, grid: OccupancyGrid) -> CGPoint? {
-        let point = CGPoint(
-            x: left + (x - grid.originX) / grid.resolution * scale,
-            y: top + (Double(gridHeight) - (y - grid.originY) / grid.resolution) * scale)
-        let right = left + Double(gridWidth) * scale
-        let bottom = top + Double(gridHeight) * scale
-        guard point.x >= left, point.x <= right, point.y >= top, point.y <= bottom else { return nil }
-        return point
-    }
-    func world(at location: CGPoint, grid: OccupancyGrid) -> SIMD2<Double>? {
-        let col = (location.x - left) / scale
-        let rowFromTop = (location.y - top) / scale
-        guard col >= 0, col <= Double(gridWidth), rowFromTop >= 0, rowFromTop <= Double(gridHeight) else { return nil }
-        return SIMD2(grid.originX + col * grid.resolution, grid.originY + (Double(gridHeight) - rowFromTop) * grid.resolution)
     }
 }

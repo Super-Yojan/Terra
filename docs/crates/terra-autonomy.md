@@ -1,7 +1,7 @@
 # terra-autonomy
 
 !!! tip "TL;DR"
-    Four levels. The arbiter does not pick a favorite.
+    Four base levels plus capability-gated target search. The arbiter does not pick a favorite.
     Stop latches until a healthy reset.
     Reset does not restore the old goal.
 
@@ -30,7 +30,10 @@ flowchart TD
 | `assisted_teleop` | Held input, after the obstacle check. |
 | `waypoint` | One operator goal. |
 | `supervised` | A frontier. Wait for approval. |
+| `target_search` | Autonomous exploration and observed target confirmation. Requires a detector. |
 
 `occupancy_telemetry` publishes observed cells only. Hidden mission targets stay out of the packet.
 
 Run the reference search in Zorvane with `TERRA_MISSION=1`.
+
+See [L4 target search](../autonomy/TARGET_SEARCH.md) for lifecycle, reporting and platform scope.

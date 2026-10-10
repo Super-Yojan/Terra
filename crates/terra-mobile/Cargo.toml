@@ -25,3 +25,6 @@ bindgen = ["uniffi/cli"]
 name = "terra-bindgen"
 path = "src/bin/bindgen.rs"
 required-features = ["bindgen"]
+
+[dev-dependencies]
+zenoh = { version = "=1.10.1", default-features = false, features = ["transport_tcp"] }

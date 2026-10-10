@@ -6,7 +6,7 @@ from dbus_next.aio import MessageBus
 from dbus_next.service import ServiceInterface, method, dbus_property
 from .ble import ROOT, SERVICE, SERVICE_UUID, STATUS_UUID
 from .bless_transport import BlessTransport
-from .onboarding import load_owner, save_owner
+from .onboarding import pairing_name, load_owner, save_owner
 
 class PairingCleanupError(Exception):
     """Teardown could not confirm the radio is closed; stop the service."""
@@ -110,7 +110,7 @@ class ButtonSetupStatus(ServiceInterface):
 async def pair_owner(args, indicators, name):
     if load_owner(args.owner) is not None:
         raise RuntimeError('owner already provisioned')
-    transport = BlessTransport(name, SERVICE_UUID, args.adapter)
+    transport = BlessTransport(pairing_name(name), SERVICE_UUID, args.adapter)
     await transport.prepare()
     bus = transport.bus
     session = None

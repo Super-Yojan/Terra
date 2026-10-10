@@ -266,10 +266,31 @@ and sends safe output during disarmed/arming states. Custom manual layouts disab
 waypoint/autonomy choices. The local simulated plant remains available on both
 targets. Bevy Zenoh controls remain available in the iOS Simulator.
 
-This implementation has not been built or exercised on hardware. No tests,
-bindings generation, smoke scripts, screenshots, or hardware checks were performed
-under the implementation-only instruction.
+The automatic connection refactor has passed unsigned iPhone/Simulator builds,
+Swift policy and bindings checks, Python rover-service tests, and local Rust/Zenoh
+integration tests. Physical pairing and radio recovery have not been exercised
+on an iPhone and rover.
 The rover status field `hardware_gate_open_confirmed` is true only when its strict
 backend gate query succeeds and confirms open. An unreadable gate remains false;
 the phone requires this confirmation for stage/commit. The rover repeats its own
 authoritative safety validation when handling the request.
+
+## ARGOS dashboard connection on physical phones
+
+The simulator-only Bevy connection described above remains unchanged. A separate **Settings → Fleet connection** connection now attaches the local phone sensor controller to a Mac-hosted Zenoh router over Tailscale. See [real-phone setup and lifecycle](DASHBOARD_TAILSCALE.md). Bluetooth remains the actuator link and Connect never arms it.
+
+## Automatic rover and router connection
+
+On a physical phone, hold the rover USR button until the LED blinks and accept
+the app’s Connect popup and any iOS pairing prompt. Pairing mode advertises a
+`-pair` name suffix; normal operation retains the original name. Terra remembers
+confirmed pairing and automatically reconnects when the app opens. Unknown
+operational rovers are not silently selected. Configure the ARGOS router endpoint
+once in Settings → Fleet connection; after Bluetooth authentication and configuration sync, the router
+connects automatically before phone tracking starts. Tracking then remains on in
+every ARGOS mode, including Manual/Teleop, and stops when the fleet session ends.
+Camera/sensor failures pause tracking without tearing down the fleet connection.
+Retry delays cap at
+15 seconds, and reconnection leaves outputs disarmed. Stop/Disconnect suppresses
+automatic attempts until Retry or foreground return. Hardware pairing and radio
+behavior still require an iPhone/rover acceptance check.

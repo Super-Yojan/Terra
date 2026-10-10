@@ -8,6 +8,8 @@ import struct
 PROTOCOL_VERSION = 1
 COMMAND_LIMIT = 96
 JSON_LIMIT = 16 * 1024
+PAGINATED_LIMIT = 4080  # 255 fragments at conservative 20-byte ATT capacity
+PAGINATED_OPERATIONS = frozenset(('layout_index', 'read_actuator', 'read_drive_profile', 'begin_layout_edit', 'stage_actuator', 'remove_actuator', 'validate_layout_edit', 'commit_layout_edit', 'discard_layout_edit'))
 ASSEMBLY_TIMEOUT = 0.100  # monotonic seconds
 
 class ProtocolError(ValueError):
@@ -91,9 +93,12 @@ def validate_command(frame: CommandFrame, session: int, layout: dict, last_seque
                 raise ProtocolError("actuator value outside layout limits")
 
 class FragmentAssembler:
-    def __init__(self, limit: int = COMMAND_LIMIT):
+    def __init__(self, limit: int = COMMAND_LIMIT, timeout: float = ASSEMBLY_TIMEOUT):
         if type(limit) is not int or not 0 < limit <= JSON_LIMIT:
             raise ProtocolError("invalid logical limit")
+        if type(timeout) not in (int, float) or not math.isfinite(timeout) or timeout <= 0:
+            raise ProtocolError("invalid assembly timeout")
+        self.timeout = timeout
         self.limit = limit
         self.clear()
 
@@ -110,7 +115,9 @@ class FragmentAssembler:
     def _push(self, data, now):
         if not math.isfinite(now):
             raise ProtocolError("invalid monotonic time")
-        if self.active is not None and (now < self.started or now >= self.started + ASSEMBLY_TIMEOUT):
+        if self.active is not None and now < self.started:
+            raise ProtocolError("monotonic clock regression")
+        if self.active is not None and now >= self.started + self.timeout:
             self.clear()
         if len(data) < 5:
             raise ProtocolError("empty or short fragment")
@@ -200,8 +207,26 @@ def decode_control(data: bytes) -> dict:
     operation, payload = envelope['operation'], envelope['payload']
     if type(operation) is not str:
         raise ProtocolError("operation must be string")
-    if operation in ('capabilities', 'read_layout', 'reset_fault', 'reset_emergency_stop'):
+    if operation in ('capabilities', 'read_layout', 'layout_index', 'reset_fault', 'reset_emergency_stop'):
         _keys(payload, ())
+    elif operation in ('read_actuator', 'read_drive_profile'):
+        _keys(payload, ('expected_revision', 'actuator_id'))
+        _uint(payload['expected_revision'], 32); _uint(payload['actuator_id'], 8)
+    elif operation == 'begin_layout_edit':
+        _keys(payload, ('expected_revision', 'mode')); _uint(payload['expected_revision'], 32)
+        if payload['mode'] not in ('existing', 'replace'): raise ProtocolError('invalid edit mode')
+    elif operation in ('stage_actuator', 'remove_actuator', 'validate_layout_edit', 'commit_layout_edit', 'discard_layout_edit'):
+        fields = ['edit_token']
+        if operation != 'discard_layout_edit': fields.append('edit_version')
+        if operation == 'stage_actuator': fields.append('actuator')
+        if operation == 'remove_actuator': fields.append('actuator_id')
+        if operation == 'commit_layout_edit': fields.append('base_revision')
+        _keys(payload, fields)
+        if type(payload['edit_token']) is not str or not 1 <= len(payload['edit_token']) <= 128: raise ProtocolError('invalid edit token')
+        if 'edit_version' in payload: _uint(payload['edit_version'], 32)
+        if 'base_revision' in payload: _uint(payload['base_revision'], 32)
+        if 'actuator_id' in payload: _uint(payload['actuator_id'], 8)
+        if 'actuator' in payload: _validate_layout_shape(dict(schema_version=1, revision=0, actuators=[payload['actuator']]))
     elif operation == 'set_bench_enabled':
         _keys(payload, ('enabled',))
         if type(payload['enabled']) is not bool: raise ProtocolError('enabled must be boolean')
@@ -214,6 +239,7 @@ def decode_control(data: bytes) -> dict:
         _validate_layout_shape(payload['layout'])
     else:
         raise ProtocolError("unknown operation")
+    if operation in PAGINATED_OPERATIONS and len(data) > PAGINATED_LIMIT: raise ProtocolError('paginated request too large')
     return envelope
 
 def _validate_layout_shape(layout):

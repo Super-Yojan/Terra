@@ -1,0 +1,46 @@
+import Foundation
+@main struct ActuatorPaginationTests {
+ static func main() {
+  var state = ActuatorPaginationState()
+  let index = ActuatorLayoutIndex(revision: 3, layout_available: true, actuator_count: 1, actuators: [.init(id: 0, name: "Motor", kind: "dc_motor")])
+  state.synchronize(index: index, generation: 1)
+  precondition(state.select(0))
+  precondition(!state.acceptPage(ActuatorDraft(id: 0, name: "old"), revision: 2, generation: 1))
+  precondition(state.acceptPage(ActuatorDraft(id: 0, name: "Motor"), revision: 3, generation: 1))
+  state.change(ActuatorDraft(id: 0, name: "Edited"))
+  precondition(!state.select(1))
+  precondition(!state.acceptPage(ActuatorDraft(id: 0, name: "late"), revision: 3, generation: 1))
+  precondition(state.selected?.name == "Edited" && state.dirty)
+  state.discardLocal()
+  precondition(state.selected?.name == "Motor" && !state.dirty)
+  precondition(state.select(0))
+  state.begin(token: "token", base: 3, version: 0, replacement: true)
+  precondition(state.entries.isEmpty)
+  state.acknowledge(ActuatorDraft(id: 0, name: "Edited"), version: 1)
+  state.validatedVersion = 1
+  precondition(state.canCommit)
+  state.acknowledge(ActuatorDraft(id: 1, name: "Second"), version: 2)
+  precondition(!state.canCommit)
+  state.removed(1, version: 3)
+  precondition(state.entries.count == 1 && state.cache[1] == nil && !state.canCommit)
+  state.validatedVersion = 3
+  precondition(state.canCommit)
+  state.synchronize(index: index, generation: 2)
+  precondition(state.token == nil && state.selected == nil)
+  precondition(state.select(0))
+  state.change(ActuatorDraft(id: 0, name: "Unsent after disconnect"))
+  state.invalidate(generation: 3)
+  precondition(state.dirty && state.selected?.name == "Unsent after disconnect" && state.cache.isEmpty && state.token == nil)
+  var wizard = ActuatorPresetUpload(actuators: [ActuatorDraft(id: 0, name: "First"), ActuatorDraft(id: 1, name: "Second")])
+  precondition(wizard.current?.id == 0 && wizard.needsPortSelection)
+  precondition(!wizard.acknowledge(id: 1) && wizard.current?.id == 0)
+  precondition(wizard.acknowledge(id: 0) && wizard.current?.id == 1)
+  var changedID = wizard.current!; changedID.id = 7; changedID.port = "P7"
+  wizard.updateCurrent(changedID)
+  precondition(!wizard.needsPortSelection)
+  precondition(wizard.acknowledge(id: 7) && wizard.current == nil)
+  let automatic = ActuatorPresetUpload(actuators: ActuatorLayoutDraft.rover1().actuators)
+  precondition(!automatic.needsPortSelection && automatic.current?.port == "P0")
+  print("Actuator pagination state checks passed")
+ }
+}

@@ -60,6 +60,26 @@ A build made on a newer OS is only portable to systems with compatible or newer
 glibc; the Docker builder establishes the Bookworm baseline (glibc 2.36).
 `build-info.json` records the actual build environment and dependency versions.
 
+## Download a release
+
+A `rover-v<version>` tag publishes the arm64 archive and its checksum. The tag
+version is the `version` in `hardware/raspberry-pi/pyproject.toml` (currently
+0.2.0). Asset URLs follow this pattern:
+
+```text
+https://github.com/Super-Yojan/Terra/releases/download/rover-v<version>/terra-rover-<version>-linux-arm64.tar.gz
+https://github.com/Super-Yojan/Terra/releases/download/rover-v<version>/terra-rover-<version>-linux-arm64.tar.gz.sha256
+```
+
+```sh
+curl -fL -O https://github.com/Super-Yojan/Terra/releases/download/rover-v0.2.0/terra-rover-0.2.0-linux-arm64.tar.gz
+curl -fL -O https://github.com/Super-Yojan/Terra/releases/download/rover-v0.2.0/terra-rover-0.2.0-linux-arm64.tar.gz.sha256
+sha256sum -c terra-rover-0.2.0-linux-arm64.tar.gz.sha256
+```
+
+The `.sha256` file names the tarball in the same directory. `sha256sum -c` exits
+non-zero if the archive does not match.
+
 ## Install the release on the Pi
 
 Copy the archive and its `.sha256` file to the Pi, then run there:

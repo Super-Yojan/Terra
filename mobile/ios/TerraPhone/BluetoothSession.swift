@@ -41,7 +41,8 @@ final class BluetoothSession {
         }
         if let fault = value["fault"] as? String { return [.state("Fault: \(fault) · disarmed")] }
         if value["emergency_stop"] as? Bool == true { return [.state("Emergency stop latched · disarmed")] }
-        return [.state(armed ? "Armed" : arming ? "Arming at safe output" : "Disarmed")]
+        let disarmed = value["stop_reason"] as? String == "watchdog" ? "Disarmed · command stream stopped" : "Disarmed"
+        return [.state(armed ? "Armed" : arming ? "Arming at safe output" : disarmed)]
     }
     func control(_ kind: String) throws -> Data {
         guard let session = session, sequence < UInt32.max - 1 else { throw BluetoothPolicyError.unavailable }
@@ -75,25 +76,5 @@ final class BluetoothSession {
         guard word(4) == session, word(8) == revision, word(12) > sequence, word(12) < UInt32.max else { return [] }
         // Before/while arming, allow freshly produced safe frames; the Pi checks safe policy.
         sequence = word(12); return [.send(frame)]
-    }
-}
-enum BluetoothPolicyError: Error { case unavailable, malformed }
-
-struct BluetoothJSONAssembler {
-    private var id: UInt16?
-    private var count: UInt8 = 0
-    private var next: UInt8 = 0
-    private var started: TimeInterval = 0
-    private var data = Data()
-    mutating func clear() { id = nil; data.removeAll(); next = 0 }
-    mutating func push(_ bytes: Data, now: TimeInterval) throws -> Data? {
-        if id != nil && (now < started || now - started >= 0.1) { clear() }
-        guard bytes.count >= 5, bytes[3] > 0, bytes[2] < bytes[3] else { clear(); throw BluetoothPolicyError.malformed }
-        let incoming = UInt16(bytes[0]) | UInt16(bytes[1]) << 8
-        if id == nil { guard bytes[2] == 0 else { throw BluetoothPolicyError.malformed }; id = incoming; count = bytes[3]; started = now }
-        guard id == incoming, count == bytes[3], next == bytes[2], data.count + bytes.count - 4 <= 16384 else { clear(); throw BluetoothPolicyError.malformed }
-        data.append(bytes.dropFirst(4))
-        if next == count - 1 { let result = data; clear(); return result }
-        next += 1; return nil
     }
 }

@@ -49,3 +49,7 @@ These configuration values require physical calibration before real robot trials
 Both simulator and phone publish `<prefix>/<rover_id>/map/occupancy` at no more than 5 Hz from their observed local map. JSON fields: `schema_version: 1`, `rover_id`, `run_id`, `sequence` (map revision), `width`, `height`, `resolution` (metres), `origin_x`, `origin_y`, and `occupancy`.
 
 Cells are row-major: index `row * width + column`, columns increase world +X, rows increase world +Y. The origin is the minimum XY cell corner. Values are -1 (unknown) and 0–100 (occupancy probability). ARGOS renders values below 65 as free and values at least 65 as occupied, matching the navigation threshold. The packet contains observed cells, not private mission targets or ground-truth obstacle geometry. A repeated revision is not a new observation; freshness comes from the last increasing revision received by ARGOS.
+
+## L4 target-search extension
+
+The additive `target_search` level and versioned `/search`, `/search/action`, `/search/status`, `/search/report` and `/search/report/ack` topics are documented in [TARGET_SEARCH.md](TARGET_SEARCH.md). The existing `supervised` mode retains its proposal approval semantics. Capability advertising requires a registered, fresh detector; physical recognition remains unavailable until an adapter is supplied and validated.
