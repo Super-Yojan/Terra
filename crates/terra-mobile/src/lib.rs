@@ -381,7 +381,7 @@ impl MobileController {
             }
         }
         let previous: serde_json::Value = serde_json::from_str(&brain.autonomy_json).unwrap_or_default();
-        let local_waypoint = previous["status"]["requested_level"] == "waypoint" && previous["goal"]["state"] == "active";
+        let local_waypoint = matches!(previous["status"]["requested_level"].as_str(), Some("waypoint" | "waypoint_direct")) && previous["goal"]["state"] == "active";
         let healthy = estimate.health == Health::Ready
             && (local_waypoint || brain.dashboard.as_ref().is_none_or(|d| !d.failed()))
             && brain.recorder.as_ref().is_none_or(|r| !r.failed());

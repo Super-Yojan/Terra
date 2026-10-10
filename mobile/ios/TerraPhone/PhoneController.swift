@@ -35,6 +35,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
     @Published private(set) var waypointStatus = "No goal"
     @Published private(set) var waypointDistance = 0.0
     private var zenoh: MobileZenohClient?
+    @Published private(set) var personDetectorStatus = "Requires LiDAR, camera tracking and scene depth"
     @Published private(set) var searchAvailable=false
     @Published private(set) var searchPhase=""
     @Published private(set) var searchReportText=""
@@ -113,6 +114,8 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
     private var dashboardEmergencyStop = false
     private var emergencyResetRequest: UInt32?
     private var hardwareMotionRevoked = true
+    private let personDetector = PersonSearchDetector()
+    private var detectorHealth = "not started"
     private var feedbackTrackingHealthy = false
     private var bleCompatible = false
     private var phoneStartedAt = 0.0
@@ -591,6 +594,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
             guard self.sensorEpochMatches(trackingEpoch), self.phoneTrackingActive else { return }
             self.phoneTrackingStatus = tracked ? (self.fleetTrackingManaged ? "Tracking active · managed by ARGOS in every mode" : "Phone tracking active") : "Tracking initializing · keep the phone steady"
         }
+        updatePersonSearch(frame: frame, tracked: tracked, epoch: trackingEpoch)
         let transform = frame.camera.transform
         let top = worldFromAR * SIMD3(transform.columns.1.x, transform.columns.1.y, transform.columns.1.z)
         phoneTopYaw = hypot(top.x, top.y) >= 0.3 ? atan2(Double(top.y), Double(top.x)) : nil
@@ -627,6 +631,53 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
             if tracked { updatePhoneGround(frame: frame, position: position); updatePhoneMap(frame: frame, position: position, bodyOrientation: orientation); publishPhoneCloud(frame: frame, position: position) }
             else { DispatchQueue.main.async { self.mapStatus = "Tracking lost · map paused" } }
         } catch { fail(error, context: "AR frame at \(frame.timestamp)") }
+    }
+    private func updatePersonSearch(frame: ARFrame, tracked: Bool, epoch: Int) {
+        guard let controller else { return }
+        let ready = tracked && frame.sceneDepth?.confidenceMap != nil
+        guard ready else {
+            try? controller.registerSearchDetector(classes: [], version: "apple-vision-person-depth-v1", timestamp: frame.timestamp)
+            setDetectorHealth(tracked ? "LiDAR scene depth unavailable" : "tracking unavailable")
+            return
+        }
+        personDetector.submit(frame: frame, worldFromAR: worldFromAR) { [weak self] result in
+            guard let self else { return }
+            self.controlQueue.async {
+                guard self.sensorEpochMatches(epoch), self.mode == .phone, self.localizationTracked,
+                      let controller = self.controller else { return }
+                let now = CACurrentMediaTime()
+                do {
+                    switch result {
+                    case .failure(let error):
+                        try controller.registerSearchDetector(classes: [], version: "apple-vision-person-depth-v1", timestamp: now)
+                        self.setDetectorHealth("failed: \(error)")
+                    case .success(let frame):
+                        guard now >= frame.timestamp, now-frame.timestamp < 0.5 else {
+                            try controller.registerSearchDetector(classes: [], version: "apple-vision-person-depth-v1", timestamp: now)
+                            self.setDetectorHealth("inference frame stale")
+                            return
+                        }
+                        try controller.registerSearchDetector(classes: ["person"], version: "apple-vision-person-depth-v1", timestamp: frame.timestamp)
+                        self.setDetectorHealth("person detector ready")
+                        if frame.rejected > 0 { TerraLog.tracking.debug("Person observations rejected: \(frame.rejected); confidence or measured depth unavailable") }
+                        guard let search = controller.targetSearchSnapshot(timestamp: now), ["searching", "confirming"].contains(search.phase) else { return }
+                        // One observation per camera frame; never let separate people become duplicate frame evidence.
+                        if let person = frame.detections.max(by: { $0.confidence < $1.confidence }) {
+                            try controller.pushTargetObservation(o: MobileTargetObservation(runId: search.runId, searchId: search.searchId,
+                                frameId: frame.frameID, targetClass: "person", confidence: person.confidence,
+                                worldX: Double(person.world.x), worldY: Double(person.world.y), receivedAt: frame.timestamp,
+                                evidenceId: "person-\(frame.frameID)"), timestamp: now)
+                        }
+                    }
+                } catch { TerraLog.tracking.notice("Person observation or capability rejected: \(String(describing: error), privacy: .public)") }
+            }
+        }
+    }
+    private func setDetectorHealth(_ value: String) {
+        guard detectorHealth != value else { return }
+        detectorHealth = value
+        TerraLog.tracking.notice("L4 detector: \(value, privacy: .public)")
+        DispatchQueue.main.async { self.personDetectorStatus = value }
     }
     func clearMap() {
         controlQueue.async {

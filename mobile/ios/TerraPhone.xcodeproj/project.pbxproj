@@ -12,6 +12,8 @@
 		08906BAF4104CBE47B269B2D /* PhoneController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C2FA04187CC39D929F3A531 /* PhoneController.swift */; };
 		137DAA3A5D1B6CB13A6C5CC6 /* RoverModelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 72D31377D574D8AFFB9FBB0D /* RoverModelView.swift */; };
 		1DEE8F75CDA61D4F9594BCB6 /* FleetConnectionSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 48EBDF0CFE543A6304242A8B /* FleetConnectionSettings.swift */; };
+		24894F900F7490AA19DE55B3 /* PersonDepthGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = DB887F7AD412C1F04EDC079D /* PersonDepthGeometry.swift */; };
+		37C8F681B8564FABEA922179 /* PersonSearchDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50BE71F885C99967A195ECC8 /* PersonSearchDetector.swift */; };
 		3DF9E05C49FEB1A06432E1A7 /* TerraLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 25948E386E416BE1611442F7 /* TerraLog.swift */; };
 		5103B205700BE25C836BE434 /* DriveControlPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C4723336D834BA5A0020B66 /* DriveControlPanel.swift */; };
 		520A05493B4DC9DE9FBB5234 /* RoverSetupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B8DD4D4F392C6D381299A69B /* RoverSetupView.swift */; };
@@ -71,6 +73,7 @@
 		40F2DDDC1E0A2ABA4F09C11F /* ARKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = ARKit.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS18.0.sdk/System/Library/Frameworks/ARKit.framework; sourceTree = DEVELOPER_DIR; };
 		48EBDF0CFE543A6304242A8B /* FleetConnectionSettings.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = FleetConnectionSettings.swift; sourceTree = "<group>"; };
 		4DB3F3D968483A1FD1080BEB /* TerraPhone.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = TerraPhone.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		50BE71F885C99967A195ECC8 /* PersonSearchDetector.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = PersonSearchDetector.swift; sourceTree = "<group>"; };
 		543C3C67B32982AE4FA32C81 /* Info.plist */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		5695D4ADB6DDDB9AD9ECC1EB /* TerraPhoneApp.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TerraPhoneApp.swift; sourceTree = "<group>"; };
 		58BEF209DEE2945A7D96965A /* BluetoothFragmentAssembler.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = BluetoothFragmentAssembler.swift; sourceTree = "<group>"; };
@@ -103,6 +106,7 @@
 		DA0000000000000000000010 /* TerraAutoConnectionPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerraAutoConnectionPolicy.swift; sourceTree = "<group>"; };
 		DB0000000000000000000004 /* DriveJoystickCommand.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DriveJoystickCommand.swift; sourceTree = "<group>"; };
 		DB0300971377E45AC7666F16 /* PhoneLocalization.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = PhoneLocalization.swift; sourceTree = "<group>"; };
+		DB887F7AD412C1F04EDC079D /* PersonDepthGeometry.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = PersonDepthGeometry.swift; sourceTree = "<group>"; };
 		E2F1F045BAD6332446793A66 /* RoverConnectionDetails.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = RoverConnectionDetails.swift; sourceTree = "<group>"; };
 		F236F546C5E50DEBDBC44862 /* JoystickSurface.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = JoystickSurface.swift; sourceTree = "<group>"; };
 		FD7D52E4241E3416851D20EB /* TerraCore.xcframework */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = wrapper.xcframework; path = TerraCore.xcframework; sourceTree = "<group>"; };
@@ -218,6 +222,8 @@
 				D04DB8926762D65151B5C411 /* ActuatorDriveProfile.swift */,
 				5C11A546598F9DA3655EF0C0 /* ActuatorPagination.swift */,
 				58BEF209DEE2945A7D96965A /* BluetoothFragmentAssembler.swift */,
+				DB887F7AD412C1F04EDC079D /* PersonDepthGeometry.swift */,
+				50BE71F885C99967A195ECC8 /* PersonSearchDetector.swift */,
 			);
 			path = TerraPhone;
 			sourceTree = "<group>";
@@ -332,6 +338,8 @@
 				A58122FA6F3E1A8414B6B6C3 /* ActuatorDriveProfile.swift in Sources */,
 				06793BBE2D9E7876A63D0C2A /* ActuatorPagination.swift in Sources */,
 				F0EA40F2756462AED7DD4EE2 /* BluetoothFragmentAssembler.swift in Sources */,
+				24894F900F7490AA19DE55B3 /* PersonDepthGeometry.swift in Sources */,
+				37C8F681B8564FABEA922179 /* PersonSearchDetector.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

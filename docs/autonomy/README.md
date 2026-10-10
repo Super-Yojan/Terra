@@ -1,7 +1,7 @@
 # Mission autonomy
 
 !!! tip "TL;DR"
-    Four levels share one arbiter.
+    Teleop, assisted teleop, L2 direct waypoint, L3 obstacle-aware waypoint, supervised exploration and L4 target search share one arbiter.
     Stop latches until reset.
     The reference mission runs in Zorvane, not in this repo.
 
@@ -72,3 +72,5 @@ Physical device navigation, braking calibration, and real survivor detection are
 
 
 ARGOS exports operator JSONL sessions. Join action tokens and teleop session/sequence values to rover receipts; do not count both ends as two interventions. `/experiment/status` provides run identity and paired run-time/UTC samples. Clock offsets and network uncertainty must be retained rather than treating two machines' monotonic clocks as interchangeable.
+
+See [L2 and L4 operation and verification](../l2-l4-implementation.md) for the new phone-backed capabilities.

@@ -6,6 +6,7 @@ pub enum Level {
     Teleop,
     AssistedTeleop,
     Waypoint,
+    WaypointDirect,
     Supervised,
     TargetSearch,
 }

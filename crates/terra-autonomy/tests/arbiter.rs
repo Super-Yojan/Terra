@@ -294,3 +294,46 @@ fn canonical_motion_is_bound_to_authority_and_run() {
     a.accept_operator(r, 0.2);
     assert_eq!(a.step(input(0.3)).twist, Twist::default());
 }
+
+#[test]
+fn direct_waypoint_needs_no_map_but_retains_sensor_and_cancel_safety() {
+    let mut a = AutonomyArbiter::default();
+    a.set_level(LevelRequest { level: Level::WaypointDirect, token: "direct".into() });
+    assert!(a.accept_goal(&terra_waypoint::GoalCommand::Local { x: 2., y: 0., yaw: None, token: Some("direct-goal".into()) }, 50.));
+    let out = a.step(input(0.1));
+    assert!(out.twist.linear > 0.);
+    assert!(out.status.supported_levels.contains(&Level::WaypointDirect));
+    let mut stale = input(1.);
+    stale.pose_time = 0.;
+    assert_eq!(a.step(stale).twist, Twist::default());
+    assert!(a.accept_goal(&terra_waypoint::GoalCommand::Cancel, 50.));
+    assert_eq!(a.step(input(1.1)).twist, Twist::default());
+}
+
+#[test]
+fn l2_bypasses_occupied_map_while_l3_stops_and_stop_still_latches() {
+    let map = terra_mapping::MapSnapshot { width: 40, height: 40, resolution: 0.25,
+        origin_x: -5., origin_y: -5., occupancy: vec![100; 1600] };
+    for (level, moves) in [(Level::WaypointDirect, true), (Level::Waypoint, false)] {
+        let mut a = AutonomyArbiter::default();
+        a.set_level(LevelRequest { level, token: "mode".into() });
+        assert!(a.accept_goal(&terra_waypoint::GoalCommand::Local { x: 2., y: 0., yaw: None, token: Some("goal".into()) }, 50.));
+        let out = a.step(ArbiterInput { map: Some(&map), map_time: Some(0.1), ..input(0.1) });
+        assert_eq!(out.twist.linear > 0., moves);
+        a.set_safety(SafetyRequest { action: SafetyAction::Stop, token: "stop".into() }, true);
+        assert_eq!(a.step(input(0.2)).twist, Twist::default());
+        assert!(!a.accept_goal(&terra_waypoint::GoalCommand::Local { x: 3., y: 0., yaw: None, token: Some("new-goal".into()) }, 50.));
+    }
+}
+
+#[test]
+fn cancelled_l2_token_never_replays_motion() {
+    let mut a = AutonomyArbiter::default();
+    a.set_level(LevelRequest { level: Level::WaypointDirect, token: "direct".into() });
+    let goal = terra_waypoint::GoalCommand::Local { x: 2., y: 0., yaw: None, token: Some("direct-goal".into()) };
+    assert!(a.accept_goal(&goal, 50.));
+    assert!(a.step(input(0.1)).twist.linear > 0.);
+    assert!(a.accept_goal(&terra_waypoint::GoalCommand::Cancel, 50.));
+    assert!(a.accept_goal(&goal, 50.)); // Correlated receipt, not a new execution.
+    assert_eq!(a.step(input(0.2)).twist, Twist::default());
+}

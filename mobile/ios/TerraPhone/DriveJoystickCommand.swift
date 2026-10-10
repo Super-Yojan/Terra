@@ -40,7 +40,7 @@ enum TerraFleetManualDrive {
     static func localWaypointActive(_ json: String) -> Bool {
         guard let root = (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any],
               let status = root["status"] as? [String: Any], let goal = root["goal"] as? [String: Any] else { return false }
-        return status["requested_level"] as? String == "waypoint" && goal["state"] as? String == "active"
+        return ["waypoint", "waypoint_direct"].contains(status["requested_level"] as? String ?? "") && goal["state"] as? String == "active"
     }
     static func isFullyManual(_ json: String) -> Bool {
         guard let root = (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any],

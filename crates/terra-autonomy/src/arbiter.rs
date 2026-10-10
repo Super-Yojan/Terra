@@ -248,7 +248,7 @@ impl AutonomyArbiter {
         }
         if matches!(g, GoalCommand::Cancel) {
             self.clear();
-            if self.level == Level::Waypoint {
+            if matches!(self.level, Level::Waypoint | Level::WaypointDirect) {
                 self.level = Level::Teleop;
             } else if self.level == Level::Supervised {
                 self.paused = true;
@@ -290,7 +290,7 @@ impl AutonomyArbiter {
         {
             return self.receipt.as_ref().is_some_and(|r| r.1);
         }
-        if self.stopped || !matches!(self.level, Level::Waypoint | Level::Supervised) {
+        if self.stopped || !matches!(self.level, Level::Waypoint | Level::WaypointDirect | Level::Supervised) {
             if let Some(t) = token.clone() {
                 self.acknowledge(t, fingerprint, false, "authority_required");
             }
@@ -691,7 +691,7 @@ impl AutonomyArbiter {
         {
             reason = "sensor_unhealthy";
             held = true;
-        } else if self.level != Level::Teleop
+        } else if !matches!(self.level, Level::Teleop | Level::WaypointDirect)
             && (input.map.is_none() || !fresh(input.now, input.map_time, 0.5))
         {
             reason = "map_stale";
@@ -785,7 +785,7 @@ impl AutonomyArbiter {
                 }
             };
             intent_command = intent;
-            if self.level == Level::Teleop {
+            if matches!(self.level, Level::Teleop | Level::WaypointDirect) {
                 twist = intent;
                 if source != "none" {
                     reason = "active";
@@ -915,6 +915,7 @@ impl AutonomyArbiter {
                     Level::Teleop,
                     Level::AssistedTeleop,
                     Level::Waypoint,
+                    Level::WaypointDirect,
                     Level::Supervised,
                 ];
                 if !self.detector_classes.is_empty() && fresh(input.now, self.detector_time, 0.5) {

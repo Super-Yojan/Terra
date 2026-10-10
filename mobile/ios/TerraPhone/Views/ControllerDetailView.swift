@@ -15,7 +15,7 @@ struct ControllerDetailView: View {
     @AppStorage("waypointGoalLon") private var goalLon = "-77.3075"
     @AppStorage("waypointToken") private var waypointToken = "gmu-north"
     @State private var entryNote = ""
-    @State private var searchClass = "survivor"
+    @State private var searchClass = "person"
     @State private var searchMinX = "-20"
     @State private var searchMinY = "-20"
     @State private var searchMaxX = "20"
@@ -89,7 +89,7 @@ struct ControllerDetailView: View {
                 }
                 if destination == .missions {
                 Section("Mission autonomy") {
-                    Picker("Requested level",selection:Binding(get:{brain.autonomyLevel},set:{brain.setAutonomy($0)})) {Text("Teleop").tag("teleop");Text("Assisted teleop").tag("assisted_teleop");Text("Waypoint").tag("waypoint");Text("Supervised search").tag("supervised");if brain.searchAvailable {Text("L4 target search").tag("target_search")}}
+                    Picker("Requested level",selection:Binding(get:{brain.autonomyLevel},set:{brain.setAutonomy($0)})) {Text("Teleop").tag("teleop");Text("Assisted teleop").tag("assisted_teleop");Text("L2 · Direct waypoint").tag("waypoint_direct");Text("L3 · Obstacle-aware waypoint").tag("waypoint");Text("Supervised search").tag("supervised");if brain.searchAvailable {Text("L4 target search").tag("target_search")}}
                         .disabled(brain.hardwareActive && !brain.hardwareFeedback)
                     Text(brain.autonomyReason)
                     if let proposal=brain.proposedGoal {Text(brain.proposalText);HStack {Button("Approve search target") {brain.decideProposal(proposal,approve:true)};Button("Reject") {brain.decideProposal(proposal,approve:false)}}}
@@ -110,7 +110,9 @@ struct ControllerDetailView: View {
                             guard let a=Double(searchMinX),let b=Double(searchMinY),let c=Double(searchMaxX),let d=Double(searchMaxY),let t=Double(searchBudget) else {entryNote="Enter numeric search bounds and budget";return}
                             brain.startTargetSearch(targetClass:searchClass,minX:a,minY:b,maxX:c,maxY:d,budget:t)
                         }.disabled(brain.autonomyLevel != "target_search" || !brain.searchTerminal)
-                    }else {Text("Target search requires a registered target detector.").font(.caption).foregroundStyle(.secondary)}
+                    }else {Text("L4 people search requires a LiDAR phone with live camera tracking and scene depth.").font(.caption).foregroundStyle(.secondary)}
+                    Text(brain.personDetectorStatus).font(.caption).foregroundStyle(.secondary)
+                    if brain.autonomyLevel == "waypoint_direct" { Text("L2 follows directly without obstacle avoidance.").font(.caption) }
                     if !brain.searchPhase.isEmpty {Text(brain.searchPhase.replacingOccurrences(of:"_",with:" ").capitalized)}
                     if !brain.searchReportText.isEmpty {Text(brain.searchReportText).textSelection(.enabled)}
                     if !brain.searchReportHistory.isEmpty {DisclosureGroup("Confirmed reports") {ForEach(Array(brain.searchReportHistory.enumerated()),id:\.offset) { _,report in Text(report).textSelection(.enabled)}}}
