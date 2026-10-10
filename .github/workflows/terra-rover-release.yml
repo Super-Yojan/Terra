@@ -1,0 +1,142 @@
+# Publish terra-rover-<version>-linux-arm64.tar.gz and its .sha256.
+# Push an existing tag rover-v<version> (for example rover-v0.2.0) that matches
+# hardware/raspberry-pi/pyproject.toml. This workflow does not create tags.
+name: Publish terra-rover release
+
+on:
+  push:
+    tags:
+      - "rover-v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to publish, for example rover-v0.2.0. Must match the packaged version. Does not create a tag."
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    permissions:
+      contents: write
+    # Native arm64 runner, same label as rover-binary.yml. The build command is
+    # the one in docs/hardware/INSTALL.md. An x86 runner would need QEMU.
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 90
+    steps:
+      - name: Resolve release tag
+        id: tag
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+            tag="${INPUT_TAG}"
+          else
+            tag="${GITHUB_REF_NAME}"
+          fi
+          case "${tag}" in
+            rover-v[0-9]*) ;;
+            *)
+              echo "refusing: tag '${tag}' must match rover-v<version>" >&2
+              exit 1
+              ;;
+          esac
+          case "${tag}" in
+            *[!A-Za-z0-9._+-]*|*..*)
+              echo "refusing: tag '${tag}' contains unsupported characters" >&2
+              exit 1
+              ;;
+          esac
+          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.tag.outputs.tag }}
+
+      - name: Require the tag to match the packaged version
+        env:
+          RELEASE_TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' hardware/raspberry-pi/pyproject.toml)"
+          case "${version}" in
+            ""|*[!0-9A-Za-z.+-]*)
+              echo "refusing: pyproject version '${version}' is missing or not a single version" >&2
+              exit 1
+              ;;
+          esac
+          expected="rover-v${version}"
+          if [ "${RELEASE_TAG}" != "${expected}" ]; then
+            echo "refusing: tag ${RELEASE_TAG} does not match packaged version ${version} (expected ${expected})" >&2
+            exit 1
+          fi
+          echo "Packaged version ${version} matches ${RELEASE_TAG}"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build the Bookworm arm64 tarball
+        run: |
+          set -euo pipefail
+          docker buildx build --platform linux/arm64 \
+            -f packaging/rover/Dockerfile \
+            --output type=local,dest=hardware/raspberry-pi/dist .
+
+      - name: Publish the tarball and checksum
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' hardware/raspberry-pi/pyproject.toml)"
+          case "${version}" in
+            ""|*[!0-9A-Za-z.+-]*)
+              echo "refusing: pyproject version '${version}' is missing or not a single version" >&2
+              exit 1
+              ;;
+          esac
+          expected="rover-v${version}"
+          if [ "${RELEASE_TAG}" != "${expected}" ]; then
+            echo "refusing: tag ${RELEASE_TAG} does not match packaged version ${version} (expected ${expected})" >&2
+            exit 1
+          fi
+          name="terra-rover-${version}-linux-arm64"
+          dist="hardware/raspberry-pi/dist"
+          tarball="${dist}/${name}.tar.gz"
+          checksum="${tarball}.sha256"
+          if [ ! -f "${tarball}" ] || [ ! -f "${checksum}" ]; then
+            echo "refusing: expected ${tarball} and ${checksum}" >&2
+            ls -la "${dist}" >&2 || true
+            exit 1
+          fi
+          recorded="$(awk 'NR==1 { print $2 }' "${checksum}")"
+          if [ "${recorded}" != "${name}.tar.gz" ]; then
+            echo "refusing: checksum names '${recorded}', expected ${name}.tar.gz" >&2
+            exit 1
+          fi
+          if [ "$(wc -l < "${checksum}")" -ne 1 ]; then
+            echo "refusing: checksum file must contain exactly one record" >&2
+            exit 1
+          fi
+          # build-rover.sh records the tarball basename, so the check runs beside it.
+          (
+            cd "${dist}"
+            sha256sum -c "${name}.tar.gz.sha256"
+          )
+          if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
+            echo "refusing: GitHub release ${RELEASE_TAG} already exists" >&2
+            exit 1
+          fi
+          notes="$(printf '%s\n' \
+            "terra-rover ${version} for 64-bit Raspberry Pi OS Bookworm or newer." \
+            "Verify with: sha256sum -c ${name}.tar.gz.sha256" \
+            "https://github.com/Super-Yojan/Terra/releases/download/${RELEASE_TAG}/${name}.tar.gz" \
+            "The image build in Super-Yojan/terra-image-gen consumes this tarball and hash.")"
+          gh release create "${RELEASE_TAG}" "${tarball}" "${checksum}" \
+            --verify-tag \
+            --title "terra-rover ${version}" \
+            --notes "${notes}"
