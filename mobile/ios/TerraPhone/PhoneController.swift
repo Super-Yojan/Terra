@@ -98,9 +98,15 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
     private var bleFeedback = false
     private var bleLayout = "{}"
     private var servoTargets: [String: Double] = [:]
-    private var staged: (request: UInt32, revision: UInt32)?
-    private var stageRequest: UInt32?
-    private var commitRequest: UInt32?
+    @Published private(set) var actuatorEditor = ActuatorPaginationState()
+    @Published private(set) var actuatorPageLoading = false
+    private typealias EditorRequest = (id: UInt32, operation: String, generation: UInt64, actuator: ActuatorDraft?, actuatorID: Int?)
+    private var editorRequest: EditorRequest?
+    private var retryableEditorRequest: EditorRequest?
+    @Published private(set) var hasRetryableActuatorRequest = false
+    private var presetUpload: ActuatorPresetUpload?
+    private var beginReplacement = false
+    private var removeAfterBegin: Int?
     private var nextRequest: UInt32 = max(1000, UInt32(clamping: UserDefaults.standard.integer(forKey: "hardwareConfigurationRequestID")))
     private var sensorEpoch = 0
     private let sensorEpochLock = NSLock()
@@ -985,7 +991,7 @@ extension PhoneController {
         defer { refreshConnectionPresentation() }
         if configurationGeneration != bluetooth.connectionGeneration {
             configurationGeneration = bluetooth.connectionGeneration
-            staged = nil; stageRequest = nil; commitRequest = nil; resetFaultRequest = nil; emergencyResetRequest = nil
+            actuatorEditor.invalidate(generation: configurationGeneration); editorRequest = nil; retryableEditorRequest = nil; hasRetryableActuatorRequest = false; presetUpload = nil; removeAfterBegin = nil; resetFaultRequest = nil; emergencyResetRequest = nil
             acknowledgedCommitRevision = nil
             configurationStatus = "Connection changed · stage draft again"
         }
@@ -999,12 +1005,16 @@ extension PhoneController {
         hardwareBenchEnabled = remoteStatus?["bench_enabled"] as? Bool == true
         activeLayoutRevision = remoteStatus?["active_revision"] as? UInt32 ?? 0
         hardwareFault = remoteStatus?["fault"] as? String
-        if let staged, staged.revision != activeLayoutRevision { self.staged = nil; stageRequest = nil }
+        if let index = try? JSONDecoder().decode(ActuatorLayoutIndex.self, from: Data(bluetooth.layoutIndexJSON.utf8)) {
+            let invalidated = actuatorEditor.generation != configurationGeneration || actuatorEditor.revision != index.revision
+            actuatorEditor.synchronize(index: index, generation: configurationGeneration)
+            if invalidated { editorRequest = nil; retryableEditorRequest = nil; hasRetryableActuatorRequest = false; presetUpload = nil; removeAfterBegin = nil; actuatorPageLoading = false }
+        }
 
         hardwareArmed = bluetooth.armed; hardwareArming = bluetooth.arming
-        capabilitiesJSON = bluetooth.capabilitiesJSON; committedLayoutJSON = bluetooth.layoutJSON
+        capabilitiesJSON = bluetooth.capabilitiesJSON; committedLayoutJSON = bluetooth.driveProfileJSON
         discoveredRovers = (try? JSONDecoder().decode([RoverPeripheral].self, from: Data(bluetooth.peripheralsJSON.utf8))) ?? []
-        feedbackCompatible = (try? actuatorSupportsFeedback(layoutJson: committedLayoutJSON)) ?? false
+        feedbackCompatible = (try? ActuatorDriveProfileSet.decode(json: committedLayoutJSON).supportsFeedback) ?? false
         let layout = committedLayoutJSON
         let ready = hardwareReady
         let compatible = feedbackCompatible
@@ -1338,7 +1348,7 @@ extension PhoneController {
     func setServoTarget(id: UInt8, position: Double) {
         guard position.isFinite, hardwareArmed else { return }
         controlQueue.async {
-            guard let layout = try? JSONDecoder().decode(ActuatorLayoutDraft.self, from: Data(self.bleLayout.utf8)),
+            guard let layout = try? ActuatorDriveProfileSet.decode(json: self.bleLayout),
                   let actuator = layout.actuators.first(where: { $0.id == Int(id) && $0.kind == "positional_servo" }) else { return }
             let value = min(actuator.limits.max, max(actuator.limits.min, position))
             self.servoTargets[String(id)] = value
@@ -1347,7 +1357,7 @@ extension PhoneController {
     }
     private func resetServoTargets() {
         servoTargets = [:]
-        if let layout = try? JSONDecoder().decode(ActuatorLayoutDraft.self, from: Data(bleLayout.utf8)) {
+        if let layout = try? ActuatorDriveProfileSet.decode(json: bleLayout) {
             for a in layout.actuators where a.kind == "positional_servo" {
                 servoTargets[String(a.id)] = min(a.limits.max, max(a.limits.min, a.safe.value ?? 0))
             }
@@ -1359,8 +1369,8 @@ extension PhoneController {
         guard bleActive, !dashboardEmergencyStop, !bleFeedback || bleCompatible else { return }
         do {
             let input: [String: Any] = ["left_effort": left, "right_effort": right, "forward": manualTarget?.forward ?? (bleFeedback ? 0 : target.forward), "turn": manualTarget?.yaw ?? (bleFeedback ? 0 : target.yaw), "servo_positions": servoTargets]
-            let json = String(decoding: try JSONSerialization.data(withJSONObject: input), as: UTF8.self)
-            let values = try actuatorRoute(layoutJson: bleLayout, inputJson: json)
+            let routed = try ActuatorDriveProfileSet.decode(json: bleLayout).route(input: input)
+            let values = String(decoding: try JSONSerialization.data(withJSONObject: routed), as: UTF8.self)
             bluetooth.drive(valuesJSON: values, producedAt: now)
         } catch { revokeHardwareMotion() }
     }
@@ -1388,25 +1398,84 @@ extension PhoneController {
         resetFaultRequest = sendConfiguration("reset_fault", payload: [:])
         configurationStatus = "Waiting for fault reset acknowledgement · remains disarmed"
     }
-    func stageActuatorLayout(json: String) {
-        staged = nil; stageRequest = nil
-        guard configurationAllowed else { configurationStatus = configurationBlockingReason ?? "Configuration unavailable"; return }
-        do {
-            let errors = try actuatorValidateLayout(layoutJson: json, capabilitiesJson: capabilitiesJSON)
-            guard errors == "[]" else { configurationStatus = errors; return }
-            guard let object = try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any] else { return }
-            guard object["revision"] as? UInt32 == activeLayoutRevision else {
-                configurationStatus = "Draft revision is stale · use the current revision before staging"; return
-            }
-            stageRequest = sendConfiguration("stage_layout", payload: ["layout": object]); configurationStatus = "Waiting for stage acknowledgement"
-        } catch { configurationStatus = error.localizedDescription }
+    var hasStagedLayout: Bool { actuatorEditor.canCommit }
+    var configurationBusy: Bool { editorRequest != nil || retryableEditorRequest != nil }
+    func editActuator(_ actuator: ActuatorDraft) {
+        guard !configurationBusy else { return }
+        if presetUpload != nil { presetUpload?.updateCurrent(actuator) }
+        actuatorEditor.change(actuator)
     }
-    func invalidateStagedLayout() { staged = nil; stageRequest = nil; configurationStatus = "Draft changed · stage again" }
-    var hasStagedLayout: Bool { staged != nil }
+    func discardLocalActuatorChanges() { guard !configurationBusy else { return }; presetUpload = nil; actuatorEditor.discardLocal() }
+    func retryActuatorConfiguration() { guard !configurationBusy else { return }; bluetooth.refreshConfigurationIndex() }
+    func retryFailedActuatorRequest() {
+        guard editorRequest == nil, let request = retryableEditorRequest,
+              request.generation == configurationGeneration else { return }
+        retryableEditorRequest = nil; hasRetryableActuatorRequest = false
+        editorRequest = request; actuatorPageLoading = request.operation == "read_actuator"
+        configurationStatus = "Retrying \(request.operation.replacingOccurrences(of: "_", with: " "))"
+        bluetooth.retryConfiguration(requestID: request.id, generation: request.generation)
+    }
+    func selectActuator(_ id: Int) {
+        guard !configurationBusy, actuatorEditor.select(id) else { return }
+        if actuatorEditor.selected != nil { return }
+        actuatorPageLoading = true
+        editorSend("read_actuator", payload: ["expected_revision": actuatorEditor.revision, "actuator_id": id], actuatorID: id)
+    }
+    private func editorSend(_ operation: String, payload: [String: Any], actuator: ActuatorDraft? = nil, actuatorID: Int? = nil) {
+        guard !configurationBusy, let id = sendConfiguration(operation, payload: payload) else { return }
+        editorRequest = (id, operation, configurationGeneration, actuator, actuatorID)
+        configurationStatus = "Waiting for \(operation.replacingOccurrences(of: "_", with: " ")) acknowledgement"
+    }
+    private func beginEditor(replacement: Bool = false) {
+        beginReplacement = replacement
+        editorSend("begin_layout_edit", payload: ["expected_revision": actuatorEditor.revision, "mode": replacement ? "replace" : "existing"])
+    }
+    func saveSelectedActuator() {
+        guard configurationAllowed, !configurationBusy, let actuator = actuatorEditor.selected else { return }
+        if actuatorEditor.token == nil { beginEditor(); return }
+        stageOne(actuator)
+    }
+    private func stageOne(_ actuator: ActuatorDraft) {
+        guard let token = actuatorEditor.token,
+              let data = try? JSONEncoder().encode(actuator),
+              let object = try? JSONSerialization.jsonObject(with: data) else { return }
+        actuatorEditor.change(actuator)
+        editorSend("stage_actuator", payload: ["edit_token": token, "edit_version": actuatorEditor.version, "actuator": object], actuator: actuator)
+    }
+    func addActuator() {
+        guard !configurationBusy, !actuatorEditor.dirty, actuatorEditor.entries.count < 16,
+              let id = (0...255).first(where: { id in !actuatorEditor.entries.contains(where: { $0.id == id }) }) else { return }
+        actuatorEditor.change(ActuatorDraft(id: id, name: "Actuator \(id)"))
+    }
+    func removeSelectedActuator() {
+        guard configurationAllowed, !configurationBusy, let id = actuatorEditor.selectedID else { return }
+        presetUpload = nil
+        guard let token = actuatorEditor.token else { removeAfterBegin = id; beginEditor(); return }
+        editorSend("remove_actuator", payload: ["edit_token": token, "edit_version": actuatorEditor.version, "actuator_id": id], actuatorID: id)
+    }
+    func uploadPreset(_ actuators: [ActuatorDraft]) {
+        guard configurationAllowed, !configurationBusy, !actuatorEditor.dirty else { return }
+        presetUpload = ActuatorPresetUpload(actuators: actuators); beginEditor(replacement: true)
+    }
+    private func presentNextPresetActuator() {
+        guard let upload = presetUpload, let actuator = upload.current else { presetUpload = nil; configurationStatus = "Preset saved to draft · validate before applying"; return }
+        if upload.needsPortSelection {
+            actuatorEditor.change(actuator)
+            configurationStatus = "Choose a physical port for \(actuator.name), then save to continue the preset"
+        } else { stageOne(actuator) }
+    }
+    func validateActuatorDraft() {
+        guard configurationAllowed, !configurationBusy, !actuatorEditor.dirty, let token = actuatorEditor.token else { return }
+        editorSend("validate_layout_edit", payload: ["edit_token": token, "edit_version": actuatorEditor.version])
+    }
+    func discardActuatorDraft() {
+        guard editorRequest == nil, let token = actuatorEditor.token else { return }
+        retryableEditorRequest = nil; hasRetryableActuatorRequest = false; presetUpload = nil
+        editorSend("discard_layout_edit", payload: ["edit_token": token])
+    }
     func commitActuatorLayout() {
-        guard configurationAllowed, let staged else { configurationStatus = configurationBlockingReason ?? "Validate and stage the draft first"; return }
-        commitRequest = sendConfiguration("commit_layout", payload: ["staged_revision": staged.revision, "staged_request_id": staged.request])
-        configurationStatus = "Waiting for commit acknowledgement"
+        guard configurationAllowed, !configurationBusy, actuatorEditor.canCommit, let token = actuatorEditor.token else { return }
+        editorSend("commit_layout_edit", payload: ["edit_token": token, "edit_version": actuatorEditor.version, "base_revision": actuatorEditor.revision])
     }
     private func receiveConfiguration(_ text: String) {
         guard let object = (try? JSONSerialization.jsonObject(with: Data(text.utf8))) as? [String: Any], let id = object["request_id"] as? UInt32 else { return }
@@ -1436,17 +1505,62 @@ extension PhoneController {
             configurationStatus = object["result"] as? String == "ok" ? "Fault reset acknowledged · arm explicitly when ready" : "Fault reset rejected: \(object["errors"] ?? [])"
             return
         }
-        guard id == stageRequest || id == commitRequest else { return }
-        guard object["result"] as? String == "ok" else { staged = nil; configurationStatus = "Rejected · draft retained: \(object["errors"] ?? [])"; return }
-        if id == stageRequest {
-            let payload = object["payload"] as? [String: Any]
-            if let revision = payload?["staged_revision"] as? UInt32, revision == activeLayoutRevision, payload?["staged_request_id"] as? UInt32 == id { staged = (id, revision); configurationStatus = "Staged revision \(revision) · commit explicitly" }
-        } else {
-            staged = nil; stageRequest = nil; commitRequest = nil
-            acknowledgedCommitRevision = object["active_revision"] as? UInt32
-            configurationStatus = "Commit acknowledged · refreshing active layout"
-            sendConfiguration("capabilities", payload: [:]); sendConfiguration("read_layout", payload: [:])
+        guard let request = editorRequest, request.id == id, request.generation == configurationGeneration else { return }
+        editorRequest = nil; actuatorPageLoading = false
+        guard object["result"] as? String == "ok" else {
+            let errors = object["errors"] as? [[String: Any]] ?? []
+            if errors.contains(where: { ["configuration_timeout", "configuration_transfer"].contains($0["code"] as? String ?? "") }) {
+                retryableEditorRequest = request; hasRetryableActuatorRequest = true
+                configurationStatus = "Acknowledgement unavailable · retry this operation to recover its exact result"
+                return
+            }
+            retryableEditorRequest = nil; hasRetryableActuatorRequest = false
+            if request.operation != "stage_actuator" { presetUpload = nil }
+            removeAfterBegin = nil; actuatorEditor.validatedVersion = nil
+            configurationStatus = "Rejected · local changes retained: \(object["errors"] ?? [])"; return
         }
+        retryableEditorRequest = nil; hasRetryableActuatorRequest = false
+        let payload = object["payload"] as? [String: Any] ?? [:]
+        switch request.operation {
+        case "read_actuator":
+            if let revision = payload["revision"] as? UInt32, let object = payload["actuator"],
+               let data = try? JSONSerialization.data(withJSONObject: object), let actuator = try? JSONDecoder().decode(ActuatorDraft.self, from: data) {
+                _ = actuatorEditor.acceptPage(actuator, revision: revision, generation: request.generation)
+            }
+        case "begin_layout_edit":
+            guard let token = payload["edit_token"] as? String, let base = payload["base_revision"] as? UInt32,
+                  base == actuatorEditor.revision, let version = payload["edit_version"] as? UInt32 else { return }
+            actuatorEditor.begin(token: token, base: base, version: version, replacement: beginReplacement)
+            if let id = removeAfterBegin {
+                removeAfterBegin = nil
+                editorSend("remove_actuator", payload: ["edit_token": token, "edit_version": version, "actuator_id": id], actuatorID: id)
+            } else if presetUpload != nil { presentNextPresetActuator(); return }
+            else if let actuator = actuatorEditor.selected, actuatorEditor.dirty { stageOne(actuator) }
+        case "stage_actuator", "remove_actuator", "validate_layout_edit":
+            guard payload["edit_token"] as? String == actuatorEditor.token,
+                  let version = payload["edit_version"] as? UInt32 else { return }
+            if request.operation == "validate_layout_edit" {
+                guard version == actuatorEditor.version else { return }; actuatorEditor.validatedVersion = version
+            } else {
+                guard version == actuatorEditor.version + 1 else { return }
+                if let actuator = request.actuator { actuatorEditor.acknowledge(actuator, version: version) }
+                if request.operation == "remove_actuator", let id = request.actuatorID { actuatorEditor.removed(id, version: version) }
+                if request.operation == "stage_actuator", let actuator = request.actuator, presetUpload != nil {
+                    guard presetUpload?.acknowledge(id: actuator.id) == true else { return }
+                    presentNextPresetActuator(); return
+                }
+            }
+        case "commit_layout_edit":
+            guard let revision = payload["revision"] as? UInt32 else { return }
+            acknowledgedCommitRevision = revision; actuatorEditor = ActuatorPaginationState()
+            disarmHardware(); bluetooth.refreshConfigurationIndex()
+        case "discard_layout_edit":
+            presetUpload = nil
+            actuatorEditor = ActuatorPaginationState(); bluetooth.refreshConfigurationIndex()
+        default: break
+        }
+        configurationStatus = "\(request.operation.replacingOccurrences(of: "_", with: " ")) acknowledged"
+
     }
 }
 

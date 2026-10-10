@@ -33,3 +33,11 @@ Automatic reconnect prefers the last rover that synchronized. Several candidates
 Developer numeric pairing is `--setup-owner` with the customer service stopped. Full bytes: [Bluetooth peripheral](../hardware/BLUETOOTH.md).
 
 Bench mode shows **Enable Bench Control** separately from Arm. It says there is no physical cutoff.
+
+## Configuration pages
+
+The app requires the rover capability `actuator_pagination_v1`. Connection reads a small actuator index, then one compact drive profile at a time. Opening an actuator loads only that actuator's editable configuration. The full `layout.json` remains on the rover.
+
+Editing begins a rover draft with `begin_layout_edit`. Each `stage_actuator` or `remove_actuator` acknowledgment advances its version. `validate_layout_edit` validates the complete draft on the rover; `commit_layout_edit` applies that exact version atomically and replies with the revision. `discard_layout_edit` abandons the draft. Presets ask for missing physical ports before uploading each actuator.
+
+Configuration messages have a 4,080-byte bound, a two-second fragment assembly deadline and a five-second acknowledgment deadline. **Retry interrupted operation** replays the exact request ID to recover the rover's cached acknowledgment. **Retry configuration** reloads the index and drive profiles after synchronization failure. Motion still uses its separate freshness limits and watchdog. Reconnect or revision changes invalidate draft authority and drive profiles; unsent editor changes remain visible.

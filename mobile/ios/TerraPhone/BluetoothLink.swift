@@ -14,7 +14,8 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
     @Published private(set) var peripheralsJSON = "[]"
     @Published private(set) var statusJSON = "{}"
     @Published private(set) var capabilitiesJSON = "{}"
-    @Published private(set) var layoutJSON = "{}"
+    @Published private(set) var layoutIndexJSON = "{}"
+    @Published private(set) var driveProfileJSON = "{}"
     @Published private(set) var replyJSON = "{}"
     @Published private(set) var connectedIdentifier: UUID?
     enum Lifecycle { case paired(UUID), authenticated(UUID), closed(retryable: Bool) }
@@ -62,6 +63,11 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
     private var synchronizationStarted = false
     private var capabilityObject: [String: Any] = [:]
     private var safeValues: [[String: Any]] = []
+    private var supportsPagination = false
+    private var profileSync = ActuatorProfileSynchronization()
+    private var synchronizationRound: UInt64 = 0
+    private var synchronizationRequests: [UInt32: UInt64] = [:]
+    private var lastObservedRevision: UInt32?
     private var awaitingSafeSequence: UInt32?
     private var awaitingSafeAt: TimeInterval?
     private var usedRequests: Set<UInt32> = []
@@ -69,13 +75,15 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
     private var callbackGeneration: UInt64 = 0
     private var characteristics: [CBUUID: CBCharacteristic] = [:]
     private var statusAssembly = BluetoothJSONAssembler()
-    private var replyAssembly = BluetoothJSONAssembler()
+    private var replyAssembly = BluetoothJSONAssembler(timeout: 2, limit: 4080)
     private var admitting = false
     private var setup = false
     private var timer: DispatchSourceTimer?
     private var messageID: UInt16 = 0
     private var requestID: UInt32 = max(0x80000000, UInt32(clamping: UserDefaults.standard.integer(forKey: "bluetoothSynchronizationRequestID")))
     private var requests: [UInt32: String] = [:]
+    private var retryEnvelopes: [UInt32: Data] = [:]
+    private var failedRequests: Set<UInt32> = []
     private var configuration: [Packet] = []
     private var waitingRequest: UInt32?
     private var waitingRequestAt: TimeInterval?
@@ -179,12 +187,14 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
         self.deferredIdentifier = nil; self.suppressCloseEvent = true; self.close("Disconnected"); self.suppressCloseEvent = false
     } }
     private func clear() {
+        synchronizationRound &+= 1; synchronizationRequests.removeAll(); profileSync.clear()
+        supportsPagination = false; lastObservedRevision = nil
         policy.reset(); usedRequests.removeAll(); awaitingSafeAt = nil; safeValues = []; awaitingSafeSequence = nil; synchronizedRevision = nil; hasCapabilities = false; synchronizationStarted = false; capabilityObject = [:]; characteristics.removeAll(); statusAssembly.clear(); replyAssembly.clear()
-        active = nil; armSafe = nil; waitingRequest = nil; waitingRequestAt = nil; pendingDrive = nil; priority = nil; configuration.removeAll(); requests.removeAll()
+        active = nil; armSafe = nil; waitingRequest = nil; waitingRequestAt = nil; pendingDrive = nil; priority = nil; configuration.removeAll(); requests.removeAll(); retryEnvelopes.removeAll(); failedRequests.removeAll()
         writeAt = nil; admitting = false; setup = false
         lastStatusCallbackAt = nil; acceptedStatusCount = 0; attemptStarted = nil
         let generation = policy.generation
-        DispatchQueue.main.async { self.connectionGeneration = generation; self.configurationReady = false; self.isReady = false; self.armed = false; self.arming = false; self.connectedIdentifier = nil; self.capabilitiesJSON = "{}"; self.layoutJSON = "{}"; self.statusJSON = "{}" }
+        DispatchQueue.main.async { self.connectionGeneration = generation; self.configurationReady = false; self.isReady = false; self.armed = false; self.arming = false; self.connectedIdentifier = nil; self.capabilitiesJSON = "{}"; self.layoutIndexJSON = "{}"; self.driveProfileJSON = "{}"; self.statusJSON = "{}" }
     }
     private func close(_ reason: String) {
         if peripheral != nil && !suppressCloseEvent {
@@ -245,23 +255,107 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
             guard self.configuration.count < 16, let object = try JSONSerialization.jsonObject(with: envelope) as? [String: Any],
                   object["schema_version"] as? Int == 1, let id = object["request_id"] as? UInt32,
                   let operation = object["operation"] as? String, !self.usedRequests.contains(id) else { throw BluetoothPolicyError.malformed }
-            self.usedRequests.insert(id); self.requests[id] = operation
-            self.configuration.append(try self.packet(envelope, characteristic: self.controlID, request: id)); self.pump()
-        } catch { self.publish("Invalid or duplicate configuration request") }
+            guard envelope.count <= 4080 else { throw BluetoothPolicyError.malformed }
+            let packet = try self.packet(envelope, characteristic: self.controlID, request: id)
+            self.usedRequests.insert(id); self.requests[id] = operation; self.retryEnvelopes[id] = envelope
+            self.configuration.append(packet); self.pump()
+        } catch {
+            if let object = try? JSONSerialization.jsonObject(with: envelope) as? [String: Any], let id = object["request_id"] as? UInt32 {
+                let reply: [String: Any] = ["schema_version": 1, "request_id": id, "result": "error", "active_revision": self.policy.revision,
+                    "errors": [["code": "configuration_request", "message": "Invalid, oversized, or duplicate configuration request"]], "payload": NSNull()]
+                if let data = try? JSONSerialization.data(withJSONObject: reply) {
+                    DispatchQueue.main.async { self.replyJSON = String(decoding: data, as: UTF8.self) }
+                }
+            }
+            self.publish("Invalid or duplicate configuration request")
+        }
     } }
+    /// Replays the exact envelope so the rover can return its cached acknowledgment.
+    func retryConfiguration(requestID: UInt32, generation: UInt64) { queue.async {
+        guard generation == self.policy.generation, self.failedRequests.contains(requestID),
+              let envelope = self.retryEnvelopes[requestID], self.configuration.count < 16 else { return }
+        do {
+            guard let object = try JSONSerialization.jsonObject(with: envelope) as? [String: Any],
+                  let operation = object["operation"] as? String else { throw BluetoothPolicyError.malformed }
+            let packet = try self.packet(envelope, characteristic: self.controlID, request: requestID)
+            self.failedRequests.remove(requestID); self.requests[requestID] = operation
+            self.configuration.append(packet); self.pump()
+        } catch { self.publish("Configuration retry unavailable; reconnect required") }
+    } }
+
     private func synchronize() {
         guard !synchronizationStarted, characteristics[repliesID]?.isNotifying == true, characteristics[statusID]?.isNotifying == true else { return }
         synchronizationStarted = true
-        for operation in ["capabilities", "read_layout"] {
-            guard requestID < UInt32.max else { close("Request IDs exhausted"); return }; requestID += 1
-            while usedRequests.contains(requestID), requestID < UInt32.max { requestID += 1 }
-            do {
-                UserDefaults.standard.set(Int(requestID), forKey: "bluetoothSynchronizationRequestID")
-                let data = try JSONSerialization.data(withJSONObject: ["schema_version": 1, "request_id": requestID, "operation": operation, "payload": [:]] as [String: Any])
-                usedRequests.insert(requestID); requests[requestID] = operation; configuration.append(try packet(data, characteristic: controlID, request: requestID))
-            } catch { close("Configuration encoding failed"); return }
-        }; pump()
+        queueSynchronization("capabilities")
     }
+
+    /// Called after commit or explicit retry. No editable actuator data is fetched here.
+    func refreshConfigurationIndex() { queue.async { self.restartProfiles() } }
+
+    private func invalidateProfiles() {
+        synchronizedRevision = nil; safeValues = []; profileSync.clear(); policy.invalidateLayout()
+        DispatchQueue.main.async { self.isReady = false; self.driveProfileJSON = "{}" }
+    }
+
+    private func restartProfiles() {
+        guard peripheral != nil, synchronizationStarted else { return }
+        synchronizationRound &+= 1
+        invalidateProfiles()
+        DispatchQueue.main.async { self.configurationReady = false; self.layoutIndexJSON = "{}" }
+        if supportsPagination { queueSynchronization("layout_index") }
+        else { queueSynchronization("capabilities") }
+    }
+
+    private func queueSynchronization(_ operation: String, payload: [String: Any] = [:]) {
+        guard requestID < UInt32.max else { close("Request IDs exhausted"); return }
+        requestID += 1
+        while usedRequests.contains(requestID), requestID < UInt32.max { requestID += 1 }
+        do {
+            UserDefaults.standard.set(Int(requestID), forKey: "bluetoothSynchronizationRequestID")
+            let data = try JSONSerialization.data(withJSONObject: ["schema_version": 1, "request_id": requestID, "operation": operation, "payload": payload] as [String: Any])
+            usedRequests.insert(requestID); requests[requestID] = operation
+            synchronizationRequests[requestID] = synchronizationRound
+            configuration.append(try packet(data, characteristic: controlID, request: requestID))
+            pump()
+        } catch { close("Configuration encoding failed") }
+    }
+
+    private func finishProfiles() throws {
+        guard let profile = profileSync.completed, profile.revision == policy.revision else { throw ActuatorProfileError.staleRevision }
+        let json = String(decoding: try JSONEncoder().encode(profile), as: UTF8.self)
+        _ = try ActuatorDriveProfileSet.decode(json: json)
+        safeValues = profile.safeValues; synchronizedRevision = profile.revision
+        policy.synchronized(revision: profile.revision)
+        let ready = policy.ready
+        DispatchQueue.main.async { self.driveProfileJSON = json; self.isReady = ready }
+        log.info("Drive profiles synchronized; revision=\(profile.revision) count=\(profile.actuators.count)")
+    }
+
+    private func nextProfile() throws {
+        guard let revision = profileSync.revision else { throw BluetoothPolicyError.malformed }
+        if let id = profileSync.remaining.first {
+            queueSynchronization("read_drive_profile", payload: ["expected_revision": revision, "actuator_id": id])
+        } else { try finishProfiles() }
+    }
+
+    private func configurationFailed(_ message: String, code: String = "configuration_transfer") {
+        guard let id = waitingRequest else { return }
+        let operation = requests.removeValue(forKey: id)
+        let sync = synchronizationRequests.removeValue(forKey: id)
+        if sync == nil, retryEnvelopes[id] != nil { failedRequests.insert(id) }
+        waitingRequest = nil; waitingRequestAt = nil; replyAssembly.clear()
+        if active?.request == id { active?.chunks.removeAll(); if writeAt == nil { active = nil } }
+        log.error("Configuration transfer failed; operation=\(operation ?? "unknown", privacy: .public) request=\(id): \(message, privacy: .public)")
+        let reply: [String: Any] = ["schema_version": 1, "request_id": id, "result": "error", "active_revision": policy.revision,
+            "errors": [["code": code, "message": message]], "payload": NSNull()]
+        if let data = try? JSONSerialization.data(withJSONObject: reply) {
+            DispatchQueue.main.async { self.replyJSON = String(decoding: data, as: UTF8.self) }
+        }
+        if sync != nil { invalidateProfiles(); DispatchQueue.main.async { self.configurationReady = false } }
+        publish(message + " · retry configuration")
+        pump()
+    }
+
     private func packet(_ bytes: Data, characteristic: CBUUID, producedAt: TimeInterval? = nil, request: UInt32? = nil) throws -> Packet {
         guard let p = peripheral, characteristics[characteristic] != nil else { throw BluetoothPolicyError.unavailable }
         let occupied = Set(([active, pendingDrive, priority, armSafe].compactMap { $0?.id }) + configuration.map { $0.id })
@@ -306,7 +400,9 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
             log.error("Status timeout: \(detail, privacy: .public)")
             close("Bluetooth status stalled; reconnect required (\(detail))"); return
         }
-        if let started = waitingRequestAt, now - started >= 2 { close("Configuration reply timed out; reconnect required"); return }
+        if let started = waitingRequestAt, now - started >= 5 {
+            configurationFailed("Configuration transfer timed out", code: "configuration_timeout"); return
+        }
         // Replies use application-fragmented notifications. Polling raw reads
         // can truncate large capabilities documents and mix read bytes into the assembler.
         pump()
@@ -371,7 +467,14 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
     func peripheral(_ p: CBPeripheral, didWriteValueFor c: CBCharacteristic, error: Error?) {
         guard current(p), characteristics[c.uuid] === c, writeAt != nil, active?.characteristic == c.uuid else { return }
         writeAt = nil
-        guard error == nil else { close("Bluetooth write failed; reconnect required"); return }
+        guard error == nil else {
+            if active?.request != nil {
+                if waitingRequest != nil { configurationFailed("Configuration write rejected") }
+                else { active = nil; pump() }
+                return
+            }
+            close("Bluetooth write failed; reconnect required"); return
+        }
         if active?.chunks.isEmpty == true { active = nil }
         // ATT acknowledgement does not update armed/applied/accepted state.
         pump()
@@ -405,13 +508,17 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
                         lastLoggedSafety = safetySummary
                         log.notice("Rover safety: \(safetySummary, privacy: .public)")
                     }
+                    let incomingRevision = object["active_revision"] as? UInt32
+                    let revisionChanged = lastObservedRevision != nil && lastObservedRevision != incomingRevision
+                    lastObservedRevision = incomingRevision
                     let effects = policy.status(object, now: now)
+                    if revisionChanged, synchronizationStarted { restartProfiles() }
                     if effects.isEmpty {
                         log.error("Status rejected: revision=\(String(describing: object["active_revision"]), privacy: .public), bytes=\(bytes.count)")
                     } else { acceptedStatusCount += 1 }
                     for effect in effects { if case .state(let text) = effect { publish(text) } }
                     if hasCapabilities, let revision = synchronizedRevision { policy.synchronized(revision: revision) }
-                    let configReady = hasCapabilities && policy.session != nil
+                    let configReady = hasCapabilities && supportsPagination && policy.session != nil && profileSync.revision == policy.revision
                     let ready = policy.ready, armed = policy.armed, arming = policy.arming
                     DispatchQueue.main.async { self.configurationReady = configReady; self.isReady = ready; self.armed = armed; self.arming = arming }
                     DispatchQueue.main.async { self.statusJSON = text; self.connectedIdentifier = p.identifier }
@@ -438,40 +545,66 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
             } else if c.uuid == repliesID {
                 guard let id = object["request_id"] as? UInt32, id == waitingRequest, let operation = requests.removeValue(forKey: id) else { return }
                 waitingRequest = nil; waitingRequestAt = nil; replyAssembly.clear()
+                let round = synchronizationRequests.removeValue(forKey: id)
+                retryEnvelopes.removeValue(forKey: id); failedRequests.remove(id)
+                if let round, round != synchronizationRound { pump(); return }
                 DispatchQueue.main.async { self.replyJSON = text }
                 guard object["result"] as? String == "ok" else {
-                    if operation == "read_layout" {
-                        synchronizedRevision = nil; safeValues = []; policy.invalidateLayout()
-                        DispatchQueue.main.async { self.isReady = false; self.layoutJSON = "{}" }
+                    if round != nil {
+                        invalidateProfiles()
+                        DispatchQueue.main.async { self.configurationReady = false }
+                        if (object["errors"] as? [[String: Any]])?.contains(where: { $0["code"] as? String == "stale_revision" }) == true {
+                            restartProfiles()
+                        }
                     }
                     publish("Configuration rejected: \(object["errors"] ?? [])")
                     pump(); return
                 }
-                if operation == "read_layout", object["payload"] is NSNull {
-                    synchronizedRevision = nil; safeValues = []; policy.invalidateLayout()
-                    DispatchQueue.main.async { self.isReady = false; self.layoutJSON = "{}" }
-                    publish("No active layout · choose a preset and apply while disarmed")
-                    pump(); return
-                }
-                if object["result"] as? String == "ok", let payload = object["payload"] as? [String: Any], let data = try? JSONSerialization.data(withJSONObject: payload) {
-                    let json = String(decoding: data, as: UTF8.self)
-                    if operation == "capabilities" { capabilityObject = payload; hasCapabilities = true; DispatchQueue.main.async { self.capabilitiesJSON = json } }
-                    if operation == "read_layout", let revision = payload["revision"] as? UInt32 {
-                        let layout = payload
-                        let capabilities = String(decoding: try JSONSerialization.data(withJSONObject: capabilityObject), as: UTF8.self)
-                        guard try actuatorValidateLayout(layoutJson: json, capabilitiesJson: capabilities) == "[]" else { throw BluetoothPolicyError.malformed }
-                        guard let actuators = layout["actuators"] as? [[String: Any]] else { throw BluetoothPolicyError.malformed }
-                        safeValues = try actuators.map { actuator in
-                            guard let id = actuator["id"], let safe = actuator["safe"] as? [String: Any], let limits = actuator["limits"] as? [String: Any], let min = limits["min"] as? Double, let max = limits["max"] as? Double else { throw BluetoothPolicyError.malformed }
-                            let target = (safe["value"] as? Double) ?? 0
-                            return ["id": id, "value": Swift.min(max, Swift.max(min, target))]
+                if let round, round == synchronizationRound, let payload = object["payload"] as? [String: Any] {
+                    switch operation {
+                    case "capabilities":
+                        capabilityObject = payload; hasCapabilities = true
+                        supportsPagination = (payload["features"] as? [String])?.contains("actuator_pagination_v1") == true
+                        let data = try JSONSerialization.data(withJSONObject: payload)
+                        DispatchQueue.main.async { self.capabilitiesJSON = String(decoding: data, as: UTF8.self) }
+                        if supportsPagination { queueSynchronization("layout_index") }
+                        else {
+                            invalidateProfiles()
+                            DispatchQueue.main.async { self.configurationReady = false }
+                            publish("Update rover service for actuator pagination")
                         }
-                        synchronizedRevision = revision; if hasCapabilities { policy.synchronized(revision: revision) }; DispatchQueue.main.async { self.layoutJSON = json }
+                    case "layout_index":
+                        guard let revision = payload["revision"] as? UInt32, revision == policy.revision,
+                              let entries = payload["actuators"] as? [[String: Any]],
+                              let count = payload["actuator_count"] as? Int, count == entries.count,
+                              let available = payload["layout_available"] as? Bool else { throw ActuatorProfileError.staleRevision }
+                        let ids = try entries.map { entry -> Int in
+                            guard let id = entry["id"] as? Int, entry["name"] is String, entry["kind"] is String else { throw BluetoothPolicyError.malformed }
+                            return id
+                        }
+                        let data = try JSONSerialization.data(withJSONObject: payload)
+                        try profileSync.begin(revision: revision, ids: ids)
+                        DispatchQueue.main.async { self.layoutIndexJSON = String(decoding: data, as: UTF8.self); self.configurationReady = true }
+                        if available { try nextProfile() }
+                        else { publish("No active layout · add actuators while disarmed") }
+                    case "read_drive_profile":
+                        guard let revision = payload["revision"] as? UInt32, revision == policy.revision,
+                              let entry = payload["actuator"] as? [String: Any] else { throw ActuatorProfileError.staleRevision }
+                        let data = try JSONSerialization.data(withJSONObject: entry)
+                        let actuator = try JSONDecoder().decode(ActuatorDriveProfile.self, from: data)
+                        try profileSync.accept(revision: revision, actuator: actuator)
+                        try nextProfile()
+                    default: break
                     }
                 }
                 pump()
             }
+        } catch ActuatorProfileError.staleRevision {
+            restartProfiles()
         } catch {
+            if c.uuid == repliesID, waitingRequest != nil {
+                configurationFailed("Invalid or incomplete configuration reply"); return
+            }
             log.error("Decode failed for \(c.uuid.uuidString, privacy: .public): \(String(describing: error), privacy: .public)")
             close("Malformed Bluetooth message; reconnect required")
         }

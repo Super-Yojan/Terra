@@ -2,6 +2,7 @@
 import asyncio
 from collections import deque
 import json
+import logging
 import os
 from pathlib import Path
 import secrets
@@ -58,7 +59,7 @@ class BlePeripheral:
         self.priority = None
         self.invalid_drive = None
         self.configuring = False
-        self.assemblers = {name: FragmentAssembler(limit) for name, limit in
+        self.assemblers = {name: FragmentAssembler(limit, timeout=2.0 if name == 'json' else .1) for name, limit in
                            [('drive', 96), ('priority', 96), ('json', JSON_LIMIT)]}
         self.routes = {}
         self.stop = threading.Event()
@@ -131,11 +132,16 @@ class BlePeripheral:
                 route = 'priority' if value[4:6] == b'TA' else 'json'
                 self.routes[message] = (route, now)
                 # Bound route table even for intentionally abandoned first fragments.
-                self.routes = {k: v for k, v in self.routes.items() if now-v[1] < .1}
+                self.routes = {k: v for k, v in self.routes.items() if 0 <= now-v[1] < self.assemblers[v[0]].timeout}
                 if len(self.routes) > 3: self.routes.clear(); raise ProtocolError('too many active messages')
             else:
                 entry = self.routes.get(message)
-                if entry is None or now-entry[1] >= .1: raise ProtocolError('unknown or expired control message')
+                if entry is None or not 0 <= now-entry[1] < self.assemblers[entry[0]].timeout:
+                    self.routes.pop(message, None)
+                    if entry is not None:
+                        self.assemblers[entry[0]].clear()
+                        logging.getLogger(__name__).warning('control assembly expired message_id=%s route=%s elapsed=%.3f', message, entry[0], now-entry[1])
+                    raise ProtocolError('unknown or expired control message')
                 route = entry[0]
         else: raise ProtocolError('unknown characteristic')
         try: data = self.assemblers[route].push(value, now)
@@ -202,7 +208,9 @@ class BlePeripheral:
                     try:
                         if not self.safety.status(time.monotonic())['armed'] and not self.safety.status(time.monotonic())['arming'] and self.safety.layout is not None:
                             self.backend.apply(self.safety.tick(time.monotonic(), self.backend.read_gate()))
-                        reply = self.store.handle(value, time.monotonic())
+                        operation_started = time.monotonic()
+                        reply = self.store.handle(value, operation_started)
+                        logging.getLogger(__name__).debug('configuration operation=%s request_id=%s queue_seconds=%.3f elapsed_seconds=%.3f result=%s', value['operation'], value['request_id'], operation_started-received, time.monotonic()-operation_started, reply['result'])
                         self.loop.call_soon_threadsafe(self._emit, 'reply', reply, generation)
                     except Exception as exc: self.safety.latch_fault('control_worker: '+str(exc), time.monotonic())
                     finally:

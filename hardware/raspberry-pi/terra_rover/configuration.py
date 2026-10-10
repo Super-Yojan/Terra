@@ -4,10 +4,11 @@ import json
 import os
 from pathlib import Path
 import tempfile
+import secrets
 
 from .backend import BackendValidationError
 from .layout import normalize_layout, validate_layout
-from .protocol import JSON_LIMIT, ProtocolError, _json, encode_control
+from .protocol import JSON_LIMIT, PAGINATED_LIMIT, PAGINATED_OPERATIONS, ProtocolError, _json, encode_control
 
 CACHE_LIMIT = 256
 
@@ -29,6 +30,7 @@ class ConfigurationStore:
         self._active = None
         self._revision = 0
         self._stage = None
+        self._draft = None
         self._connected = False
         self._cache = {}
         self.errors = []
@@ -114,12 +116,14 @@ class ConfigurationStore:
         self.safety.connect(session, now)
         self._connected = True
         self._stage = None
+        self._draft = None
         self._cache.clear()
 
     def end_connection(self, now):
         self.reset_bench()
         self._connected = False
         self._stage = None
+        self._draft = None
         self._cache.clear()
         self.safety.disconnect(now)
 
@@ -168,6 +172,11 @@ class ConfigurationStore:
                 reply = self._dispatch(envelope, now)
             except (ProtocolError, ValueError, TypeError, OverflowError) as exc:
                 reply = self._reply(request_id, [_error('configuration', exc)])
+        if envelope['operation'] in PAGINATED_OPERATIONS:
+            # Validation reports are bounded independently of the complete layout.
+            reply['errors'] = [dict(error, message=error['message'][:160]) for error in reply['errors'][:12]]
+            if len(json.dumps(reply, separators=(',', ':'), allow_nan=False).encode('utf-8')) > PAGINATED_LIMIT:
+                reply = self._reply(request_id, [_error('configuration_size', 'paginated reply exceeds conservative ATT size limit')])
         self._cache[request_id] = (fingerprint, deepcopy(reply))
         return reply
 
@@ -184,9 +193,13 @@ class ConfigurationStore:
             gate.set_enabled(enabled)
             return self._reply(request_id, payload=dict(bench_enabled=gate.enabled))
         if operation == 'capabilities':
-            return self._reply(request_id, payload=self.backend.capabilities())
+            caps = self.backend.capabilities()
+            caps['features'] = list(dict.fromkeys(caps.get('features', []) + ['actuator_pagination_v1']))
+            return self._reply(request_id, payload=caps)
         if operation == 'read_layout':
             return self._reply(request_id, self.errors, self.read())
+        if operation in PAGINATED_OPERATIONS:
+            return self._paginate(request_id, operation, payload, now)
         errors = self._gate_errors(now)
         if errors:
             return self._reply(request_id, errors)
@@ -207,6 +220,7 @@ class ConfigurationStore:
                 return self._reply(request_id, [_error('stale_revision', 'layout.revision must equal active revision')])
             if candidate['revision'] == 0xffffffff:
                 return self._reply(request_id, [_error('revision_exhausted', 'layout revision cannot increment')])
+            self._draft = None
             self._stage = (request_id, candidate)
             return self._reply(request_id, payload=dict(staged_request_id=request_id, staged_revision=candidate['revision']))
         if self._stage is None or payload['staged_request_id'] != self._stage[0] or payload['staged_revision'] != self._stage[1]['revision']:
@@ -217,8 +231,77 @@ class ConfigurationStore:
         if candidate['revision'] != self.active_revision:
             return self._reply(request_id, [_error('stale_revision', 'active layout changed after staging')])
         candidate['revision'] += 1
-        self._stage = None  # consumed even on failure; retry requires a new stage
+        self._stage = None
+        self._draft = None  # consumed even on failure; retry requires a new stage
         return self._commit_candidate(request_id, candidate, now)
+
+    def _draft_payload(self):
+        return {key: self._draft[key] for key in ('edit_token', 'base_revision', 'edit_version')}
+
+    def _paginate(self, request_id, operation, payload, now):
+        def reject(code, message): return self._reply(request_id, [_error(code, message)])
+        active = self._active
+        if operation == 'layout_index':
+            entries = active['actuators'] if active else []
+            return self._reply(request_id, payload=dict(revision=self.active_revision, layout_available=active is not None,
+                actuator_count=len(entries), actuators=[{key:a[key] for key in ('id','name','kind')} for a in entries]))
+        if 'expected_revision' in payload and payload['expected_revision'] != self.active_revision:
+            return reject('stale_revision', 'active revision changed')
+        if operation in ('read_actuator', 'read_drive_profile'):
+            entry = next((a for a in (active['actuators'] if active else []) if a['id'] == payload['actuator_id']), None)
+            if entry is None: return reject('actuator_not_found', 'actuator does not exist')
+            if operation == 'read_drive_profile': entry = {key:entry[key] for key in ('id','kind','limits','route','safe')}
+            return self._reply(request_id, payload=dict(revision=self.active_revision, actuator=entry))
+        errors = self._gate_errors(now)
+        if errors: return self._reply(request_id, errors)
+        if operation == 'begin_layout_edit':
+            if self.active_revision == 0xffffffff: return reject('revision_exhausted', 'layout revision cannot increment')
+            layout = deepcopy(active) if payload['mode'] == 'existing' and active else dict(schema_version=1,revision=self.active_revision,actuators=[])
+            self._stage = None
+            self._draft = dict(edit_token=secrets.token_hex(16), base_revision=self.active_revision, edit_version=0, layout=layout, validated=None)
+            return self._reply(request_id, payload=self._draft_payload())
+        draft = self._draft
+        if draft is None or payload['edit_token'] != draft['edit_token']:
+            return reject('edit_token', 'no matching edit session')
+        if draft['base_revision'] != self.active_revision:
+            self._draft = None
+            return reject('stale_revision', 'active revision changed')
+        if operation == 'discard_layout_edit':
+            self._draft = None
+            return self._reply(request_id)
+        if payload['edit_version'] != draft['edit_version']: return reject('edit_version', 'draft version changed')
+        if operation in ('stage_actuator', 'remove_actuator'):
+            if draft['edit_version'] == 0xffffffff: return reject('edit_version', 'draft version exhausted')
+            entries = deepcopy(draft['layout']['actuators'])
+            identifier = payload['actuator']['id'] if operation == 'stage_actuator' else payload['actuator_id']
+            position = next((i for i,a in enumerate(entries) if a['id'] == identifier), None)
+            if operation == 'stage_actuator':
+                candidate, errors = self._validate(dict(schema_version=1,revision=draft['base_revision'],actuators=[payload['actuator']]))
+                if errors: return self._reply(request_id, errors)
+                if position is None:
+                    if len(entries) >= 16: return reject('actuator_count', 'at most 16 actuators are supported')
+                    entries.append(candidate['actuators'][0])
+                else: entries[position] = candidate['actuators'][0]
+            else:
+                if position is None: return reject('actuator_not_found', 'actuator does not exist')
+                entries.pop(position)
+            updated = dict(draft['layout'], actuators=entries)
+            if len(self._serialize(updated)) > JSON_LIMIT: return reject('configuration_size', 'draft exceeds persisted layout limit')
+            draft['layout'] = updated; draft['edit_version'] += 1; draft['validated'] = None
+            return self._reply(request_id, payload=dict(self._draft_payload(), actuator_id=identifier))
+        if operation == 'commit_layout_edit':
+            if payload['base_revision'] != draft['base_revision']: return reject('stale_revision', 'base revision changed')
+            if draft['validated'] != draft['edit_version']: return reject('edit_not_validated', 'validate this exact draft before committing')
+        candidate, errors = self._validate(draft['layout'])
+        if errors: return self._reply(request_id, errors)
+        if operation == 'validate_layout_edit':
+            draft['validated'] = draft['edit_version']
+            return self._reply(request_id, payload=self._draft_payload())
+        candidate['revision'] += 1
+        self._draft = None
+        reply = self._commit_candidate(request_id, candidate, now)
+        reply['payload'] = dict(revision=self.active_revision) if reply['result'] == 'ok' else None
+        return reply
 
     def _persist(self, candidate):
         # Parent must be provisioned by deployment; never silently create a new path.
