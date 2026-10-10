@@ -24,6 +24,9 @@ struct DriveJoystickCommand: Equatable {
 }
 
 enum DriveJoystickSafety {
+    static func trackingLossRequiresDisarm(feedback: Bool, fullyManual: Bool) -> Bool {
+        feedback && !fullyManual
+    }
     static func hardwareArmAllowed(feedback: Bool, fullyManual: Bool, trackingHealthy: Bool, compatible: Bool) -> Bool {
         !feedback || fullyManual || (trackingHealthy && compatible)
     }
@@ -56,6 +59,7 @@ enum TerraFleetManualDrive {
               let twist = root["twist"] as? [String: Any],
               let linear = twist["linear"] as? Double, let angular = twist["angular"] as? Double,
               linear.isFinite, angular.isFinite, abs(linear) <= 0.5, abs(angular) <= 1 else { return .zero }
+        print("I am here")
         return DriveJoystickCommand(forward: linear / 0.5, yaw: angular)
     }
 }

@@ -41,7 +41,9 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
         self.automationGeneration = generation
         self.deferredIdentifier = identifier; self.connectDeferredIfPossible()
     } }
-    private let log = Logger(subsystem: "com.terra.phone", category: "Bluetooth")
+    private let log = TerraLog.bluetooth
+    private var lastLoggedConnection = ""
+    private var lastLoggedSafety = ""
     private var lastStatusCallbackAt: TimeInterval?
     private var acceptedStatusCount = 0
     private let queue = DispatchQueue(label: "terra.bluetooth")
@@ -98,6 +100,10 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
     }
     deinit { timer?.cancel() }
     private func publish(_ text: String) {
+        if text != lastLoggedConnection {
+            lastLoggedConnection = text
+            log.info("Connection: \(text, privacy: .public)")
+        }
         recordConnection(text)
         DispatchQueue.main.async { self.status = text }
     }
@@ -208,6 +214,7 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
         } catch { self.stop() }
     } }
     func arm() { queue.async {
+        self.log.notice("Arm requested; ready=\(self.policy.ready)")
         do {
             guard self.policy.ready, self.awaitingSafeSequence == nil else { throw BluetoothPolicyError.unavailable }
             let produced = self.now
@@ -218,6 +225,7 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
         } catch { self.publish("Synchronize layout and safe output before arming") }
     } }
     func emergencyStop() { queue.async {
+        self.log.notice("Emergency stop requested")
         self.policy.stop(); self.awaitingSafeSequence = nil; self.awaitingSafeAt = nil; self.armSafe = nil; self.pendingDrive = nil
         do { self.priority = try self.packet(self.policy.control("emergency_stop"), characteristic: self.controlID); self.pump() }
         catch { self.close("Emergency stop; reconnect required") }
@@ -226,6 +234,7 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
     private func stop() {
         // Cleanup after a closed link must preserve the original disconnect reason.
         guard peripheral != nil, characteristics[controlID] != nil, policy.session != nil else { policy.stop(); return }
+        log.notice("Sending disarm command")
         policy.stop(); awaitingSafeSequence = nil; awaitingSafeAt = nil; armSafe = nil; pendingDrive = nil
         do { priority = try packet(policy.control("disarm"), characteristic: controlID); pump() }
         catch { close("Disarmed; reconnect required") }
@@ -391,6 +400,11 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
             }
             if c.uuid == statusID {
                 if object["type"] as? String == "status" {
+                    let safetySummary = "armed=\(object["armed"] ?? "missing") arming=\(object["arming"] ?? "missing") stop_reason=\(object["stop_reason"] ?? "missing") fault=\(object["fault"] ?? "none") gate=\(object["gate_mode"] ?? "missing") configuration_allowed=\(object["configuration_allowed"] ?? "missing")"
+                    if safetySummary != lastLoggedSafety {
+                        lastLoggedSafety = safetySummary
+                        log.notice("Rover safety: \(safetySummary, privacy: .public)")
+                    }
                     let effects = policy.status(object, now: now)
                     if effects.isEmpty {
                         log.error("Status rejected: revision=\(String(describing: object["active_revision"]), privacy: .public), bytes=\(bytes.count)")

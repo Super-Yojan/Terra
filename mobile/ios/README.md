@@ -126,3 +126,16 @@ ARGOS hardware arming: the selected rover panel now exposes Arm and Disarm. Terr
 The rover phone mount has its left edge facing forward. The shared phone-to-body transform maps phone -X to rover +X and phone -Y to rover +Y for both AR heading and IMU feedback. Camera depth remains in its measured optical/world frame.
 
 Accepted active L3 waypoints continue locally across an ARGOS router outage (operator-approved). Automatic link recovery retains the mission and existing arming state; connection setup/teardown runs away from the local control loop. Teleop does not get this exemption. Explicit disconnect/stop, backgrounding, Bluetooth loss/watchdog, and unhealthy local tracking/maps still inhibit motion. During an outage, new dashboard orders and remote stop commands cannot be delivered until connectivity returns.
+
+
+## USB debug logging
+
+Connect the iPhone by USB, select it in Xcode, and Run TerraPhone using the Debug configuration. Show the debug console (Shift-Command-Y) and filter for TerraPhone or the `com.terra.phone` subsystem. macOS Console can also stream the connected iPhone's logs; select the device and enable Info and Debug messages.
+
+Use `TerraLog.bluetooth`, `.control`, `.tracking`, or `.configuration` when adding diagnostics. For example:
+
+```swift
+TerraLog.control.debug("Manual control ready=\(self.hardwareReady)")
+```
+
+Use `notice` for safety transitions, `info` for normal lifecycle events, `debug` for temporary diagnostics, and `error` for failures. Bluetooth logs include rover armed/arming state, `stop_reason`, fault, gate mode and configuration eligibility whenever these change. Control logs identify the caller requesting motion revocation. Avoid logs on every frame or drive tick, and never log credentials or complete sensor/network payloads. Reinstall the updated app before testing on the phone.

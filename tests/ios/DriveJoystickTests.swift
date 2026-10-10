@@ -25,6 +25,9 @@ import Foundation
         precondition(!DriveJoystickSafety.canArm(ready: true, manual: false, stopped: false, foreground: true))
         precondition(!DriveJoystickSafety.canArm(ready: true, manual: true, stopped: true, foreground: true))
         precondition(!DriveJoystickSafety.canArm(ready: true, manual: true, stopped: false, foreground: false))
+        precondition(!DriveJoystickSafety.trackingLossRequiresDisarm(feedback: false, fullyManual: false))
+        precondition(!DriveJoystickSafety.trackingLossRequiresDisarm(feedback: true, fullyManual: true))
+        precondition(DriveJoystickSafety.trackingLossRequiresDisarm(feedback: true, fullyManual: false))
         print("Joystick direction, bounds, dead zone, release and arming safeguards passed")
     }
 }

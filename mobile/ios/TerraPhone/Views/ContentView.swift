@@ -1,32 +1,6 @@
 import SwiftUI
 import UIKit
 
-enum TerraDestination: String, Hashable {
-    case drive, missions, live, telemetry, settings, robots
-    var title: String {
-        switch self {
-        case .drive: return "Debug drive"
-        case .missions: return "Navigation tools"
-        case .live: return "Map inspection"
-        case .telemetry: return "Diagnostics"
-        case .settings: return "Controller tools"
-        case .robots: return "Rover setup"
-        }
-    }
-}
-
-enum TerraStyle {
-    static let forest = Color(uiColor: UIColor { traits in
-        traits.userInterfaceStyle == .dark
-            ? UIColor(red: 0.63, green: 0.83, blue: 0.70, alpha: 1)
-            : UIColor(red: 0.09, green: 0.23, blue: 0.17, alpha: 1)
-    })
-    static let buttonForest = Color(red: 0.09, green: 0.23, blue: 0.17)
-    static let background = Color(uiColor: .systemGroupedBackground)
-    static let surface = Color(uiColor: .secondarySystemGroupedBackground)
-}
-
-
 struct ContentView: View {
     @StateObject private var brain = PhoneController()
     @Environment(\.scenePhase) private var scenePhase
@@ -84,30 +58,4 @@ struct ContentView: View {
         #endif
     }
 
-}
-
-struct TerraMark: Shape {
-    func path(in rect: CGRect) -> Path {
-        var path = Path()
-        func point(_ x: CGFloat, _ y: CGFloat) -> CGPoint {
-            CGPoint(x: rect.minX + x * rect.width, y: rect.minY + y * rect.height)
-        }
-        path.move(to: point(0.5, 0))
-        path.addLine(to: point(0.88, 0.76))
-        path.addLine(to: point(0.67, 0.7))
-        path.addLine(to: point(0.52, 0.42))
-        path.addLine(to: point(0.37, 0.65))
-        path.addLine(to: point(0.18, 0.65))
-        path.closeSubpath()
-        path.move(to: point(0.14, 0.73))
-        path.addCurve(to: point(0.45, 0.81), control1: point(0.49, 0.7), control2: point(0.57, 0.77))
-        path.addCurve(to: point(0.0, 1.0), control1: point(0.33, 0.92), control2: point(0.17, 0.97))
-        path.closeSubpath()
-        path.move(to: point(0.46, 0.75))
-        path.addCurve(to: point(0.4, 1), control1: point(0.75, 0.79), control2: point(0.7, 0.89))
-        path.addLine(to: point(1, 1))
-        path.addLine(to: point(0.9, 0.81))
-        path.closeSubpath()
-        return path
-    }
 }

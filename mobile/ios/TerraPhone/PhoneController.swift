@@ -1,3 +1,4 @@
+import OSLog
 import ARKit
 import AVFoundation
 import Combine
@@ -245,7 +246,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
                 return
             }
             let continuingWaypoint = TerraFleetManualDrive.localWaypointActive(controller.autonomyStatus())
-            if !continuingWaypoint { self.target = (0, 0); self.revokeHardwareMotion() }
+            // Connecting the router preserves the current local drive session.
             // Network setup must not block local AR and control updates.
             self.routerQueue.async {
             do {
@@ -573,6 +574,9 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
         guard mode == .phone, frame.timestamp >= phoneStartedAt, let controller else { return }
         let tracked: Bool
         if case .normal = frame.camera.trackingState { tracked = true } else { tracked = false }
+        if localizationTracked != tracked {
+            TerraLog.tracking.notice("Camera tracking changed; healthy=\(tracked) state=\(String(describing: frame.camera.trackingState), privacy: .public)")
+        }
         localizationTracked = tracked
         sensorEpochLock.lock(); let trackingEpoch = sensorEpoch; sensorEpochLock.unlock()
         DispatchQueue.main.async {
@@ -597,7 +601,16 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
         }
         previousPosition = tracked ? position : nil
         previousPoseTime = tracked ? frame.timestamp : nil
-        if !tracked { filteredVelocity = .zero; if bleActive { feedbackTrackingHealthy = false; revokeHardwareMotion() } }
+        if !tracked {
+            filteredVelocity = .zero
+            if bleActive {
+                feedbackTrackingHealthy = false
+                let fullyManual = TerraFleetManualDrive.isFullyManual(controller.autonomyStatus())
+                if DriveJoystickSafety.trackingLossRequiresDisarm(feedback: bleFeedback, fullyManual: fullyManual) {
+                    revokeHardwareMotion(reason: "camera tracking lost in tracking-dependent mode")
+                }
+            }
+        }
         let q = orientation.vector
         let bodyForward = orientation.act(SIMD3<Float>(1, 0, 0))
         phonePose = (Double(position.x), Double(position.y), atan2(Double(bodyForward.y), Double(bodyForward.x)))
@@ -915,6 +928,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
         }
     }
     private func fail(_ error: Error, context: String = "Controller") {
+        TerraLog.control.error("Controller failure: \(context, privacy: .public): \(error.localizedDescription, privacy: .public)")
         let detail = "\(context): \(error.localizedDescription)"
         #if DEBUG
         let destination = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("ControllerFailure.json")
@@ -948,9 +962,12 @@ extension PhoneController {
     private func sensorEpochMatches(_ epoch: Int) -> Bool {
         sensorEpochLock.lock(); defer { sensorEpochLock.unlock() }; return sensorEpoch == epoch
     }
-    private func revokeHardwareMotion() {
+    private func revokeHardwareMotion(reason: String = #function) {
         target = (0, 0); resetServoTargets()
-        if !hardwareMotionRevoked { bluetooth.disarm(); hardwareMotionRevoked = true }
+        if !hardwareMotionRevoked {
+            TerraLog.control.notice("Revoking motion; caller=\(reason, privacy: .public) mode=\(String(describing: self.mode), privacy: .public) feedback=\(self.bleFeedback)")
+            bluetooth.disarm(); hardwareMotionRevoked = true
+        }
     }
     private func observeBluetooth() {
         bluetooth.onDiscovery = { [weak self] rover, generation in self?.discovered(rover, generation: generation) }
@@ -1311,6 +1328,7 @@ extension PhoneController {
                 return
             }
             self.target = (0, 0); self.resetServoTargets(); self.hardwareMotionRevoked = false
+            TerraLog.control.notice("Arm accepted by phone; fullyManual=\(fullyManual) feedback=\(self.bleFeedback)")
             self.bluetooth.arm()
         }
     }
@@ -1392,6 +1410,7 @@ extension PhoneController {
     }
     private func receiveConfiguration(_ text: String) {
         guard let object = (try? JSONSerialization.jsonObject(with: Data(text.utf8))) as? [String: Any], let id = object["request_id"] as? UInt32 else { return }
+        TerraLog.configuration.info("Reply request=\(id) result=\(String(describing: object["result"]), privacy: .public)")
         if id == emergencyResetRequest {
             emergencyResetRequest = nil
             guard object["result"] as? String == "ok" else {

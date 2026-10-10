@@ -5,8 +5,12 @@ project_path = File.join(root, 'mobile/ios/TerraPhone.xcodeproj')
 project = Xcodeproj::Project.new(project_path)
 app = project.new_target(:application, 'TerraPhone', :ios, '17.0')
 sources = project.main_group.new_group('TerraPhone', 'TerraPhone')
-%w[TerraPhoneApp.swift ContentView.swift TerraDashboard.swift ConnectionPresentation.swift TerraConnectionViews.swift RoverModelView.swift TerraAutoConnectionPolicy.swift DriveControlPanel.swift DriveJoystickCommand.swift PhoneController.swift PhoneLocalization.swift BluetoothSession.swift BluetoothLink.swift ActuatorConfiguration.swift ActuatorLayoutView.swift].each do |name|
-  app.source_build_phase.add_file_reference(sources.new_file(name))
+Dir.glob(File.join(root, 'mobile/ios/TerraPhone/*.swift')).sort.each do |path|
+  app.source_build_phase.add_file_reference(sources.new_file(File.basename(path)))
+end
+views = sources.new_group('Views', 'Views')
+Dir.glob(File.join(root, 'mobile/ios/TerraPhone/Views/*.swift')).sort.each do |path|
+  app.source_build_phase.add_file_reference(views.new_file(File.basename(path)))
 end
 sources.new_file('Info.plist')
 app.resources_build_phase.add_file_reference(sources.new_file('Assets.xcassets'))
