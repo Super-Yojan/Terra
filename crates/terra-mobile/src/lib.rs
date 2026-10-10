@@ -12,6 +12,7 @@ pub use search::{MobileSearchRequest,MobileTargetObservation,MobileSearchSnapsho
 mod mapping;
 mod transport;
 mod waypoint;
+pub use frames::*;
 pub use mapping::*;
 pub use transport::*;
 pub use waypoint::*;

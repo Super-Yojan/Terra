@@ -2,3 +2,8 @@
 module_name = "TerraCore"
 ffi_module_name = "TerraCoreFFI"
 generate_module_map = true
+
+[bindings.kotlin]
+package_name = "dev.superyojan.terra.core"
+cdylib_name = "terra_mobile"
+generate_immutable_records = true

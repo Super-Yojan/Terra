@@ -22,7 +22,8 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
     @Published private(set) var mapStatus = "Start Simulated rover to build a map"
     @Published private(set) var mapPose = SIMD3<Double>.zero
     private var occupancyMap: MobileOccupancyMap?
-    private var simulatedPosition = SIMD2<Double>.zero
+    private let plant = SimulatedPlant()
+    private let velocityFilter = PoseVelocityFilter()
     private var mapGroundOffset: Double?
     private var groundPolicy = PhoneGroundPolicy()
     private var lastMapTime = -Double.infinity
@@ -368,9 +369,17 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
             guard let self else { return }
             if let error { self.controlQueue.async { if self.sensorEpochMatches(epoch) { self.handleTrackingFailure(error) } }; return }
             guard let data else { return }
-            let acceleration = self.phoneToBody.act(SIMD3(Float(data.userAcceleration.x), Float(data.userAcceleration.y), Float(data.userAcceleration.z))) * 9.80665
-            let gyro = self.phoneToBody.act(SIMD3(Float(data.rotationRate.x), Float(data.rotationRate.y), Float(data.rotationRate.z)))
-            let sample = ImuReading(timestamp: data.timestamp, accelerationForward: Double(acceleration.x), accelerationLeft: Double(acceleration.y), accelerationUp: Double(acceleration.z), gyroRoll: Double(gyro.x), gyroPitch: Double(gyro.y), gyroYaw: Double(gyro.z))
+            let acceleration: AxisSample
+            let gyro: AxisSample
+            do {
+                acceleration = try deviceVectorToBody(x: data.userAcceleration.x, y: data.userAcceleration.y, z: data.userAcceleration.z)
+                gyro = try deviceVectorToBody(x: data.rotationRate.x, y: data.rotationRate.y, z: data.rotationRate.z)
+            } catch {
+                self.controlQueue.async { if self.sensorEpochMatches(epoch) { self.fail(error) } }
+                return
+            }
+            // Core Motion user acceleration is in g. Android linear acceleration is already m/s².
+            let sample = ImuReading(timestamp: data.timestamp, accelerationForward: acceleration.x * 9.80665, accelerationLeft: acceleration.y * 9.80665, accelerationUp: acceleration.z * 9.80665, gyroRoll: gyro.x, gyroPitch: gyro.y, gyroYaw: gyro.z)
             self.controlQueue.async {
                 guard self.mode == .phone, self.sensorEpochMatches(epoch) else { return }
                 do { try self.controller?.pushImu(sample: sample) } catch { self.fail(error, context: "IMU sample at \(sample.timestamp)") }
@@ -517,9 +526,10 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
         let now = mode == .simulation ? simulatedTime : CACurrentMediaTime()
         do {
             if mode == .simulation {
-                try controller.pushImu(sample: ImuReading(timestamp: now, accelerationForward: simulatedAcceleration, accelerationLeft: simulatedForward * simulatedYawRate, accelerationUp: 0, gyroRoll: 0, gyroPitch: 0, gyroYaw: simulatedYawRate))
+                let pose = try plant.state()
+                try controller.pushImu(sample: ImuReading(timestamp: now, accelerationForward: pose.accelerationForward, accelerationLeft: pose.forward * pose.yawRate, accelerationUp: 0, gyroRoll: 0, gyroPitch: 0, gyroYaw: pose.yawRate))
                 if tick % 5 == 0 {
-                    try controller.pushVio(sample: VioReading(timestamp: now, positionX: simulatedPosition.x, positionY: simulatedPosition.y, positionZ: 0, quaternionX: 0, quaternionY: 0, quaternionZ: sin(simulatedYaw / 2), quaternionW: cos(simulatedYaw / 2), velocityX: simulatedForward * cos(simulatedYaw), velocityY: simulatedForward * sin(simulatedYaw), velocityZ: 0, tracked: true))
+                    try controller.pushVio(sample: VioReading(timestamp: now, positionX: pose.x, positionY: pose.y, positionZ: 0, quaternionX: pose.quaternionX, quaternionY: pose.quaternionY, quaternionZ: pose.quaternionZ, quaternionW: pose.quaternionW, velocityX: pose.velocityX, velocityY: pose.velocityY, velocityZ: 0, tracked: true))
                 }
             }
             // An attached fleet owns velocity intent; idle phone input must not
@@ -547,12 +557,9 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
                 }
             }
             if mode == .simulation {
-                simulatedAcceleration = 3 * (output.leftEffort + output.rightEffort) / 2 - simulatedForward
-                simulatedForward += simulatedAcceleration * 0.01
-                simulatedYawRate += (5 * (output.rightEffort - output.leftEffort) / 2 - simulatedYawRate) * 0.01
-                if tick % 10 == 0 { try updateSimulatedMap(timestamp: now) }
-                simulatedPosition += SIMD2(cos(simulatedYaw), sin(simulatedYaw)) * simulatedForward * 0.01
-                simulatedYaw += simulatedYawRate * 0.01
+                let pose = try plant.state()
+                if tick % 10 == 0 { try updateSimulatedMap(x: pose.x, y: pose.y, yaw: pose.yaw, timestamp: now) }
+                _ = try plant.step(leftEffort: output.leftEffort, rightEffort: output.rightEffort)
                 simulatedTime += 0.01
             }
             tick += 1
@@ -691,29 +698,12 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
         if mode != .remote {try controller?.autonomyMap(grid:grid,timestamp:lastMapTime.isFinite ? lastMapTime:simulatedTime,revision:UInt64(tick))}
         DispatchQueue.main.async { self.occupancy = grid; self.mapPose = SIMD3(x, y, yaw); self.mapStatus = status }
     }
-    private func updateSimulatedMap(timestamp: Double) throws {
+    private func updateSimulatedMap(x: Double, y: Double, yaw: Double, timestamp: Double) throws {
         guard let map = occupancyMap else { return }
-        let x = simulatedPosition.x, y = simulatedPosition.y
+        let frame = try simulatedRoomDepth(x: x, y: y, yaw: yaw)
         try map.recenter(x: x, y: y)
-        // Room walls at ±6 m, optical camera facing along rover heading.
-        var depths = [Float](repeating: .nan, count: 81)
-        for u in depths.indices {
-            let right = (Double(u) - 40) / 60
-            let dx = cos(simulatedYaw) + right * sin(simulatedYaw)
-            let dy = sin(simulatedYaw) - right * cos(simulatedYaw)
-            var nearest = Double.infinity
-            for wall in [-6.0, 6.0] {
-                if abs(dx) > 1e-9 { let t = (wall - x) / dx
-                    if t > 0 && abs(y + t * dy) <= 6 { nearest = min(nearest, t) } }
-                if abs(dy) > 1e-9 { let t = (wall - y) / dy
-                    if t > 0 && abs(x + t * dx) <= 6 { nearest = min(nearest, t) } }
-            }
-            if nearest.isFinite { depths[u] = Float(nearest) }
-        }
-        let opticalToBody = simd_quatd(ix: -0.5, iy: 0.5, iz: -0.5, r: 0.5)
-        let q = (simd_quatd(angle: simulatedYaw, axis: SIMD3(0, 0, 1)) * opticalToBody).vector
-        try map.integrateDepth(frame: MappingDepthFrame(timestamp: timestamp, width: 81, height: 1, fx: 60, fy: 60, cx: 40, cy: 0, cameraX: x, cameraY: y, cameraZ: 0.5, quaternionX: q.x, quaternionY: q.y, quaternionZ: q.z, quaternionW: q.w, depthMetres: depths))
-        try publishMap(x: x, y: y, yaw: simulatedYaw, status: "Simulated depth · 10 Hz")
+        try map.integrateDepth(frame: MappingDepthFrame(timestamp: timestamp, width: frame.width, height: frame.height, fx: frame.fx, fy: frame.fy, cx: frame.cx, cy: frame.cy, cameraX: frame.cameraX, cameraY: frame.cameraY, cameraZ: frame.cameraZ, quaternionX: frame.quaternionX, quaternionY: frame.quaternionY, quaternionZ: frame.quaternionZ, quaternionW: frame.quaternionW, depthMetres: frame.depthMetres))
+        try publishMap(x: x, y: y, yaw: yaw, status: "Simulated depth · 10 Hz")
     }
     private func integrateRemoteDepth(_ frame: MobileDepthFrame) {
         guard let map = occupancyMap else { return }
@@ -823,8 +813,11 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
         let q = (simd_quatf(worldFromAR) * simd_quatf(frame.camera.transform) * simd_quatf(angle: .pi, axis: SIMD3(1, 0, 0))).vector
         guard mapGroundOffset != nil else { return }
         do {
+            let optical = try yUpCameraToOpticalPose(x: Double(arPosition.x), y: Double(arPosition.y), z: Double(arPosition.z), quaternionX: Double(cameraRotation.x), quaternionY: Double(cameraRotation.y), quaternionZ: Double(cameraRotation.z), quaternionW: Double(cameraRotation.w))
+            // Initial camera height is assumed 0.5 m; calibrate against the ground before physical use.
+            mapGroundOffset = try latchGroundOffset(latched: mapGroundOffset, positionZ: Double(position.z), reference: 0.5)
             try map.recenter(x: Double(position.x), y: Double(position.y))
-            try map.integrateDepth(frame: MappingDepthFrame(timestamp: frame.timestamp, width: UInt32(width), height: UInt32(height), fx: Double(k.columns.0.x) * sx, fy: Double(k.columns.1.y) * sy, cx: (Double(k.columns.2.x) + 0.5) * sx - 0.5, cy: (Double(k.columns.2.y) + 0.5) * sy - 0.5, cameraX: Double(position.x), cameraY: Double(position.y), cameraZ: Double(position.z) + (mapGroundOffset ?? 0), quaternionX: Double(q.x), quaternionY: Double(q.y), quaternionZ: Double(q.z), quaternionW: Double(q.w), depthMetres: values))
+            try map.integrateDepth(frame: MappingDepthFrame(timestamp: frame.timestamp, width: UInt32(width), height: UInt32(height), fx: Double(k.columns.0.x) * sx, fy: Double(k.columns.1.y) * sy, cx: (Double(k.columns.2.x) + 0.5) * sx - 0.5, cy: (Double(k.columns.2.y) + 0.5) * sy - 0.5, cameraX: Double(position.x), cameraY: Double(position.y), cameraZ: Double(position.z) + (mapGroundOffset ?? 0), quaternionX: optical.quaternionX, quaternionY: optical.quaternionY, quaternionZ: optical.quaternionZ, quaternionW: optical.quaternionW, depthMetres: values))
             lastMapTime = frame.timestamp
             let forward = bodyOrientation.act(SIMD3<Float>(1, 0, 0))
             try publishMap(x: Double(position.x), y: Double(position.y), yaw: atan2(Double(forward.y), Double(forward.x)), status: "ARKit scene depth · measured floor · 10 Hz")
