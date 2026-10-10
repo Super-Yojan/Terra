@@ -112,3 +112,8 @@ def load_device_name(path):
     if not isinstance(value, dict) or not re.fullmatch(r'terra-[A-Z0-9]{6}', value.get('name', '')):
         raise ValueError('invalid persisted rover name')
     return value['name']
+
+
+def pairing_name(name):
+    """Distinguish enrollment before an encrypted connection is attempted."""
+    return name if name.endswith("-pair") else name + "-pair"

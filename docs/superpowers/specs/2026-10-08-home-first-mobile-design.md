@@ -1,7 +1,7 @@
 # Home-first Terra mobile interface
 
 Date: 2026-10-08
-Status: Navigation direction approved; written specification awaiting review.
+Status: Implemented; software checks complete, physical hardware acceptance pending.
 
 ## Confirmed purpose
 
@@ -17,14 +17,14 @@ The previous automatic pairing/reconnection work and the running rover service a
 
 ## Navigation
 
-Use two persistent tabs: Home and Settings. Each has a NavigationStack sharing the single PhoneController owned by the app root.
+Use two pages rather than persistent tabs, with Settings accessible from an icon in the bottom-left corner of Home: Home and Settings. They share a NavigationStack and the single PhoneController owned by the app root.
 
-Home retains one stable hierarchy in every connection state. Remove its manual joystick, maps, mission controls, autonomy selector, telemetry grid, shortcut grid, and large decorative rover preview. Retain Terra's existing identity through its mark, native typography, forest accent, adaptive system surfaces, and light/dark support. Do not add invented metrics, fleet counts, or membership acknowledgements.
+Home retains one stable hierarchy in every connection state. Remove its manual joystick, maps, mission controls, autonomy selector, telemetry grid, shortcut grid, and other purely decorative elements. Retain the large rover preview as Home's centerpiece, using it to display the rover's connection state, show its actuators, and identify which rover the phone is currently connected to. Retain Terra's existing identity through its mark, native typography, forest accent, adaptive system surfaces, and light/dark support. Do not add invented metrics, fleet counts, or membership acknowledgements.
 
 Settings is a short list of focused destinations:
 
 - Fleet connection: saved TCP router endpoint, topic prefix, and rover ID.
-- Rover setup: automatic connection preference, phone feedback/tracking option, and actuator configuration.
+- Rover setup: automatic connection preference, ARGOS-managed phone tracking status/retry, and actuator configuration.
 - Diagnostics: detailed status and recording/export information actually available from the controller.
 - Debug tools: manual drive, local simulated rover, simulator-only Bevy connection, sensor inspection, and existing map/waypoint tools if retained.
 
@@ -75,7 +75,7 @@ Show distinct session status: waiting for rover, setup required, connecting, con
 
 Use the existing saved keys dashboardRouterEndpoint, dashboardTopicPrefix, and dashboardRoverID. Editing is one explicit Save action with validation, not reconnect-on-every-keystroke. Saving applies the settings together, invalidates obsolete attempts, and allows automatic connection. Explicit fleet Retry clears retry suppression without resetting the Bluetooth connection. Explicit fleet Disconnect keeps its existing current-session suppression semantics.
 
-Home should still show that fleet transport is connected in Bluetooth manual mode. Phone feedback remains a separate setup option and is not silently enabled. Tracked pose/mission capability must not be implied while feedback is off.
+Home should still show that fleet transport is connected in Bluetooth manual mode. Per the user’s follow-up, phone tracking starts after ARGOS connects and stays on in every autonomy mode, including Manual/Teleop. It stops when the fleet session ends or the rover disconnects. Camera/sensor failures expose a tracking-unavailable state with explicit retry while retaining transport sessions. Tracking initialization and healthy tracking are separate from fleet connectivity. Feedback eligibility follows actual layout compatibility/readiness; tracking never arms motors. Preserve the existing Rust controller, router session, accepted autonomy, and recording identity when starting sensors. ARGOS velocity intent takes priority over idle phone input.
 
 ## Focused screens and implementation boundaries
 
@@ -85,7 +85,7 @@ Replace ControllerDetailView's destination-anchor navigation with targeted conte
 
 Provide typed connection presentation through a Foundation-only policy/helper that can be tested without SwiftUI or a radio. Preserve raw diagnostic text as secondary details; expose radio power/authorization and in-flight attempts explicitly. Add a dedicated fleet-retry method instead of using hardware Retry for fleet failures.
 
-Moving between tabs/details/settings preserves the running transport and sensor controller. Leaving a debug driving surface still zeros joystick/servo intent and disarms. Background stops/disconnects; foreground restores automatic connection as previously implemented. Inactivity revokes motion without canceling system pairing prompts. Pairing consent stays at the root and is not obscured by a splash; remove the timed splash from normal launch so connection state is immediately visible.
+Moving between Home/details/settings preserves the running transport and sensor controller. Leaving a debug driving surface still zeros joystick/servo intent and disarms. Background stops/disconnects; foreground restores automatic connection as previously implemented. Inactivity revokes motion without canceling system pairing prompts. Pairing consent stays at the root and is not obscured by a splash; remove the timed splash from normal launch so connection state is immediately visible.
 
 ## Accessibility and layout
 
@@ -101,4 +101,4 @@ Use native iOS controls and SF Symbols, minimum 44-point actions, text labels al
 
 ## Scope
 
-This overhaul changes information architecture, connection presentation, and settings interactions. It does not introduce a new fleet protocol, router discovery, autonomous sensor activation, ownership reset, background execution, automatic arming, or dashboard mission-management features. Implementation begins after written-spec review and a reviewed implementation plan.
+This overhaul changes information architecture, connection presentation, and settings interactions. It does not introduce a new fleet protocol, router discovery, ownership reset, background execution, automatic arming, or dashboard mission-management features. Implementation begins after written-spec review and a reviewed implementation plan.

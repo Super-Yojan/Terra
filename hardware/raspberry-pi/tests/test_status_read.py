@@ -31,3 +31,12 @@ class StatusReadTests(unittest.TestCase):
         self.assertLessEqual(len(raw), 512)
         self.assertIsInstance(json.loads(raw)['fault'], str)
         self.assertFalse(json.loads(raw)['configuration_allowed'])
+
+    def test_periodic_status_retains_watchdog_and_sequence_without_bulk_diagnostics(self):
+        payload = dict(schema_version=1, type='status', session=1, active_revision=2,
+                       armed=False, arming=False, last_sequence=42, stop_reason='watchdog',
+                       configuration_errors=['x' * 2000], battery_reason='unsupported')
+        decoded = json.loads(status_read_document(payload))
+        self.assertEqual(decoded['last_sequence'], 42)
+        self.assertEqual(decoded['stop_reason'], 'watchdog')
+        self.assertNotIn('configuration_errors', decoded)

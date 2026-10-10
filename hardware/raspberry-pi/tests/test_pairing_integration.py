@@ -102,7 +102,7 @@ class PairingIntegrationTests(unittest.IsolatedAsyncioTestCase):
                 advertisement=self.exports[path]
                 properties={p.name:p.prop_getter(advertisement) for p in ServiceInterface._get_properties(advertisement)}
                 if advertisement.name != 'org.bluez.LEAdvertisement1': raise AssertionError('incorrect interface')
-                if properties['LocalName'] != 'terra-ABC123': raise AssertionError('missing local name')
+                if properties['LocalName'] != 'terra-ABC123-pair': raise AssertionError('missing local name')
                 if properties['ServiceUUIDs'] != [pairing.SERVICE_UUID]: raise AssertionError('missing discovery UUID')
                 return await super().call_register_advertisement(path,options)
         with tempfile.TemporaryDirectory() as d:

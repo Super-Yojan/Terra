@@ -30,11 +30,11 @@ def denied(message):
     return DBusError('org.bluez.Error.NotAuthorized', message)
 
 def status_read_document(payload):
-    # ATT attribute reads are capped at 512 bytes. Full diagnostics use the
-    # existing fragmented notifications; admission needs only these fields.
+    # Keep admission and recurring motion status compact. Bulk configuration
+    # diagnostics are returned by control replies rather than every 100 ms.
     keys = ('schema_version', 'type', 'session', 'active_revision', 'armed', 'arming',
             'layout_available', 'fault', 'emergency_stop', 'gate_mode', 'bench_enabled',
-            'hardware_gate_open_confirmed', 'configuration_allowed')
+            'hardware_gate_open_confirmed', 'configuration_allowed', 'last_sequence', 'stop_reason')
     compact = {key: payload[key] for key in keys if key in payload}
     raw = json.dumps(compact, separators=(',', ':'), allow_nan=False).encode()
     if len(raw) > 512 and isinstance(compact.get('fault'), str):
@@ -228,7 +228,7 @@ class BlePeripheral:
                 status = self.store.status(time.monotonic())
                 status.update(type='status', generation=self.generation)
                 self.status_bytes = status_read_document(status)
-                self.loop.call_soon_threadsafe(self._emit, 'status', status, self.generation)
+                self.loop.call_soon_threadsafe(self._emit, 'status', json.loads(self.status_bytes), self.generation)
                 self.last_status = now
             self.stop.wait(max(0, .010-(time.monotonic()-started)))
         self.store.end_connection(time.monotonic())
