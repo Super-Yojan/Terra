@@ -34,7 +34,7 @@ struct ActuatorDriveProfile: Codable {
     var safeValue: Double { min(limits.max, max(limits.min, safe.value ?? 0)) }
 }
 
-enum ActuatorProfileError: Error { case invalid, staleRevision }
+enum ActuatorProfileError: Error { case invalid, staleRevision; case invalidInput(String) }
 
 struct ActuatorDriveProfileSet: Codable {
     var schema_version = 1
@@ -60,13 +60,13 @@ struct ActuatorDriveProfileSet: Codable {
         let keys = ["left_effort", "right_effort", "forward", "turn"]
         var values: [String: Double] = [:]
         for key in keys {
-            guard let number = input[key] as? Double, number.isFinite, abs(number) <= 1 else { throw ActuatorProfileError.invalid }
+            guard let number = input[key] as? Double, number.isFinite, abs(number) <= 1 else { throw ActuatorProfileError.invalidInput("\(key)=\(String(describing: input[key])) must be finite and within -1...1") }
             values[key] = number
         }
         let servos = input["servo_positions"] as? [String: Double] ?? [:]
         for (id, value) in servos {
             guard value.isFinite, abs(value) <= 1, let identifier = Int(id),
-                  actuators.contains(where: { $0.id == identifier && $0.route.type == "servo" }) else { throw ActuatorProfileError.invalid }
+                  actuators.contains(where: { $0.id == identifier && $0.route.type == "servo" }) else { throw ActuatorProfileError.invalidInput("servo \(id)=\(value) is invalid or missing from the current profile") }
         }
         return actuators.map { actuator in
             let value: Double

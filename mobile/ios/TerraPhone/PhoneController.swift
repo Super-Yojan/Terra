@@ -286,7 +286,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
     func disconnectDashboard() {
         routerSuppressed = true; routerRetryAt = nil; invalidateDashboardAttempt()
         controlQueue.async {
-            self.target = (0, 0); self.revokeHardwareMotion()
+            self.target = (0, 0); self.revokeHardwareMotion(reason: "operator disconnected dashboard")
             try? self.controller?.disconnectDashboard()
             self.goalLatched = false
             DispatchQueue.main.async {
@@ -464,7 +464,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
         if controller.dashboardStatus() == "connected" {
             do { _ = try controller.step(timestamp: now) }
             catch {
-                target = (0, 0); revokeHardwareMotion()
+                target = (0, 0); revokeHardwareMotion(reason: "manual dashboard update failed: \(error)")
                 try? controller.disconnectDashboard()
                 DispatchQueue.main.async { self.status = "Dashboard control update: \(error.localizedDescription)" }
             }
@@ -534,7 +534,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
                 let continuingWaypoint = TerraFleetManualDrive.localWaypointActive(controller.autonomyStatus())
                 if continuingWaypoint { try controller.detachDashboardLink() }
                 else {
-                    self.target = (0, 0); self.revokeHardwareMotion()
+                    self.target = (0, 0); self.revokeHardwareMotion(reason: "dashboard link failed with no active local waypoint")
                     try controller.disconnectDashboard()
                 }
                 DispatchQueue.main.async {
@@ -564,7 +564,9 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
                 routeHardware(left: wheels.left, right: wheels.right, now: ProcessInfo.processInfo.systemUptime, manualTarget: command)
             }
             if bleActive && bleFeedback && !fullyManual {
-                if !feedbackTrackingHealthy { revokeHardwareMotion() }
+                if !feedbackTrackingHealthy {
+                    revokeHardwareMotion(reason: "feedback controller safety=\(String(describing: output.safety)); time=\(now) target=(\(output.targetForward),\(output.targetYawRate)) estimated=(\(output.estimatedForward),\(output.estimatedYawRate)) effort=(\(output.leftEffort),\(output.rightEffort))")
+                }
                 if tick % 5 == 0 { routeHardware(left: output.leftEffort, right: output.rightEffort, now: ProcessInfo.processInfo.systemUptime) }
             }
             if bleActive && !bleFeedback && !fullyManual && tick % 5 == 0 && controller.dashboardStatus() == "connected" {
@@ -972,6 +974,8 @@ extension PhoneController {
         target = (0, 0); resetServoTargets()
         if !hardwareMotionRevoked {
             TerraLog.control.notice("Revoking motion; caller=\(reason, privacy: .public) mode=\(String(describing: self.mode), privacy: .public) feedback=\(self.bleFeedback)")
+            let autonomy = controller?.autonomyStatus() ?? "unavailable"
+            TerraLog.control.notice("Disarm context; bleActive=\(self.bleActive) compatible=\(self.bleCompatible) trackingHealthy=\(self.feedbackTrackingHealthy) emergencyStop=\(self.dashboardEmergencyStop) router=\(self.controller?.dashboardStatus() ?? "unavailable", privacy: .public) autonomy=\(autonomy, privacy: .public)")
             bluetooth.disarm(); hardwareMotionRevoked = true
         }
     }
@@ -1033,7 +1037,7 @@ extension PhoneController {
         controlQueue.async {
             self.bleCompatible = compatible
             if self.bleLayout != layout { self.bleLayout = layout; self.target = (0, 0); self.resetServoTargets() }
-            if self.bleActive && (!ready || (self.bleFeedback && !compatible)) { self.revokeHardwareMotion() }
+            if self.bleActive && (!ready || (self.bleFeedback && !compatible)) { self.revokeHardwareMotion(reason: "Bluetooth readiness lost; ready=\(ready) feedbackCompatible=\(compatible)") }
         }
     }
     private var connectionNow: TimeInterval { ProcessInfo.processInfo.systemUptime }
@@ -1343,7 +1347,7 @@ extension PhoneController {
         }
     }
     func disarmHardware() {
-        controlQueue.async { self.revokeHardwareMotion() }
+        controlQueue.async { self.revokeHardwareMotion(reason: "explicit hardware disarm requested") }
     }
     func setServoTarget(id: UInt8, position: Double) {
         guard position.isFinite, hardwareArmed else { return }
@@ -1368,11 +1372,20 @@ extension PhoneController {
     private func routeHardware(left: Double, right: Double, now: TimeInterval, manualTarget: DriveJoystickCommand? = nil) {
         guard bleActive, !dashboardEmergencyStop, !bleFeedback || bleCompatible else { return }
         do {
-            let input: [String: Any] = ["left_effort": left, "right_effort": right, "forward": manualTarget?.forward ?? (bleFeedback ? 0 : target.forward), "turn": manualTarget?.yaw ?? (bleFeedback ? 0 : target.yaw), "servo_positions": servoTargets]
+            // Resolve numeric values before erasing their types into Any. Otherwise
+            // Swift can infer feedback's neutral literal as Int inside this dictionary.
+            let forward: Double = manualTarget?.forward ?? (bleFeedback ? 0 : target.forward)
+            let turn: Double = manualTarget?.yaw ?? (bleFeedback ? 0 : target.yaw)
+            let input: [String: Any] = ["left_effort": left, "right_effort": right, "forward": forward, "turn": turn, "servo_positions": servoTargets]
             let routed = try ActuatorDriveProfileSet.decode(json: bleLayout).route(input: input)
             let values = String(decoding: try JSONSerialization.data(withJSONObject: routed), as: UTF8.self)
             bluetooth.drive(valuesJSON: values, producedAt: now)
-        } catch { revokeHardwareMotion() }
+        } catch {
+            let detail = "Actuator routing failed: \(error); left=\(left) right=\(right) feedback=\(bleFeedback)"
+            TerraLog.control.error("\(detail, privacy: .public)")
+            DispatchQueue.main.async { self.configurationStatus = detail }
+            revokeHardwareMotion(reason: detail)
+        }
     }
     var configurationAllowed: Bool {
         configurationBlockingReason == nil

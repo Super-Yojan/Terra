@@ -16,6 +16,15 @@ import Foundation
         precondition(profile.supportsFeedback)
         precondition(profile.safeValues.map { $0["value"] as! Double } == [0, 0, 0.25])
         let input: [String: Any] = ["left_effort": 1.0, "right_effort": -0.6, "forward": 0.4, "turn": 0.2, "servo_positions": ["2": -0.8]]
+        // Feedback routing has no manual command: its neutral values must remain
+        // Double when placed in the heterogeneous actuator-input dictionary.
+        let manualForward: Double? = nil
+        let feedback = true
+        let forward: Double = manualForward ?? (feedback ? 0 : 0.4)
+        let turn: Double = manualForward ?? (feedback ? 0 : 0.2)
+        let feedbackInput: [String: Any] = ["left_effort": 0.0, "right_effort": 0.0, "forward": forward, "turn": turn, "servo_positions": [String: Double]()]
+        let neutralOutput = try profile.route(input: feedbackInput)
+        precondition(neutralOutput.map { $0["value"] as! Double } == [0, 0, 0.25])
         let output = try profile.route(input: input)
         precondition(output.map { $0["value"] as! Double } == [0.8, -0.6, -0.5])
         func rejects(_ json: String) {
