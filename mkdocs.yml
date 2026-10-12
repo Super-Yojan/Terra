@@ -84,6 +84,7 @@ nav:
   - TerraPhone:
       - phone/index.md
       - Building in Xcode: phone/build.md
+      - Android: MOBILE_ANDROID.md
       - Simulator and iPhone: phone/simulator.md
       - Bluetooth pairing: phone/bluetooth.md
       - Tap to configure: phone/tap-to-configure.md
