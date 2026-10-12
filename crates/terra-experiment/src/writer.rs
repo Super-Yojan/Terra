@@ -1,3 +1,6 @@
+//! Bounded background JSONL writer for experiment evidence.
+//! Queue or file failures are exposed to the caller instead of blocking control.
+
 use serde_json::Value;
 use std::{
     fs::File,
@@ -48,7 +51,11 @@ impl RunRecorder {
                         Ok(Message::Close) | Err(mpsc::RecvTimeoutError::Disconnected) => {
                             line(
                                 &mut w,
-                                &serde_json::json!({"kind":"run_end","complete":!state.load(Ordering::Acquire),"dropped_events":drops.load(Ordering::Acquire)}),
+                                &serde_json::json!({
+                                    "kind": "run_end",
+                                    "complete": !state.load(Ordering::Acquire),
+                                    "dropped_events": drops.load(Ordering::Acquire),
+                                }),
                             )?;
                             w.flush()?;
                             return Ok(());

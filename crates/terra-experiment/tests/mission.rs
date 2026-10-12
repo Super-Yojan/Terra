@@ -17,8 +17,8 @@ fn deterministic_detection_and_confirmation() {
 #[test]
 fn bounded_recorder_flushes_and_identifies_run() {
     let p = std::env::temp_dir().join(format!("terra-log-{}.jsonl", std::process::id()));
-    let mut r = RunRecorder::create(&p, serde_json::json!({"run_id":"run-1"}), 8).unwrap();
-    r.record(serde_json::json!({"kind":"takeover","time":1.}))
+    let mut r = RunRecorder::create(&p, serde_json::json!({"run_id": "run-1"}), 8).unwrap();
+    r.record(serde_json::json!({"kind": "takeover","time": 1.}))
         .unwrap();
     r.close().unwrap();
     let records = read_records(&std::fs::read(&p).unwrap()).unwrap();

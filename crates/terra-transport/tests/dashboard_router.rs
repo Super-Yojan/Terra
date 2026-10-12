@@ -135,9 +135,9 @@ fn sends_real_sized_cloud_and_occupancy_snapshots_but_bounds_other_topics() {
         .unwrap();
     let service = ControlPlane::connect(&endpoint, "phone-large", 7).unwrap();
     let points =
-        serde_json::json!({"version":1,"points":vec![[1.123456789,2.123456789,3.123456789];1800]})
+        serde_json::json!({"version": 1,"points": vec![[1.123456789,2.123456789,3.123456789];1800]})
             .to_string();
-    let cells = serde_json::json!({"schema_version":1,"width":200,"height":200,"occupancy":vec![100;40000]}).to_string();
+    let cells = serde_json::json!({"schema_version": 1,"width": 200,"height": 200,"occupancy": vec![100;40000]}).to_string();
     assert!(points.len() > 65536 && points.len() <= 262144);
     assert!(cells.len() > 65536 && cells.len() <= 262144);
     service.publish("pointcloud", points.clone());

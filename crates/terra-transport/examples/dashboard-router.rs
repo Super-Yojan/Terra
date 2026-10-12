@@ -11,7 +11,9 @@ fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         } else if a != 100 || !(64..=127).contains(&b) {
             return Err("Expected 0.0.0.0 or a Tailscale IPv4 address in 100.64.0.0/10".into());
         }
-        if !ip.is_unspecified() { endpoints.push(format!("tcp/{ip}:7448")); }
+        if !ip.is_unspecified() {
+            endpoints.push(format!("tcp/{ip}:7448"));
+        }
     }
     let mut config = zenoh::Config::default();
     for (key, value) in [

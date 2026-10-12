@@ -1,4 +1,10 @@
-//! Leased, latest-command-only Zenoh velocity publisher for Terra.
+//! Zenoh connections for remote intent, telemetry, and dashboard control.
+//!
+//! [`RoverConnection`] publishes leased velocity targets and receives remote depth.
+//! The `control_plane` module queues operator requests and exposes onboard status.
+//! Transport carries intent; the onboard autonomy and hardware layers still decide
+//! whether it may cause motion. Disconnects must not replay old commands.
+
 use std::{
     sync::{Arc, Mutex},
     thread::{self, JoinHandle},
@@ -25,8 +31,8 @@ struct State {
     actions: std::collections::VecDeque<(String, String)>,
     authority: String,
     authority_received: Option<Instant>,
-    search: Option<(serde_json::Value,Instant)>,
-    reports: std::collections::BTreeMap<(String,String,String),(serde_json::Value,Instant)>,
+    search: Option<(serde_json::Value, Instant)>,
+    reports: std::collections::BTreeMap<(String, String, String), (serde_json::Value, Instant)>,
     shutdown: bool,
     error: Option<String>,
 }
@@ -52,7 +58,7 @@ fn payload(linear: f64, angular: f64) -> Result<String, TransportError> {
     if !linear.is_finite() || !angular.is_finite() || linear.abs() > 2.0 || angular.abs() > 2.0 {
         return Err(TransportError::InvalidTarget);
     }
-    Ok(serde_json::json!({"linear":linear,"angular":angular}).to_string())
+    Ok(serde_json::json!({"linear": linear,"angular": angular}).to_string())
 }
 /// Latest simulator depth frame whose header carries an exposure-aligned pose.
 /// Intrinsics use terra-mapping's integer-pixel principal point: documented
@@ -247,15 +253,47 @@ impl RoverConnection {
                 let authority = session
                     .declare_subscriber(format!("{base}/**"))
                     .callback(move |sample| {
-                        let key=sample.key_expr().as_str();
-                        if !key.ends_with("/autonomy/status")&&!key.ends_with("/search/status")&&!key.ends_with("/search/report"){return;}
+                        let key = sample.key_expr().as_str();
+                        if !key.ends_with("/autonomy/status")
+                            && !key.ends_with("/search/status")
+                            && !key.ends_with("/search/report")
+                        {
+                            return;
+                        }
                         let bytes = sample.payload().to_bytes();
                         if bytes.len() <= 65536
                             && let Ok(text) = String::from_utf8(bytes.to_vec())
                         {
-                            let mut state=status_shared.lock().unwrap();
-                            if key.ends_with("/search/report"){if let Ok(value)=serde_json::from_str::<serde_json::Value>(&text){let ids=(value["run_id"].as_str(),value["search_id"].as_str(),value["report_id"].as_str());if let (Some(run),Some(search),Some(report))=ids {state.reports.retain(|_,(_,at)|at.elapsed().as_secs_f64()<2.5);let key=(run.into(),search.into(),report.into());if state.reports.len()<128||state.reports.contains_key(&key){state.reports.insert(key,(value,Instant::now()));}}}}
-                            else if key.ends_with("/search/status"){if let Ok(value)=serde_json::from_str::<serde_json::Value>(&text){state.search=Some((value,Instant::now()));}}else{state.authority=text;state.authority_received=Some(Instant::now());}
+                            let mut state = status_shared.lock().unwrap();
+                            if key.ends_with("/search/report") {
+                                if let Ok(value) = serde_json::from_str::<serde_json::Value>(&text)
+                                {
+                                    let ids = (
+                                        value["run_id"].as_str(),
+                                        value["search_id"].as_str(),
+                                        value["report_id"].as_str(),
+                                    );
+                                    if let (Some(run), Some(search), Some(report)) = ids {
+                                        state
+                                            .reports
+                                            .retain(|_, (_, at)| at.elapsed().as_secs_f64() < 2.5);
+                                        let key = (run.into(), search.into(), report.into());
+                                        if state.reports.len() < 128
+                                            || state.reports.contains_key(&key)
+                                        {
+                                            state.reports.insert(key, (value, Instant::now()));
+                                        }
+                                    }
+                                }
+                            } else if key.ends_with("/search/status") {
+                                if let Ok(value) = serde_json::from_str::<serde_json::Value>(&text)
+                                {
+                                    state.search = Some((value, Instant::now()));
+                                }
+                            } else {
+                                state.authority = text;
+                                state.authority_received = Some(Instant::now());
+                            }
                         }
                     })
                     .wait()
@@ -323,8 +361,16 @@ impl RoverConnection {
         Ok(())
     }
     pub fn send_action(&self, kind: &str, payload: &str) -> Result<(), TransportError> {
-        if !matches!(kind, "autonomy" | "safety" | "goal" | "goal/decision" | "search" | "search/action" | "search/report/ack")
-            || payload.len() > 2048
+        if !matches!(
+            kind,
+            "autonomy"
+                | "safety"
+                | "goal"
+                | "goal/decision"
+                | "search"
+                | "search/action"
+                | "search/report/ack"
+        ) || payload.len() > 2048
             || serde_json::from_str::<serde_json::Value>(payload).is_err()
         {
             return Err(TransportError::InvalidTarget);
@@ -340,11 +386,26 @@ impl RoverConnection {
         Ok(())
     }
     pub fn autonomy_status(&self) -> String {
-        let state=self.state.lock().unwrap();let mut value:serde_json::Value=serde_json::from_str(&state.authority).unwrap_or_else(|_|serde_json::json!({}));
-        if !value.is_object(){return "{}".into();}
-        value["age"]=serde_json::json!(state.authority_received.map(|t|t.elapsed().as_secs_f64()));
-        if let Some((search,at))=state.search.as_ref(){value["search"]=search.clone();value["search_age"]=serde_json::json!(at.elapsed().as_secs_f64());}
-        value["reports"]=serde_json::json!(state.reports.values().filter(|(_,at)|at.elapsed().as_secs_f64()<2.5).map(|(v,_)|v).collect::<Vec<_>>());
+        let state = self.state.lock().unwrap();
+        let mut value: serde_json::Value =
+            serde_json::from_str(&state.authority).unwrap_or_else(|_| serde_json::json!({}));
+        if !value.is_object() {
+            return "{}".into();
+        }
+        value["age"] =
+            serde_json::json!(state.authority_received.map(|t| t.elapsed().as_secs_f64()));
+        if let Some((search, at)) = state.search.as_ref() {
+            value["search"] = search.clone();
+            value["search_age"] = serde_json::json!(at.elapsed().as_secs_f64());
+        }
+        value["reports"] = serde_json::json!(
+            state
+                .reports
+                .values()
+                .filter(|(_, at)| at.elapsed().as_secs_f64() < 2.5)
+                .map(|(v, _)| v)
+                .collect::<Vec<_>>()
+        );
         value.to_string()
     }
     pub fn status(&self) -> String {
@@ -380,7 +441,7 @@ mod tests {
         assert!(validate("udp/127.0.0.1:7447", "terra/rover").is_err());
         assert!(validate("tcp/127.0.0.1:7447", "terra/*").is_err());
         let p: serde_json::Value = serde_json::from_str(&payload(1.0, 0.3).unwrap()).unwrap();
-        assert_eq!(p, serde_json::json!({"linear":1.0,"angular":0.3}));
+        assert_eq!(p, serde_json::json!({"linear": 1.0,"angular": 0.3}));
         assert!(payload(f64::NAN, 0.0).is_err());
         assert!(payload(2.1, 0.0).is_err());
     }
@@ -611,4 +672,18 @@ pub fn drain_control_actions(
 }
 
 /// Operator intents only. Sensor evidence is supplied by the onboard adapter.
-pub fn is_control_topic(kind:&str)->bool{matches!(kind,"autonomy"|"safety"|"goal"|"goal/decision"|"teleop"|"cmd_vel"|"hardware"|"search"|"search/action"|"search/report/ack")}
+pub fn is_control_topic(kind: &str) -> bool {
+    matches!(
+        kind,
+        "autonomy"
+            | "safety"
+            | "goal"
+            | "goal/decision"
+            | "teleop"
+            | "cmd_vel"
+            | "hardware"
+            | "search"
+            | "search/action"
+            | "search/report/ack"
+    )
+}

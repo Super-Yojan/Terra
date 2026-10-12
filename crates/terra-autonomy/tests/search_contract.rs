@@ -1,6 +1,14 @@
 use terra_autonomy::*;
 fn request() -> serde_json::Value {
-    serde_json::json!({"version":1,"run_id":"local","search_id":"search-1","token":"start-1","target_class":"survivor","bounds":{"min_x":-5.0,"min_y":-5.0,"max_x":5.0,"max_y":5.0},"time_budget_s":60.0})
+    serde_json::json!({
+        "version": 1,
+        "run_id": "local",
+        "search_id": "search-1",
+        "token": "start-1",
+        "target_class": "survivor",
+        "bounds": {"min_x": -5.0,"min_y": -5.0,"max_x": 5.0,"max_y": 5.0},
+        "time_budget_s": 60.0,
+    })
 }
 #[test]
 fn search_contract_accepts_named_level_and_bounded_request() {
@@ -52,6 +60,12 @@ fn actions_and_report_ack_are_session_correlated() {
 #[test]
 fn full_length_search_id_has_a_valid_report_ack() {
     let id = "s".repeat(64);
-    let v = serde_json::json!({"version":1,"run_id":"local","search_id":id,"report_id":format!("{}:report",id),"token":"ack"});
+    let v = serde_json::json!({
+        "version": 1,
+        "run_id": "local",
+        "search_id": id,
+        "report_id": format!("{}:report",id),
+        "token": "ack",
+    });
     assert!(decode_search_report_ack(&serde_json::to_vec(&v).unwrap()).is_some());
 }

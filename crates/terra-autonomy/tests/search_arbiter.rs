@@ -251,10 +251,35 @@ fn completed_report_survives_new_search_before_next_control_tick() {
 }
 #[test]
 fn report_acknowledgements_are_idempotent() {
-    let mut a=arbiter();let m=map();a.start_search(req(),&input(&m,0.)).unwrap();
-    for (f,t) in [(1,0.),(2,0.3),(3,0.6)] {
-        a.set_detector_capability(vec!["survivor".into()],"sim-v1".into(),t).unwrap();
-        a.accept_target_observation(TargetObservation{run_id:"local".into(),search_id:"s".into(),frame_id:f,target_class:"survivor".into(),confidence:0.9,world_x:2.,world_y:1.,received_at:t,evidence_id:format!("f{f}")},t).unwrap();
+    let mut a = arbiter();
+    let m = map();
+    a.start_search(req(), &input(&m, 0.)).unwrap();
+    for (f, t) in [(1, 0.), (2, 0.3), (3, 0.6)] {
+        a.set_detector_capability(vec!["survivor".into()], "sim-v1".into(), t)
+            .unwrap();
+        a.accept_target_observation(
+            TargetObservation {
+                run_id: "local".into(),
+                search_id: "s".into(),
+                frame_id: f,
+                target_class: "survivor".into(),
+                confidence: 0.9,
+                world_x: 2.,
+                world_y: 1.,
+                received_at: t,
+                evidence_id: format!("f{f}"),
+            },
+            t,
+        )
+        .unwrap();
     }
-    let r=SearchReportAck{version:1,run_id:"local".into(),search_id:"s".into(),report_id:"s:report".into(),token:"ack".into()};assert!(a.ack_search_report(r.clone()));assert!(a.ack_search_report(r));
+    let r = SearchReportAck {
+        version: 1,
+        run_id: "local".into(),
+        search_id: "s".into(),
+        report_id: "s:report".into(),
+        token: "ack".into(),
+    };
+    assert!(a.ack_search_report(r.clone()));
+    assert!(a.ack_search_report(r));
 }

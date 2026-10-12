@@ -5,6 +5,10 @@
 //! unless the hardware enable switch is closed and the command is still inside
 //! the motor watchdog window.
 //!
+//!
+//! Read [`StampedEffort`] and [`map_effort`] for timestamped input and PWM
+//! conversion before following the adapter watchdog and enable-switch checks.
+
 //! # Fail-safe
 //!
 //! Zero effort is **coast**, not a brake. Duty is 0, direction is absent, and

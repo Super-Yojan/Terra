@@ -16,7 +16,7 @@ const TELEMETRY_TTL: Duration = Duration::from_millis(500);
 pub struct ControlPlane {
     inbox: Inbox,
     states: States,
-    batches: Arc<Mutex<BTreeMap<String,(Vec<String>,Instant)>>>,
+    batches: Arc<Mutex<BTreeMap<String, (Vec<String>, Instant)>>>,
     stop: Arc<AtomicBool>,
     failed: Arc<AtomicBool>,
     worker: Option<JoinHandle<()>>,
@@ -100,14 +100,14 @@ impl ControlPlane {
             })
             .wait()
             .map_err(|e| TransportError::Network(e.to_string()))?;
-        let batches:Arc<Mutex<BTreeMap<String,(Vec<String>,Instant)>>>=Default::default();
-        let batch_state=batches.clone();
+        let batches: Arc<Mutex<BTreeMap<String, (Vec<String>, Instant)>>> = Default::default();
+        let batch_state = batches.clone();
         let state = states.clone();
         let stopped = stop.clone();
         let fault = failed.clone();
         let fleet = format!("{prefix}/fleet/state");
         let worker = thread::spawn(move || {
-            let mut last_batch=Instant::now()-Duration::from_secs(1);
+            let mut last_batch = Instant::now() - Duration::from_secs(1);
             while !stopped.load(Ordering::Acquire) {
                 if outbound && session.info().routers_zid().wait().next().is_none() {
                     fault.store(true, Ordering::Release);
@@ -125,7 +125,7 @@ impl ControlPlane {
                 if session
                     .put(
                         &fleet,
-                        serde_json::json!({"count":1,"max_count":1,"ids":[id]}).to_string(),
+                        serde_json::json!({"count": 1,"max_count": 1,"ids": [id]}).to_string(),
                     )
                     .wait()
                     .is_err()
@@ -141,9 +141,18 @@ impl ControlPlane {
                         fault.store(true, Ordering::Release);
                     }
                 }
-                if last_batch.elapsed()>=Duration::from_secs(1) {
-                    last_batch=Instant::now();let batches=batch_state.lock().unwrap().clone();
-                    for (kind,(values,at)) in batches {if at.elapsed()<TELEMETRY_TTL {for value in values {if session.put(format!("{base}/{kind}"),value).wait().is_err(){fault.store(true,Ordering::Release);}}}}
+                if last_batch.elapsed() >= Duration::from_secs(1) {
+                    last_batch = Instant::now();
+                    let batches = batch_state.lock().unwrap().clone();
+                    for (kind, (values, at)) in batches {
+                        if at.elapsed() < TELEMETRY_TTL {
+                            for value in values {
+                                if session.put(format!("{base}/{kind}"), value).wait().is_err() {
+                                    fault.store(true, Ordering::Release);
+                                }
+                            }
+                        }
+                    }
                 }
                 thread::sleep(Duration::from_millis(100));
             }
@@ -186,8 +195,14 @@ impl ControlPlane {
         }
     }
     /// Fair replay of bounded outstanding records on one contractual topic.
-    pub fn publish_batch(&self,kind:&str,values:Vec<String>){
-        if kind=="search/report" && values.len()<=128 && values.iter().all(|v|v.len()<=65536) {self.batches.lock().unwrap().insert(kind.into(),(values,Instant::now()));}
+    pub fn publish_batch(&self, kind: &str, values: Vec<String>) {
+        if kind == "search/report" && values.len() <= 128 && values.iter().all(|v| v.len() <= 65536)
+        {
+            self.batches
+                .lock()
+                .unwrap()
+                .insert(kind.into(), (values, Instant::now()));
+        }
     }
     pub fn failed(&self) -> bool {
         self.failed.load(Ordering::Acquire)

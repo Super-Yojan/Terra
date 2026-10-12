@@ -1,4 +1,10 @@
-//! VIO-anchored velocity with bounded IMU prediction, not a full VIO or EKF stack.
+//! VIO-anchored velocity estimation with bounded IMU prediction.
+//!
+//! Feed [`VelocityEstimator::push_imu`] and [`VelocityEstimator::push_vio`] with
+//! samples from one monotonic clock, then call [`VelocityEstimator::estimate`].
+//! A delayed VIO anchor is advanced using retained IMU history. Missing, stale,
+//! or untracked evidence yields a health state rather than a usable velocity.
+
 use std::collections::VecDeque;
 use terra_types::*;
 #[derive(Clone, Copy, Debug)]
@@ -105,6 +111,8 @@ impl VelocityEstimator {
         self.vio = Some(sample);
         Ok(())
     }
+    /// Advance the latest tracked VIO anchor with bounded IMU history.
+    /// Unusable evidence returns zero velocity with the reason in `health`.
     pub fn estimate(&self, now: f64) -> VelocityEstimate {
         let stopped = |health| VelocityEstimate {
             timestamp: now,

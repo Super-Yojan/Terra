@@ -10,9 +10,14 @@ fn near_miss_is_an_episode_not_every_tick() {
 #[test]
 fn incomplete_records_are_not_complete_runs() {
     let values = vec![
-        serde_json::json!({"kind":"manifest"}),
-        serde_json::json!({"kind":"control_tick","time":1.,"status":{"active_source":"operator"},"events":[{"kind":"request_accepted","reason":"operator_selection"}]}),
-        serde_json::json!({"kind":"run_end","complete":false}),
+        serde_json::json!({"kind": "manifest"}),
+        serde_json::json!({
+            "kind": "control_tick",
+            "time": 1.,
+            "status": {"active_source": "operator"},
+            "events": [{"kind": "request_accepted","reason": "operator_selection"}],
+        }),
+        serde_json::json!({"kind": "run_end","complete": false}),
     ];
     assert!(!summarize(&values).complete);
     assert_eq!(summarize(&values).mode_changes, 1);
@@ -20,8 +25,13 @@ fn incomplete_records_are_not_complete_runs() {
 #[test]
 fn mission_outcomes_and_interventions_use_run_exposure() {
     let records = vec![
-        serde_json::json!({"kind":"control_tick","time":10,"mission":{"observations":[{"observed_at":5}],"complete":false},"events":[{"kind":"takeover"},{"kind":"request_accepted","reason":"proposal_approve"}]}),
-        serde_json::json!({"kind":"control_tick","time":30,"mission":{"complete":true}}),
+        serde_json::json!({
+            "kind": "control_tick",
+            "time": 10,
+            "mission": {"observations": [{"observed_at": 5}],"complete": false},
+            "events": [{"kind": "takeover"},{"kind": "request_accepted","reason": "proposal_approve"}],
+        }),
+        serde_json::json!({"kind": "control_tick","time": 30,"mission": {"complete": true}}),
     ];
     let s = summarize(&records);
     assert_eq!(s.takeovers, 1);

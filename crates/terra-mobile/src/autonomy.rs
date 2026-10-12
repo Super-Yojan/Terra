@@ -1,3 +1,5 @@
+//! Phone-facing autonomy bindings and conversion to onboard arbiter inputs.
+
 use crate::*;
 #[uniffi::export]
 impl MobileController {
@@ -85,17 +87,30 @@ impl MobileController {
     pub fn detach_dashboard_link(&self) -> Result<(), ControllerError> {
         let mut b = self.brain.lock().map_err(|_| ControllerError::Internal)?;
         let service = b.dashboard.take();
-        b.hardware_requests.clear(); b.hardware_tokens.clear();
+        b.hardware_requests.clear();
+        b.hardware_tokens.clear();
         drop(b);
         // Network teardown must not stall the phone control/Bluetooth producer.
-        if let Some(service) = service { std::thread::spawn(move || drop(service)); }
+        if let Some(service) = service {
+            std::thread::spawn(move || drop(service));
+        }
         Ok(())
     }
-    pub fn reconnect_dashboard(&self, endpoint: String, prefix: String, rover_id: u64) -> Result<(), ControllerError> {
+    pub fn reconnect_dashboard(
+        &self,
+        endpoint: String,
+        prefix: String,
+        rover_id: u64,
+    ) -> Result<(), ControllerError> {
         self.detach_dashboard_link()?;
         let service = terra_transport::ControlPlane::connect(&endpoint, &prefix, rover_id)
-            .map_err(|e| ControllerError::InvalidInput { message: e.to_string() })?;
-        self.brain.lock().map_err(|_| ControllerError::Internal)?.dashboard = Some(service);
+            .map_err(|e| ControllerError::InvalidInput {
+                message: e.to_string(),
+            })?;
+        self.brain
+            .lock()
+            .map_err(|_| ControllerError::Internal)?
+            .dashboard = Some(service);
         Ok(())
     }
     /// Clear remote intent while preserving sensors, recording and a latched emergency stop.
@@ -116,11 +131,15 @@ impl MobileController {
         Ok(())
     }
     pub fn take_hardware_request(&self) -> String {
-        let Ok(mut b) = self.brain.lock() else { return String::new(); };
+        let Ok(mut b) = self.brain.lock() else {
+            return String::new();
+        };
         let authority = serde_json::from_str(&b.autonomy_json).unwrap_or_default();
         while let Some((raw, received)) = b.hardware_requests.pop_front() {
             let age = received.elapsed().as_secs_f64();
-            if let Some(mut request) = super::admit_hardware_request(raw.as_bytes(), age, &authority) {
+            if let Some(mut request) =
+                super::admit_hardware_request(raw.as_bytes(), age, &authority)
+            {
                 request["valid_for"] = serde_json::json!((0.5 - age).max(0.));
                 return request.to_string();
             }
@@ -129,10 +148,14 @@ impl MobileController {
     }
     pub fn publish_hardware_status(&self, payload: String) -> Result<(), ControllerError> {
         if payload.len() > 4096 || serde_json::from_str::<serde_json::Value>(&payload).is_err() {
-            return Err(ControllerError::InvalidInput { message: "invalid hardware status".into() });
+            return Err(ControllerError::InvalidInput {
+                message: "invalid hardware status".into(),
+            });
         }
         let b = self.brain.lock().map_err(|_| ControllerError::Internal)?;
-        if let Some(d) = b.dashboard.as_ref() { d.publish("hardware/status", payload); }
+        if let Some(d) = b.dashboard.as_ref() {
+            d.publish("hardware/status", payload);
+        }
         Ok(())
     }
     /// Transport connectivity only, not acknowledgement by an ARGOS operator.
@@ -199,7 +222,9 @@ impl MobileController {
                     },
                 );
             }
-            "search" | "search/action" | "search/report/ack" => search::dispatch_search(&mut b,&kind,payload.as_bytes(),timestamp)?,
+            "search" | "search/action" | "search/report/ack" => {
+                search::dispatch_search(&mut b, &kind, payload.as_bytes(), timestamp)?
+            }
             _ => return Err(invalid()),
         }
         Ok(())
@@ -262,7 +287,19 @@ impl MobileController {
                 message: "invalid run identity".into(),
             });
         }
-        let recorder=terra_experiment::RunRecorder::create(std::path::Path::new(&path),serde_json::json!({"run_id":run_id,"platform":"phone","planner":terra_navigation::PlannerConfig::default(),"collision_observation":"unavailable"}),8192).map_err(|e|ControllerError::InvalidInput{message:e.to_string()})?;
+        let recorder = terra_experiment::RunRecorder::create(
+            std::path::Path::new(&path),
+            serde_json::json!({
+                "run_id": run_id,
+                "platform": "phone",
+                "planner": terra_navigation::PlannerConfig::default(),
+                "collision_observation": "unavailable",
+            }),
+            8192,
+        )
+        .map_err(|e| ControllerError::InvalidInput {
+            message: e.to_string(),
+        })?;
         let mut brain = self.brain.lock().map_err(|_| ControllerError::Internal)?;
         if let Some(mut old) = brain.recorder.take() {
             old.close().map_err(|e| ControllerError::InvalidInput {

@@ -1,4 +1,10 @@
-//! Rolling, world-aligned XY occupancy grid. World +Z is up.
+//! Rolling occupancy mapping from exposure-aligned camera depth.
+//!
+//! Read [`LocalOccupancyMap::integrate_depth`] for sensor integration and
+//! [`LocalOccupancyMap::recenter`] for moving the window without losing overlapping
+//! world evidence. [`MapSnapshot`] stores row-major cells: -1 is unknown and
+//! 0..=100 is occupancy probability. World +Z is up; optical camera +Z is forward.
+
 use terra_types::{Quaternion, Vector3};
 
 #[derive(Clone, Copy, Debug)]
@@ -108,25 +114,29 @@ impl LocalOccupancyMap {
         if !x.is_finite() || !y.is_finite() || x.abs() > 1e9 || y.abs() > 1e9 {
             return Err(MapError::InvalidPose);
         }
-        let r = self.config.resolution;
-        let dx = ((x - self.config.width as f64 * r / 2.0 - self.origin_x) / r).round() as i64;
-        let dy = ((y - self.config.height as f64 * r / 2.0 - self.origin_y) / r).round() as i64;
-        if dx == 0 && dy == 0 {
+        let resolution = self.config.resolution;
+        let column_shift = ((x - self.config.width as f64 * resolution / 2.0 - self.origin_x)
+            / resolution)
+            .round() as i64;
+        let row_shift = ((y - self.config.height as f64 * resolution / 2.0 - self.origin_y)
+            / resolution)
+            .round() as i64;
+        if column_shift == 0 && row_shift == 0 {
             return Ok(());
         }
         let mut evidence = vec![0.0; self.evidence.len()];
         let mut observed = vec![false; self.observed.len()];
         for row in 0..self.config.height as i64 {
             for col in 0..self.config.width as i64 {
-                if let Some(old) = self.index(col + dx, row + dy) {
-                    let new = (row * self.config.width as i64 + col) as usize;
-                    evidence[new] = self.evidence[old];
-                    observed[new] = self.observed[old];
+                if let Some(source_index) = self.index(col + column_shift, row + row_shift) {
+                    let destination_index = (row * self.config.width as i64 + col) as usize;
+                    evidence[destination_index] = self.evidence[source_index];
+                    observed[destination_index] = self.observed[source_index];
                 }
             }
         }
-        self.origin_x += dx as f64 * r;
-        self.origin_y += dy as f64 * r;
+        self.origin_x += column_shift as f64 * resolution;
+        self.origin_y += row_shift as f64 * resolution;
         self.evidence = evidence;
         self.observed = observed;
         Ok(())
@@ -156,16 +166,23 @@ impl LocalOccupancyMap {
         {
             return Err(MapError::InvalidTime);
         }
-        let k = intrinsics;
-        if k.width == 0
-            || k.height == 0
-            || u64::from(k.width) * u64::from(k.height) > 4_194_304
-            || depth.len() != k.width as usize * k.height as usize
-            || ![k.fx, k.fy, k.cx, k.cy].iter().all(|v| v.is_finite())
-            || k.cx.abs() > 1e6
-            || k.cy.abs() > 1e6
-            || k.fx < 1e-6
-            || k.fy < 1e-6
+        let camera_intrinsics = intrinsics;
+        if camera_intrinsics.width == 0
+            || camera_intrinsics.height == 0
+            || u64::from(camera_intrinsics.width) * u64::from(camera_intrinsics.height) > 4_194_304
+            || depth.len() != camera_intrinsics.width as usize * camera_intrinsics.height as usize
+            || ![
+                camera_intrinsics.fx,
+                camera_intrinsics.fy,
+                camera_intrinsics.cx,
+                camera_intrinsics.cy,
+            ]
+            .iter()
+            .all(|v| v.is_finite())
+            || camera_intrinsics.cx.abs() > 1e6
+            || camera_intrinsics.cy.abs() > 1e6
+            || camera_intrinsics.fx < 1e-6
+            || camera_intrinsics.fy < 1e-6
         {
             return Err(MapError::InvalidFrame);
         }
@@ -184,15 +201,15 @@ impl LocalOccupancyMap {
         // Deduplicate per frame so dense pixels cannot instantly saturate a cell.
         // Obstacle evidence wins over free evidence from another ray in the same frame.
         let mut updates = vec![0_i8; self.evidence.len()];
-        for v in (0..k.height).step_by(self.config.pixel_stride as usize) {
-            for u in (0..k.width).step_by(self.config.pixel_stride as usize) {
-                let z = depth[(v * k.width + u) as usize] as f64;
+        for v in (0..camera_intrinsics.height).step_by(self.config.pixel_stride as usize) {
+            for u in (0..camera_intrinsics.width).step_by(self.config.pixel_stride as usize) {
+                let z = depth[(v * camera_intrinsics.width + u) as usize] as f64;
                 if !z.is_finite() || z <= 0.0 {
                     continue;
                 }
                 let optical = Vector3 {
-                    x: (u as f64 - k.cx) * z / k.fx,
-                    y: (v as f64 - k.cy) * z / k.fy,
+                    x: (u as f64 - camera_intrinsics.cx) * z / camera_intrinsics.fx,
+                    y: (v as f64 - camera_intrinsics.cy) * z / camera_intrinsics.fy,
                     z,
                 };
                 let range = optical.x.hypot(optical.y).hypot(optical.z);
@@ -247,6 +264,8 @@ impl LocalOccupancyMap {
         self.last_timestamp = Some(timestamp);
         Ok(())
     }
+    /// Copy observed evidence into a row-major probability grid.
+    /// The origin is the lower-left cell boundary; cell centers add half a cell.
     pub fn snapshot(&self) -> MapSnapshot {
         MapSnapshot {
             width: self.config.width,
@@ -281,7 +300,7 @@ mod tests {
             ..Default::default()
         })
         .unwrap();
-        let k = CameraIntrinsics {
+        let camera_intrinsics = CameraIntrinsics {
             width: 1,
             height: 1,
             fx: 1.0,
@@ -301,13 +320,14 @@ mod tests {
                 ..Vector3::ZERO
             }),
         };
-        (map, k, pose)
+        (map, camera_intrinsics, pose)
     }
     #[test]
     fn wall_marks_ray_free_endpoint_occupied_and_space_behind_unknown() {
-        let (mut map, k, p) = setup();
+        let (mut map, camera_intrinsics, p) = setup();
         for t in 0..4 {
-            map.integrate_depth(t as f64, k, p, &[2.0]).unwrap();
+            map.integrate_depth(t as f64, camera_intrinsics, p, &[2.0])
+                .unwrap();
         }
         let s = map.snapshot();
         assert!(s.occupancy[10 * 20 + 12] < 50);
@@ -316,8 +336,9 @@ mod tests {
     }
     #[test]
     fn rolling_preserves_world_evidence_and_exposes_unknown_cells() {
-        let (mut map, k, p) = setup();
-        map.integrate_depth(0.0, k, p, &[2.0]).unwrap();
+        let (mut map, camera_intrinsics, p) = setup();
+        map.integrate_depth(0.0, camera_intrinsics, p, &[2.0])
+            .unwrap();
         let before = map.snapshot().occupancy[10 * 20 + 14];
         map.recenter(1.0, 0.0).unwrap();
         assert_eq!(map.snapshot().occupancy[10 * 20 + 12], before);
@@ -327,29 +348,33 @@ mod tests {
     }
     #[test]
     fn invalid_depth_and_inputs_do_not_clear_unknown_space() {
-        let (mut map, k, p) = setup();
-        map.integrate_depth(0.0, k, p, &[f32::NAN]).unwrap();
+        let (mut map, camera_intrinsics, p) = setup();
+        map.integrate_depth(0.0, camera_intrinsics, p, &[f32::NAN])
+            .unwrap();
         assert!(map.snapshot().occupancy.iter().all(|x| *x == -1));
         assert_eq!(
-            map.integrate_depth(0.0, k, p, &[2.0]),
+            map.integrate_depth(0.0, camera_intrinsics, p, &[2.0]),
             Err(MapError::InvalidTime)
         );
         assert_eq!(
-            map.integrate_depth(1.0, k, p, &[]),
+            map.integrate_depth(1.0, camera_intrinsics, p, &[]),
             Err(MapError::InvalidFrame)
         );
-        map.integrate_depth(1.0, k, p, &[100.0]).unwrap();
+        map.integrate_depth(1.0, camera_intrinsics, p, &[100.0])
+            .unwrap();
         assert!(map.snapshot().occupancy.iter().all(|x| *x == -1));
     }
     #[test]
     fn ground_is_free_and_overhead_return_is_ignored() {
-        let (mut map, k, mut p) = setup();
+        let (mut map, camera_intrinsics, mut p) = setup();
         p.position.z = 0.0;
-        map.integrate_depth(0.0, k, p, &[2.0]).unwrap();
+        map.integrate_depth(0.0, camera_intrinsics, p, &[2.0])
+            .unwrap();
         assert!(map.snapshot().occupancy[10 * 20 + 14] < 50);
         map.clear();
         p.position.z = 3.0;
-        map.integrate_depth(1.0, k, p, &[2.0]).unwrap();
+        map.integrate_depth(1.0, camera_intrinsics, p, &[2.0])
+            .unwrap();
         assert!(map.snapshot().occupancy.iter().all(|x| *x == -1));
     }
 }

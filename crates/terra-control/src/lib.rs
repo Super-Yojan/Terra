@@ -1,4 +1,10 @@
-//! Feedback PI velocity control with feedforward, coupled effort limits and anti-windup.
+//! Closed-loop velocity control: desired motion to normalized wheel effort.
+//!
+//! [`VelocityController::set_target`] accepts a timestamped velocity target.
+//! [`VelocityController::step`] checks sensor health and freshness before applying
+//! feedforward and PI feedback. Wheel efforts share one saturation scale so their
+//! ratio is preserved; anti-windup feeds the achievable effort back into the integrals.
+
 use terra_types::*;
 #[derive(Clone, Copy, Debug)]
 pub struct ControllerConfig {
@@ -119,6 +125,8 @@ impl VelocityController {
         self.target = Some(target);
         Ok(())
     }
+    /// Produce wheel effort only after time, sensor health, and target checks pass.
+    /// A safety hold clears accumulated feedback so it cannot resume as a surge.
     pub fn step(&mut self, estimate: VelocityEstimate) -> MotorOutput {
         let now = estimate.timestamp;
         let dt = self.last_step.map_or(0.01, |last| now - last);
@@ -156,26 +164,29 @@ impl VelocityController {
             return MotorOutput::stopped(reason);
         }
         let target = self.target.unwrap();
-        let error_v = target.forward - estimate.forward;
-        let error_w = target.yaw_rate - estimate.yaw_rate;
+        let linear_error = target.forward - estimate.forward;
+        let yaw_error = target.yaw_rate - estimate.yaw_rate;
         let linear = self.config.linear_feedforward * target.forward
-            + self.config.linear_kp * error_v
+            + self.config.linear_kp * linear_error
             + self.linear_integral;
         let yaw = self.config.yaw_feedforward * target.yaw_rate
-            + self.config.yaw_kp * error_w
+            + self.config.yaw_kp * yaw_error
             + self.yaw_integral;
+        // Scale both wheels together to preserve the requested turn/forward ratio.
         let scale =
             ((linear - yaw).abs().max((linear + yaw).abs()) / self.config.max_effort).max(1.0);
         let (mut left, mut right) = ((linear - yaw) / scale, (linear + yaw) / scale);
         let achieved_linear = (left + right) * 0.5;
         let achieved_yaw = (right - left) * 0.5;
+        // Back-calculation prevents the integrals from growing against saturation.
         self.linear_integral = (self.linear_integral
-            + (self.config.linear_ki * error_v
+            + (self.config.linear_ki * linear_error
                 + self.config.anti_windup * (achieved_linear - linear))
                 * dt)
             .clamp(-self.config.max_effort, self.config.max_effort);
         self.yaw_integral = (self.yaw_integral
-            + (self.config.yaw_ki * error_w + self.config.anti_windup * (achieved_yaw - yaw)) * dt)
+            + (self.config.yaw_ki * yaw_error + self.config.anti_windup * (achieved_yaw - yaw))
+                * dt)
             .clamp(-self.config.max_effort, self.config.max_effort);
         if target.forward == 0.0
             && target.yaw_rate == 0.0

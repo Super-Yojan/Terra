@@ -1,3 +1,6 @@
+//! Select motion authority from operator requests, onboard evidence, and safety state.
+//! The tick combines waypoint/search intent with planning and emits reasons for holds.
+
 use crate::*;
 use serde::Serialize;
 use std::collections::VecDeque;
@@ -62,7 +65,7 @@ pub struct AutonomyArbiter {
     pending_reports: VecDeque<SearchReport>,
     search_sessions: VecDeque<String>,
     reported_sessions: std::collections::BTreeSet<(String, String)>,
-    acknowledged_reports: std::collections::BTreeSet<(String,String,String)>,
+    acknowledged_reports: std::collections::BTreeSet<(String, String, String)>,
 }
 impl Default for AutonomyArbiter {
     fn default() -> Self {
@@ -290,7 +293,12 @@ impl AutonomyArbiter {
         {
             return self.receipt.as_ref().is_some_and(|r| r.1);
         }
-        if self.stopped || !matches!(self.level, Level::Waypoint | Level::WaypointDirect | Level::Supervised) {
+        if self.stopped
+            || !matches!(
+                self.level,
+                Level::Waypoint | Level::WaypointDirect | Level::Supervised
+            )
+        {
             if let Some(t) = token.clone() {
                 self.acknowledge(t, fingerprint, false, "authority_required");
             }
@@ -619,13 +627,20 @@ impl AutonomyArbiter {
             p.run_id == r.run_id && p.search_id == r.search_id && p.report_id == r.report_id
         }) {
             self.pending_reports.remove(i);
-            self.acknowledged_reports.insert((r.run_id.clone(),r.search_id.clone(),r.report_id.clone()));
+            self.acknowledged_reports.insert((
+                r.run_id.clone(),
+                r.search_id.clone(),
+                r.report_id.clone(),
+            ));
             self.event("report_acknowledged", Some(r.token), "report_delivered");
             true
         } else {
-            self.acknowledged_reports.contains(&(r.run_id,r.search_id,r.report_id))
+            self.acknowledged_reports
+                .contains(&(r.run_id, r.search_id, r.report_id))
         }
     }
+    /// Run one authority/safety tick and return intent, allowed motion, and status.
+    /// Consumers must use the returned `twist`, not bypass holds with `intent`.
     pub fn step(&mut self, input: ArbiterInput<'_>) -> ArbiterOutput {
         let valid_time = input.now.is_finite()
             && input.now >= 0.

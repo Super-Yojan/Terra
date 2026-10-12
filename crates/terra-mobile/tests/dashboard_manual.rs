@@ -85,36 +85,119 @@ fn sensor_free_dashboard_publishes_status_without_pose_or_motor_output() {
 fn dashboard_drive_reaches_the_real_mobile_arbiter_with_queue_age() {
     use terra_mobile::{ImuReading, VioReading};
     let socket = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let endpoint = format!("tcp/127.0.0.1:{}", socket.local_addr().unwrap().port()); drop(socket);
+    let endpoint = format!("tcp/127.0.0.1:{}", socket.local_addr().unwrap().port());
+    drop(socket);
     let mut config = zenoh::Config::default();
     config.insert_json5("mode", "\"router\"").unwrap();
-    config.insert_json5("listen/endpoints", &serde_json::json!([endpoint]).to_string()).unwrap();
-    config.insert_json5("scouting/multicast/enabled", "false").unwrap();
+    config
+        .insert_json5(
+            "listen/endpoints",
+            &serde_json::json!([endpoint]).to_string(),
+        )
+        .unwrap();
+    config
+        .insert_json5("scouting/multicast/enabled", "false")
+        .unwrap();
     let router = zenoh::open(config).wait().unwrap();
     let controller = MobileController::new(default_control_settings()).unwrap();
-    controller.connect_dashboard(endpoint, "drive-check".into(), 7).unwrap();
+    controller
+        .connect_dashboard(endpoint, "drive-check".into(), 7)
+        .unwrap();
     let start = Instant::now();
     let mut sequence = 0;
     let mut accepted = false;
     while start.elapsed() < Duration::from_secs(3) {
         let now = 100. + start.elapsed().as_secs_f64();
-        controller.push_imu(ImuReading {timestamp:now,acceleration_forward:0.,acceleration_left:0.,acceleration_up:0.,gyro_roll:0.,gyro_pitch:0.,gyro_yaw:0.}).unwrap();
-        controller.push_vio(VioReading {timestamp:now,position_x:0.,position_y:0.,position_z:0.,quaternion_x:0.,quaternion_y:0.,quaternion_z:0.,quaternion_w:1.,velocity_x:0.,velocity_y:0.,velocity_z:0.,tracked:true}).unwrap();
+        controller
+            .push_imu(ImuReading {
+                timestamp: now,
+                acceleration_forward: 0.,
+                acceleration_left: 0.,
+                acceleration_up: 0.,
+                gyro_roll: 0.,
+                gyro_pitch: 0.,
+                gyro_yaw: 0.,
+            })
+            .unwrap();
+        controller
+            .push_vio(VioReading {
+                timestamp: now,
+                position_x: 0.,
+                position_y: 0.,
+                position_z: 0.,
+                quaternion_x: 0.,
+                quaternion_y: 0.,
+                quaternion_z: 0.,
+                quaternion_w: 1.,
+                velocity_x: 0.,
+                velocity_y: 0.,
+                velocity_z: 0.,
+                tracked: true,
+            })
+            .unwrap();
         controller.step(now).unwrap();
-        let status: serde_json::Value = serde_json::from_str(&controller.autonomy_status()).unwrap();
+        let status: serde_json::Value =
+            serde_json::from_str(&controller.autonomy_status()).unwrap();
         sequence += 1;
-        router.put("drive-check/7/teleop",serde_json::json!({"linear":0.3,"angular":0.,"run_id":status["status"]["run_id"],"authority_revision":status["status"]["revision"],"operator_session_id":"test","sequence":sequence}).to_string()).wait().unwrap();
+        router
+            .put(
+                "drive-check/7/teleop",
+                serde_json::json!({
+                    "linear": 0.3,
+                    "angular": 0.,
+                    "run_id": status["status"]["run_id"],
+                    "authority_revision": status["status"]["revision"],
+                    "operator_session_id": "test",
+                    "sequence": sequence,
+                })
+                .to_string(),
+            )
+            .wait()
+            .unwrap();
         std::thread::sleep(Duration::from_millis(20));
         let now = 100. + start.elapsed().as_secs_f64();
-        controller.push_imu(ImuReading {timestamp:now,acceleration_forward:0.,acceleration_left:0.,acceleration_up:0.,gyro_roll:0.,gyro_pitch:0.,gyro_yaw:0.}).unwrap();
-        controller.push_vio(VioReading {timestamp:now,position_x:0.,position_y:0.,position_z:0.,quaternion_x:0.,quaternion_y:0.,quaternion_z:0.,quaternion_w:1.,velocity_x:0.,velocity_y:0.,velocity_z:0.,tracked:true}).unwrap();
+        controller
+            .push_imu(ImuReading {
+                timestamp: now,
+                acceleration_forward: 0.,
+                acceleration_left: 0.,
+                acceleration_up: 0.,
+                gyro_roll: 0.,
+                gyro_pitch: 0.,
+                gyro_yaw: 0.,
+            })
+            .unwrap();
+        controller
+            .push_vio(VioReading {
+                timestamp: now,
+                position_x: 0.,
+                position_y: 0.,
+                position_z: 0.,
+                quaternion_x: 0.,
+                quaternion_y: 0.,
+                quaternion_z: 0.,
+                quaternion_w: 1.,
+                velocity_x: 0.,
+                velocity_y: 0.,
+                velocity_z: 0.,
+                tracked: true,
+            })
+            .unwrap();
         controller.step(now).unwrap();
-        let status: serde_json::Value = serde_json::from_str(&controller.autonomy_status()).unwrap();
+        let status: serde_json::Value =
+            serde_json::from_str(&controller.autonomy_status()).unwrap();
         if status["status"]["active_source"] == "operator" {
-            assert_eq!(status["twist"]["linear"], 0.3, "selected manual intent must reach the phone adapter");
+            assert_eq!(
+                status["twist"]["linear"], 0.3,
+                "selected manual intent must reach the phone adapter"
+            );
             assert_eq!(status["twist"]["angular"], 0.0);
-            accepted=true;break
+            accepted = true;
+            break;
         }
     }
-    assert!(accepted,"routed, fresh teleop was not accepted by the mobile controller");
+    assert!(
+        accepted,
+        "routed, fresh teleop was not accepted by the mobile controller"
+    );
 }

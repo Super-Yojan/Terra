@@ -1,3 +1,5 @@
+//! Versioned target-search requests, observations, reports, and acknowledgements.
+
 use crate::valid_token;
 use serde::{Deserialize, Serialize};
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]

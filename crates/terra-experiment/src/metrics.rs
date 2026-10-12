@@ -1,3 +1,5 @@
+//! Offline metrics computed from recorded experiment events.
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 #[derive(Default)]
@@ -34,15 +36,19 @@ pub struct RunSummary {
     pub contacts: u64,
     pub operator_control_seconds: f64,
     pub mission_complete: bool,
-    #[serde(default)] pub search_confirmations:u64,
-    #[serde(default)] pub search_exhaustions:u64,
-    #[serde(default)] pub search_route_failures:u64,
-    #[serde(default)] pub time_to_target_confirmation:Option<f64>,
+    #[serde(default)]
+    pub search_confirmations: u64,
+    #[serde(default)]
+    pub search_exhaustions: u64,
+    #[serde(default)]
+    pub search_route_failures: u64,
+    #[serde(default)]
+    pub time_to_target_confirmation: Option<f64>,
 }
 pub fn summarize(records: &[Value]) -> RunSummary {
     let mut out = RunSummary::default();
     let mut previous = std::collections::BTreeMap::<u64, (f64, String)>::new();
-    let mut terminal_searches=std::collections::BTreeSet::new();
+    let mut terminal_searches = std::collections::BTreeSet::new();
     for r in records {
         if r["kind"] == "run_end" {
             out.complete = r["complete"] == true;
@@ -58,9 +64,23 @@ pub fn summarize(records: &[Value]) -> RunSummary {
                 out.operator_control_seconds += (time - old).clamp(0., 0.5);
             }
             previous.insert(id, (time, source.into()));
-            if let (Some(id),Some(phase))=(r["search"]["search_id"].as_str(),r["search"]["phase"].as_str()) {
-                if matches!(phase,"completed"|"exhausted"|"timed_out"|"cancelled") && terminal_searches.insert((r["rover_id"].as_u64().unwrap_or(0),r["run_id"].as_str().unwrap_or("").to_string(),id.to_string())) {
-                    if phase=="completed" {out.search_confirmations+=1;out.time_to_target_confirmation.get_or_insert(time);}else if phase=="exhausted" {out.search_exhaustions+=1;}
+            if let (Some(id), Some(phase)) = (
+                r["search"]["search_id"].as_str(),
+                r["search"]["phase"].as_str(),
+            ) {
+                if matches!(phase, "completed" | "exhausted" | "timed_out" | "cancelled")
+                    && terminal_searches.insert((
+                        r["rover_id"].as_u64().unwrap_or(0),
+                        r["run_id"].as_str().unwrap_or("").to_string(),
+                        id.to_string(),
+                    ))
+                {
+                    if phase == "completed" {
+                        out.search_confirmations += 1;
+                        out.time_to_target_confirmation.get_or_insert(time);
+                    } else if phase == "exhausted" {
+                        out.search_exhaustions += 1;
+                    }
                 }
             }
             if r["mission"]["complete"] == true {

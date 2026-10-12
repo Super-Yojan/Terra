@@ -1,4 +1,10 @@
-//! Deterministic local planning over observed occupancy, shared by phone and Bevy.
+//! Deterministic local motion planning over observed occupancy.
+//!
+//! [`LocalPlanner::plan`] samples reachable velocities and chooses the safe one
+//! closest to the requested intent. [`LocalPlanner::admissible`] checks the swept
+//! footprint through the prediction horizon and braking period. [`frontier`] and
+//! [`reachable`] search the grid; unknown cells are not treated as free paths.
+
 mod search;
 pub use search::*;
 use serde::{Deserialize, Serialize};
@@ -52,49 +58,55 @@ pub struct PlanningDecision {
     pub twist: Twist,
     pub reason: &'static str,
 }
-fn valid_map(m: &MapSnapshot) -> bool {
-    m.width > 0
-        && m.height > 0
-        && m.width <= 1000
-        && m.height <= 1000
-        && m.occupancy.len() == m.width as usize * m.height as usize
-        && m.resolution.is_finite()
-        && m.resolution >= 0.01
-        && m.origin_x.is_finite()
-        && m.origin_y.is_finite()
+fn valid_map(map: &MapSnapshot) -> bool {
+    map.width > 0
+        && map.height > 0
+        && map.width <= 1000
+        && map.height <= 1000
+        && map.occupancy.len() == map.width as usize * map.height as usize
+        && map.resolution.is_finite()
+        && map.resolution >= 0.01
+        && map.origin_x.is_finite()
+        && map.origin_y.is_finite()
 }
-fn cell(m: &MapSnapshot, x: f64, y: f64) -> Option<(usize, usize)> {
-    if !valid_map(m) || !x.is_finite() || !y.is_finite() {
+fn cell(map: &MapSnapshot, x: f64, y: f64) -> Option<(usize, usize)> {
+    if !valid_map(map) || !x.is_finite() || !y.is_finite() {
         return None;
     }
-    let a = ((x - m.origin_x) / m.resolution).floor();
-    let b = ((y - m.origin_y) / m.resolution).floor();
-    (a >= 0. && b >= 0. && a < (m.width as f64) && b < (m.height as f64))
-        .then_some((a as usize, b as usize))
+    let column = ((x - map.origin_x) / map.resolution).floor();
+    let row = ((y - map.origin_y) / map.resolution).floor();
+    (column >= 0. && row >= 0. && column < (map.width as f64) && row < (map.height as f64))
+        .then_some((column as usize, row as usize))
 }
-fn clear(m: &MapSnapshot, x: f64, y: f64, r: f64, current: Option<Pose>) -> bool {
-    let Some((cx, cy)) = cell(m, x, y) else {
+// Check every cell touched by the circular footprint, including cell corners.
+// Unknown space is allowed only inside the footprint at the starting pose;
+// that exception lets the rover leave its own unobserved underbody cells.
+fn clear(map: &MapSnapshot, x: f64, y: f64, radius: f64, current: Option<Pose>) -> bool {
+    let Some((center_column, center_row)) = cell(map, x, y) else {
         return false;
     };
-    let n = (r / m.resolution).ceil() as isize + 1;
-    for dy in -n..=n {
-        for dx in -n..=n {
-            let a = cx as isize + dx;
-            let b = cy as isize + dy;
-            let px = m.origin_x + (a as f64 + 0.5) * m.resolution;
-            let py = m.origin_y + (b as f64 + 0.5) * m.resolution;
-            if (px - x).hypot(py - y) > r + m.resolution * 0.7072 {
+    let cell_reach = (radius / map.resolution).ceil() as isize + 1;
+    for dy in -cell_reach..=cell_reach {
+        for dx in -cell_reach..=cell_reach {
+            let column = center_column as isize + dx;
+            let row = center_row as isize + dy;
+            let cell_x = map.origin_x + (column as f64 + 0.5) * map.resolution;
+            let cell_y = map.origin_y + (row as f64 + 0.5) * map.resolution;
+            if (cell_x - x).hypot(cell_y - y) > radius + map.resolution * 0.7072 {
                 continue;
             }
-            if a < 0 || b < 0 || a >= m.width as isize || b >= m.height as isize {
+            if column < 0 || row < 0 || column >= map.width as isize || row >= map.height as isize {
                 return false;
             }
-            let v = m.occupancy[b as usize * m.width as usize + a as usize];
-            if v >= 65 {
+            let occupancy = map.occupancy[row as usize * map.width as usize + column as usize];
+            if occupancy >= 65 {
                 return false;
             }
-            if v < 0
-                && current.is_none_or(|p| (px - p.x).hypot(py - p.y) > r + m.resolution * 0.7072)
+            if occupancy < 0
+                && current.is_none_or(|sample_pose| {
+                    (cell_x - sample_pose.x).hypot(cell_y - sample_pose.y)
+                        > radius + map.resolution * 0.7072
+                })
             {
                 return false;
             }
@@ -104,54 +116,61 @@ fn clear(m: &MapSnapshot, x: f64, y: f64, r: f64, current: Option<Pose>) -> bool
 }
 impl LocalPlanner {
     fn valid(&self) -> bool {
-        let c = &self.config;
+        let config = &self.config;
         [
-            c.radius,
-            c.max_linear,
-            c.max_angular,
-            c.acceleration,
-            c.yaw_acceleration,
-            c.braking,
-            c.horizon,
+            config.radius,
+            config.max_linear,
+            config.max_angular,
+            config.acceleration,
+            config.yaw_acceleration,
+            config.braking,
+            config.horizon,
         ]
         .iter()
         .all(|v| v.is_finite() && *v > 0.)
-            && c.radius <= 5.
-            && c.horizon <= 10.
+            && config.radius <= 5.
+            && config.horizon <= 10.
     }
-    pub fn admissible(&self, m: &MapSnapshot, pose: Pose, t: Twist) -> bool {
+    /// Check the swept footprint through the motion horizon and the braking tail.
+    /// Out-of-map, occupied, or newly entered unknown cells reject the trajectory.
+    pub fn admissible(&self, map: &MapSnapshot, pose: Pose, trajectory: Twist) -> bool {
         if !self.valid()
-            || !valid_map(m)
+            || !valid_map(map)
             || !pose.finite()
-            || !t.linear.is_finite()
-            || !t.angular.is_finite()
+            || !trajectory.linear.is_finite()
+            || !trajectory.angular.is_finite()
         {
             return false;
         }
-        let c = &self.config;
-        let step = (m.resolution / (2. * t.linear.abs().max(0.1))).min(0.1);
-        let mut p = pose;
+        let config = &self.config;
+        let step = (map.resolution / (2. * trajectory.linear.abs().max(0.1))).min(0.1);
+        let mut sample_pose = pose;
         let mut elapsed = 0.;
-        let duration = c.horizon + t.linear.abs() / c.braking;
+        let duration = config.horizon + trajectory.linear.abs() / config.braking;
         while elapsed < duration {
-            if !clear(m, p.x, p.y, c.radius, Some(pose)) {
+            if !clear(map, sample_pose.x, sample_pose.y, config.radius, Some(pose)) {
                 return false;
             }
-            let scale = if elapsed <= c.horizon {
+            let scale = if elapsed <= config.horizon {
                 1.
             } else {
-                (1. - (elapsed - c.horizon) * c.braking / t.linear.abs().max(0.001)).max(0.)
+                (1. - (elapsed - config.horizon) * config.braking
+                    / trajectory.linear.abs().max(0.001))
+                .max(0.)
             };
-            p.yaw += t.angular * scale * step;
-            p.x += t.linear * scale * p.yaw.cos() * step;
-            p.y += t.linear * scale * p.yaw.sin() * step;
+            sample_pose.yaw += trajectory.angular * scale * step;
+            sample_pose.x += trajectory.linear * scale * sample_pose.yaw.cos() * step;
+            sample_pose.y += trajectory.linear * scale * sample_pose.yaw.sin() * step;
             elapsed += step;
         }
-        clear(m, p.x, p.y, c.radius, Some(pose))
+        clear(map, sample_pose.x, sample_pose.y, config.radius, Some(pose))
     }
+    /// Sample acceleration-bounded velocities and minimize deviation from intent.
+    /// Returns zero twist with `obstacle_blocked` when no candidate is admissible
+    /// or the planning inputs are invalid; the reason alone does not prove an obstacle.
     pub fn plan(
         &self,
-        m: &MapSnapshot,
+        map: &MapSnapshot,
         pose: Pose,
         current: Twist,
         intent: Twist,
@@ -176,25 +195,26 @@ impl LocalPlanner {
         {
             return stop;
         }
-        let c = &self.config;
-        let lo = (current.linear - c.acceleration * dt).max(-c.max_linear);
-        let hi = (current.linear + c.acceleration * dt).min(c.max_linear);
-        let al = (current.angular - c.yaw_acceleration * dt).max(-c.max_angular);
-        let ah = (current.angular + c.yaw_acceleration * dt).min(c.max_angular);
+        let config = &self.config;
+        let min_linear = (current.linear - config.acceleration * dt).max(-config.max_linear);
+        let max_linear = (current.linear + config.acceleration * dt).min(config.max_linear);
+        let min_angular = (current.angular - config.yaw_acceleration * dt).max(-config.max_angular);
+        let max_angular = (current.angular + config.yaw_acceleration * dt).min(config.max_angular);
         let mut best: Option<(f64, Twist)> = None;
-        for i in 0..=10 {
-            for j in 0..=10 {
-                let t = Twist {
-                    linear: lo + (hi - lo) * i as f64 / 10.,
-                    angular: al + (ah - al) * j as f64 / 10.,
+        for linear_sample in 0..=10 {
+            for angular_sample in 0..=10 {
+                let trajectory = Twist {
+                    linear: min_linear + (max_linear - min_linear) * linear_sample as f64 / 10.,
+                    angular: min_angular
+                        + (max_angular - min_angular) * angular_sample as f64 / 10.,
                 };
-                if !self.admissible(m, pose, t) {
+                if !self.admissible(map, pose, trajectory) {
                     continue;
                 }
-                let score =
-                    (t.linear - intent.linear).powi(2) + 0.3 * (t.angular - intent.angular).powi(2);
+                let score = (trajectory.linear - intent.linear).powi(2)
+                    + 0.3 * (trajectory.angular - intent.angular).powi(2);
                 if best.is_none_or(|b| score < b.0) {
-                    best = Some((score, t));
+                    best = Some((score, trajectory));
                 }
             }
         }
@@ -213,7 +233,7 @@ impl LocalPlanner {
 }
 /// Breadth-first search through inflated observed free cells. Stable ordering breaks ties.
 pub fn frontier(
-    m: &MapSnapshot,
+    map: &MapSnapshot,
     pose: Pose,
     radius: f64,
     excluded: &[(f64, f64)],
@@ -221,43 +241,43 @@ pub fn frontier(
     if !pose.finite() || !radius.is_finite() || radius <= 0. || radius > 5. {
         return None;
     }
-    let start = cell(m, pose.x, pose.y)?;
-    let mut seen = vec![false; m.occupancy.len()];
-    let mut q = VecDeque::from([(start.0, start.1, 0usize)]);
+    let start = cell(map, pose.x, pose.y)?;
+    let mut seen = vec![false; map.occupancy.len()];
+    let mut queue = VecDeque::from([(start.0, start.1, 0usize)]);
     let mut best: Option<(f64, (f64, f64))> = None;
-    while let Some((x, y, d)) = q.pop_front() {
-        let index = y * m.width as usize + x;
+    while let Some((x, y, distance_cells)) = queue.pop_front() {
+        let index = y * map.width as usize + x;
         if seen[index] {
             continue;
         }
         seen[index] = true;
-        let px = m.origin_x + (x as f64 + 0.5) * m.resolution;
-        let py = m.origin_y + (y as f64 + 0.5) * m.resolution;
-        if !clear(m, px, py, radius, Some(pose)) {
+        let px = map.origin_x + (x as f64 + 0.5) * map.resolution;
+        let py = map.origin_y + (y as f64 + 0.5) * map.resolution;
+        if !clear(map, px, py, radius, Some(pose)) {
             continue;
         }
-        let reach = (radius / m.resolution).ceil() as isize + 2;
-        let mut gain = 0;
+        let reach = (radius / map.resolution).ceil() as isize + 2;
+        let mut unknown_neighbors = 0;
         for dy in -reach..=reach {
             for dx in -reach..=reach {
                 let a = x as isize + dx;
                 let b = y as isize + dy;
                 if a >= 0
                     && b >= 0
-                    && a < m.width as isize
-                    && b < m.height as isize
-                    && m.occupancy[b as usize * m.width as usize + a as usize] < 0
+                    && a < map.width as isize
+                    && b < map.height as isize
+                    && map.occupancy[b as usize * map.width as usize + a as usize] < 0
                 {
-                    gain += 1;
+                    unknown_neighbors += 1;
                 }
             }
         }
-        if clear(m, px, py, radius, None)
-            && gain > 0
+        if clear(map, px, py, radius, None)
+            && unknown_neighbors > 0
             && (px - pose.x).hypot(py - pose.y) > radius.max(0.8)
             && excluded.iter().all(|&(a, b)| (px - a).hypot(py - b) > 1.)
         {
-            let score = gain as f64 / (1. + d as f64);
+            let score = unknown_neighbors as f64 / (1. + distance_cells as f64);
             if best.is_none_or(|b| score > b.0) {
                 best = Some((score, (px, py)));
             }
@@ -265,69 +285,69 @@ pub fn frontier(
         for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
             let a = x as isize + dx;
             let b = y as isize + dy;
-            if a >= 0 && b >= 0 && a < m.width as isize && b < m.height as isize {
-                q.push_back((a as usize, b as usize, d + 1));
+            if a >= 0 && b >= 0 && a < map.width as isize && b < map.height as isize {
+                queue.push_back((a as usize, b as usize, distance_cells + 1));
             }
         }
     }
     best.map(|b| b.1)
 }
 /// Reachability check for proposal approval using observed, footprint-inflated free cells.
-pub fn reachable(m: &MapSnapshot, pose: Pose, radius: f64, x: f64, y: f64) -> bool {
-    let Some(start) = cell(m, pose.x, pose.y) else {
+pub fn reachable(map: &MapSnapshot, pose: Pose, radius: f64, x: f64, y: f64) -> bool {
+    let Some(start) = cell(map, pose.x, pose.y) else {
         return false;
     };
-    let Some(target) = cell(m, x, y) else {
+    let Some(target) = cell(map, x, y) else {
         return false;
     };
     if !pose.finite()
         || !radius.is_finite()
         || radius <= 0.
         || radius > 5.
-        || !clear(m, x, y, radius, None)
+        || !clear(map, x, y, radius, None)
     {
         return false;
     }
-    let mut seen = vec![false; m.occupancy.len()];
-    let mut q = VecDeque::from([start]);
-    while let Some((a, b)) = q.pop_front() {
-        let i = b * m.width as usize + a;
-        if seen[i] {
+    let mut seen = vec![false; map.occupancy.len()];
+    let mut queue = VecDeque::from([start]);
+    while let Some((column, row)) = queue.pop_front() {
+        let index = row * map.width as usize + column;
+        if seen[index] {
             continue;
         }
-        seen[i] = true;
-        let px = m.origin_x + (a as f64 + 0.5) * m.resolution;
-        let py = m.origin_y + (b as f64 + 0.5) * m.resolution;
-        if !clear(m, px, py, radius, Some(pose)) {
+        seen[index] = true;
+        let cell_x = map.origin_x + (column as f64 + 0.5) * map.resolution;
+        let cell_y = map.origin_y + (row as f64 + 0.5) * map.resolution;
+        if !clear(map, cell_x, cell_y, radius, Some(pose)) {
             continue;
         }
-        if (a, b) == target {
+        if (column, row) == target {
             return true;
         }
         for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
-            let nx = a as isize + dx;
-            let ny = b as isize + dy;
-            if nx >= 0 && ny >= 0 && nx < m.width as isize && ny < m.height as isize {
-                q.push_back((nx as usize, ny as usize));
+            let nx = column as isize + dx;
+            let ny = row as isize + dy;
+            if nx >= 0 && ny >= 0 && nx < map.width as isize && ny < map.height as isize {
+                queue.push_back((nx as usize, ny as usize));
             }
         }
     }
     false
 }
 /// Clearance to observed obstacle cell boundaries; unknown space is not evidence of clearance.
-pub fn observed_clearance(m: &MapSnapshot, pose: Pose, radius: f64) -> Option<f64> {
-    if !valid_map(m) || !pose.finite() || !radius.is_finite() || radius <= 0. {
+pub fn observed_clearance(map: &MapSnapshot, pose: Pose, radius: f64) -> Option<f64> {
+    if !valid_map(map) || !pose.finite() || !radius.is_finite() || radius <= 0. {
         return None;
     }
     let mut best = f64::INFINITY;
-    for (i, v) in m.occupancy.iter().enumerate() {
+    for (i, v) in map.occupancy.iter().enumerate() {
         if *v < 65 {
             continue;
         }
-        let x = m.origin_x + (i % m.width as usize) as f64 * m.resolution;
-        let y = m.origin_y + (i / m.width as usize) as f64 * m.resolution;
-        let dx = (x - pose.x).max(0.).max(pose.x - x - m.resolution);
-        let dy = (y - pose.y).max(0.).max(pose.y - y - m.resolution);
+        let x = map.origin_x + (i % map.width as usize) as f64 * map.resolution;
+        let y = map.origin_y + (i / map.width as usize) as f64 * map.resolution;
+        let dx = (x - pose.x).max(0.).max(pose.x - x - map.resolution);
+        let dy = (y - pose.y).max(0.).max(pose.y - y - map.resolution);
         best = best.min(dx.hypot(dy) - radius);
     }
     best.is_finite().then_some(best.max(0.))

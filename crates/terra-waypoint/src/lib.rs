@@ -1,5 +1,10 @@
-//! Lat/lon go-to-waypoint follower. The phone runs this through `terra-mobile`.
-//! The simulator calls the same type; it does not keep a second controller.
+//! Waypoint following shared by the phone and simulator.
+//!
+//! [`GeoOrigin`] converts geographic coordinates to a local metric frame.
+//! [`WaypointController`] accepts goals, tracks arrival, and returns velocity
+//! intent. Obstacle checking and motor authorization belong to downstream layers;
+//! a waypoint output alone does not establish that a route is safe.
+
 use serde::Serialize;
 use terra_types::InputError;
 
@@ -257,6 +262,7 @@ impl WaypointController {
     }
 
     /// `x` and `y` are the rover pose in the origin frame, metres. `yaw` is radians, 0 facing +x.
+    /// Compute local goal-following intent; downstream planning checks obstacles.
     pub fn step(&self, x: f64, y: f64, yaw: f64) -> WaypointOutput {
         let Some(goal) = &self.goal else {
             return WaypointOutput {

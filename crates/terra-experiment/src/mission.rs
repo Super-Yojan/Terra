@@ -1,3 +1,5 @@
+//! Mission definitions and versioned records used to interpret experiment outcomes.
+
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

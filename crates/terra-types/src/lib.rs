@@ -1,5 +1,10 @@
-//! SI units; rover body axes are +X forward, +Y left, +Z up.
-//! All timestamps use the same monotonic clock, in seconds.
+//! Shared math, sensor samples, velocity targets, and safety results.
+//!
+//! All timestamps are seconds on one monotonic clock. Length and velocity use SI
+//! units; rover body axes are +X forward, +Y left, +Z up. [`Quaternion`] carries
+//! orientation and [`MotorOutput`] carries normalized wheel effort. This crate
+//! holds the vocabulary used by estimation, control, and hardware adapters.
+
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Vector3 {
     pub x: f64,
@@ -75,23 +80,25 @@ impl Quaternion {
             w: self.w,
         }
     }
-    pub fn compose(self, b: Self) -> Self {
+    pub fn compose(self, other: Self) -> Self {
         Self {
-            x: self.w * b.x + self.x * b.w + self.y * b.z - self.z * b.y,
-            y: self.w * b.y - self.x * b.z + self.y * b.w + self.z * b.x,
-            z: self.w * b.z + self.x * b.y - self.y * b.x + self.z * b.w,
-            w: self.w * b.w - self.x * b.x - self.y * b.y - self.z * b.z,
+            x: self.w * other.x + self.x * other.w + self.y * other.z - self.z * other.y,
+            y: self.w * other.y - self.x * other.z + self.y * other.w + self.z * other.x,
+            z: self.w * other.z + self.x * other.y - self.y * other.x + self.z * other.w,
+            w: self.w * other.w - self.x * other.x - self.y * other.y - self.z * other.z,
         }
     }
     /// Rotate a vector; callers must normalize the quaternion first.
-    pub fn rotate(self, v: Vector3) -> Vector3 {
-        let q = Vector3 {
+    pub fn rotate(self, vector: Vector3) -> Vector3 {
+        let axis = Vector3 {
             x: self.x,
             y: self.y,
             z: self.z,
         };
-        let t = q.cross(v).scaled(2.0);
-        v.plus(t.scaled(self.w)).plus(q.cross(t))
+        let twice_cross = axis.cross(vector).scaled(2.0);
+        vector
+            .plus(twice_cross.scaled(self.w))
+            .plus(axis.cross(twice_cross))
     }
     pub fn from_rotation_vector(v: Vector3) -> Self {
         let angle = v.x.hypot(v.y).hypot(v.z);
