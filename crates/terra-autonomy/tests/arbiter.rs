@@ -391,3 +391,46 @@ fn cancelled_l2_token_never_replays_motion() {
     assert!(a.accept_goal(&goal, 50.)); // Correlated receipt, not a new execution.
     assert_eq!(a.step(input(0.2)).twist, Twist::default());
 }
+
+#[test]
+fn blocked_planner_trace_is_published_and_cleared_on_stop() {
+    let mut arbiter = AutonomyArbiter::default();
+    arbiter.set_level(LevelRequest {
+        level: Level::AssistedTeleop,
+        token: "trace".into(),
+    });
+    arbiter.accept_operator(tele(), 0.0);
+    let map = terra_mapping::MapSnapshot {
+        width: 40,
+        height: 40,
+        resolution: 0.25,
+        origin_x: -5.,
+        origin_y: -5.,
+        occupancy: vec![100; 1600],
+    };
+    let evidence = |now| ArbiterInput {
+        now,
+        pose: Pose::default(),
+        pose_time: now,
+        map: Some(&map),
+        map_time: Some(now),
+        map_revision: 1,
+        measured: Twist::default(),
+        healthy: true,
+    };
+    let output = arbiter.step(evidence(0.1));
+    assert_eq!(output.status.reason, "obstacle_blocked");
+    let trace = output.status.planner_trace.as_ref().unwrap();
+    assert_eq!(trace.candidates.len(), 121);
+    assert_eq!(trace.age, 0.);
+    assert!(trace.selected.is_none());
+    assert!(serde_json::to_vec(&output.status).unwrap().len() < 65_536);
+    arbiter.set_safety(
+        SafetyRequest {
+            action: SafetyAction::Stop,
+            token: "stop-trace".into(),
+        },
+        true,
+    );
+    assert!(arbiter.step(evidence(0.2)).status.planner_trace.is_none());
+}

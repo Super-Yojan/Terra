@@ -12,6 +12,7 @@ struct PhoneLocalizationInput {
  var localY: Double
  var topYaw: Double?
  var tracked: Bool
+ var permissionReason: String? = nil
 }
 struct PhoneLocalizationReport: Codable {
  var version = 1
@@ -20,6 +21,9 @@ struct PhoneLocalizationReport: Codable {
  var reason: String
  var tracking: String
  var gpsAccuracy: Double?
+ var gpsLatitude: Double?
+ var gpsLongitude: Double?
+ var gpsFixAge: Double?
  var headingAccuracy: Double?
  var originLatitude: Double?
  var originLongitude: Double?
@@ -40,15 +44,24 @@ struct PhoneLocalizationPolicy {
    && input.latitude.map { $0.isFinite && abs($0) <= 85 } == true && input.longitude.map { $0.isFinite && abs($0) <= 180 } == true
   let headingGood = freshHeading && input.headingAccuracy.map { $0.isFinite && $0 >= 0 && $0 <= 15 } == true
    && input.heading.map { $0.isFinite && $0 >= 0 && $0 < 360 } == true && input.topYaw?.isFinite == true
-  let usable = gpsGood && headingGood && input.tracked && input.localX.isFinite && input.localY.isFinite
+  let usable = input.permissionReason == nil && gpsGood && headingGood && input.tracked && input.localX.isFinite && input.localY.isFinite
   if usable { if goodSince == nil { goodSince = input.now } } else { goodSince = nil }
   let ready = goodSince.map { input.now - $0 >= 8 } ?? false
   if ready && anchor == nil {
    anchor = (input.latitude!, input.longitude!, input.localX, input.localY, -input.heading! * .pi / 180 - input.topYaw!)
   }
-  let reason = !input.tracked ? "AR tracking unavailable" : !gpsGood ? "GPS unavailable or inaccurate" : !headingGood ? "Heading uncertain" : !ready ? "Checking geographic alignment" : "GPS and heading reliable"
+  let gpsReason: String
+  if let permission = input.permissionReason { gpsReason = permission }
+  else if input.fixTime == nil { gpsReason = "Waiting for GPS fix" }
+  else if !freshFix { gpsReason = "GPS fix stale · waiting for an update" }
+  else if !gpsGood { gpsReason = "GPS accuracy insufficient · requires 10 m or better" }
+  else { gpsReason = "GPS available" }
+  let reason = !input.tracked ? "AR tracking unavailable" : !gpsGood || input.permissionReason != nil ? gpsReason : !headingGood ? "Heading uncertain · requires fresh compass accuracy of 15° or better" : !ready ? "Checking geographic alignment" : "GPS and heading reliable"
   return PhoneLocalizationReport(frameID: frameID, mode: ready ? "geographic" : "local", reason: reason,
-   tracking: input.tracked ? "normal" : "limited", gpsAccuracy: input.accuracy, headingAccuracy: input.headingAccuracy,
+   tracking: input.tracked ? "normal" : "limited", gpsAccuracy: input.accuracy,
+   gpsLatitude: input.latitude.flatMap { $0.isFinite && abs($0) <= 90 ? $0 : nil },
+   gpsLongitude: input.longitude.flatMap { $0.isFinite && abs($0) <= 180 ? $0 : nil },
+   gpsFixAge: input.fixTime.flatMap { $0.isFinite && input.now.isFinite ? max(0, input.now-$0) : nil }, headingAccuracy: input.headingAccuracy,
    originLatitude: anchor?.0, originLongitude: anchor?.1, anchorX: anchor?.2, anchorY: anchor?.3, rotation: anchor?.4)
  }
 }

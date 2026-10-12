@@ -117,6 +117,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
     private let personDetector = PersonSearchDetector()
     private var detectorHealth = "not started"
     private var feedbackTrackingHealthy = false
+    private var bleReady = false
     private var bleCompatible = false
     private var phoneStartedAt = 0.0
     private let controlQueue = DispatchQueue(label: "terra.control", qos: .userInteractive)
@@ -124,6 +125,8 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
     private let motion = CMMotionManager()
     private let session = ARSession()
     private let locationManager = CLLocationManager()
+    private var locationPermissionReason: String?
+    private var lastLocalizationReason = ""
     private var locationFix: CLLocation?
     private var locationHeading: CLHeading?
     private var localizationPolicy = PhoneLocalizationPolicy()
@@ -145,17 +148,16 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
     private var previousPosition: SIMD3<Float>?
     private var previousPoseTime: Double?
     private var filteredVelocity = SIMD3<Float>.zero
-    // Mounted with the left edge forward: x_body=-x_phone,
-    // y_body=-y_phone, z_body=z_phone. Use the same mount for IMU and AR pose.
-    private let phoneToBody = simd_quatf(angle: .pi, axis: SIMD3(0, 0, 1))
+    // Upright, rear camera forward; Core Motion and ARCamera use different sensor axes.
+    private let phoneToBody = PhoneMountGeometry.phoneToBody
     // ARKit world +Y up -> robotics world +Z up, preserving right handedness.
     private let worldFromAR = simd_float3x3(columns: (SIMD3(0, -1, 0), SIMD3(0, 0, 1), SIMD3(-1, 0, 0)))
     override init() {
         super.init()
         locationManager.delegate = self
         locationManager.desiredAccuracy = kCLLocationAccuracyBest
-        locationManager.distanceFilter = 1
-        locationManager.headingFilter = 2
+        locationManager.distanceFilter = kCLDistanceFilterNone
+        locationManager.headingFilter = kCLHeadingFilterNone
         locationManager.headingOrientation = .portrait
         motionQueue.maxConcurrentOperationCount = 1
         motionQueue.qualityOfService = .userInteractive
@@ -356,6 +358,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
             catch { self.fail(error) }
         }
         let configuration = ARWorldTrackingConfiguration()
+        TerraLog.tracking.notice("Phone mount: upright portrait, top edge up, rear camera forward; AR optical -Z and phone -Z map to rover forward")
         configuration.worldAlignment = .gravity
         configuration.planeDetection = [.horizontal]
         if ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) { configuration.frameSemantics.insert(.sceneDepth) }
@@ -400,7 +403,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
             self.timer?.cancel(); self.timer = nil
             self.mode = .stopped
             self.dashboardEmergencyStop = false
-            self.bleActive = false; self.bleFeedback = false; self.hardwareMotionRevoked = true; self.feedbackTrackingHealthy = false; self.target = (0, 0); self.servoTargets = [:]
+            self.bleActive = false; self.bleReady = false; self.bleFeedback = false; self.hardwareMotionRevoked = true; self.feedbackTrackingHealthy = false; self.target = (0, 0); self.servoTargets = [:]
             self.zenoh?.disconnect(); self.zenoh = nil
             self.goalLatched = false
             self.remotePose = nil; self.phonePose = nil
@@ -596,11 +599,11 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
         }
         updatePersonSearch(frame: frame, tracked: tracked, epoch: trackingEpoch)
         let transform = frame.camera.transform
-        let top = worldFromAR * SIMD3(transform.columns.1.x, transform.columns.1.y, transform.columns.1.z)
+        let top = worldFromAR * -SIMD3(transform.columns.0.x, transform.columns.0.y, transform.columns.0.z)
         phoneTopYaw = hypot(top.x, top.y) >= 0.3 ? atan2(Double(top.y), Double(top.x)) : nil
         let arPosition = SIMD3(transform.columns.3.x, transform.columns.3.y, transform.columns.3.z)
         let position = worldFromAR * arPosition
-        let orientation = simd_quatf(worldFromAR) * simd_quatf(transform) * phoneToBody.inverse
+        let orientation = simd_quatf(worldFromAR) * simd_quatf(transform) * PhoneMountGeometry.cameraToBody.inverse
         var velocityReady = false
         if tracked, let last = previousPosition, let previousTime = previousPoseTime {
             let dt = frame.timestamp - previousTime
@@ -1086,6 +1089,7 @@ extension PhoneController {
             }
         }
         controlQueue.async {
+            self.bleReady = ready
             self.bleCompatible = compatible
             if self.bleLayout != layout { self.bleLayout = layout; self.target = (0, 0); self.resetServoTargets() }
             if self.bleActive && (!ready || (self.bleFeedback && !compatible)) { self.revokeHardwareMotion(reason: "Bluetooth readiness lost; ready=\(ready) feedbackCompatible=\(compatible)") }
@@ -1421,7 +1425,7 @@ extension PhoneController {
         DispatchQueue.main.async { self.servoPositions = values }
     }
     private func routeHardware(left: Double, right: Double, now: TimeInterval, manualTarget: DriveJoystickCommand? = nil) {
-        guard bleActive, !dashboardEmergencyStop, !bleFeedback || bleCompatible else { return }
+        guard bleActive, bleReady, !dashboardEmergencyStop, !bleFeedback || bleCompatible else { return }
         do {
             // Resolve numeric values before erasing their types into Any. Otherwise
             // Swift can infer feedback's neutral literal as Int inside this dictionary.
@@ -1629,6 +1633,17 @@ extension PhoneController {
 }
 
 extension PhoneController {
+    func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+        let reason: String?
+        switch manager.authorizationStatus {
+        case .denied: reason = "Location permission denied · allow Terra in Settings"
+        case .restricted: reason = "Location permission restricted"
+        case .notDetermined: reason = "Waiting for location permission"
+        default: reason = manager.accuracyAuthorization == .reducedAccuracy ? "Precise Location is off · enable it for geographic alignment" : nil
+        }
+        TerraLog.tracking.notice("Location authorization: \(reason ?? "Precise Location allowed", privacy: .public)")
+        controlQueue.async { self.locationPermissionReason = reason }
+    }
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         guard let fix = locations.last else { return }
         controlQueue.async { if self.mode == .phone { self.locationFix = fix } }
@@ -1637,7 +1652,13 @@ extension PhoneController {
         controlQueue.async { if self.mode == .phone { self.locationHeading = heading } }
     }
     func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
-        controlQueue.async { self.locationFix = nil; self.locationHeading = nil }
+        let detail = error.localizedDescription
+        TerraLog.tracking.error("Location error: \(detail, privacy: .public)")
+        // Temporary acquisition failures do not erase a previously measured fix.
+        // Its original timestamp still enforces the freshness limit.
+        if (error as? CLError)?.code == .denied {
+            controlQueue.async { self.locationFix = nil; self.locationHeading = nil; self.locationPermissionReason = "Location permission denied" }
+        }
     }
     private func publishLocalization(_ controller: MobileController) {
         let now = Date().timeIntervalSince1970
@@ -1648,7 +1669,12 @@ extension PhoneController {
             fixTime: locationFix?.timestamp.timeIntervalSince1970, accuracy: locationFix?.horizontalAccuracy,
             heading: locationHeading?.trueHeading, headingAccuracy: locationHeading?.headingAccuracy,
             headingTime: locationHeading?.timestamp.timeIntervalSince1970,
-            localX: phonePose?.x ?? 0, localY: phonePose?.y ?? 0, topYaw: phoneTopYaw, tracked: localizationTracked && previousPoseTime.map { CACurrentMediaTime() - $0 < 1 } == true))
+            localX: phonePose?.x ?? 0, localY: phonePose?.y ?? 0, topYaw: phoneTopYaw, tracked: localizationTracked && previousPoseTime.map { CACurrentMediaTime() - $0 < 1 } == true,
+            permissionReason: locationPermissionReason))
+        if report.reason != lastLocalizationReason {
+            lastLocalizationReason = report.reason
+            TerraLog.tracking.notice("Localization: \(report.reason, privacy: .public); GPS accuracy=\(report.gpsAccuracy ?? -1) age=\(report.gpsFixAge ?? -1); heading accuracy=\(report.headingAccuracy ?? -1)")
+        }
         if let data = try? JSONEncoder().encode(report), let json = String(data: data, encoding: .utf8) {
             try? controller.publishLocalization(payload: json)
         }

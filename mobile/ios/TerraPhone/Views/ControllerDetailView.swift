@@ -199,7 +199,7 @@ struct ControllerDetailView: View {
                     Text(brain.benchmark).font(.footnote)
                 }
                 Section("Phone mounting") {
-                    Text("Default: phone flat, screen up, top edge toward the rover’s front. Phone and rover origins are assumed coincident. Calibrate the mount before connecting motor hardware.")
+                    Text("Phone upright, top edge up, rear camera facing the rover’s front and screen facing backward. Phone and rover origins are assumed coincident.")
                         .font(.footnote).foregroundStyle(.secondary)
                     Text("ARKit needs a physical supported iPhone and visual features. Use Simulated rover on the iOS simulator.")
                         .font(.footnote).foregroundStyle(.secondary)

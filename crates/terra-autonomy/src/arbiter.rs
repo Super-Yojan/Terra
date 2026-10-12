@@ -57,6 +57,11 @@ pub struct AutonomyArbiter {
     events: Vec<DecisionEvent>,
     reset: bool,
     last_plan: Option<(f64, Twist, &'static str)>,
+    planner_trace: Option<(f64, terra_navigation::PlannerTrace)>,
+    global_route: Vec<[f64; 2]>,
+    route_goal: Option<(u64, f64, f64)>,
+    route_map_revision: u64,
+    route_checked_at: f64,
     last_frontier: f64,
     search: Option<SearchController>,
     detector_classes: Vec<String>,
@@ -91,6 +96,11 @@ impl Default for AutonomyArbiter {
             events: Vec::new(),
             reset: true,
             last_plan: None,
+            planner_trace: None,
+            global_route: Vec::new(),
+            route_goal: None,
+            route_map_revision: 0,
+            route_checked_at: f64::NEG_INFINITY,
             last_frontier: -1.,
             search: None,
             detector_classes: vec![],
@@ -164,6 +174,7 @@ impl AutonomyArbiter {
         self.proposal = None;
         self.reset = true;
         self.last_plan = None;
+        self.planner_trace = None;
     }
     pub fn set_level(&mut self, r: LevelRequest) {
         let fp = format!("level:{:?}", r.level);
@@ -308,6 +319,7 @@ impl AutonomyArbiter {
         let ok = self.follower.accept(g, extent).unwrap_or(false);
         if ok {
             self.last_plan = None;
+            self.planner_trace = None;
             self.proposal = None;
             self.paused = false;
         }
@@ -508,6 +520,7 @@ impl AutonomyArbiter {
         )?;
         self.follower.cancel();
         self.last_plan = None;
+        self.planner_trace = None;
         self.search_sessions.push_back(r.search_id.clone());
         self.search = Some(search);
         self.paused = false;
@@ -565,6 +578,7 @@ impl AutonomyArbiter {
         if result.is_ok() {
             self.follower.cancel();
             self.last_plan = None;
+            self.planner_trace = None;
             self.reset = true;
             self.event(
                 match r.action {
@@ -666,6 +680,7 @@ impl AutonomyArbiter {
         let mut intent_command = Twist::default();
         let mut twist = Twist::default();
         let mut held = false;
+        let mut route_failure = None;
         let bounded_map = if self.level == Level::TargetSearch {
             self.search.as_ref().and_then(|s| {
                 input.map.map(|map| {
@@ -750,6 +765,7 @@ impl AutonomyArbiter {
                             20_000.,
                         );
                         self.last_plan = None;
+                        self.planner_trace = None;
                         self.event("route_selected", None, "search_route");
                     }
                     goal = self
@@ -759,6 +775,7 @@ impl AutonomyArbiter {
                 } else {
                     self.follower.cancel();
                     self.last_plan = None;
+                    self.planner_trace = None;
                     held = true;
                     reason = "search_hold";
                 }
@@ -793,13 +810,102 @@ impl AutonomyArbiter {
                             "waypoint"
                         };
                     }
-                    Twist {
-                        linear: out.linear,
-                        angular: out.angular,
+                    if self.level == Level::Waypoint && out.status.state == GoalState::Active {
+                        let map = planning_map.unwrap();
+                        let radius = self.planner.config.radius;
+                        let destination = (out.status.goal_id, out.status.x, out.status.y);
+                        let here = [input.pose.x, input.pose.y];
+                        // Drop reached route points; never use a distant point without checking line of sight.
+                        while self.global_route.len() > 1
+                            && (self.global_route[0][0] - here[0])
+                                .hypot(self.global_route[0][1] - here[1])
+                                < 0.2
+                        {
+                            self.global_route.remove(0);
+                        }
+                        let changed_goal = self.route_goal != Some(destination);
+                        let due = input.now - self.route_checked_at >= 0.2;
+                        let needs_route = changed_goal
+                            || (due
+                                && (self.global_route.is_empty()
+                                    || (self.route_map_revision != input.map_revision
+                                        && !std::iter::once(here)
+                                            .chain(self.global_route.iter().copied())
+                                            .collect::<Vec<_>>()
+                                            .windows(2)
+                                            .all(|p| {
+                                                terra_navigation::route_segment_clear(
+                                                    map, input.pose, radius, p[0], p[1],
+                                                )
+                                            }))));
+                        if needs_route {
+                            self.last_plan = None;
+                            self.planner_trace = None;
+                            self.route_goal = Some(destination);
+                            self.global_route = match terra_navigation::astar_route(
+                                map,
+                                input.pose,
+                                radius,
+                                out.status.x,
+                                out.status.y,
+                            ) {
+                                Ok(route) => route,
+                                Err(why) => {
+                                    route_failure = Some(why);
+                                    Vec::new()
+                                }
+                            };
+                        }
+                        if due || changed_goal {
+                            self.route_checked_at = input.now;
+                            self.route_map_revision = input.map_revision;
+                        }
+                        let target = self.global_route.iter().rev().copied().find(|point| {
+                            terra_navigation::route_segment_clear(
+                                map, input.pose, radius, here, *point,
+                            )
+                        });
+                        if let Some(point) = target {
+                            // At the final position use the original follower for arrival and final yaw.
+                            let (linear, angular) = if point == [out.status.x, out.status.y] {
+                                (out.linear, out.angular)
+                            } else {
+                                self.follower.route_intent(
+                                    input.pose.x,
+                                    input.pose.y,
+                                    input.pose.yaw,
+                                    point[0],
+                                    point[1],
+                                )
+                            };
+                            Twist { linear, angular }
+                        } else {
+                            // Localization may move us away from every cached visible point,
+                            // even without a map revision change. Retry A* at the bounded interval.
+                            self.global_route.clear();
+                            route_failure = Some(route_failure.unwrap_or("route_no_path"));
+                            Twist::default()
+                        }
+                    } else {
+                        if self.level == Level::Waypoint {
+                            self.global_route.clear();
+                            self.route_goal = None;
+                        }
+                        Twist {
+                            linear: out.linear,
+                            angular: out.angular,
+                        }
                     }
                 }
             };
             intent_command = intent;
+            if let Some(why) = route_failure {
+                held = true;
+                reason = why;
+                source = "none";
+                self.last_plan = None;
+                self.planner_trace = None;
+            }
             if matches!(self.level, Level::Teleop | Level::WaypointDirect) {
                 twist = intent;
                 if source != "none" {
@@ -810,6 +916,7 @@ impl AutonomyArbiter {
                     twist = intent;
                     reason = "active";
                     self.last_plan = None;
+                    self.planner_trace = None;
                 } else if let Some((at, output, why)) = self.last_plan.filter(|p| {
                     input.now - p.0 < 0.1
                         && (self.level != Level::TargetSearch
@@ -820,13 +927,15 @@ impl AutonomyArbiter {
                     twist = output;
                     reason = why;
                 } else {
-                    let planned = self.planner.plan(
+                    let (planned, trace) = self.planner.plan_with_trace(
                         planning_map.unwrap(),
                         input.pose,
                         input.measured,
                         intent,
                         0.1,
                     );
+                    self.planner_trace =
+                        (!trace.candidates.is_empty()).then_some((input.now, trace));
                     twist = planned.twist;
                     reason = planned.reason;
                     self.last_plan = Some((input.now, twist, reason));
@@ -879,6 +988,7 @@ impl AutonomyArbiter {
                 search.navigator.invalidate_goal(input.now);
             }
             self.last_plan = None;
+            // Retire cached motion, but keep fresh diagnostics explaining the route failure.
             self.event("route_failed", None, "obstacle_blocked");
         }
         if held
@@ -902,6 +1012,7 @@ impl AutonomyArbiter {
         if held {
             if reason != "obstacle_blocked" {
                 self.last_plan = None;
+                self.planner_trace = None;
             }
             twist = Twist::default();
             source = "none";
@@ -911,6 +1022,28 @@ impl AutonomyArbiter {
             }
         }
         let status = AutonomyStatus {
+            global_route: if self.level == Level::Waypoint
+                && route_failure.is_none()
+                && valid_time
+                && !self.stopped
+                && !self.paused
+                && input.healthy
+                && fresh(input.now, input.map_time, 0.5)
+                && goal.state == GoalState::Active
+            {
+                self.global_route.clone()
+            } else {
+                Vec::new()
+            },
+            planner_trace: self
+                .planner_trace
+                .as_ref()
+                .filter(|(at, _)| input.now - at >= 0. && input.now - at < 0.5)
+                .map(|(at, trace)| {
+                    let mut trace = trace.clone();
+                    trace.age = input.now - at;
+                    trace
+                }),
             run_id: self.run_id.clone(),
             assigned_level: self.assigned_level,
             requested_level: self.level,

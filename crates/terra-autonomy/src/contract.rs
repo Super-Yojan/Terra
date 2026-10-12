@@ -67,6 +67,11 @@ pub struct GoalProposal {
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct AutonomyStatus {
+    /// World-metre A* route for L3. Empty when no safe global route is available.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub global_route: Vec<[f64; 2]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub planner_trace: Option<terra_navigation::PlannerTrace>,
     pub run_id: String,
     pub assigned_level: Option<Level>,
     pub requested_level: Level,

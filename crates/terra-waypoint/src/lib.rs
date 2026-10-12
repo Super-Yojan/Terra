@@ -261,6 +261,23 @@ impl WaypointController {
         self.goal_id = 0;
     }
 
+    /// Follow an intermediate route point without replacing the original goal or its status.
+    pub fn route_intent(
+        &self,
+        x: f64,
+        y: f64,
+        yaw: f64,
+        target_x: f64,
+        target_y: f64,
+    ) -> (f64, f64) {
+        // Intermediate corners need a tighter tolerance than final-goal arrival.
+        // Otherwise the rover can stop short of the corner before the next leg is visible.
+        let mut config = self.config.clone();
+        config.arrive_radius = config.arrive_radius.min(0.05);
+        let output = pursuit(x, y, yaw, target_x, target_y, None, &config);
+        (output.linear, output.angular)
+    }
+
     /// `x` and `y` are the rover pose in the origin frame, metres. `yaw` is radians, 0 facing +x.
     /// Compute local goal-following intent; downstream planning checks obstacles.
     pub fn step(&self, x: f64, y: f64, yaw: f64) -> WaypointOutput {

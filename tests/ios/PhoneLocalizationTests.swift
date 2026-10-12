@@ -16,6 +16,16 @@ import Foundation
   precondition(policy.update(input(19, tracked: false)).mode == "local")
   policy.reset()
   precondition(policy.update(input(30)).originLatitude == nil)
+  var missing = input(31); missing.fixTime = nil
+  precondition(policy.update(missing).reason == "Waiting for GPS fix")
+  var stale = input(32); stale.fixTime = 20
+  precondition(policy.update(stale).reason.contains("stale"))
+  var denied = input(33); denied.permissionReason = "Location permission denied"
+  precondition(policy.update(denied).reason.contains("denied"))
+  precondition(policy.update(denied).mode == "local")
+  let measured = policy.update(input(34, accuracy: 50))
+  precondition(measured.gpsLatitude == 38 && measured.gpsFixAge == 0)
+  precondition(measured.reason.contains("accuracy insufficient"))
   print("Phone localization hysteresis, heading alignment, tracking loss and reset: passed")
  }
 }

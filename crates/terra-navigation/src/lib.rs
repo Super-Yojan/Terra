@@ -5,6 +5,8 @@
 //! footprint through the prediction horizon and braking period. [`frontier`] and
 //! [`reachable`] search the grid; unknown cells are not treated as free paths.
 
+mod astar;
+pub use astar::*;
 mod search;
 pub use search::*;
 use serde::{Deserialize, Serialize};
@@ -15,7 +17,7 @@ pub struct Twist {
     pub linear: f64,
     pub angular: f64,
 }
-#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct Pose {
     pub x: f64,
     pub y: f64,
@@ -58,6 +60,23 @@ pub struct PlanningDecision {
     pub twist: Twist,
     pub reason: &'static str,
 }
+/// Diagnostic geometry from the actual candidate checks. Points are millimetre
+/// offsets from `origin`, keeping all 121 paths below the telemetry size budget.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct PlannerTrace {
+    /// Seconds elapsed since this candidate set was evaluated.
+    pub age: f64,
+    pub origin: Pose,
+    pub candidates: Vec<CandidateTrace>,
+    pub selected: Option<usize>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct CandidateTrace {
+    pub velocity: Twist,
+    pub points_mm: Vec<[i32; 2]>,
+    pub rejection: Option<String>,
+}
+
 fn valid_map(map: &MapSnapshot) -> bool {
     map.width > 0
         && map.height > 0
@@ -82,8 +101,17 @@ fn cell(map: &MapSnapshot, x: f64, y: f64) -> Option<(usize, usize)> {
 // Unknown space is allowed only inside the footprint at the starting pose;
 // that exception lets the rover leave its own unobserved underbody cells.
 fn clear(map: &MapSnapshot, x: f64, y: f64, radius: f64, current: Option<Pose>) -> bool {
+    footprint_rejection(map, x, y, radius, current).is_none()
+}
+fn footprint_rejection(
+    map: &MapSnapshot,
+    x: f64,
+    y: f64,
+    radius: f64,
+    current: Option<Pose>,
+) -> Option<&'static str> {
     let Some((center_column, center_row)) = cell(map, x, y) else {
-        return false;
+        return Some("outside_map");
     };
     let cell_reach = (radius / map.resolution).ceil() as isize + 1;
     for dy in -cell_reach..=cell_reach {
@@ -96,11 +124,11 @@ fn clear(map: &MapSnapshot, x: f64, y: f64, radius: f64, current: Option<Pose>) 
                 continue;
             }
             if column < 0 || row < 0 || column >= map.width as isize || row >= map.height as isize {
-                return false;
+                return Some("outside_map");
             }
             let occupancy = map.occupancy[row as usize * map.width as usize + column as usize];
             if occupancy >= 65 {
-                return false;
+                return Some("occupied");
             }
             if occupancy < 0
                 && current.is_none_or(|sample_pose| {
@@ -108,11 +136,11 @@ fn clear(map: &MapSnapshot, x: f64, y: f64, radius: f64, current: Option<Pose>) 
                         > radius + map.resolution * 0.7072
                 })
             {
-                return false;
+                return Some("unknown");
             }
         }
     }
-    true
+    None
 }
 impl LocalPlanner {
     fn valid(&self) -> bool {
@@ -134,22 +162,46 @@ impl LocalPlanner {
     /// Check the swept footprint through the motion horizon and the braking tail.
     /// Out-of-map, occupied, or newly entered unknown cells reject the trajectory.
     pub fn admissible(&self, map: &MapSnapshot, pose: Pose, trajectory: Twist) -> bool {
+        self.evaluate(map, pose, trajectory, false).0.is_none()
+    }
+    fn evaluate(
+        &self,
+        map: &MapSnapshot,
+        pose: Pose,
+        trajectory: Twist,
+        record: bool,
+    ) -> (Option<&'static str>, Vec<[i32; 2]>) {
+        let mut points = Vec::new();
         if !self.valid()
             || !valid_map(map)
             || !pose.finite()
             || !trajectory.linear.is_finite()
             || !trajectory.angular.is_finite()
         {
-            return false;
+            return (Some("invalid_input"), points);
         }
         let config = &self.config;
         let step = (map.resolution / (2. * trajectory.linear.abs().max(0.1))).min(0.1);
+        let duration = config.horizon + trajectory.linear.abs() / config.braking;
+        let record_interval = (duration / 14.).max(step);
+        let mut next_record = 0.;
         let mut sample_pose = pose;
         let mut elapsed = 0.;
-        let duration = config.horizon + trajectory.linear.abs() / config.braking;
+        let offset = |p: Pose| {
+            [
+                ((p.x - pose.x) * 1000.).round() as i32,
+                ((p.y - pose.y) * 1000.).round() as i32,
+            ]
+        };
         while elapsed < duration {
-            if !clear(map, sample_pose.x, sample_pose.y, config.radius, Some(pose)) {
-                return false;
+            let rejection =
+                footprint_rejection(map, sample_pose.x, sample_pose.y, config.radius, Some(pose));
+            if record && (elapsed >= next_record || rejection.is_some()) {
+                points.push(offset(sample_pose));
+                next_record = elapsed + record_interval;
+            }
+            if rejection.is_some() {
+                return (rejection, points);
             }
             let scale = if elapsed <= config.horizon {
                 1.
@@ -163,7 +215,13 @@ impl LocalPlanner {
             sample_pose.y += trajectory.linear * scale * sample_pose.yaw.sin() * step;
             elapsed += step;
         }
-        clear(map, sample_pose.x, sample_pose.y, config.radius, Some(pose))
+        if record {
+            points.push(offset(sample_pose));
+        }
+        (
+            footprint_rejection(map, sample_pose.x, sample_pose.y, config.radius, Some(pose)),
+            points,
+        )
     }
     /// Sample acceleration-bounded velocities and minimize deviation from intent.
     /// Returns zero twist with `obstacle_blocked` when no candidate is admissible
@@ -176,6 +234,33 @@ impl LocalPlanner {
         intent: Twist,
         dt: f64,
     ) -> PlanningDecision {
+        self.plan_recorded(map, pose, current, intent, dt, false).0
+    }
+    pub fn plan_with_trace(
+        &self,
+        map: &MapSnapshot,
+        pose: Pose,
+        current: Twist,
+        intent: Twist,
+        dt: f64,
+    ) -> (PlanningDecision, PlannerTrace) {
+        self.plan_recorded(map, pose, current, intent, dt, true)
+    }
+    fn plan_recorded(
+        &self,
+        map: &MapSnapshot,
+        pose: Pose,
+        current: Twist,
+        intent: Twist,
+        dt: f64,
+        record: bool,
+    ) -> (PlanningDecision, PlannerTrace) {
+        let mut trace = PlannerTrace {
+            age: 0.,
+            origin: pose,
+            candidates: Vec::new(),
+            selected: None,
+        };
         let stop = PlanningDecision {
             twist: Twist::default(),
             reason: "obstacle_blocked",
@@ -193,7 +278,7 @@ impl LocalPlanner {
             .iter()
             .any(|v| !v.is_finite())
         {
-            return stop;
+            return (stop, trace);
         }
         let config = &self.config;
         let min_linear = (current.linear - config.acceleration * dt).max(-config.max_linear);
@@ -208,27 +293,40 @@ impl LocalPlanner {
                     angular: min_angular
                         + (max_angular - min_angular) * angular_sample as f64 / 10.,
                 };
-                if !self.admissible(map, pose, trajectory) {
+                let (rejection, points_mm) = self.evaluate(map, pose, trajectory, record);
+                if record {
+                    trace.candidates.push(CandidateTrace {
+                        velocity: trajectory,
+                        points_mm,
+                        rejection: rejection.map(str::to_owned),
+                    });
+                }
+                if rejection.is_some() {
                     continue;
                 }
                 let score = (trajectory.linear - intent.linear).powi(2)
                     + 0.3 * (trajectory.angular - intent.angular).powi(2);
                 if best.is_none_or(|b| score < b.0) {
                     best = Some((score, trajectory));
+                    if record {
+                        trace.selected = Some(trace.candidates.len() - 1);
+                    }
                 }
             }
         }
-        best.map(|(_, twist)| PlanningDecision {
-            twist,
-            reason: if (twist.linear - intent.linear).abs() > 0.15
-                || (twist.angular - intent.angular).abs() > 0.15
-            {
-                "assisted"
-            } else {
-                "active"
-            },
-        })
-        .unwrap_or(stop)
+        let decision = best
+            .map(|(_, twist)| PlanningDecision {
+                twist,
+                reason: if (twist.linear - intent.linear).abs() > 0.15
+                    || (twist.angular - intent.angular).abs() > 0.15
+                {
+                    "assisted"
+                } else {
+                    "active"
+                },
+            })
+            .unwrap_or(stop);
+        (decision, trace)
     }
 }
 /// Breadth-first search through inflated observed free cells. Stable ordering breaks ties.

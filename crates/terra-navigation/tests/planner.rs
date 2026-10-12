@@ -124,3 +124,39 @@ fn frontier_can_leave_known_robot_footprint_when_grid_under_body_is_unobserved()
     let target = frontier(&m, pose, 0.65, &[]).expect("reachable observed region ahead");
     assert!(reachable(&m, pose, 0.65, target.0, target.1));
 }
+
+#[test]
+fn trace_matches_decision_and_records_rejected_candidates() {
+    let planner = LocalPlanner::default();
+    let pose = Pose::default();
+    let intent = Twist {
+        linear: 1.0,
+        angular: 0.0,
+    };
+    let free = map();
+    let expected = planner.plan(&free, pose, Twist::default(), intent, 0.1);
+    let (decision, trace) = planner.plan_with_trace(&free, pose, Twist::default(), intent, 0.1);
+    assert_eq!(decision.twist, expected.twist);
+    assert_eq!(trace.candidates.len(), 121);
+    let selected = trace.selected.unwrap();
+    assert_eq!(trace.candidates[selected].velocity, decision.twist);
+    assert!(trace.candidates[selected].rejection.is_none());
+    assert!(
+        trace
+            .candidates
+            .iter()
+            .all(|c| !c.points_mm.is_empty() && c.points_mm.len() <= 16)
+    );
+    let mut blocked = free;
+    blocked.occupancy.fill(100);
+    let (decision, trace) = planner.plan_with_trace(&blocked, pose, Twist::default(), intent, 0.1);
+    assert_eq!(decision.reason, "obstacle_blocked");
+    assert!(trace.selected.is_none());
+    assert!(
+        trace
+            .candidates
+            .iter()
+            .all(|c| c.rejection.as_deref() == Some("occupied"))
+    );
+    assert!(serde_json::to_vec(&trace).unwrap().len() < 55_000);
+}
