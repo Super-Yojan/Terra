@@ -62,6 +62,7 @@ pub struct AutonomyArbiter {
     route_goal: Option<(u64, f64, f64)>,
     route_map_revision: u64,
     route_checked_at: f64,
+    route_reaches_goal: bool,
     last_frontier: f64,
     search: Option<SearchController>,
     detector_classes: Vec<String>,
@@ -101,6 +102,7 @@ impl Default for AutonomyArbiter {
             route_goal: None,
             route_map_revision: 0,
             route_checked_at: f64::NEG_INFINITY,
+            route_reaches_goal: false,
             last_frontier: -1.,
             search: None,
             detector_classes: vec![],
@@ -825,32 +827,43 @@ impl AutonomyArbiter {
                         }
                         let changed_goal = self.route_goal != Some(destination);
                         let due = input.now - self.route_checked_at >= 0.2;
+                        let segment_blocked = self.route_map_revision != input.map_revision
+                            && !std::iter::once(here)
+                                .chain(self.global_route.iter().copied())
+                                .collect::<Vec<_>>()
+                                .windows(2)
+                                .all(|p| {
+                                    terra_navigation::route_segment_clear(
+                                        map, input.pose, radius, p[0], p[1],
+                                    )
+                                });
+                        // Approach routes stop at the frontier. Replan on the same
+                        // interval so a rolling map can extend them toward the goal.
                         let needs_route = changed_goal
                             || (due
                                 && (self.global_route.is_empty()
-                                    || (self.route_map_revision != input.map_revision
-                                        && !std::iter::once(here)
-                                            .chain(self.global_route.iter().copied())
-                                            .collect::<Vec<_>>()
-                                            .windows(2)
-                                            .all(|p| {
-                                                terra_navigation::route_segment_clear(
-                                                    map, input.pose, radius, p[0], p[1],
-                                                )
-                                            }))));
+                                    || !self.route_reaches_goal
+                                    || segment_blocked));
                         if needs_route {
                             self.last_plan = None;
                             self.planner_trace = None;
                             self.route_goal = Some(destination);
-                            self.global_route = match terra_navigation::astar_route(
+                            self.global_route = match terra_navigation::astar_progress_route(
                                 map,
                                 input.pose,
                                 radius,
                                 out.status.x,
                                 out.status.y,
                             ) {
-                                Ok(route) => route,
+                                Ok(route) => {
+                                    self.route_reaches_goal = route.last().is_some_and(|point| {
+                                        (point[0] - destination.1).abs() <= 1e-9
+                                            && (point[1] - destination.2).abs() <= 1e-9
+                                    });
+                                    route
+                                }
                                 Err(why) => {
+                                    self.route_reaches_goal = false;
                                     route_failure = Some(why);
                                     Vec::new()
                                 }
@@ -883,6 +896,7 @@ impl AutonomyArbiter {
                             // Localization may move us away from every cached visible point,
                             // even without a map revision change. Retry A* at the bounded interval.
                             self.global_route.clear();
+                            self.route_reaches_goal = false;
                             route_failure = Some(route_failure.unwrap_or("route_no_path"));
                             Twist::default()
                         }
@@ -890,6 +904,7 @@ impl AutonomyArbiter {
                         if self.level == Level::Waypoint {
                             self.global_route.clear();
                             self.route_goal = None;
+                            self.route_reaches_goal = false;
                         }
                         Twist {
                             linear: out.linear,
@@ -919,9 +934,7 @@ impl AutonomyArbiter {
                     self.planner_trace = None;
                 } else if let Some((at, output, why)) = self.last_plan.filter(|p| {
                     input.now - p.0 < 0.1
-                        && (self.level != Level::TargetSearch
-                            || planning_map
-                                .is_some_and(|m| self.planner.admissible(m, input.pose, p.1)))
+                        && planning_map.is_some_and(|m| self.planner.admissible(m, input.pose, p.1))
                 }) {
                     let _ = at;
                     twist = output;
