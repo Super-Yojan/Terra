@@ -29,7 +29,7 @@
 
 | Question | Page |
 | --- | --- |
-| How do I compile it? | [Xcode](build.md) |
+| How do I compile it? | [Xcode](build.md) or [Linux](linux.md) |
 | Simulator or iPhone? | [Split](simulator.md) |
 | How do I pair? | [Bluetooth](bluetooth.md) |
 | Tap a part to configure? | [Planned](tap-to-configure.md) |

@@ -1,5 +1,10 @@
 # Terra Mobile
 
+Linux builds of this app go through xtool (`Package.swift`, `xtool.yml`) and
+`./scripts/build-ios-linux.sh`. See [Building on Linux](../../docs/phone/linux.md).
+On a Mac, open `TerraPhone.xcodeproj`. Do not open this folder as an Xcode
+package, or Xcode will follow `Package.swift` instead of the project.
+
 Home focuses on connecting your rover and the ARGOS fleet dashboard. The rover
 preview stays beside the real connection state, remembered name, and configured
 actuator names. Open Settings from the lower-left gear button for Fleet connection,

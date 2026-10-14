@@ -1,0 +1,5 @@
+// scripts/build-ios-linux.sh writes include/TerraCoreFFI.h and lib/libterra_mobile.a.
+module TerraCoreFFI {
+    header "include/TerraCoreFFI.h"
+    export *
+}

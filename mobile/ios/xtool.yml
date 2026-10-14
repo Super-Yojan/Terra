@@ -1,0 +1,7 @@
+version: 1
+bundleID: org.terra.robotics.phone
+product: TerraPhone
+infoPath: xtool-Info.plist
+iconPath: TerraPhone/Assets.xcassets/AppIcon.appiconset/icon.png
+resources:
+  - TerraPhone/Models

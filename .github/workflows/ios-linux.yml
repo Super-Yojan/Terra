@@ -1,0 +1,88 @@
+name: iOS Linux
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      xcode_xip:
+        description: Absolute path to Xcode.xip on this runner. Empty means the build stops at the SDK check.
+        required: false
+        type: string
+
+jobs:
+  config:
+    name: xtool config
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check xtool package against the Xcode project
+        run: ./scripts/check-xtool-ios.sh
+
+  build:
+    name: xtool build
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: System packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            binutils \
+            build-essential \
+            clang \
+            git \
+            gnupg2 \
+            libc6-dev \
+            libcurl4-openssl-dev \
+            libedit2 \
+            libgcc-13-dev \
+            libimobiledevice-utils \
+            libncurses-dev \
+            libpython3-dev \
+            libsqlite3-0 \
+            libstdc++-13-dev \
+            libxml2-dev \
+            libz3-dev \
+            pkg-config \
+            usbmuxd \
+            zip \
+            unzip \
+            zlib1g-dev
+
+      - name: Swift 6.4.1
+        run: |
+          curl -fL \
+            "https://download.swift.org/swift-6.4.1-release/ubuntu2404/swift-6.4.1-RELEASE/swift-6.4.1-RELEASE-ubuntu24.04.tar.gz" \
+            -o /tmp/swift.tar.gz
+          sudo mkdir -p /opt/swift
+          sudo tar -xzf /tmp/swift.tar.gz -C /opt/swift --strip-components=1
+          echo /opt/swift/usr/bin >> "$GITHUB_PATH"
+
+      - name: xtool 1.22.2
+        run: |
+          curl -fL \
+            "https://github.com/xtool-org/xtool/releases/download/1.22.2/xtool-$(uname -m).AppImage" \
+            -o /tmp/xtool.AppImage
+          chmod +x /tmp/xtool.AppImage
+          cd /tmp
+          ./xtool.AppImage --appimage-extract
+          sudo mv squashfs-root /opt/xtool
+          sudo ln -sf /opt/xtool/AppRun /usr/local/bin/xtool
+          xtool --help
+
+      - name: Build TerraPhone
+        env:
+          XCODE_XIP: ${{ github.event.inputs.xcode_xip }}
+        run: ./scripts/build-ios-linux.sh

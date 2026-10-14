@@ -3,7 +3,7 @@
 !!! tip "TL;DR"
     Needs a Mac, Xcode, and iOS 17.
     `./scripts/build-ios.sh` makes the XCFramework.
-    Linux CI does not run `xcodebuild`.
+    Linux uses [xtool](linux.md) instead of `xcodebuild`.
 
 ![App icon produced for the phone target](../assets/terra-icon.png){ width="180" }
 

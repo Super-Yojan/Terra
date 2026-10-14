@@ -6,6 +6,12 @@
 /mobile/ios/Generated/
 /mobile/ios/build/
 /mobile/ios/DerivedData/
+/mobile/ios/.build/
+/mobile/ios/.swiftpm/
+/mobile/ios/xtool/
+/mobile/ios/TerraPhone/TerraCore.swift
+/mobile/ios/LinuxSupport/include/
+/mobile/ios/LinuxSupport/lib/
 **/xcuserdata/
 
 /hardware/raspberry-pi/.venv/

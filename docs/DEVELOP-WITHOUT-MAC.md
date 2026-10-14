@@ -2,7 +2,8 @@
 
 !!! tip "TL;DR"
     Zorvane runs on Linux.
-    TerraPhone still needs a Mac.
+    The Xcode project still needs a Mac.
+    xtool can build TerraPhone on Linux after an Xcode `.xip` is installed.
     The Pi image also builds on Linux, with Docker.
 
 ![Splash from the phone, which you cannot compile here](assets/mountain-banner.jpg)
@@ -23,4 +24,6 @@ flowchart LR
 
 Build notes: [Zorvane README](https://github.com/Super-Yojan/Zorvane/blob/main/README.md).
 
-Phone: `./scripts/build-ios.sh` on a Mac. See [Xcode](phone/build.md).
+Phone on a Mac: `./scripts/build-ios.sh`, then the Xcode project. See [Xcode](phone/build.md).
+
+Phone on Linux: [xtool](phone/linux.md). `./scripts/build-ios-linux.sh` stops until `xtool sdk install` has unpacked an Xcode `.xip`. That download needs an Apple ID.
