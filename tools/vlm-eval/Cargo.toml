@@ -1,0 +1,21 @@
+[package]
+name = "terra-vlm-eval"
+version.workspace = true
+edition.workspace = true
+description = "Offline NEXT decision eval over a fused occupancy render. No motors."
+publish = false
+
+[[bin]]
+name = "vlm-eval"
+path = "src/bin/vlm-eval.rs"
+
+[dependencies]
+base64 = "0.22"
+image = { version = "0.25", default-features = false, features = ["png"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+terra-autonomy.workspace = true
+terra-mapping.workspace = true
+terra-navigation.workspace = true
+ureq = { version = "2.12", default-features = false, features = ["json"] }
