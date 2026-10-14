@@ -140,6 +140,8 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
     private var lastLocalTarget = (forward: 0.0, yaw: 0.0)
     private var lastCloudTime = -Double.infinity
     private var tick = 0
+    // Publication identity must survive prepare/preserveRuntime and UI tick resets.
+    private var occupancyPublicationRevision: UInt64 = 0
     private var simulatedTime = 0.0
     private var simulatedForward = 0.0
     private var simulatedYawRate = 0.0
@@ -691,7 +693,10 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
     }
     private func publishMap(x: Double, y: Double, yaw: Double, status: String) throws {
         guard let grid = try occupancyMap?.snapshot() else { return }
-        if mode != .remote {try controller?.autonomyMap(grid:grid,timestamp:lastMapTime.isFinite ? lastMapTime:simulatedTime,revision:UInt64(tick))}
+        if mode != .remote {
+            occupancyPublicationRevision += 1
+            try controller?.autonomyMap(grid:grid,timestamp:lastMapTime.isFinite ? lastMapTime:simulatedTime,revision:occupancyPublicationRevision)
+        }
         DispatchQueue.main.async { self.occupancy = grid; self.mapPose = SIMD3(x, y, yaw); self.mapStatus = status }
     }
     private func updateSimulatedMap(timestamp: Double) throws {

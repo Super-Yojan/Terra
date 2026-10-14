@@ -1,6 +1,20 @@
 //! Phone-facing autonomy bindings and conversion to onboard arbiter inputs.
 
 use crate::*;
+
+impl MobileController {
+    fn install_dashboard(
+        &self,
+        service: terra_transport::ControlPlane,
+    ) -> Result<(), ControllerError> {
+        let mut brain = self.brain.lock().map_err(|_| ControllerError::Internal)?;
+        brain.map_gate = Default::default();
+        brain.cloud_gate = Default::default();
+        brain.dashboard = Some(service);
+        Ok(())
+    }
+}
+
 #[uniffi::export]
 impl MobileController {
     /// Bounded world-space visualization points; never a source of motor authority.
@@ -10,7 +24,7 @@ impl MobileController {
                 message: "point cloud too large".into(),
             });
         }
-        let value: serde_json::Value =
+        let mut value: serde_json::Value =
             serde_json::from_str(&payload).map_err(|_| ControllerError::Internal)?;
         if value["version"].as_u64() != Some(1)
             || value["points"].as_array().is_none_or(|p| p.len() > 4096)
@@ -19,10 +33,42 @@ impl MobileController {
                 message: "invalid point cloud".into(),
             });
         }
-        let brain = self.brain.lock().map_err(|_| ControllerError::Internal)?;
+        let mut brain = self.brain.lock().map_err(|_| ControllerError::Internal)?;
+        // Exact parsed content comparison; preserve original full-payload bytes.
+        let frame_id = value["frameID"].as_str().map(str::to_owned);
+        let publication = if brain.dashboard.is_some() {
+            if let (Some(sequence), Some(_)) = (value["sequence"].as_u64(), frame_id.as_ref()) {
+                value.as_object_mut().unwrap().remove("sequence");
+                brain.cloud_gate.observe(
+                    value,
+                    frame_id.clone().unwrap(),
+                    sequence,
+                    std::time::Instant::now(),
+                    std::time::Duration::from_millis(500),
+                )
+            } else {
+                brain.cloud_gate = Default::default();
+                publication::Publication::Full
+            }
+        } else {
+            publication::Publication::Skip
+        };
+        let mut full_rejected = false;
         if let Some(dashboard) = brain.dashboard.as_ref() {
-            dashboard.publish("pointcloud", payload);
+            match publication {
+                publication::Publication::Full => {
+                    full_rejected = !dashboard.publish_visualization("pointcloud", payload);
+                }
+                publication::Publication::Heartbeat(sequence) => dashboard.publish(
+                    "pointcloud/heartbeat",
+                    serde_json::json!({"version":1,"rover_id":dashboard.rover_id,
+                        "frameID":frame_id,"sequence":sequence})
+                    .to_string(),
+                ),
+                publication::Publication::Skip => {}
+            }
         }
+        brain.cloud_gate.full_enqueued(!full_rejected);
         Ok(())
     }
     /// Publish positioning quality without changing the controller's local motion frame.
@@ -59,10 +105,7 @@ impl MobileController {
                     message: e.to_string(),
                 }
             })?;
-        self.brain
-            .lock()
-            .map_err(|_| ControllerError::Internal)?
-            .dashboard = Some(service);
+        self.install_dashboard(service)?;
         Ok(())
     }
     /// Attach an outbound dashboard session to this controller; no hardware arming.
@@ -77,10 +120,7 @@ impl MobileController {
             .map_err(|e| ControllerError::InvalidInput {
                 message: e.to_string(),
             })?;
-        self.brain
-            .lock()
-            .map_err(|_| ControllerError::Internal)?
-            .dashboard = Some(service);
+        self.install_dashboard(service)?;
         Ok(())
     }
     /// Drop network transport without clearing an accepted local mission.
@@ -107,10 +147,7 @@ impl MobileController {
             .map_err(|e| ControllerError::InvalidInput {
                 message: e.to_string(),
             })?;
-        self.brain
-            .lock()
-            .map_err(|_| ControllerError::Internal)?
-            .dashboard = Some(service);
+        self.install_dashboard(service)?;
         Ok(())
     }
     /// Clear remote intent while preserving sensors, recording and a latched emergency stop.

@@ -13,6 +13,7 @@ uniffi::setup_scaffolding!();
 mod actuators;
 pub use actuators::*;
 mod autonomy;
+mod publication;
 mod search;
 pub use search::{MobileSearchRequest, MobileSearchSnapshot, MobileTargetObservation};
 mod mapping;
@@ -180,7 +181,8 @@ struct Brain {
     run_start: Option<f64>,
     run_id: String,
     sequence: u64,
-    last_map_publish: Option<f64>,
+    map_gate: publication::MapGate,
+    cloud_gate: publication::CloudGate,
     dashboard: Option<terra_transport::ControlPlane>,
     hardware_requests: std::collections::VecDeque<(String, std::time::Instant)>,
     hardware_tokens: std::collections::VecDeque<String>,
@@ -212,7 +214,8 @@ impl MobileController {
                         .as_nanos()
                 ),
                 sequence: 0,
-                last_map_publish: None,
+                map_gate: Default::default(),
+                cloud_gate: Default::default(),
                 dashboard: None,
                 hardware_requests: Default::default(),
                 hardware_tokens: Default::default(),
@@ -443,13 +446,40 @@ impl MobileController {
             p.expires_at -= start;
             p
         });
-        let publish_map = map.is_some()
-            && brain
-                .last_map_publish
-                .is_none_or(|last| timestamp - last >= 0.2);
-        if publish_map {
-            brain.last_map_publish = Some(timestamp);
-        }
+        let map_run = brain.run_id.clone();
+        let map_publication = if brain.dashboard.is_some() {
+            map.as_ref().map(|(grid, time, sequence)| {
+                if !publication::fresh_map_sample(timestamp, *time) {
+                    return publication::Publication::Skip;
+                }
+                if !brain.map_gate.is_newer(&map_run, *sequence) {
+                    return publication::Publication::Skip;
+                }
+                if !publication::map_visualization_valid(grid, &map_run) {
+                    brain.map_gate.reject_source(map_run.clone(), *sequence);
+                    return publication::Publication::Skip;
+                }
+                let content = (
+                    brain.run_id.clone(),
+                    grid.width,
+                    grid.height,
+                    grid.resolution,
+                    grid.origin_x,
+                    grid.origin_y,
+                    grid.occupancy.clone(),
+                );
+                brain.map_gate.observe(
+                    content,
+                    map_run.clone(),
+                    *sequence,
+                    std::time::Instant::now(),
+                    std::time::Duration::from_millis(200),
+                )
+            })
+        } else {
+            None
+        };
+        let mut map_full_rejected = false;
         if let Some(d) = brain.dashboard.as_ref() {
             d.publish("experiment/status",serde_json::json!({
                 "run_id": brain.run_id,
@@ -479,12 +509,28 @@ impl MobileController {
                 "goal/proposal",
                 serde_json::to_string(&wire_proposal).unwrap(),
             );
-            if publish_map && let Some((grid, _, sequence)) = map.as_ref() {
-                d.publish(
-                    "map/occupancy",
-                    terra_autonomy::occupancy_telemetry(d.rover_id, &brain.run_id, *sequence, grid)
+            if let Some((grid, _, sequence)) = map.as_ref() {
+                match map_publication {
+                    Some(publication::Publication::Full) => {
+                        map_full_rejected = !d.publish_visualization(
+                            "map/occupancy",
+                            terra_autonomy::occupancy_telemetry(
+                                d.rover_id,
+                                &brain.run_id,
+                                *sequence,
+                                grid,
+                            )
+                            .to_string(),
+                        );
+                    }
+                    Some(publication::Publication::Heartbeat(sequence)) => d.publish(
+                        "map/occupancy/heartbeat",
+                        serde_json::json!({"schema_version":1,"rover_id":d.rover_id,
+                            "run_id":brain.run_id,"sequence":sequence})
                         .to_string(),
-                );
+                    ),
+                    _ => {}
+                }
             }
             if brain.pose.is_some()
                 && estimate.health == Health::Ready
@@ -503,6 +549,7 @@ impl MobileController {
                 );
             }
         }
+        brain.map_gate.full_enqueued(!map_full_rejected);
         brain.autonomy_json = serde_json::json!({
             "status": output.status,
             "goal": output.goal,

@@ -11,8 +11,40 @@ use std::{
 };
 use zenoh::Wait;
 type Inbox = Arc<Mutex<VecDeque<(String, Vec<u8>, Instant)>>>;
-type States = Arc<Mutex<BTreeMap<String, (String, Instant)>>>;
+type States = Arc<Mutex<BTreeMap<String, (Option<String>, Instant)>>>;
 const TELEMETRY_TTL: Duration = Duration::from_millis(500);
+
+fn visualization_topic(kind: &str) -> bool {
+    matches!(
+        kind,
+        "map/occupancy" | "map/occupancy/heartbeat" | "pointcloud" | "pointcloud/heartbeat"
+    )
+}
+
+// Visualization is sample-driven, unlike replayable control state. Retain the
+// receipt timestamp after taking its payload so fleet liveness keeps its TTL.
+fn telemetry_snapshot(
+    states: &mut BTreeMap<String, (Option<String>, Instant)>,
+) -> (bool, Vec<(String, String)>) {
+    let mut active = false;
+    let mut snapshots = Vec::new();
+    for (kind, (value, at)) in states {
+        if at.elapsed() >= TELEMETRY_TTL {
+            continue;
+        }
+        active = true;
+        let payload = if visualization_topic(kind) {
+            value.take()
+        } else {
+            value.clone()
+        };
+        if let Some(payload) = payload {
+            snapshots.push((kind.clone(), payload));
+        }
+    }
+    (active, snapshots)
+}
+
 pub struct ControlPlane {
     inbox: Inbox,
     states: States,
@@ -113,12 +145,9 @@ impl ControlPlane {
                     fault.store(true, Ordering::Release);
                     break;
                 }
-                let snapshots = state.lock().unwrap().clone();
+                let (active, snapshots) = telemetry_snapshot(&mut state.lock().unwrap());
                 // A stalled/backgrounded controller must not look freshly observed.
-                if !snapshots
-                    .values()
-                    .any(|(_, at)| at.elapsed() < TELEMETRY_TTL)
-                {
+                if !active {
                     thread::sleep(Duration::from_millis(100));
                     continue;
                 }
@@ -133,10 +162,7 @@ impl ControlPlane {
                     fault.store(true, Ordering::Release);
                     break;
                 }
-                for (kind, (value, at)) in snapshots {
-                    if at.elapsed() >= TELEMETRY_TTL {
-                        continue;
-                    }
+                for (kind, value) in snapshots {
                     if session.put(format!("{base}/{kind}"), value).wait().is_err() {
                         fault.store(true, Ordering::Release);
                     }
@@ -180,18 +206,29 @@ impl ControlPlane {
             .collect()
     }
     pub fn publish(&self, kind: &str, value: String) {
+        let _ = self.enqueue_state(kind, value);
+    }
+    /// Enqueue sample-driven visualization, reporting size/failure rejection.
+    /// Acceptance is into the bounded latest-state slot, not network delivery.
+    pub fn publish_visualization(&self, kind: &str, value: String) -> bool {
+        visualization_topic(kind) && !self.failed() && self.enqueue_state(kind, value)
+    }
+    fn enqueue_state(&self, kind: &str, value: String) -> bool {
         // Dense visualization snapshots exceed the ordinary state-message budget.
         // Keep action/small telemetry limits unchanged and bound only these two topics higher.
-        let limit = if matches!(kind, "pointcloud" | "map/occupancy") {
-            262144
-        } else {
-            65536
+        let limit = match kind {
+            "map/occupancy" => 2_000_000,
+            "pointcloud" => 262144,
+            _ => 65536,
         };
         if value.len() <= limit {
             self.states
                 .lock()
                 .unwrap()
-                .insert(kind.into(), (value, Instant::now()));
+                .insert(kind.into(), (Some(value), Instant::now()));
+            true
+        } else {
+            false
         }
     }
     /// Fair replay of bounded outstanding records on one contractual topic.
