@@ -117,6 +117,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
     private let personDetector = PersonSearchDetector()
     private var detectorHealth = "not started"
     private var feedbackTrackingHealthy = false
+    private var openLoopWaypointDisarmed = false
     private var bleReady = false
     private var bleCompatible = false
     private var phoneStartedAt = 0.0
@@ -563,6 +564,16 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
             tick += 1
             let autonomy = controller.autonomyStatus()
             let fullyManual = TerraFleetManualDrive.isFullyManual(autonomy)
+            let disarmWaypoint = bleActive && !bleFeedback && TerraFleetManualDrive.openLoopMustDisarmWaypoint(autonomy)
+            if disarmWaypoint && !openLoopWaypointDisarmed {
+                openLoopWaypointDisarmed = true
+                target = (0, 0)
+                let payload = String(decoding: (try? JSONSerialization.data(withJSONObject: ["level": "teleop", "token": UUID().uuidString])) ?? Data(), as: UTF8.self)
+                try? controller.autonomyRequest(kind: "autonomy", payload: payload, timestamp: now)
+                DispatchQueue.main.async { self.autonomyReason = "L3 stays disarmed until wheel feedback is available" }
+            } else if !disarmWaypoint {
+                openLoopWaypointDisarmed = false
+            }
             if bleActive && bleFeedback { feedbackTrackingHealthy = output.safety == .active }
             if bleActive && fullyManual && tick % 5 == 0 {
                 // L0 has no sensor-driven motor correction. The arbiter still
@@ -578,9 +589,13 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
                 if tick % 5 == 0 { routeHardware(left: output.leftEffort, right: output.rightEffort, now: ProcessInfo.processInfo.systemUptime) }
             }
             if bleActive && !bleFeedback && !fullyManual && tick % 5 == 0 && controller.dashboardStatus() == "connected" {
-                let command = TerraFleetManualDrive.command(autonomy)
-                let wheels = command.wheelEfforts
-                routeHardware(left: wheels.left, right: wheels.right, now: ProcessInfo.processInfo.systemUptime, manualTarget: command)
+                if disarmWaypoint {
+                    routeHardware(left: 0, right: 0, now: ProcessInfo.processInfo.systemUptime, manualTarget: .zero)
+                } else {
+                    let command = TerraFleetManualDrive.command(autonomy)
+                    let wheels = command.wheelEfforts
+                    routeHardware(left: wheels.left, right: wheels.right, now: ProcessInfo.processInfo.systemUptime, manualTarget: command)
+                }
             }
             if tick % 10 == 0 { publish(output);updateAuthority() }
             if mode == .phone { publishLocalization(controller) }
@@ -876,6 +891,9 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
     }
     func setAutonomy(_ level:String) {
         controlQueue.async {
+            // Open-loop Bluetooth cannot take an autonomy level. L3 in particular
+            // stays disarmed until wheel feedback exists; update() also drops a
+            // latched waypoint back to teleop and commands zero effort.
             guard !self.bleActive || self.bleFeedback else { return }
             self.target=(0,0)
             do {let payload=String(decoding:try JSONSerialization.data(withJSONObject:["level":level,"token":UUID().uuidString]),as:UTF8.self)

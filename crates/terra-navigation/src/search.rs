@@ -202,7 +202,10 @@ impl SearchNavigator {
                 SearchNavigationDecision::Exhausted
             };
         };
-        self.route = route(memory, pose, self.radius, target);
+        self.route = match crate::astar_route(memory, pose, self.radius, target.0, target.1) {
+            Ok(route) => approach_waypoints(&route),
+            Err(_) => Vec::new(),
+        };
         // Only hand the follower a waypoint reachable in the current observed map.
         if let Some(&(x, y)) = self.route.first() {
             if reachable(m, pose, self.radius, x, y) {
@@ -218,64 +221,21 @@ impl SearchNavigator {
         }
     }
 }
-/// Stable A* over certified free cells, with footprint checks at every cell.
-fn route(m: &MapSnapshot, pose: Pose, radius: f64, target: (f64, f64)) -> Vec<(f64, f64)> {
-    use std::{cmp::Reverse, collections::BinaryHeap};
-    let index = |x: f64, y: f64| -> Option<usize> {
-        let a = ((x - m.origin_x) / m.resolution).floor() as isize;
-        let b = ((y - m.origin_y) / m.resolution).floor() as isize;
-        (a >= 0 && b >= 0 && a < m.width as isize && b < m.height as isize)
-            .then_some(b.max(0) as usize * m.width as usize + a.max(0) as usize)
-    };
-    let point = |i: usize| {
-        (
-            m.origin_x + (i % m.width as usize) as f64 * m.resolution + 0.5 * m.resolution,
-            m.origin_y + (i / m.width as usize) as f64 * m.resolution + 0.5 * m.resolution,
-        )
-    };
-    let (Some(start), Some(end)) = (index(pose.x, pose.y), index(target.0, target.1)) else {
-        return vec![];
-    };
-    let heuristic = |i: usize| {
-        (i % m.width as usize).abs_diff(end % m.width as usize)
-            + (i / m.width as usize).abs_diff(end / m.width as usize)
-    };
-    let mut distance = vec![usize::MAX; m.occupancy.len()];
-    let mut parent = vec![usize::MAX; m.occupancy.len()];
-    let mut queue = BinaryHeap::new();
-    distance[start] = 0;
-    queue.push(Reverse((heuristic(start), 0, start)));
-    while let Some(Reverse((_, cost, i))) = queue.pop() {
-        if cost != distance[i] {
-            continue;
-        }
-        if i == end {
-            let mut cells = vec![];
-            let mut j = end;
-            while j != start {
-                cells.push(point(j));
-                j = parent[j];
-            }
-            cells.reverse();
-            return cells;
-        }
-        let x = i % m.width as usize;
-        let y = i / m.width as usize;
-        for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
-            let a = x as isize + dx;
-            let b = y as isize + dy;
-            if a < 0 || b < 0 || a >= m.width as isize || b >= m.height as isize {
-                continue;
-            }
-            let n = b as usize * m.width as usize + a as usize;
-            let (px, py) = point(n);
-            if !super::clear(m, px, py, radius, None) || cost + 1 >= distance[n] {
-                continue;
-            }
-            distance[n] = cost + 1;
-            parent[n] = i;
-            queue.push(Reverse((cost + 1 + heuristic(n), cost + 1, n)));
+/// Sample the compacted polyline into steps the search follower can consume
+/// one at a time. The first sample is ahead of the rover, matching the old
+/// cell-center route that omitted the starting pose.
+fn approach_waypoints(route: &[[f64; 2]]) -> Vec<(f64, f64)> {
+    let mut waypoints = Vec::new();
+    for segment in route.windows(2) {
+        let distance = (segment[1][0] - segment[0][0]).hypot(segment[1][1] - segment[0][1]);
+        let steps = (distance / 0.25).ceil().max(1.0) as usize;
+        for step in 1..=steps {
+            let fraction = step as f64 / steps as f64;
+            waypoints.push((
+                segment[0][0] + (segment[1][0] - segment[0][0]) * fraction,
+                segment[0][1] + (segment[1][1] - segment[0][1]) * fraction,
+            ));
         }
     }
-    vec![]
+    waypoints
 }

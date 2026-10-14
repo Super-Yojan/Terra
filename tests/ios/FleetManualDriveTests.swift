@@ -22,6 +22,11 @@ import Foundation
   precondition(!DriveJoystickSafety.hardwareArmAllowed(feedback: true, fullyManual: false, trackingHealthy: false, compatible: true))
   precondition(DriveJoystickSafety.hardwareArmAllowed(feedback: true, fullyManual: false, trackingHealthy: true, compatible: true))
   precondition(TerraFleetManualDrive.localWaypointActive("{\"status\":{\"requested_level\":\"waypoint_direct\"},\"goal\":{\"state\":\"active\"}}"))
+  precondition(TerraFleetManualDrive.openLoopMustDisarmWaypoint("{\"status\":{\"requested_level\":\"waypoint\",\"effective_level\":\"none\"}}"))
+  precondition(TerraFleetManualDrive.openLoopMustDisarmWaypoint("{\"status\":{\"effective_level\":\"waypoint\"}}"))
+  precondition(!TerraFleetManualDrive.openLoopMustDisarmWaypoint("{\"status\":{\"requested_level\":\"waypoint_direct\"}}"))
+  precondition(!TerraFleetManualDrive.openLoopMustDisarmWaypoint("{\"status\":{\"requested_level\":\"teleop\"}}"))
+  precondition(TerraFleetManualDrive.command("{\"status\":{\"requested_level\":\"waypoint\",\"effective_level\":\"waypoint\",\"active_source\":\"waypoint\",\"safety\":\"clear\"},\"twist\":{\"linear\":1,\"angular\":0.2}}") == .zero)
   print("Fleet manual routing: accepted operator twist, stopped authority, autonomy and missing payload passed")
  }
 }

@@ -37,6 +37,15 @@ enum DriveJoystickSafety {
 
 /// Route only the arbiter-selected manual intent, never an unvalidated network payload.
 enum TerraFleetManualDrive {
+    /// L3 wheel commands come from the closed-loop velocity controller. Without
+    /// wheel feedback, open-loop Bluetooth must drop waypoint back to teleop and
+    /// send zero effort. Applying planner efforts on that path would keep driving
+    /// a plant the phone can no longer correct.
+    static func openLoopMustDisarmWaypoint(_ json: String) -> Bool {
+        guard let root = (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any],
+              let status = root["status"] as? [String: Any] else { return false }
+        return status["requested_level"] as? String == "waypoint" || status["effective_level"] as? String == "waypoint"
+    }
     static func localWaypointActive(_ json: String) -> Bool {
         guard let root = (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any],
               let status = root["status"] as? [String: Any], let goal = root["goal"] as? [String: Any] else { return false }
