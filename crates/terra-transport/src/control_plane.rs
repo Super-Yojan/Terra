@@ -60,15 +60,31 @@ impl ControlPlane {
         if !endpoint.starts_with("tcp/127.0.0.1:") {
             return Err(TransportError::InvalidSettings);
         }
-        Self::open(endpoint, prefix, id, false)
+        Self::open(endpoint, prefix, id, false, None)
     }
     /// Outbound TCP session, suitable for an explicitly configured Tailscale router.
     /// No listeners, multicast discovery, or automatic application command retries.
     pub fn connect(endpoint: &str, prefix: &str, id: u64) -> Result<Self, TransportError> {
         crate::validate(endpoint, prefix)?;
-        Self::open(endpoint, prefix, id, true)
+        Self::open(endpoint, prefix, id, true, None)
     }
-    fn open(endpoint: &str, prefix: &str, id: u64, outbound: bool) -> Result<Self, TransportError> {
+    pub fn connect_authenticated(
+        endpoint: &str,
+        prefix: &str,
+        id: u64,
+        user: &str,
+        password: &str,
+    ) -> Result<Self, TransportError> {
+        crate::validate(endpoint, prefix)?;
+        Self::open(endpoint, prefix, id, true, Some((user, password)))
+    }
+    fn open(
+        endpoint: &str,
+        prefix: &str,
+        id: u64,
+        outbound: bool,
+        credentials: Option<(&str, &str)>,
+    ) -> Result<Self, TransportError> {
         let mut config = zenoh::Config::default();
         if outbound {
             for (key, value) in [
@@ -95,6 +111,16 @@ impl ControlPlane {
         config
             .insert_json5("scouting/multicast/enabled", "false")
             .map_err(|e| TransportError::Network(e.to_string()))?;
+        if let Some((user, password)) = credentials.filter(|(u, _)| !u.is_empty()) {
+            for (key, value) in [
+                ("transport/auth/usrpwd/user", user),
+                ("transport/auth/usrpwd/password", password),
+            ] {
+                config
+                    .insert_json5(key, &serde_json::json!(value).to_string())
+                    .map_err(|e| TransportError::Network(e.to_string()))?;
+            }
+        }
         let session = zenoh::open(config)
             .wait()
             .map_err(|e| TransportError::Network(e.to_string()))?;

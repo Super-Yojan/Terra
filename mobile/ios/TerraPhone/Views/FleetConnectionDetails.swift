@@ -7,7 +7,7 @@ struct FleetConnectionDetails: View {
         Form {
             Section {
                 Text(brain.dashboardStatus)
-                LabeledContent("Router", value: UserDefaults.standard.string(forKey: "dashboardRouterEndpoint") ?? "Not configured")
+                LabeledContent("Router", value: TerraFleetDefaults.savedEndpoint)
                 LabeledContent("Rover ID", value: UserDefaults.standard.string(forKey: "dashboardRoverID") ?? "0")
             }
             Section {

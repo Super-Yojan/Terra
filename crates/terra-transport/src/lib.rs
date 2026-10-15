@@ -43,7 +43,7 @@ pub struct RoverConnection {
 }
 fn validate(endpoint: &str, prefix: &str) -> Result<(), TransportError> {
     if endpoint.len() > 512
-        || !endpoint.starts_with("tcp/")
+        || !(endpoint.starts_with("tcp/") || endpoint.starts_with("tls/"))
         || endpoint.contains(['\n', '\r', '#', '?'])
         || endpoint.parse::<zenoh::config::EndPoint>().is_err()
         || prefix.len() > 256
@@ -682,6 +682,7 @@ pub fn is_control_topic(kind: &str) -> bool {
             | "teleop"
             | "cmd_vel"
             | "hardware"
+            | "navigation/settings"
             | "search"
             | "search/action"
             | "search/report/ack"

@@ -236,6 +236,8 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
             dashboardStatus = "Enter a TCP router endpoint and valid topic prefix"; routerSuppressed = true; return
         }
         let endpoint = settings.endpoint, prefix = settings.prefix
+        let fleetUser = UserDefaults.standard.string(forKey: "dashboardRouterUser") ?? "terra"
+        let fleetPassword = TerraFleetDefaults.password
         dashboardConnecting = true; dashboardStatus = "Connecting…"
         sensorEpochLock.lock(); let epoch = sensorEpoch; sensorEpochLock.unlock()
         controlQueue.async {
@@ -265,9 +267,9 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
             self.routerQueue.async {
             do {
                 if continuingWaypoint {
-                    try controller.reconnectDashboard(endpoint: endpoint, prefix: prefix, roverId: id)
+                    try controller.reconnectDashboardAuthenticated(endpoint: endpoint, prefix: prefix, roverId: id, user: fleetUser, password: fleetPassword)
                 } else {
-                    try controller.connectDashboard(endpoint: endpoint, prefix: prefix, roverId: id)
+                    try controller.connectDashboardAuthenticated(endpoint: endpoint, prefix: prefix, roverId: id, user: fleetUser, password: fleetPassword)
                 }
                 guard self.sensorEpochMatches(epoch), self.dashboardAttemptMatches(attempt) else {
                     try? controller.disconnectDashboard(); return
@@ -1221,7 +1223,7 @@ extension PhoneController {
               !routerSuppressed, !dashboardConnected, !dashboardConnecting else { return }
         if let due = routerRetryAt, connectionNow < due { return }
         let defaults = UserDefaults.standard
-        let endpoint = defaults.string(forKey: "dashboardRouterEndpoint") ?? ""
+        let endpoint = TerraFleetDefaults.savedEndpoint
         guard !endpoint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             dashboardStatus = "Set router endpoint in Settings"; return
         }
@@ -1242,7 +1244,7 @@ extension PhoneController {
     func retryFleetConnection() {
         routerSuppressed = false; routerRetryAt = nil
         let defaults = UserDefaults.standard
-        let endpoint = defaults.string(forKey: "dashboardRouterEndpoint") ?? ""
+        let endpoint = TerraFleetDefaults.savedEndpoint
         let prefix = defaults.string(forKey: "dashboardTopicPrefix") ?? "terra/phone"
         let id = defaults.string(forKey: "dashboardRoverID") ?? "0"
         connectDashboard(endpoint: endpoint, prefix: prefix, roverID: id)
@@ -1265,7 +1267,7 @@ extension PhoneController {
         facts.hardwareReady = hardwareReady
         facts.hardwareFault = hardwareFault != nil
         facts.roverFailed = roverConnectionFailed
-        facts.fleetConfigured = TerraRouterSettings.parse(endpoint: defaults.string(forKey: "dashboardRouterEndpoint") ?? "", prefix: defaults.string(forKey: "dashboardTopicPrefix") ?? "terra/phone", roverID: defaults.string(forKey: "dashboardRoverID") ?? "0") != nil
+        facts.fleetConfigured = TerraRouterSettings.parse(endpoint: TerraFleetDefaults.savedEndpoint, prefix: defaults.string(forKey: "dashboardTopicPrefix") ?? "terra/phone", roverID: defaults.string(forKey: "dashboardRoverID") ?? "0") != nil
         facts.fleetAttempting = dashboardConnecting; facts.fleetConnected = dashboardConnected
         facts.fleetPaused = routerSuppressed; facts.fleetFailed = routerRetryAt != nil
         #if targetEnvironment(simulator)

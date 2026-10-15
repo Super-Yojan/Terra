@@ -123,6 +123,24 @@ impl MobileController {
         self.install_dashboard(service)?;
         Ok(())
     }
+    pub fn connect_dashboard_authenticated(
+        &self,
+        endpoint: String,
+        prefix: String,
+        rover_id: u64,
+        user: String,
+        password: String,
+    ) -> Result<(), ControllerError> {
+        self.disconnect_dashboard()?;
+        let service = terra_transport::ControlPlane::connect_authenticated(
+            &endpoint, &prefix, rover_id, &user, &password,
+        )
+        .map_err(|e| ControllerError::InvalidInput {
+            message: e.to_string(),
+        })?;
+        self.install_dashboard(service)?;
+        Ok(())
+    }
     /// Drop network transport without clearing an accepted local mission.
     pub fn detach_dashboard_link(&self) -> Result<(), ControllerError> {
         let mut b = self.brain.lock().map_err(|_| ControllerError::Internal)?;
@@ -147,6 +165,24 @@ impl MobileController {
             .map_err(|e| ControllerError::InvalidInput {
                 message: e.to_string(),
             })?;
+        self.install_dashboard(service)?;
+        Ok(())
+    }
+    pub fn reconnect_dashboard_authenticated(
+        &self,
+        endpoint: String,
+        prefix: String,
+        rover_id: u64,
+        user: String,
+        password: String,
+    ) -> Result<(), ControllerError> {
+        self.detach_dashboard_link()?;
+        let service = terra_transport::ControlPlane::connect_authenticated(
+            &endpoint, &prefix, rover_id, &user, &password,
+        )
+        .map_err(|e| ControllerError::InvalidInput {
+            message: e.to_string(),
+        })?;
         self.install_dashboard(service)?;
         Ok(())
     }
@@ -189,7 +225,11 @@ impl MobileController {
                 message: "invalid hardware status".into(),
             });
         }
-        let b = self.brain.lock().map_err(|_| ControllerError::Internal)?;
+        let mut b = self.brain.lock().map_err(|_| ControllerError::Internal)?;
+        b.hardware_observation = Some((
+            serde_json::from_str(&payload).unwrap(),
+            std::time::Instant::now(),
+        ));
         if let Some(d) = b.dashboard.as_ref() {
             d.publish("hardware/status", payload);
         }
@@ -346,6 +386,8 @@ impl MobileController {
         brain.recorder = Some(recorder);
 
         brain.autonomy = terra_autonomy::AutonomyArbiter::default();
+        let planner = brain.navigation.parameters.planner();
+        brain.autonomy.configure_planner(planner);
         brain.autonomy.run_id = run_id.clone();
         brain.controller.reset();
         brain.run_id = run_id;

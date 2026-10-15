@@ -116,6 +116,32 @@ impl Default for AutonomyArbiter {
     }
 }
 impl AutonomyArbiter {
+    /// Check live authority/goal state, including commands accepted earlier in this tick.
+    pub fn navigation_configuration_allowed(
+        &self,
+        run_id: &str,
+        revision: u64,
+        pose: Pose,
+    ) -> bool {
+        self.run_id == run_id
+            && self.revision == revision
+            && !self.stopped
+            && self.follower.step(pose.x, pose.y, pose.yaw).status.state != GoalState::Active
+    }
+    /// Invalidate cached trajectories and routes after a validated configuration change.
+    pub fn configure_planner(&mut self, config: terra_navigation::PlannerConfig) {
+        self.planner.config = config;
+        self.last_plan = None;
+        self.planner_trace = None;
+        self.global_route.clear();
+        self.route_goal = None;
+        self.route_map_revision = 0;
+        self.route_checked_at = 0.;
+        self.operator = None;
+        self.reset = true;
+        self.revision = self.revision.saturating_add(1);
+    }
+
     /// Held local stop always relatches after reset and never replays an old token.
     pub fn hold_emergency_stop(&mut self) {
         if !self.stopped {

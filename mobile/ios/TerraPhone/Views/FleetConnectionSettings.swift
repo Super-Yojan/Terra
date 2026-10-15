@@ -3,16 +3,18 @@ import SwiftUI
 struct FleetConnectionSettings: View {
     @ObservedObject var brain: PhoneController
     @Environment(\.dismiss) private var dismiss
-    @State private var endpoint = UserDefaults.standard.string(forKey: "dashboardRouterEndpoint") ?? ""
+    @State private var endpoint = TerraFleetDefaults.savedEndpoint
     @State private var prefix = UserDefaults.standard.string(forKey: "dashboardTopicPrefix") ?? "terra/phone"
     @State private var roverID = UserDefaults.standard.string(forKey: "dashboardRoverID") ?? "0"
+    @State private var user = UserDefaults.standard.string(forKey: "dashboardRouterUser") ?? "terra"
+    @State private var password = TerraFleetDefaults.password
     @State private var error = ""
     var body: some View {
         Form {
             Section {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Router address").font(.caption).foregroundStyle(.secondary)
-                    TextField("tcp/<router address>:7448", text: $endpoint)
+                    TextField("tls/<router address>:7448", text: $endpoint)
                         .textInputAutocapitalization(.never).autocorrectionDisabled()
                         .accessibilityLabel("Fleet router address")
                 }
@@ -24,8 +26,10 @@ struct FleetConnectionSettings: View {
                     Text("Rover ID").font(.caption).foregroundStyle(.secondary)
                     TextField("Rover ID", text: $roverID).keyboardType(.numberPad)
                 }
+                TextField("Fleet account", text: $user).textInputAutocapitalization(.never).autocorrectionDisabled()
+                SecureField("Fleet password", text: $password)
             } header: { Text("Fleet router") } footer: {
-                Text("Use the router’s Tailscale address when connecting across networks. Keep Tailscale enabled on this phone and the router computer.")
+                Text("The default ARGOS router is public and uses encrypted TLS. Enter your fleet credentials; the password is stored in this phone’s Keychain.")
             }
             Section {
                 Text("Terra connects automatically after your rover is ready. Saving changes replaces the current fleet session without disconnecting Bluetooth.")
@@ -36,6 +40,9 @@ struct FleetConnectionSettings: View {
         .toolbar {
             ToolbarItem(placement: .confirmationAction) {
                 Button("Save") {
+                    guard TerraRouterSettings.parse(endpoint: endpoint, prefix: prefix, roverID: roverID) != nil else { error = "Enter a valid TCP or TLS router, prefix, and rover ID."; return }
+                    guard TerraFleetDefaults.savePassword(password) else { error = "Unable to save fleet password in Keychain."; return }
+                    UserDefaults.standard.set(user, forKey: "dashboardRouterUser")
                     if brain.applyDashboardSettings(endpoint: endpoint, prefix: prefix, roverID: roverID) { dismiss() }
                     else { error = "Enter a TCP address with a valid port, a topic prefix, and a non-negative rover ID." }
                 }.fontWeight(.semibold)

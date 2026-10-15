@@ -13,6 +13,7 @@ uniffi::setup_scaffolding!();
 mod actuators;
 pub use actuators::*;
 mod autonomy;
+mod navigation_settings;
 mod publication;
 mod search;
 pub use search::{MobileSearchRequest, MobileSearchSnapshot, MobileTargetObservation};
@@ -184,6 +185,8 @@ struct Brain {
     map_gate: publication::MapGate,
     cloud_gate: publication::CloudGate,
     dashboard: Option<terra_transport::ControlPlane>,
+    navigation: navigation_settings::State,
+    hardware_observation: Option<(serde_json::Value, std::time::Instant)>,
     hardware_requests: std::collections::VecDeque<(String, std::time::Instant)>,
     hardware_tokens: std::collections::VecDeque<String>,
 }
@@ -217,6 +220,8 @@ impl MobileController {
                 map_gate: Default::default(),
                 cloud_gate: Default::default(),
                 dashboard: None,
+                navigation: Default::default(),
+                hardware_observation: None,
                 hardware_requests: Default::default(),
                 hardware_tokens: Default::default(),
             }),
@@ -330,6 +335,7 @@ impl MobileController {
             .unwrap_or_default();
         for (kind, bytes, age) in incoming {
             match kind.as_str() {
+                "navigation/settings" => navigation_settings::apply(&mut brain, &bytes, age),
                 "hardware" => {
                     let authority: serde_json::Value =
                         serde_json::from_str(&brain.autonomy_json).unwrap_or_default();
@@ -488,10 +494,9 @@ impl MobileController {
                 "utc": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs_f64(),
                 "recording": brain.recorder.as_ref().is_some_and(|r|!r.failed()),
             }).to_string());
-            d.publish(
-                "autonomy/status",
-                serde_json::to_string(&output.status).unwrap(),
-            );
+            let mut status = serde_json::to_value(&output.status).unwrap();
+            status["navigation"] = brain.navigation.status();
+            d.publish("autonomy/status", status.to_string());
             d.publish(
                 "search/status",
                 serde_json::to_string(&output.search).unwrap(),
@@ -552,6 +557,7 @@ impl MobileController {
         brain.map_gate.full_enqueued(!map_full_rejected);
         brain.autonomy_json = serde_json::json!({
             "status": output.status,
+            "navigation": brain.navigation.status(),
             "goal": output.goal,
             "proposal": wire_proposal,
             "search": output.search,
@@ -598,6 +604,8 @@ impl MobileController {
     pub fn reset(&self) -> Result<(), ControllerError> {
         let mut brain = self.brain.lock().map_err(|_| ControllerError::Internal)?;
         brain.autonomy = terra_autonomy::AutonomyArbiter::default();
+        let planner = brain.navigation.parameters.planner();
+        brain.autonomy.configure_planner(planner);
         brain.dashboard = None;
         brain.pose = None;
         brain.map = None;
@@ -787,3 +795,6 @@ mod hardware_request_tests {
         assert!(admit_hardware_request(br#"{"action":"disarm","token":"stop"}"#, 8., &a).is_some());
     }
 }
+
+#[cfg(test)]
+mod navigation_settings_tests;

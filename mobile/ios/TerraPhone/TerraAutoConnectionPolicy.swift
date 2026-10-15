@@ -1,4 +1,5 @@
 import Foundation
+import Security
 
 /// Discovery never establishes ownership. Only a remembered rover reconnects silently.
 enum TerraAutoConnectionPolicy {
@@ -105,6 +106,33 @@ enum TerraBluetoothFailurePolicy {
     }
 }
 
+enum TerraFleetDefaults {
+    static let endpoint = "tls/argos.34.135.204.210.sslip.io:7448"
+    static var savedEndpoint: String {
+        let saved = UserDefaults.standard.string(forKey: "dashboardRouterEndpoint") ?? ""
+        return saved.isEmpty ? endpoint : saved
+    }
+    static var password: String {
+        get {
+            var result: CFTypeRef?
+            let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "Terra.ARGOS", kSecAttrAccount as String: "fleet", kSecReturnData as String: true]
+            guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess, let data = result as? Data else { return "" }
+            return String(data: data, encoding: .utf8) ?? ""
+        }
+    }
+    static func savePassword(_ value: String) -> Bool {
+        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: "Terra.ARGOS", kSecAttrAccount as String: "fleet"]
+        let data = Data(value.utf8)
+        let status = SecItemUpdate(query as CFDictionary, [kSecValueData as String: data] as CFDictionary)
+        if status == errSecSuccess { return true }
+        guard status == errSecItemNotFound else { return false }
+        var item = query
+        item[kSecValueData as String] = data
+        item[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        return SecItemAdd(item as CFDictionary, nil) == errSecSuccess
+    }
+}
+
 struct TerraRouterSettings {
     let endpoint: String
     let prefix: String
@@ -113,7 +141,7 @@ struct TerraRouterSettings {
         let endpoint = endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
         let prefix = prefix.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let id = UInt64(roverID.trimmingCharacters(in: .whitespacesAndNewlines)),
-              endpoint.hasPrefix("tcp/"), !endpoint.contains(where: { $0.isWhitespace }),
+              (endpoint.hasPrefix("tcp/") || endpoint.hasPrefix("tls/")), !endpoint.contains(where: { $0.isWhitespace }),
               let separator = endpoint.lastIndex(of: ":"),
               let port = UInt16(endpoint[endpoint.index(after: separator)...]), port > 0,
               !prefix.isEmpty, !prefix.contains("*"), !prefix.contains("#"),
