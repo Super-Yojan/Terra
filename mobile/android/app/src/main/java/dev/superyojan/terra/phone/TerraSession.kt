@@ -335,6 +335,7 @@ class TerraSession(context: Context) {
             val payload = JSONObject()
                 .put("level", level)
                 .put("token", UUID.randomUUID().toString())
+                .apply { if (level == "explore") put("budget_seconds", 120.0) }
                 .toString()
             try {
                 if (mode == DriveMode.Remote) {

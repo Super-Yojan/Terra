@@ -113,3 +113,8 @@ Not verified:
 ## iOS follow-up on a Mac
 
 `PhoneController` now calls `deviceVectorToBody`, `yUpCameraToBodyPose`, `yUpCameraToOpticalPose`, `latchGroundOffset`, `PoseVelocityFilter`, `SimulatedPlant`, and `simulatedRoomDepth`. Those symbols appear only after `./scripts/build-ios.sh` regenerates `mobile/ios/Generated`. This checkout cannot run `xcodebuild`.
+
+### Integrated exploration
+
+Android offers **Explore · 120 seconds** and sends that explicit time budget to
+the shared arbiter. The run still requires a fresh pose and occupancy map.

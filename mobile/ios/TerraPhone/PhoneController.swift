@@ -698,7 +698,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
         phonePose = (Double(roverPosition.x), Double(roverPosition.y), atan2(Double(bodyForward.y), Double(bodyForward.x)))
         do {
             try controller.pushVio(sample: VioReading(timestamp: frame.timestamp, positionX: Double(roverPosition.x), positionY: Double(roverPosition.y), positionZ: Double(roverPosition.z), quaternionX: Double(q.x), quaternionY: Double(q.y), quaternionZ: Double(q.z), quaternionW: Double(q.w), velocityX: Double(filteredVelocity.x), velocityY: Double(filteredVelocity.y), velocityZ: Double(filteredVelocity.z), tracked: tracked && velocityReady))
-            if tracked { updatePhoneGround(frame: frame, position: position); updatePhoneMap(frame: frame, position: position, bodyOrientation: orientation); publishPhoneCloud(frame: frame, position: position) }
+            if tracked { updatePhoneGround(frame: frame, position: position); updatePhoneMap(frame: frame, position: position, roverPosition: roverPosition, bodyOrientation: orientation); publishPhoneCloud(frame: frame, position: position) }
             else { DispatchQueue.main.async { self.mapStatus = "Tracking lost · map paused" } }
         } catch { fail(error, context: "AR frame at \(frame.timestamp)") }
     }
@@ -924,7 +924,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
             try? controller.publishPointCloud(payload: String(decoding: data, as: UTF8.self))
         }
     }
-    private func updatePhoneMap(frame: ARFrame, position: SIMD3<Float>, bodyOrientation: simd_quatf) {
+    private func updatePhoneMap(frame: ARFrame, position: SIMD3<Float>, roverPosition: SIMD3<Float>, bodyOrientation: simd_quatf) {
         guard frame.timestamp - lastMapTime >= 0.1, let depth = frame.sceneDepth, let map = occupancyMap else { return }
         let buffer = depth.depthMap
         guard CVPixelBufferGetPixelFormatType(buffer) == kCVPixelFormatType_DepthFloat32,
@@ -956,11 +956,11 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
         let q = (simd_quatf(worldFromAR) * simd_quatf(frame.camera.transform) * simd_quatf(angle: .pi, axis: SIMD3(1, 0, 0))).vector
         guard mapGroundOffset != nil else { return }
         do {
-            try map.recenter(x: Double(position.x), y: Double(position.y))
+            try map.recenter(x: Double(roverPosition.x), y: Double(roverPosition.y))
             try map.integrateDepth(frame: MappingDepthFrame(timestamp: frame.timestamp, width: UInt32(width), height: UInt32(height), fx: Double(k.columns.0.x) * sx, fy: Double(k.columns.1.y) * sy, cx: (Double(k.columns.2.x) + 0.5) * sx - 0.5, cy: (Double(k.columns.2.y) + 0.5) * sy - 0.5, cameraX: Double(position.x), cameraY: Double(position.y), cameraZ: Double(position.z) + (mapGroundOffset ?? 0), quaternionX: Double(q.x), quaternionY: Double(q.y), quaternionZ: Double(q.z), quaternionW: Double(q.w), depthMetres: values))
             lastMapTime = frame.timestamp
             let forward = bodyOrientation.act(SIMD3<Float>(1, 0, 0))
-            try publishMap(x: Double(position.x), y: Double(position.y), yaw: atan2(Double(forward.y), Double(forward.x)), status: "ARKit scene depth · measured floor · 10 Hz")
+            try publishMap(x: Double(roverPosition.x), y: Double(roverPosition.y), yaw: atan2(Double(forward.y), Double(forward.x)), status: "ARKit scene depth · measured floor · 10 Hz")
         } catch { DispatchQueue.main.async { self.mapStatus = "Map: " + error.localizedDescription } }
     }
     private func handleTrackingFailure(_ error: Error) {

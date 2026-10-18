@@ -37,7 +37,7 @@ private val levelLabels = mapOf(
     "assisted_teleop" to "Assisted teleop",
     "waypoint" to "Waypoint",
     "supervised" to "Supervised search",
-    "explore" to "Explore",
+    "explore" to "Explore · 120 seconds",
 )
 
 @Composable
