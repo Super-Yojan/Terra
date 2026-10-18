@@ -5,6 +5,7 @@
     [ARGOS](https://super-yojan.dev/ARGOS/) commands the fleet.
     [Zorvane](https://super-yojan.dev/Zorvane/) is the world.
     Simulator uses Zenoh. A real iPhone uses Bluetooth.
+    The Android emulator uses Zenoh too. See [TerraPhone for Android](MOBILE_ANDROID.md).
 
 ![TerraPhone app icon: a six-wheeled rover on a forest road](assets/terra-icon.png){ width="240" }
 
@@ -65,7 +66,7 @@ flowchart LR
 ## What is already in the tree
 
 - Rust workspace under `crates/`. Version `0.1.0`.
-- TerraPhone in `mobile/ios/`.
+- TerraPhone in `mobile/ios/` and `mobile/android/`.
 - Pi service `terra-rover` `0.2.0` in `hardware/raspberry-pi/`.
 
 The old `simulator/` tree is gone. Run the world from Zorvane: `cargo run -p zorvane`.
