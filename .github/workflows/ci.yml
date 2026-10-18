@@ -55,7 +55,15 @@ jobs:
 
       - name: SDK packages
         run: |
-          yes | sdkmanager --licenses >/dev/null
+          sdkmanager --licenses >/dev/null <<EOF
+          y
+          y
+          y
+          y
+          y
+          y
+          y
+          EOF
           sdkmanager --install "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018"
           echo "ANDROID_NDK_HOME=${ANDROID_SDK_ROOT}/ndk/27.2.12479018" >> "$GITHUB_ENV"
 

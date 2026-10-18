@@ -5,7 +5,7 @@ Documentation: <https://super-yojan.dev/Terra/>
 Terra is the vehicle body and onboard autonomy: shared Rust crates, the TerraPhone
 iOS and Android apps, and the Raspberry Pi rover. The world simulator is
 [Zorvane](https://super-yojan.dev/Zorvane/). The fleet operator is
-[ARGOS](https://super-yojan.dev/ARGOS/). Both sit with this site under
+[ARGOS](https://super-yojan.dev/ARGOS/). ARGOS now uses a React browser UI and Rust Axum server; its Swift app is a legacy fallback and Unity is a historical prototype. TerraPhone iOS remains the onboard vehicle runtime. All sites sit under
 [super-yojan.dev](https://super-yojan.dev).
 
 Configurable Bluetooth actuator control is implemented for TerraPhone and a
@@ -60,3 +60,13 @@ open mobile/ios/TerraPhone.xcodeproj
 ./scripts/build-android.sh
 cd mobile/android && ./gradlew assembleDebug testDebugUnitTest
 ```
+
+## Integrated capabilities
+
+Terra includes time-bounded frontier exploration (`terra-exploration`), the Android
+TerraPhone adapter, and an [offline VLM decision evaluator](tools/vlm-eval/README.md).
+The evaluator is a research tool and does not command live vehicles. Android setup
+and limitations are in [the Android guide](docs/MOBILE_ANDROID.md).
+Phone mount measurements and the two-pass offset fit are in Settings; stop tracking
+before saving measurements. See [the calibration checklist](docs/MOUNT_CALIBRATION_CHECKLIST.md).
+Measured ground-plane detection remains independent of mount height.

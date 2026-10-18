@@ -839,234 +839,242 @@ impl AutonomyArbiter {
                 held = true;
                 self.explore_blocked = false;
             } else {
-            if self.level == Level::TargetSearch {
-                let detector = self
-                    .search
-                    .as_ref()
-                    .is_some_and(|s| self.detector_available(&s.request.target_class, input.now));
-                let mut search_goal = None;
-                if let Some(search) = self.search.as_mut() {
-                    if !detector {
-                        search.hold("detector_unavailable");
-                    } else {
-                        search_goal = search
-                            .tick(
-                                input.map.unwrap(),
-                                input.pose,
-                                input.map_revision,
-                                input.now,
-                            )
-                            .unwrap_or(None);
-                    }
-                }
-                if let Some((x, y)) = search_goal {
-                    if (goal.x - x).abs() > 1e-8
-                        || (goal.y - y).abs() > 1e-8
-                        || goal.state != GoalState::Active
-                    {
-                        let _ = self.follower.accept(
-                            &GoalCommand::Local {
-                                x,
-                                y,
-                                yaw: None,
-                                token: None,
-                            },
-                            20_000.,
-                        );
-                        self.last_plan = None;
-                        self.planner_trace = None;
-                        self.event("route_selected", None, "search_route");
-                    }
-                    goal = self
-                        .follower
-                        .step(input.pose.x, input.pose.y, input.pose.yaw)
-                        .status;
-                } else {
-                    self.follower.cancel();
-                    self.last_plan = None;
-                    self.planner_trace = None;
-                    held = true;
-                    reason = "search_hold";
-                }
-            }
-            let intent = match self.level {
-                Level::Teleop | Level::AssistedTeleop => self
-                    .operator
-                    .as_ref()
-                    .filter(|(_, t)| fresh(input.now, Some(*t), 0.5))
-                    .map(|(r, _)| {
-                        source = if self.level == Level::Teleop {
-                            "operator"
+                if self.level == Level::TargetSearch {
+                    let detector = self.search.as_ref().is_some_and(|s| {
+                        self.detector_available(&s.request.target_class, input.now)
+                    });
+                    let mut search_goal = None;
+                    if let Some(search) = self.search.as_mut() {
+                        if !detector {
+                            search.hold("detector_unavailable");
                         } else {
-                            "assisted_operator"
-                        };
-                        Twist {
-                            linear: r.linear.clamp(-2., 2.),
-                            angular: r.angular.clamp(-2., 2.),
+                            search_goal = search
+                                .tick(
+                                    input.map.unwrap(),
+                                    input.pose,
+                                    input.map_revision,
+                                    input.now,
+                                )
+                                .unwrap_or(None);
                         }
-                    })
-                    .unwrap_or_default(),
-                _ => {
-                    let out = self
-                        .follower
-                        .step(input.pose.x, input.pose.y, input.pose.yaw);
-                    if out.status.state == GoalState::Active {
-                        source = if self.level == Level::Supervised {
-                            "frontier"
-                        } else if self.level == Level::Explore {
-                            "explore"
-                        } else if self.level == Level::TargetSearch {
-                            "target_search"
-                        } else {
-                            "waypoint"
-                        };
                     }
-                    if self.level == Level::Waypoint && out.status.state == GoalState::Active {
-                        let map = planning_map.unwrap();
-                        let radius = self.planner.config.radius;
-                        let destination = (out.status.goal_id, out.status.x, out.status.y);
-                        let here = [input.pose.x, input.pose.y];
-                        // Drop reached route points; never use a distant point without checking line of sight.
-                        while self.global_route.len() > 1
-                            && (self.global_route[0][0] - here[0])
-                                .hypot(self.global_route[0][1] - here[1])
-                                < 0.2
+                    if let Some((x, y)) = search_goal {
+                        if (goal.x - x).abs() > 1e-8
+                            || (goal.y - y).abs() > 1e-8
+                            || goal.state != GoalState::Active
                         {
-                            self.global_route.remove(0);
-                        }
-                        let changed_goal = self.route_goal != Some(destination);
-                        let due = input.now - self.route_checked_at >= 0.2;
-                        let segment_blocked = self.route_map_revision != input.map_revision
-                            && !std::iter::once(here)
-                                .chain(self.global_route.iter().copied())
-                                .collect::<Vec<_>>()
-                                .windows(2)
-                                .all(|p| {
-                                    terra_navigation::route_segment_clear(
-                                        map, input.pose, radius, p[0], p[1],
-                                    )
-                                });
-                        // Approach routes stop at the frontier. Replan on the same
-                        // interval so a rolling map can extend them toward the goal.
-                        let needs_route = changed_goal
-                            || (due
-                                && (self.global_route.is_empty()
-                                    || !self.route_reaches_goal
-                                    || segment_blocked));
-                        if needs_route {
+                            let _ = self.follower.accept(
+                                &GoalCommand::Local {
+                                    x,
+                                    y,
+                                    yaw: None,
+                                    token: None,
+                                },
+                                20_000.,
+                            );
                             self.last_plan = None;
                             self.planner_trace = None;
-                            self.route_goal = Some(destination);
-                            self.global_route = match terra_navigation::astar_progress_route(
-                                map,
-                                input.pose,
-                                radius,
-                                out.status.x,
-                                out.status.y,
-                            ) {
-                                Ok(route) => {
-                                    self.route_reaches_goal = route.last().is_some_and(|point| {
-                                        (point[0] - destination.1).abs() <= 1e-9
-                                            && (point[1] - destination.2).abs() <= 1e-9
-                                    });
-                                    route
-                                }
-                                Err(why) => {
-                                    self.route_reaches_goal = false;
-                                    route_failure = Some(why);
-                                    Vec::new()
-                                }
-                            };
+                            self.event("route_selected", None, "search_route");
                         }
-                        if due || changed_goal {
-                            self.route_checked_at = input.now;
-                            self.route_map_revision = input.map_revision;
-                        }
-                        let target = self.global_route.iter().rev().copied().find(|point| {
-                            terra_navigation::route_segment_clear(
-                                map, input.pose, radius, here, *point,
-                            )
-                        });
-                        if let Some(point) = target {
-                            // At the final position use the original follower for arrival and final yaw.
-                            let (linear, angular) = if point == [out.status.x, out.status.y] {
-                                (out.linear, out.angular)
-                            } else {
-                                self.follower.route_intent(
-                                    input.pose.x,
-                                    input.pose.y,
-                                    input.pose.yaw,
-                                    point[0],
-                                    point[1],
-                                )
-                            };
-                            Twist { linear, angular }
-                        } else {
-                            // Localization may move us away from every cached visible point,
-                            // even without a map revision change. Retry A* at the bounded interval.
-                            self.global_route.clear();
-                            self.route_reaches_goal = false;
-                            route_failure = Some(route_failure.unwrap_or("route_no_path"));
-                            Twist::default()
-                        }
+                        goal = self
+                            .follower
+                            .step(input.pose.x, input.pose.y, input.pose.yaw)
+                            .status;
                     } else {
-                        if self.level == Level::Waypoint {
-                            self.global_route.clear();
-                            self.route_goal = None;
-                            self.route_reaches_goal = false;
-                        }
-                        Twist {
-                            linear: out.linear,
-                            angular: out.angular,
-                        }
+                        self.follower.cancel();
+                        self.last_plan = None;
+                        self.planner_trace = None;
+                        held = true;
+                        reason = "search_hold";
                     }
                 }
-            };
-            intent_command = intent;
-            if let Some(why) = route_failure {
-                held = true;
-                reason = why;
-                source = "none";
-                self.last_plan = None;
-                self.planner_trace = None;
-            }
-            if matches!(self.level, Level::Teleop | Level::WaypointDirect) {
-                twist = intent;
-                if source != "none" {
-                    reason = "active";
-                }
-            } else if source != "none" {
-                if intent == Twist::default() {
-                    twist = intent;
-                    reason = "active";
+                let intent = match self.level {
+                    Level::Teleop | Level::AssistedTeleop => self
+                        .operator
+                        .as_ref()
+                        .filter(|(_, t)| fresh(input.now, Some(*t), 0.5))
+                        .map(|(r, _)| {
+                            source = if self.level == Level::Teleop {
+                                "operator"
+                            } else {
+                                "assisted_operator"
+                            };
+                            Twist {
+                                linear: r.linear.clamp(-2., 2.),
+                                angular: r.angular.clamp(-2., 2.),
+                            }
+                        })
+                        .unwrap_or_default(),
+                    _ => {
+                        let out = self
+                            .follower
+                            .step(input.pose.x, input.pose.y, input.pose.yaw);
+                        if out.status.state == GoalState::Active {
+                            source = if self.level == Level::Supervised {
+                                "frontier"
+                            } else if self.level == Level::Explore {
+                                "explore"
+                            } else if self.level == Level::TargetSearch {
+                                "target_search"
+                            } else {
+                                "waypoint"
+                            };
+                        }
+                        if self.level == Level::Waypoint && out.status.state == GoalState::Active {
+                            let map = planning_map.unwrap();
+                            let radius = self.planner.config.radius;
+                            let destination = (out.status.goal_id, out.status.x, out.status.y);
+                            let here = [input.pose.x, input.pose.y];
+                            // Drop reached route points; never use a distant point without checking line of sight.
+                            while self.global_route.len() > 1
+                                && (self.global_route[0][0] - here[0])
+                                    .hypot(self.global_route[0][1] - here[1])
+                                    < 0.2
+                            {
+                                self.global_route.remove(0);
+                            }
+                            let changed_goal = self.route_goal != Some(destination);
+                            let due = input.now - self.route_checked_at >= 0.2;
+                            let segment_blocked = self.route_map_revision != input.map_revision
+                                && !std::iter::once(here)
+                                    .chain(self.global_route.iter().copied())
+                                    .collect::<Vec<_>>()
+                                    .windows(2)
+                                    .all(|p| {
+                                        terra_navigation::route_segment_clear(
+                                            map, input.pose, radius, p[0], p[1],
+                                        )
+                                    });
+                            // Approach routes stop at the frontier. Replan on the same
+                            // interval so a rolling map can extend them toward the goal.
+                            let needs_route = changed_goal
+                                || (due
+                                    && (self.global_route.is_empty()
+                                        || !self.route_reaches_goal
+                                        || segment_blocked));
+                            if needs_route {
+                                self.last_plan = None;
+                                self.planner_trace = None;
+                                self.route_goal = Some(destination);
+                                self.global_route = match terra_navigation::astar_progress_route(
+                                    map,
+                                    input.pose,
+                                    radius,
+                                    out.status.x,
+                                    out.status.y,
+                                ) {
+                                    Ok(route) => {
+                                        self.route_reaches_goal =
+                                            route.last().is_some_and(|point| {
+                                                (point[0] - destination.1).abs() <= 1e-9
+                                                    && (point[1] - destination.2).abs() <= 1e-9
+                                            });
+                                        route
+                                    }
+                                    Err(why) => {
+                                        self.route_reaches_goal = false;
+                                        route_failure = Some(why);
+                                        Vec::new()
+                                    }
+                                };
+                            }
+                            if due || changed_goal {
+                                self.route_checked_at = input.now;
+                                self.route_map_revision = input.map_revision;
+                            }
+                            let target = self.global_route.iter().rev().copied().find(|point| {
+                                terra_navigation::route_segment_clear(
+                                    map, input.pose, radius, here, *point,
+                                )
+                            });
+                            if let Some(point) = target {
+                                // At the final position use the original follower for arrival and final yaw.
+                                let (linear, angular) = if point == [out.status.x, out.status.y] {
+                                    (out.linear, out.angular)
+                                } else {
+                                    self.follower.route_intent(
+                                        input.pose.x,
+                                        input.pose.y,
+                                        input.pose.yaw,
+                                        point[0],
+                                        point[1],
+                                    )
+                                };
+                                Twist { linear, angular }
+                            } else {
+                                // Localization may move us away from every cached visible point,
+                                // even without a map revision change. Retry A* at the bounded interval.
+                                self.global_route.clear();
+                                self.route_reaches_goal = false;
+                                route_failure = Some(route_failure.unwrap_or("route_no_path"));
+                                Twist::default()
+                            }
+                        } else {
+                            if self.level == Level::Waypoint {
+                                self.global_route.clear();
+                                self.route_goal = None;
+                                self.route_reaches_goal = false;
+                            }
+                            Twist {
+                                linear: out.linear,
+                                angular: out.angular,
+                            }
+                        }
+                    }
+                };
+                intent_command = intent;
+                if let Some(why) = route_failure {
+                    held = true;
+                    reason = why;
+                    source = "none";
                     self.last_plan = None;
                     self.planner_trace = None;
-                } else if let Some((at, output, why)) = self.last_plan.filter(|p| {
-                    input.now - p.0 < 0.1
-                        && planning_map.is_some_and(|m| self.planner.admissible(m, input.pose, p.1))
-                }) {
-                    let _ = at;
-                    twist = output;
-                    reason = why;
-                } else {
-                    let (planned, trace) = self.planner.plan_with_trace(
-                        planning_map.unwrap(),
-                        input.pose,
-                        input.measured,
-                        intent,
-                        0.1,
-                    );
-                    self.planner_trace =
-                        (!trace.candidates.is_empty()).then_some((input.now, trace));
-                    twist = planned.twist;
-                    reason = planned.reason;
-                    self.last_plan = Some((input.now, twist, reason));
                 }
-                if reason == "obstacle_blocked" {
-                    held = true;
-                    source = "none";
+                if matches!(self.level, Level::Teleop | Level::WaypointDirect) {
+                    twist = intent;
+                    if source != "none" {
+                        reason = "active";
+                    }
+                } else if source != "none" {
+                    if intent == Twist::default() {
+                        twist = intent;
+                        reason = "active";
+                        self.last_plan = None;
+                        self.planner_trace = None;
+                    } else if let Some((at, output, why)) = self.last_plan.filter(|p| {
+                        input.now - p.0 < 0.1
+                            && planning_map
+                                .is_some_and(|m| self.planner.admissible(m, input.pose, p.1))
+                    }) {
+                        let _ = at;
+                        twist = output;
+                        reason = why;
+                    } else {
+                        let mut planner = self.planner.clone();
+                        if self.level == Level::Explore {
+                            let cap = self.explorer.config().approach_horizon;
+                            if cap.is_finite() && cap > 0. {
+                                planner.config.horizon = planner.config.horizon.min(cap);
+                            }
+                        }
+                        let (planned, trace) = planner.plan_with_trace(
+                            planning_map.unwrap(),
+                            input.pose,
+                            input.measured,
+                            intent,
+                            0.1,
+                        );
+                        self.planner_trace =
+                            (!trace.candidates.is_empty()).then_some((input.now, trace));
+                        twist = planned.twist;
+                        reason = planned.reason;
+                        self.last_plan = Some((input.now, twist, reason));
+                    }
+                    if reason == "obstacle_blocked" {
+                        held = true;
+                        source = "none";
+                    }
                 }
-            }
 
                 if self.level == Level::Supervised && goal.state != GoalState::Active {
                     self.rejected.retain(|(_, _, expiry)| *expiry > input.now);

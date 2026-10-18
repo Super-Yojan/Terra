@@ -27,9 +27,13 @@ rustup target add aarch64-linux-android x86_64-linux-android
 
 # Host cdylib: UniFFI metadata for bindgen, and the JVM smoke test.
 cargo build -p terra-mobile
+case "$(uname -s)" in
+    Darwin) host_library=target/debug/libterra_mobile.dylib ;;
+    *) host_library=target/debug/libterra_mobile.so ;;
+esac
 mkdir -p mobile/android/app/src/main/java
 cargo run -p terra-mobile --features bindgen --bin terra-bindgen -- generate \
-    --library target/debug/libterra_mobile.so --language kotlin \
+    --library "$host_library" --language kotlin \
     --config crates/terra-mobile/uniffi.toml \
     --out-dir mobile/android/app/src/main/java \
     --no-format

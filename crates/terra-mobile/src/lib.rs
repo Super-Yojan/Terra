@@ -17,6 +17,7 @@ mod navigation_settings;
 mod publication;
 mod search;
 pub use search::{MobileSearchRequest, MobileSearchSnapshot, MobileTargetObservation};
+mod frames;
 mod mapping;
 mod transport;
 mod waypoint;

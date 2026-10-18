@@ -2,7 +2,7 @@
 
 !!! tip "TL;DR"
     Teleop, assisted teleop, L2 direct waypoint, L3 obstacle-aware waypoint, supervised exploration and L4 target search share one arbiter.
-    Five levels share one arbiter.
+    Time-bounded autonomous frontier exploration uses the same safety arbiter.
     Stop latches until reset.
     The reference mission runs in Zorvane, not in this repo.
 
@@ -39,7 +39,7 @@ These are simulated detection rules, not a validated human-detection sensor mode
 Mission obstacles and rover maps are separate from hidden targets.
 
 
-Connect native ARGOS to `tcp/127.0.0.1:7447`. Explicitly choose a level before sending a waypoint:
+Connect the ARGOS Rust server to `tcp/127.0.0.1:7447`, then open its React browser UI. Explicitly choose a level before sending a waypoint:
 
 - Teleop: hold keyboard/touch controls for precise movement. Commands expire after 500 ms.
 - Assisted teleop: operator intent goes through the shared obstacle/braking checker.

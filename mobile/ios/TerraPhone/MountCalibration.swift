@@ -49,13 +49,15 @@ struct MountCalibration: Codable {
             && abs(cameraYawDegrees) <= 180
     }
 
-    private var correction: simd_quatf {
+    var correction: simd_quatf {
         let radians = Float.pi / 180
         let roll = simd_quatf(angle: Float(cameraRollDegrees) * radians, axis: SIMD3(1, 0, 0))
         let pitch = simd_quatf(angle: Float(cameraPitchDegrees) * radians, axis: SIMD3(0, 1, 0))
         let yaw = simd_quatf(angle: Float(cameraYawDegrees) * radians, axis: SIMD3(0, 0, 1))
         return yaw * pitch * roll
     }
+
+    var arCameraToBody: simd_quatf { correction * PhoneMountGeometry.cameraToBody }
 
     /// Nominal upright, rear-camera-forward phone axes, plus measured mount correction.
     var deviceToBody: simd_quatf {

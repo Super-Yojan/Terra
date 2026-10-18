@@ -319,6 +319,8 @@ fn direct_waypoint_needs_no_map_but_retains_sensor_and_cancel_safety() {
     a.set_level(LevelRequest {
         level: Level::WaypointDirect,
         token: "direct".into(),
+        budget_seconds: None,
+        budget_minutes: None,
     });
     assert!(a.accept_goal(
         &terra_waypoint::GoalCommand::Local {
@@ -354,6 +356,8 @@ fn l2_bypasses_occupied_map_while_l3_stops_and_stop_still_latches() {
         a.set_level(LevelRequest {
             level,
             token: "mode".into(),
+            budget_seconds: None,
+            budget_minutes: None,
         });
         assert!(a.accept_goal(
             &terra_waypoint::GoalCommand::Local {
@@ -396,6 +400,8 @@ fn cancelled_l2_token_never_replays_motion() {
     a.set_level(LevelRequest {
         level: Level::WaypointDirect,
         token: "direct".into(),
+        budget_seconds: None,
+        budget_minutes: None,
     });
     let goal = terra_waypoint::GoalCommand::Local {
         x: 2.,
@@ -416,6 +422,8 @@ fn blocked_planner_trace_is_published_and_cleared_on_stop() {
     arbiter.set_level(LevelRequest {
         level: Level::AssistedTeleop,
         token: "trace".into(),
+        budget_seconds: None,
+        budget_minutes: None,
     });
     arbiter.accept_operator(tele(), 0.0);
     let map = terra_mapping::MapSnapshot {

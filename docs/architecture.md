@@ -65,3 +65,12 @@ flowchart LR
 ![Placeholder of the planned tap-to-configure popup](assets/phone-tap.svg){ width="260" }
 
 *#27 is not built. `rover.usdz` orbits and zooms. It does not edit actuators.*
+
+## Current platform split
+
+ARGOS is the React web operator interface backed by a Rust Axum server. The server
+bridges browser commands and telemetry to Zenoh. ARGOS Swift is a legacy fallback;
+Unity is a historical prototype. TerraPhone iOS remains the physical vehicle's
+sensor, Bluetooth and shared Rust runtime. Android is an additional mobile adapter.
+Zorvane owns simulation; Terra owns onboard control, mapping and autonomy.
+The VLM evaluator under `tools/vlm-eval` is offline research infrastructure.

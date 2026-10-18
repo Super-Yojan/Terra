@@ -68,7 +68,7 @@ class TerraCoreSmokeTest {
         val levels = supportedAutonomyLevels()
         assertTrue(levels.contains("teleop"))
         assertTrue(levels.contains("waypoint"))
-        assertFalse(levels.contains("explore"))
+        assertTrue(levels.contains("explore"))
 
         val report = runVelocityBenchmark()
         assertTrue(report.passed)

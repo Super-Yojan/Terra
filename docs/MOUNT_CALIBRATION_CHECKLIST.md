@@ -13,7 +13,7 @@ the rover turns.
 - [ ] Measure rear camera optical-center height from ground plane.
 - [ ] Measure camera roll, pitch, and yaw relative to rover axes 
       if needed, or else 0, in degrees.
-- [ ] Enter measurements in the app. Its automatic turn fit replaces the starting
+- [ ] Enter measurements in Settings → Phone mounting. Stop tracking before saving. Its automatic turn fit replaces the starting
       forward/left offsets after the two turn passes agree.
 - [ ] Corrections are applied through the app relative to upright rear-camera-forward mounting:
       rover +X forward, +Y left, +Z up; roll X, pitch Y, yaw Z.
@@ -39,7 +39,7 @@ the rover turns.
    pass. Rejected fits require repeating the turns with a steady pivot and
    reliable tracking.
 6. Review the reported forward/left offset and pass RMS errors. Tap
-   **Use fitted offset**, then **Save measured mount calibration**. The fit
+   **Use fitted offset**, stop tracking, then **Save measured mount calibration**. The fit
    does not estimate camera height or mount-angle corrections; those remain
    measured inputs. Record the result and reviewer.
 
@@ -50,8 +50,9 @@ the rover turns.
 - [ ] In-place turn reports rotation without fictitious rover-origin translation.
 - [ ] Depth map ground line/returns agree with the measured ground plane and height.
 - [ ] Tracking loss, interruption, and relocalization produce a safe stop/reset.
-- [ ] Lever-arm correction `v_rover = v_camera - omega × r_camera` uses one frame
-      consistently and is checked during the in-place turn.
+- [ ] Rover velocity is differentiated from the corrected rover position, so the
+      rotating camera lever arm is removed before velocity filtering. Check it
+      during the in-place turn.
 - [ ] The saved calibration shows the fitted horizontal offset and manually
       measured height and mount-angle corrections.
 
@@ -63,3 +64,7 @@ the rover turns.
 
 ARKit world tracking is local visual-inertial tracking, not a surveyed global
 reference. Repeat the check after changing the phone, mount, or mount position.
+
+Ground height is still estimated from tracked horizontal planes. Saved mount height
+does not replace the current ground-plane policy. Without a plausible calibration,
+the nominal upright mount and coincident origin remain the fallback.
