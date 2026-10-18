@@ -78,7 +78,7 @@ Phone depth, when ARCore Depth is supported, uses the smoothed 16-bit image (`ac
 
 ## Autonomy
 
-The picker lists `supported_autonomy_levels()`: teleop, assisted teleop, waypoint, and supervised search. **Explore** is drawn disabled. `supported_autonomy_levels` matches on every `terra_autonomy::Level` variant, so adding frontier exploration (`explore`, issues #32 and #33) fails that function to compile until the wire name is added. The chip then enables itself.
+The picker uses `supported_autonomy_levels()` for teleop, assisted teleop, waypoint, supervised search and time-bounded exploration. **Explore · 120 seconds** sends an explicit duration to the shared arbiter. Direct waypoint is available in the shared API; target-search capability remains detector-dependent.
 
 Level changes go out as `autonomy` actions. Emergency stop and reset go out as `safety`. Approving or rejecting a search target sends `goal/decision`. On the emulator those are Zenoh puts. Locally they are `MobileController.autonomyRequest`.
 
