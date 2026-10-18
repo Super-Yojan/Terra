@@ -1,0 +1,8 @@
+[package]
+name = "terra-exploration"
+version.workspace = true
+edition.workspace = true
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+terra-mapping.workspace = true
+terra-navigation.workspace = true

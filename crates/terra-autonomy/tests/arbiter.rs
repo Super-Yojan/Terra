@@ -30,6 +30,8 @@ fn takeover_clears_old_lease_and_stop_is_latched() {
     a.set_level(LevelRequest {
         level: Level::Teleop,
         token: "take-1".into(),
+        budget_seconds: None,
+        budget_minutes: None,
     });
     assert_eq!(a.step(input(0.2)).twist, Twist::default());
     a.accept_operator(tele(), 0.3);
@@ -75,6 +77,8 @@ fn stale_inputs_and_no_implicit_goal_mode() {
     a.set_level(LevelRequest {
         level: Level::Waypoint,
         token: "mode".into(),
+        budget_seconds: None,
+        budget_minutes: None,
     });
     assert_eq!(a.step(input(0.7)).status.reason, "map_stale");
     assert_eq!(a.step(input(0.65)).status.reason, "invalid_time");
@@ -85,6 +89,8 @@ fn duplicate_takeover_does_not_clear_fresh_input_twice() {
     let r = LevelRequest {
         level: Level::Teleop,
         token: "take-1".into(),
+        budget_seconds: None,
+        budget_minutes: None,
     };
     a.set_level(r.clone());
     a.accept_operator(tele(), 0.);
@@ -97,6 +103,8 @@ fn supervised_proposes_but_waits_for_approval() {
     a.set_level(LevelRequest {
         level: Level::Supervised,
         token: "s".into(),
+        budget_seconds: None,
+        budget_minutes: None,
     });
     let mut m = terra_mapping::MapSnapshot {
         width: 40,
@@ -151,6 +159,8 @@ fn duplicate_goal_token_does_not_relaunch() {
     a.set_level(LevelRequest {
         level: Level::Waypoint,
         token: "mode".into(),
+        budget_seconds: None,
+        budget_minutes: None,
     });
     let g = terra_waypoint::GoalCommand::Local {
         x: 3.,
@@ -162,6 +172,8 @@ fn duplicate_goal_token_does_not_relaunch() {
     a.set_level(LevelRequest {
         level: Level::Teleop,
         token: "take".into(),
+        budget_seconds: None,
+        budget_minutes: None,
     });
     assert!(a.accept_goal(&g, 50.));
     assert_eq!(
@@ -175,6 +187,8 @@ fn invalid_direct_goal_is_rejected() {
     a.set_level(LevelRequest {
         level: Level::Waypoint,
         token: "m".into(),
+        budget_seconds: None,
+        budget_minutes: None,
     });
     assert!(!a.accept_goal(
         &terra_waypoint::GoalCommand::Local {
@@ -232,6 +246,8 @@ fn previous_run_approval_cannot_launch_reused_proposal_id() {
     a.set_level(LevelRequest {
         level: Level::Supervised,
         token: "level".into(),
+        budget_seconds: None,
+        budget_minutes: None,
     });
     let mut m = terra_mapping::MapSnapshot {
         width: 40,
@@ -287,6 +303,8 @@ fn canonical_motion_is_bound_to_authority_and_run() {
     a.set_level(LevelRequest {
         level: Level::Teleop,
         token: "takeover".into(),
+        budget_seconds: None,
+        budget_minutes: None,
     });
     let mut r = tele();
     r.run_id = Some("new-run".into());
@@ -301,6 +319,8 @@ fn direct_waypoint_needs_no_map_but_retains_sensor_and_cancel_safety() {
     a.set_level(LevelRequest {
         level: Level::WaypointDirect,
         token: "direct".into(),
+        budget_seconds: None,
+        budget_minutes: None,
     });
     assert!(a.accept_goal(
         &terra_waypoint::GoalCommand::Local {
@@ -336,6 +356,8 @@ fn l2_bypasses_occupied_map_while_l3_stops_and_stop_still_latches() {
         a.set_level(LevelRequest {
             level,
             token: "mode".into(),
+            budget_seconds: None,
+            budget_minutes: None,
         });
         assert!(a.accept_goal(
             &terra_waypoint::GoalCommand::Local {
@@ -378,6 +400,8 @@ fn cancelled_l2_token_never_replays_motion() {
     a.set_level(LevelRequest {
         level: Level::WaypointDirect,
         token: "direct".into(),
+        budget_seconds: None,
+        budget_minutes: None,
     });
     let goal = terra_waypoint::GoalCommand::Local {
         x: 2.,
@@ -398,6 +422,8 @@ fn blocked_planner_trace_is_published_and_cleared_on_stop() {
     arbiter.set_level(LevelRequest {
         level: Level::AssistedTeleop,
         token: "trace".into(),
+        budget_seconds: None,
+        budget_minutes: None,
     });
     arbiter.accept_operator(tele(), 0.0);
     let map = terra_mapping::MapSnapshot {

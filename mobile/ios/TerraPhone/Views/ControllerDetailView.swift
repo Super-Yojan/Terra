@@ -3,6 +3,7 @@ import SwiftUI
 struct ControllerDetailView: View {
     @ObservedObject var brain: PhoneController
     var destination: TerraDestination = .drive
+    @State private var calibration = MountCalibration.load()
     @State private var forward = 0.0
     @State private var yaw = 0.0
     #if targetEnvironment(simulator)
@@ -14,6 +15,7 @@ struct ControllerDetailView: View {
     @AppStorage("waypointGoalLat") private var goalLat = "38.82981"
     @AppStorage("waypointGoalLon") private var goalLon = "-77.3075"
     @AppStorage("waypointToken") private var waypointToken = "gmu-north"
+    @AppStorage("exploreBudgetSeconds") private var exploreSeconds = "120"
     @State private var entryNote = ""
     @State private var searchClass = "person"
     @State private var searchMinX = "-20"
@@ -89,9 +91,13 @@ struct ControllerDetailView: View {
                 }
                 if destination == .missions {
                 Section("Mission autonomy") {
-                    Picker("Requested level",selection:Binding(get:{brain.autonomyLevel},set:{brain.setAutonomy($0)})) {Text("Teleop").tag("teleop");Text("Assisted teleop").tag("assisted_teleop");Text("L2 · Direct waypoint").tag("waypoint_direct");Text("L3 · Obstacle-aware waypoint").tag("waypoint");Text("Supervised search").tag("supervised");if brain.searchAvailable {Text("L4 target search").tag("target_search")}}
+                    TextField("Explore budget (seconds)", text: $exploreSeconds)
+                        .keyboardType(.decimalPad)
+                        .accessibilityLabel("Explore budget seconds")
+                    Picker("Requested level",selection:Binding(get:{brain.autonomyLevel},set:{brain.setAutonomy($0, budgetSeconds: Double(exploreSeconds))})) {Text("Teleop").tag("teleop");Text("Assisted teleop").tag("assisted_teleop");Text("L2 · Direct waypoint").tag("waypoint_direct");Text("L3 · Obstacle-aware waypoint").tag("waypoint");Text("Autonomous explore").tag("explore");Text("Supervised search").tag("supervised");if brain.searchAvailable {Text("L4 target search").tag("target_search")}}
                         .disabled(brain.hardwareActive && !brain.hardwareFeedback)
                     Text(brain.autonomyReason)
+                    if !brain.explorationSummary.isEmpty { Text(brain.explorationSummary).font(.footnote) }
                     if let proposal=brain.proposedGoal {Text(brain.proposalText);HStack {Button("Approve search target") {brain.decideProposal(proposal,approve:true)};Button("Reject") {brain.decideProposal(proposal,approve:false)}}}
                     Button("Take over") {forward=0;yaw=0;brain.setAutonomy("teleop")}
                     Button("Emergency stop",role:.destructive) {forward=0;yaw=0;brain.emergencyStop()}
@@ -199,9 +205,36 @@ struct ControllerDetailView: View {
                     Text(brain.benchmark).font(.footnote)
                 }
                 Section("Phone mounting") {
-                    Text("Phone upright, top edge up, rear camera facing the rover’s front and screen facing backward. Phone and rover origins are assumed coincident.")
+                    Text("Mount the phone with its rear camera facing rover-forward. Enter rear-camera position relative to the rover reference point using a straight line measurement in meters.")
                         .font(.footnote).foregroundStyle(.secondary)
-                    Text("ARKit needs a physical supported iPhone and visual features. Use Simulated rover on the iOS simulator.")
+                    LabeledContent("Calibration", value: brain.calibrationStatus)
+                    calibrationField("Camera forward offset (m)", value: $calibration.cameraOffsetForward)
+                    calibrationField("Camera left offset (m)", value: $calibration.cameraOffsetLeft)
+                    calibrationField("Camera height (m)", value: $calibration.cameraHeight)
+                    calibrationField("Camera roll (°)", value: $calibration.cameraRollDegrees)
+                    calibrationField("Camera pitch (°)", value: $calibration.cameraPitchDegrees)
+                    calibrationField("Camera yaw (°)", value: $calibration.cameraYawDegrees)
+                    Text("Angles are mount corrections around rover +X forward, +Y left, +Z up; roll X, pitch Y, yaw Z. Measure relative to the upright, rear-camera-forward position.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                    Toggle("Measurements reviewed", isOn: $calibration.reviewed)
+                    Button("Save measured mount calibration") { brain.saveMountCalibration(calibration) }
+                    Text("After saving, manually rotate the rover at least 90° in both directions around the rover reference point. Confirm ARKit tracking remains normal and the camera arc agrees with the measured offset; record the result in the calibration checklist.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                    Button("Start offset turn pass") { brain.beginAutomaticOffsetFit() }
+                        .disabled(brain.offsetFitInProgress)
+                    Button("Finish turn pass") { brain.finishAutomaticOffsetFit() }
+                        .disabled(!brain.offsetFitInProgress)
+                    Text(brain.offsetFitStatus).font(.footnote).foregroundStyle(.secondary)
+                    if let fitted = brain.fittedCameraOffset {
+                        Button("Use fitted offset") {
+                            calibration.cameraOffsetForward = fitted.x
+                            calibration.cameraOffsetLeft = fitted.y
+                            calibration.reviewed = false
+                        }
+                    }
+                    Text("With the rover motor-disabled, record one ≥90° turn pass, then a pass in the opposite direction. The fit checks ARKit tracking and rejects inconsistent paths. Review the result before saving it.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                    Text("ARKit needs a physical supported iPhone and visual features. Use Simulated rover on the iOS simuluator.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }.id(TerraDestination.settings)
                 }
@@ -216,6 +249,10 @@ struct ControllerDetailView: View {
                 forward = 0; yaw = 0; brain.setTarget(forward: 0, yaw: 0); brain.disarmHardware()
             }
         }
+    }
+    private func calibrationField(_ title: String, value: Binding<Double>) -> some View {
+        TextField(title, value: value, format: .number.precision(.fractionLength(0...3)))
+            .keyboardType(.decimalPad)
     }
     private var selectedGoal: SIMD2<Double>? {
         guard let originLatitude = Double(originLat), let originLongitude = Double(originLon),

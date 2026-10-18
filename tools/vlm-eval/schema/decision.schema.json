@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Super-Yojan/Terra/tools/vlm-eval/schema/decision.schema.json",
+  "title": "Terra NEXT VLM decision",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["decision", "dump_proposal", "rationale", "confidence"],
+  "properties": {
+    "decision": {
+      "enum": ["waypoint", "hold", "ask_operator"]
+    },
+    "target_id": {
+      "type": ["string", "null"],
+      "description": "Id from the scenario object list, such as B1 or F1. Null when the decision is not a waypoint."
+    },
+    "waypoint": {
+      "description": "Ignored for the goal. The validator copies approach_x and approach_y from target_id.",
+      "anyOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["x", "y"],
+          "properties": {
+            "x": { "type": "number" },
+            "y": { "type": "number" }
+          }
+        }
+      ]
+    },
+    "dump_proposal": {
+      "type": "boolean",
+      "description": "Proposal only. It does not command a servo."
+    },
+    "rationale": { "type": "string", "maxLength": 4000 },
+    "confidence": { "type": "number", "minimum": 0, "maximum": 1 }
+  }
+}

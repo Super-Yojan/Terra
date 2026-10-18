@@ -1,0 +1,71 @@
+{
+  "camera_source": "placeholder",
+  "camera_source_note": "Zorvane can boot the NEXT pitch headless (`TERRA_HEADLESS=1`) and can grab a windowed viewport under Xvfb (`scripts/capture-docs-frames.sh` in the Zorvane repo). Neither path exports an RGB camera frame posed to match one of these synthetic occupancy packets. The NEXT scene is not in this Terra checkout. These camera images are labelled schematics, not Zorvane renders.",
+  "scenarios": [
+    {
+      "autonomy_level": "waypoint",
+      "camera_source": "placeholder",
+      "dump_proposal": false,
+      "expected_decision": "waypoint",
+      "id": "01-bucket-reachable",
+      "title": "Bucket visible and reachable"
+    },
+    {
+      "autonomy_level": "waypoint",
+      "camera_source": "placeholder",
+      "dump_proposal": false,
+      "expected_decision": "waypoint",
+      "id": "02-bucket-behind-obstacle",
+      "title": "Bucket behind an obstacle"
+    },
+    {
+      "autonomy_level": "waypoint",
+      "camera_source": "placeholder",
+      "dump_proposal": false,
+      "expected_decision": "waypoint",
+      "id": "03-person-in-path",
+      "title": "Person in the path"
+    },
+    {
+      "autonomy_level": "waypoint",
+      "camera_source": "placeholder",
+      "dump_proposal": false,
+      "expected_decision": "waypoint",
+      "id": "04-unknown-frontier",
+      "title": "Unknown frontier"
+    },
+    {
+      "autonomy_level": "waypoint",
+      "camera_source": "placeholder",
+      "dump_proposal": false,
+      "expected_decision": "waypoint",
+      "id": "05-two-buckets",
+      "title": "Two buckets, one enclosed"
+    },
+    {
+      "autonomy_level": "waypoint",
+      "camera_source": "placeholder",
+      "dump_proposal": true,
+      "expected_decision": "hold",
+      "id": "06-dump-at-bucket",
+      "title": "Carrying balls at a bucket"
+    },
+    {
+      "autonomy_level": "waypoint",
+      "camera_source": "placeholder",
+      "dump_proposal": false,
+      "expected_decision": "ask_operator",
+      "id": "07-low-confidence",
+      "title": "Low confidence, ask the operator"
+    },
+    {
+      "autonomy_level": "teleop",
+      "camera_source": "placeholder",
+      "dump_proposal": false,
+      "expected_decision": "hold",
+      "id": "08-l0-no-goal",
+      "title": "L0 trial, no goal"
+    }
+  ],
+  "version": 1
+}

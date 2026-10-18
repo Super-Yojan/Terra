@@ -21,8 +21,17 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
     @Published private(set) var occupancy: OccupancyGrid?
     @Published private(set) var mapStatus = "Start Simulated rover to build a map"
     @Published private(set) var mapPose = SIMD3<Double>.zero
+    @Published private(set) var calibrationStatus = "Mount measurements not saved"
+    @Published private(set) var offsetFitStatus = "Offset fit not started"
+    @Published private(set) var fittedCameraOffset: SIMD2<Double>?
+    @Published private(set) var offsetFitInProgress = false
+    private var mountCalibration = MountCalibration.load()
+    private var isCollectingOffsetFit = false
+    private var offsetFitSamples: [RotationOffsetSample] = []
+    private var firstTurnFit: RotationOffsetFit?
     private var occupancyMap: MobileOccupancyMap?
-    private var simulatedPosition = SIMD2<Double>.zero
+    private let plant = SimulatedPlant()
+    private let velocityFilter = PoseVelocityFilter()
     private var mapGroundOffset: Double?
     private var groundPolicy = PhoneGroundPolicy()
     private var lastMapTime = -Double.infinity
@@ -44,6 +53,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
     @Published private(set) var searchTerminal=true
     @Published private(set) var autonomyLevel="teleop"
     @Published private(set) var autonomyReason="Idle"
+    @Published private(set) var explorationSummary=""
     @Published var runLog:URL?
     @Published private(set) var proposedGoal:UInt64?
     private var proposalRun=""
@@ -327,7 +337,6 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
         controlQueue.async {
             do {
                 self.occupancyMap = try MobileOccupancyMap(settings: defaultOccupancySettings())
-                self.simulatedPosition = .zero
                 self.mapGroundOffset = nil; self.groundPolicy.reset()
                 self.lastMapTime = -Double.infinity
                 self.zenoh = try MobileZenohClient(endpoint: endpoint, prefix: "terra/rover", roverId: id)
@@ -376,12 +385,24 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
             guard let self else { return }
             if let error { self.controlQueue.async { if self.sensorEpochMatches(epoch) { self.handleTrackingFailure(error) } }; return }
             guard let data else { return }
-            let acceleration = self.phoneToBody.act(SIMD3(Float(data.userAcceleration.x), Float(data.userAcceleration.y), Float(data.userAcceleration.z))) * 9.80665
-            let gyro = self.phoneToBody.act(SIMD3(Float(data.rotationRate.x), Float(data.rotationRate.y), Float(data.rotationRate.z)))
-            let sample = ImuReading(timestamp: data.timestamp, accelerationForward: Double(acceleration.x), accelerationLeft: Double(acceleration.y), accelerationUp: Double(acceleration.z), gyroRoll: Double(gyro.x), gyroPitch: Double(gyro.y), gyroYaw: Double(gyro.z))
+            let acceleration: AxisSample
+            let gyro: AxisSample
+            do {
+                acceleration = try deviceVectorToBody(x: data.userAcceleration.x, y: data.userAcceleration.y, z: data.userAcceleration.z)
+                gyro = try deviceVectorToBody(x: data.rotationRate.x, y: data.rotationRate.y, z: data.rotationRate.z)
+            } catch {
+                self.controlQueue.async { if self.sensorEpochMatches(epoch) { self.fail(error) } }
+                return
+            }
+            // Core Motion user acceleration is in g. Android linear acceleration is already m/s².
+            let sample = ImuReading(timestamp: data.timestamp, accelerationForward: acceleration.x * 9.80665, accelerationLeft: acceleration.y * 9.80665, accelerationUp: acceleration.z * 9.80665, gyroRoll: gyro.x, gyroPitch: gyro.y, gyroYaw: gyro.z)
             self.controlQueue.async {
                 guard self.mode == .phone, self.sensorEpochMatches(epoch) else { return }
-                do { try self.controller?.pushImu(sample: sample) } catch { self.fail(error, context: "IMU sample at \(sample.timestamp)") }
+                do {
+                    let a = self.mountCalibration.correction.act(SIMD3(Float(sample.accelerationForward), Float(sample.accelerationLeft), Float(sample.accelerationUp)))
+                    let g = self.mountCalibration.correction.act(SIMD3(Float(sample.gyroRoll), Float(sample.gyroPitch), Float(sample.gyroYaw)))
+                    try self.controller?.pushImu(sample: ImuReading(timestamp: sample.timestamp, accelerationForward: Double(a.x), accelerationLeft: Double(a.y), accelerationUp: Double(a.z), gyroRoll: Double(g.x), gyroPitch: Double(g.y), gyroYaw: Double(g.z)))
+                } catch { self.fail(error, context: "IMU sample at \(sample.timestamp)") }
             }
         }
         phoneTrackingActive = true
@@ -407,6 +428,8 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
         controlQueue.async {
             self.timer?.cancel(); self.timer = nil
             self.mode = .stopped
+            self.isCollectingOffsetFit = false; self.offsetFitSamples.removeAll(); self.firstTurnFit = nil
+            DispatchQueue.main.async { self.offsetFitInProgress = false }
             self.dashboardEmergencyStop = false
             self.bleActive = false; self.bleReady = false; self.bleFeedback = false; self.hardwareMotionRevoked = true; self.feedbackTrackingHealthy = false; self.target = (0, 0); self.servoTargets = [:]
             self.zenoh?.disconnect(); self.zenoh = nil
@@ -450,7 +473,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
                 DispatchQueue.main.async {self.runLog=log}
         }
         self.occupancyMap = try MobileOccupancyMap(settings: defaultOccupancySettings())
-        simulatedPosition = .zero; mapGroundOffset = nil; groundPolicy.reset(); lastMapTime = -Double.infinity
+        mapGroundOffset = nil; groundPolicy.reset(); lastMapTime = -Double.infinity
         DispatchQueue.main.async { self.occupancy = nil; self.mapPose = .zero; self.mapStatus = mode == .simulation ? "Simulated depth · 10 Hz" : (ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) ? "Waiting for scene depth" : "Scene depth unavailable on this device") }
         self.mode = mode
         phoneStartedAt = ProcessInfo.processInfo.systemUptime
@@ -525,9 +548,10 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
         let now = mode == .simulation ? simulatedTime : CACurrentMediaTime()
         do {
             if mode == .simulation {
-                try controller.pushImu(sample: ImuReading(timestamp: now, accelerationForward: simulatedAcceleration, accelerationLeft: simulatedForward * simulatedYawRate, accelerationUp: 0, gyroRoll: 0, gyroPitch: 0, gyroYaw: simulatedYawRate))
+                let pose = try plant.state()
+                try controller.pushImu(sample: ImuReading(timestamp: now, accelerationForward: pose.accelerationForward, accelerationLeft: pose.forward * pose.yawRate, accelerationUp: 0, gyroRoll: 0, gyroPitch: 0, gyroYaw: pose.yawRate))
                 if tick % 5 == 0 {
-                    try controller.pushVio(sample: VioReading(timestamp: now, positionX: simulatedPosition.x, positionY: simulatedPosition.y, positionZ: 0, quaternionX: 0, quaternionY: 0, quaternionZ: sin(simulatedYaw / 2), quaternionW: cos(simulatedYaw / 2), velocityX: simulatedForward * cos(simulatedYaw), velocityY: simulatedForward * sin(simulatedYaw), velocityZ: 0, tracked: true))
+                    try controller.pushVio(sample: VioReading(timestamp: now, positionX: pose.x, positionY: pose.y, positionZ: 0, quaternionX: pose.quaternionX, quaternionY: pose.quaternionY, quaternionZ: pose.quaternionZ, quaternionW: pose.quaternionW, velocityX: pose.velocityX, velocityY: pose.velocityY, velocityZ: 0, tracked: true))
                 }
             }
             // An attached fleet owns velocity intent; idle phone input must not
@@ -555,12 +579,9 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
                 }
             }
             if mode == .simulation {
-                simulatedAcceleration = 3 * (output.leftEffort + output.rightEffort) / 2 - simulatedForward
-                simulatedForward += simulatedAcceleration * 0.01
-                simulatedYawRate += (5 * (output.rightEffort - output.leftEffort) / 2 - simulatedYawRate) * 0.01
-                if tick % 10 == 0 { try updateSimulatedMap(timestamp: now) }
-                simulatedPosition += SIMD2(cos(simulatedYaw), sin(simulatedYaw)) * simulatedForward * 0.01
-                simulatedYaw += simulatedYawRate * 0.01
+                let pose = try plant.state()
+                if tick % 10 == 0 { try updateSimulatedMap(x: pose.x, y: pose.y, yaw: pose.yaw, timestamp: now) }
+                _ = try plant.step(leftEffort: output.leftEffort, rightEffort: output.rightEffort)
                 simulatedTime += 0.01
             }
             tick += 1
@@ -622,18 +643,45 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
         phoneTopYaw = hypot(top.x, top.y) >= 0.3 ? atan2(Double(top.y), Double(top.x)) : nil
         let arPosition = SIMD3(transform.columns.3.x, transform.columns.3.y, transform.columns.3.z)
         let position = worldFromAR * arPosition
-        let orientation = simd_quatf(worldFromAR) * simd_quatf(transform) * PhoneMountGeometry.cameraToBody.inverse
+        let orientation = simd_quatf(worldFromAR) * simd_quatf(transform) * mountCalibration.arCameraToBody.inverse
+        if isCollectingOffsetFit {
+            if !tracked {
+                isCollectingOffsetFit = false
+                offsetFitSamples.removeAll(keepingCapacity: true)
+                DispatchQueue.main.async {
+                    self.offsetFitInProgress = false
+                    self.offsetFitStatus = "Fit cancelled because ARKit tracking was interrupted"
+                }
+            } else {
+                let roverForward = orientation.act(SIMD3<Float>(1, 0, 0))
+                offsetFitSamples.append(RotationOffsetSample(
+                    timestamp: frame.timestamp,
+                    cameraPositionWorld: SIMD2(Double(position.x), Double(position.y)),
+                    roverHeadingWorld: atan2(Double(roverForward.y), Double(roverForward.x))
+                ))
+                if offsetFitSamples.count > 12000 {
+                    isCollectingOffsetFit = false
+                    offsetFitSamples.removeAll(keepingCapacity: true)
+                    DispatchQueue.main.async {
+                        self.offsetFitInProgress = false
+                        self.offsetFitStatus = "Fit cancelled: turn exceeded the capture duration. Start a new pass."
+                    }
+                }
+            }
+        }
+        let offset = mountCalibration.isPlausible ? SIMD3(Float(mountCalibration.cameraOffsetForward), Float(mountCalibration.cameraOffsetLeft), Float(mountCalibration.cameraHeight)) : .zero
+        let roverPosition = position - orientation.act(offset)
         var velocityReady = false
         if tracked, let last = previousPosition, let previousTime = previousPoseTime {
             let dt = frame.timestamp - previousTime
             if dt > 0 && dt < 0.2 {
-                let raw = (position - last) / Float(dt)
+                let raw = (roverPosition - last) / Float(dt)
                 let alpha = Float(dt / (0.03 + dt))
                 filteredVelocity += alpha * (raw - filteredVelocity)
                 velocityReady = true
             }
         }
-        previousPosition = tracked ? position : nil
+        previousPosition = tracked ? roverPosition : nil
         previousPoseTime = tracked ? frame.timestamp : nil
         if !tracked {
             filteredVelocity = .zero
@@ -647,10 +695,10 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
         }
         let q = orientation.vector
         let bodyForward = orientation.act(SIMD3<Float>(1, 0, 0))
-        phonePose = (Double(position.x), Double(position.y), atan2(Double(bodyForward.y), Double(bodyForward.x)))
+        phonePose = (Double(roverPosition.x), Double(roverPosition.y), atan2(Double(bodyForward.y), Double(bodyForward.x)))
         do {
-            try controller.pushVio(sample: VioReading(timestamp: frame.timestamp, positionX: Double(position.x), positionY: Double(position.y), positionZ: Double(position.z), quaternionX: Double(q.x), quaternionY: Double(q.y), quaternionZ: Double(q.z), quaternionW: Double(q.w), velocityX: Double(filteredVelocity.x), velocityY: Double(filteredVelocity.y), velocityZ: Double(filteredVelocity.z), tracked: tracked && velocityReady))
-            if tracked { updatePhoneGround(frame: frame, position: position); updatePhoneMap(frame: frame, position: position, bodyOrientation: orientation); publishPhoneCloud(frame: frame, position: position) }
+            try controller.pushVio(sample: VioReading(timestamp: frame.timestamp, positionX: Double(roverPosition.x), positionY: Double(roverPosition.y), positionZ: Double(roverPosition.z), quaternionX: Double(q.x), quaternionY: Double(q.y), quaternionZ: Double(q.z), quaternionW: Double(q.w), velocityX: Double(filteredVelocity.x), velocityY: Double(filteredVelocity.y), velocityZ: Double(filteredVelocity.z), tracked: tracked && velocityReady))
+            if tracked { updatePhoneGround(frame: frame, position: position); updatePhoneMap(frame: frame, position: position, roverPosition: roverPosition, bodyOrientation: orientation); publishPhoneCloud(frame: frame, position: position) }
             else { DispatchQueue.main.async { self.mapStatus = "Tracking lost · map paused" } }
         } catch { fail(error, context: "AR frame at \(frame.timestamp)") }
     }
@@ -701,6 +749,83 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
         TerraLog.tracking.notice("L4 detector: \(value, privacy: .public)")
         DispatchQueue.main.async { self.personDetectorStatus = value }
     }
+    func saveMountCalibration(_ value: MountCalibration) {
+        controlQueue.async {
+            do {
+                guard value.isPlausible else { throw CalibrationSaveError.invalidValues }
+                guard self.mode == .stopped else { throw CalibrationSaveError.stopFirst }
+                try value.save()
+                self.mountCalibration = value
+                DispatchQueue.main.async {
+                    self.calibrationStatus = value.reviewed ? "Measured calibration saved · reviewed" : "Measured calibration saved · review required"
+                }
+            } catch {
+                DispatchQueue.main.async { self.calibrationStatus = "Calibration not saved: \(error.localizedDescription)" }
+            }
+        }
+    }
+    func beginAutomaticOffsetFit() {
+        controlQueue.async {
+            guard !self.isCollectingOffsetFit else { return }
+            guard self.mode == .phone else {
+                DispatchQueue.main.async { self.offsetFitStatus = "Start Phone IMU + VIO before fitting the offset" }
+                return
+            }
+            guard self.mountCalibration.cameraHeight > 0 else {
+                DispatchQueue.main.async { self.offsetFitStatus = "Enter and save camera height before fitting" }
+                return
+            }
+            if self.firstTurnFit == nil {
+                DispatchQueue.main.async { self.fittedCameraOffset = nil }
+            }
+            self.offsetFitSamples.removeAll(keepingCapacity: true)
+            self.isCollectingOffsetFit = true
+            DispatchQueue.main.async {
+                self.offsetFitInProgress = true
+                self.offsetFitStatus = "Turn the rover at least 90° in one direction around its marked reference point"
+            }
+        }
+    }
+    func finishAutomaticOffsetFit() {
+        controlQueue.async {
+            guard self.isCollectingOffsetFit else { return }
+            self.isCollectingOffsetFit = false
+            DispatchQueue.main.async { self.offsetFitInProgress = false }
+            let samples = self.offsetFitSamples
+            self.offsetFitSamples.removeAll(keepingCapacity: true)
+            guard let fit = RotationOffsetFitter.fit(samples) else {
+                DispatchQueue.main.async {
+                    self.offsetFitInProgress = false
+                    self.offsetFitStatus = "Fit rejected: need stable tracking, ≥90° turn, and ≤5 cm path error. Retry slowly."
+                }
+                return
+            }
+            if let first = self.firstTurnFit {
+                guard first.turnDirection != fit.turnDirection,
+                      hypot(first.forward - fit.forward, first.left - fit.left) <= 0.05 else {
+                    self.firstTurnFit = nil
+                    DispatchQueue.main.async {
+                        self.offsetFitInProgress = false
+                        self.offsetFitStatus = "Reverse-turn result disagreed by over 5 cm. Recheck the pivot and tracking, then repeat both turns."
+                    }
+                    return
+                }
+                self.firstTurnFit = nil
+                let forward = (first.forward + fit.forward) * 0.5
+                let left = (first.left + fit.left) * 0.5
+                DispatchQueue.main.async {
+                    self.fittedCameraOffset = SIMD2(forward, left)
+                    self.offsetFitStatus = String(format: "Two-way fit accepted · forward %+.3f m · left %+.3f m · RMS %.1f / %.1f cm",
+                                                  forward, left, first.rmsError * 100, fit.rmsError * 100)
+                }
+            } else {
+                self.firstTurnFit = fit
+                DispatchQueue.main.async {
+                    self.offsetFitStatus = String(format: "First pass accepted · %.1f cm RMS. Now start and perform a turn in the opposite direction.", fit.rmsError * 100)
+                }
+            }
+        }
+    }
     func clearMap() {
         controlQueue.async {
             do { try self.occupancyMap?.clear(); self.lastMapTime = -Double.infinity
@@ -716,29 +841,12 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
         }
         DispatchQueue.main.async { self.occupancy = grid; self.mapPose = SIMD3(x, y, yaw); self.mapStatus = status }
     }
-    private func updateSimulatedMap(timestamp: Double) throws {
+    private func updateSimulatedMap(x: Double, y: Double, yaw: Double, timestamp: Double) throws {
         guard let map = occupancyMap else { return }
-        let x = simulatedPosition.x, y = simulatedPosition.y
+        let frame = try simulatedRoomDepth(x: x, y: y, yaw: yaw)
         try map.recenter(x: x, y: y)
-        // Room walls at ±6 m, optical camera facing along rover heading.
-        var depths = [Float](repeating: .nan, count: 81)
-        for u in depths.indices {
-            let right = (Double(u) - 40) / 60
-            let dx = cos(simulatedYaw) + right * sin(simulatedYaw)
-            let dy = sin(simulatedYaw) - right * cos(simulatedYaw)
-            var nearest = Double.infinity
-            for wall in [-6.0, 6.0] {
-                if abs(dx) > 1e-9 { let t = (wall - x) / dx
-                    if t > 0 && abs(y + t * dy) <= 6 { nearest = min(nearest, t) } }
-                if abs(dy) > 1e-9 { let t = (wall - y) / dy
-                    if t > 0 && abs(x + t * dx) <= 6 { nearest = min(nearest, t) } }
-            }
-            if nearest.isFinite { depths[u] = Float(nearest) }
-        }
-        let opticalToBody = simd_quatd(ix: -0.5, iy: 0.5, iz: -0.5, r: 0.5)
-        let q = (simd_quatd(angle: simulatedYaw, axis: SIMD3(0, 0, 1)) * opticalToBody).vector
-        try map.integrateDepth(frame: MappingDepthFrame(timestamp: timestamp, width: 81, height: 1, fx: 60, fy: 60, cx: 40, cy: 0, cameraX: x, cameraY: y, cameraZ: 0.5, quaternionX: q.x, quaternionY: q.y, quaternionZ: q.z, quaternionW: q.w, depthMetres: depths))
-        try publishMap(x: x, y: y, yaw: simulatedYaw, status: "Simulated depth · 10 Hz")
+        try map.integrateDepth(frame: MappingDepthFrame(timestamp: timestamp, width: frame.width, height: frame.height, fx: frame.fx, fy: frame.fy, cx: frame.cx, cy: frame.cy, cameraX: frame.cameraX, cameraY: frame.cameraY, cameraZ: frame.cameraZ, quaternionX: frame.quaternionX, quaternionY: frame.quaternionY, quaternionZ: frame.quaternionZ, quaternionW: frame.quaternionW, depthMetres: frame.depthMetres))
+        try publishMap(x: x, y: y, yaw: yaw, status: "Simulated depth · 10 Hz")
     }
     private func integrateRemoteDepth(_ frame: MobileDepthFrame) {
         guard let map = occupancyMap else { return }
@@ -816,7 +924,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
             try? controller.publishPointCloud(payload: String(decoding: data, as: UTF8.self))
         }
     }
-    private func updatePhoneMap(frame: ARFrame, position: SIMD3<Float>, bodyOrientation: simd_quatf) {
+    private func updatePhoneMap(frame: ARFrame, position: SIMD3<Float>, roverPosition: SIMD3<Float>, bodyOrientation: simd_quatf) {
         guard frame.timestamp - lastMapTime >= 0.1, let depth = frame.sceneDepth, let map = occupancyMap else { return }
         let buffer = depth.depthMap
         guard CVPixelBufferGetPixelFormatType(buffer) == kCVPixelFormatType_DepthFloat32,
@@ -848,11 +956,11 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
         let q = (simd_quatf(worldFromAR) * simd_quatf(frame.camera.transform) * simd_quatf(angle: .pi, axis: SIMD3(1, 0, 0))).vector
         guard mapGroundOffset != nil else { return }
         do {
-            try map.recenter(x: Double(position.x), y: Double(position.y))
+            try map.recenter(x: Double(roverPosition.x), y: Double(roverPosition.y))
             try map.integrateDepth(frame: MappingDepthFrame(timestamp: frame.timestamp, width: UInt32(width), height: UInt32(height), fx: Double(k.columns.0.x) * sx, fy: Double(k.columns.1.y) * sy, cx: (Double(k.columns.2.x) + 0.5) * sx - 0.5, cy: (Double(k.columns.2.y) + 0.5) * sy - 0.5, cameraX: Double(position.x), cameraY: Double(position.y), cameraZ: Double(position.z) + (mapGroundOffset ?? 0), quaternionX: Double(q.x), quaternionY: Double(q.y), quaternionZ: Double(q.z), quaternionW: Double(q.w), depthMetres: values))
             lastMapTime = frame.timestamp
             let forward = bodyOrientation.act(SIMD3<Float>(1, 0, 0))
-            try publishMap(x: Double(position.x), y: Double(position.y), yaw: atan2(Double(forward.y), Double(forward.x)), status: "ARKit scene depth · measured floor · 10 Hz")
+            try publishMap(x: Double(roverPosition.x), y: Double(roverPosition.y), yaw: atan2(Double(forward.y), Double(forward.x)), status: "ARKit scene depth · measured floor · 10 Hz")
         } catch { DispatchQueue.main.async { self.mapStatus = "Map: " + error.localizedDescription } }
     }
     private func handleTrackingFailure(_ error: Error) {
@@ -891,14 +999,20 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
             }catch{DispatchQueue.main.async{self.autonomyReason=error.localizedDescription}}
         }
     }
-    func setAutonomy(_ level:String) {
+    func setAutonomy(_ level:String, budgetSeconds: Double? = nil) {
         controlQueue.async {
             // Open-loop Bluetooth cannot take an autonomy level. L3 in particular
             // stays disarmed until wheel feedback exists; update() also drops a
             // latched waypoint back to teleop and commands zero effort.
             guard !self.bleActive || self.bleFeedback else { return }
             self.target=(0,0)
-            do {let payload=String(decoding:try JSONSerialization.data(withJSONObject:["level":level,"token":UUID().uuidString]),as:UTF8.self)
+            do {
+                var body: [String: Any] = ["level": level, "token": UUID().uuidString]
+                if level == "explore" {
+                    let budget = budgetSeconds ?? 120
+                    if budget.isFinite, budget > 0 { body["budget_seconds"] = budget }
+                }
+                let payload=String(decoding:try JSONSerialization.data(withJSONObject:body),as:UTF8.self)
                 if self.mode == .remote {try self.zenoh?.sendAction(kind:"autonomy",payload:payload)}else{try self.controller?.autonomyRequest(kind:"autonomy",payload:payload,timestamp:self.mode == .simulation ? self.simulatedTime:CACurrentMediaTime())}
             }catch{DispatchQueue.main.async{self.autonomyReason=error.localizedDescription}}
         }
@@ -999,6 +1113,21 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
             self.searchReportText=report.map{String(format:"Target confirmed at %.2f, %.2f m · %d frames",$0["world_x"] as? Double ?? 0,$0["world_y"] as? Double ?? 0,($0["frame_ids"] as? [Any])?.count ?? 0)} ?? ""
         }
         DispatchQueue.main.async {self.autonomyLevel=level;self.autonomyReason=reason;self.proposalRun=proposal?["run_id"] as? String ?? "";self.proposedGoal=(proposal?["proposal_id"] as? NSNumber)?.uint64Value;self.proposalText=proposal.map{String(format:"Search target %.1f, %.1f m",$0["x"] as? Double ?? 0,$0["y"] as? Double ?? 0)} ?? "";if let goal{self.waypointActive=(goal["state"] as? String)=="active";self.waypointDistance=goal["distance"] as? Double ?? 0;self.waypointStatus=goal["state"] as? String ?? "Unknown"}}
+        let exploration=(object["exploration"] as? [String:Any]) ?? (status["exploration"] as? [String:Any])
+        let summary: String = {
+            guard let exploration, let phase=exploration["phase"] as? String, phase != "idle" else { return "" }
+            let remaining=exploration["remaining_seconds"] as? Double ?? 0
+            let coverage=exploration["coverage_m2"] as? Double ?? 0
+            if let end=exploration["end_reason"] as? String {
+                return String(format:"Explore ended · %@ · %.1f m² observed", end.replacingOccurrences(of:"_", with:" "), coverage)
+            }
+            if let target=exploration["target"] as? [String:Any] {
+                let x=target["x"] as? Double ?? 0, y=target["y"] as? Double ?? 0
+                return String(format:"Exploring · %.0f s left · %.1f m² · target %.1f, %.1f m", remaining, coverage, x, y)
+            }
+            return String(format:"Exploring · %.0f s left · %.1f m²", remaining, coverage)
+        }()
+        DispatchQueue.main.async {self.explorationSummary=summary}
     }
     private func publish(_ output: ControlOutput) {
         DispatchQueue.main.async {
@@ -1704,4 +1833,9 @@ extension PhoneController {
             try? controller.publishLocalization(payload: json)
         }
     }
+}
+
+private enum CalibrationSaveError: LocalizedError {
+    case invalidValues, stopFirst
+    var errorDescription: String? { self == .stopFirst ? "Stop tracking before saving mount measurements." : "Check the measured values and camera height." }
 }

@@ -52,6 +52,8 @@ fn arbiter() -> AutonomyArbiter {
     a.set_level(LevelRequest {
         level: Level::TargetSearch,
         token: "mode".into(),
+        budget_seconds: None,
+        budget_minutes: None,
     });
     a
 }
@@ -61,6 +63,8 @@ fn mode_without_detector_or_request_never_moves() {
     a.set_level(LevelRequest {
         level: Level::TargetSearch,
         token: "m".into(),
+        budget_seconds: None,
+        budget_minutes: None,
     });
     assert_eq!(
         a.step(input(&map(), 0.1)).status.result.as_deref(),
@@ -159,6 +163,8 @@ fn repeated_start_cannot_relaunch_after_takeover() {
     a.set_level(LevelRequest {
         level: Level::Teleop,
         token: "take".into(),
+        budget_seconds: None,
+        budget_minutes: None,
     });
     a.start_search(req(), &input(&m, 0.1)).unwrap();
     assert_eq!(a.step(input(&m, 0.2)).twist, Twist::default());

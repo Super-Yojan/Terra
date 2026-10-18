@@ -3,9 +3,9 @@
 Documentation: <https://super-yojan.dev/Terra/>
 
 Terra is the vehicle body and onboard autonomy: shared Rust crates, the TerraPhone
-iOS app, and the Raspberry Pi rover. The world simulator is
+iOS and Android apps, and the Raspberry Pi rover. The world simulator is
 [Zorvane](https://super-yojan.dev/Zorvane/). The fleet operator is
-[ARGOS](https://super-yojan.dev/ARGOS/). Both sit with this site under
+[ARGOS](https://super-yojan.dev/ARGOS/). ARGOS now uses a React browser UI and Rust Axum server; its Swift app is a legacy fallback and Unity is a historical prototype. TerraPhone iOS remains the onboard vehicle runtime. All sites sit under
 [super-yojan.dev](https://super-yojan.dev).
 
 Configurable Bluetooth actuator control is implemented for TerraPhone and a
@@ -19,7 +19,7 @@ history and current verification limits. Radio sessions, actuator timing and
 physical compatibility remain unverified. The [optional bench procedure](docs/hardware/BENCH.md)
 requires separate authorization.
 
-See the [mission-autonomy guide](docs/autonomy/README.md) for four shared-core levels, explicit waypoint authority, safety controls, and experiment logs.
+See the [mission-autonomy guide](docs/autonomy/README.md) for five shared-core levels, explicit waypoint authority, time-bounded exploration, safety controls, and experiment logs.
 
 - `terra-types`: sensor samples, coordinate conventions, commands and motor outputs.
 - `terra-actuators`: configurable actuator layouts, routing, and Bluetooth framing;
@@ -31,9 +31,9 @@ See the [mission-autonomy guide](docs/autonomy/README.md) for four shared-core l
 - `terra-motors`: signed wheel effort to PWM duty and direction, with a hardware enable gate and a command watchdog. See [motor adapter](docs/MOBILE_CONTROL.md#motor-adapter).
 - `terra-mapping`: rolling local occupancy grids from depth and camera poses. See [mapping API](crates/terra-mapping/README.md).
 - `terra-transport`: leased Zenoh velocity publishing. The default prefix is `terra/rover`.
-- `terra-mobile`: UniFFI interface shared by Swift and Rust.
+- `terra-mobile`: UniFFI interface shared by Swift, Kotlin, and Rust.
 
-See [mobile controller setup](docs/MOBILE_CONTROL.md) for the sensor contract, iOS build and validation.
+See [mobile controller setup](docs/MOBILE_CONTROL.md) for the sensor contract, and [TerraPhone for Android](docs/MOBILE_ANDROID.md) for the Kotlin shell.
 
 ## Simulation
 
@@ -57,4 +57,16 @@ cargo test --locked --workspace
 ./scripts/build-ios.sh
 ./scripts/check-swift.sh
 open mobile/ios/TerraPhone.xcodeproj
+./scripts/build-android.sh
+cd mobile/android && ./gradlew assembleDebug testDebugUnitTest
 ```
+
+## Integrated capabilities
+
+Terra includes time-bounded frontier exploration (`terra-exploration`), the Android
+TerraPhone adapter, and an [offline VLM decision evaluator](tools/vlm-eval/README.md).
+The evaluator is a research tool and does not command live vehicles. Android setup
+and limitations are in [the Android guide](docs/MOBILE_ANDROID.md).
+Phone mount measurements and the two-pass offset fit are in Settings; stop tracking
+before saving measurements. See [the calibration checklist](docs/MOUNT_CALIBRATION_CHECKLIST.md).
+Measured ground-plane detection remains independent of mount height.

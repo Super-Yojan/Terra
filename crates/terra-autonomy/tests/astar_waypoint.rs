@@ -22,6 +22,8 @@ fn l3_follows_corner_route_and_preserves_original_destination() {
     arbiter.set_level(LevelRequest {
         level: Level::Waypoint,
         token: "astar-mode".into(),
+        budget_seconds: None,
+        budget_minutes: None,
     });
     assert!(arbiter.accept_goal(
         &GoalCommand::Local {
@@ -76,6 +78,8 @@ fn l3_holds_when_route_is_sealed() {
     arbiter.set_level(LevelRequest {
         level: Level::Waypoint,
         token: "mode".into(),
+        budget_seconds: None,
+        budget_minutes: None,
     });
     arbiter.accept_goal(
         &GoalCommand::Local {
@@ -115,6 +119,8 @@ fn changed_map_invalidates_route_without_losing_the_goal() {
     arbiter.set_level(LevelRequest {
         level: Level::Waypoint,
         token: "mode".into(),
+        budget_seconds: None,
+        budget_minutes: None,
     });
     arbiter.accept_goal(
         &GoalCommand::Local {
@@ -177,6 +183,8 @@ fn localization_jump_replans_without_a_map_revision_change() {
     arbiter.set_level(LevelRequest {
         level: Level::Waypoint,
         token: "mode".into(),
+        budget_seconds: None,
+        budget_minutes: None,
     });
     arbiter.accept_goal(
         &GoalCommand::Local {
@@ -222,6 +230,8 @@ fn cached_waypoint_command_must_stay_admissible() {
     arbiter.set_level(LevelRequest {
         level: Level::Waypoint,
         token: "cache".into(),
+        budget_seconds: None,
+        budget_minutes: None,
     });
     assert!(arbiter.accept_goal(
         &GoalCommand::Local {
@@ -311,6 +321,8 @@ fn l3_crosses_an_18_by_12_pitch_on_the_rolling_map() {
     arbiter.set_level(LevelRequest {
         level: Level::Waypoint,
         token: "pitch".into(),
+        budget_seconds: None,
+        budget_minutes: None,
     });
     let goal = (17., 6.);
     assert!(arbiter.accept_goal(
