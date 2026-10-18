@@ -337,7 +337,6 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
         controlQueue.async {
             do {
                 self.occupancyMap = try MobileOccupancyMap(settings: defaultOccupancySettings())
-                self.simulatedPosition = .zero
                 self.mapGroundOffset = nil; self.groundPolicy.reset()
                 self.lastMapTime = -Double.infinity
                 self.zenoh = try MobileZenohClient(endpoint: endpoint, prefix: "terra/rover", roverId: id)
@@ -429,6 +428,8 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
         controlQueue.async {
             self.timer?.cancel(); self.timer = nil
             self.mode = .stopped
+            self.isCollectingOffsetFit = false; self.offsetFitSamples.removeAll(); self.firstTurnFit = nil
+            DispatchQueue.main.async { self.offsetFitInProgress = false }
             self.dashboardEmergencyStop = false
             self.bleActive = false; self.bleReady = false; self.bleFeedback = false; self.hardwareMotionRevoked = true; self.feedbackTrackingHealthy = false; self.target = (0, 0); self.servoTargets = [:]
             self.zenoh?.disconnect(); self.zenoh = nil
@@ -472,7 +473,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
                 DispatchQueue.main.async {self.runLog=log}
         }
         self.occupancyMap = try MobileOccupancyMap(settings: defaultOccupancySettings())
-        simulatedPosition = .zero; mapGroundOffset = nil; groundPolicy.reset(); lastMapTime = -Double.infinity
+        mapGroundOffset = nil; groundPolicy.reset(); lastMapTime = -Double.infinity
         DispatchQueue.main.async { self.occupancy = nil; self.mapPose = .zero; self.mapStatus = mode == .simulation ? "Simulated depth · 10 Hz" : (ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) ? "Waiting for scene depth" : "Scene depth unavailable on this device") }
         self.mode = mode
         phoneStartedAt = ProcessInfo.processInfo.systemUptime
@@ -955,11 +956,8 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
         let q = (simd_quatf(worldFromAR) * simd_quatf(frame.camera.transform) * simd_quatf(angle: .pi, axis: SIMD3(1, 0, 0))).vector
         guard mapGroundOffset != nil else { return }
         do {
-            let optical = try yUpCameraToOpticalPose(x: Double(arPosition.x), y: Double(arPosition.y), z: Double(arPosition.z), quaternionX: Double(cameraRotation.x), quaternionY: Double(cameraRotation.y), quaternionZ: Double(cameraRotation.z), quaternionW: Double(cameraRotation.w))
-            // Initial camera height is assumed 0.5 m; calibrate against the ground before physical use.
-            mapGroundOffset = try latchGroundOffset(latched: mapGroundOffset, positionZ: Double(position.z), reference: 0.5)
             try map.recenter(x: Double(position.x), y: Double(position.y))
-            try map.integrateDepth(frame: MappingDepthFrame(timestamp: frame.timestamp, width: UInt32(width), height: UInt32(height), fx: Double(k.columns.0.x) * sx, fy: Double(k.columns.1.y) * sy, cx: (Double(k.columns.2.x) + 0.5) * sx - 0.5, cy: (Double(k.columns.2.y) + 0.5) * sy - 0.5, cameraX: Double(position.x), cameraY: Double(position.y), cameraZ: Double(position.z) + (mapGroundOffset ?? 0), quaternionX: optical.quaternionX, quaternionY: optical.quaternionY, quaternionZ: optical.quaternionZ, quaternionW: optical.quaternionW, depthMetres: values))
+            try map.integrateDepth(frame: MappingDepthFrame(timestamp: frame.timestamp, width: UInt32(width), height: UInt32(height), fx: Double(k.columns.0.x) * sx, fy: Double(k.columns.1.y) * sy, cx: (Double(k.columns.2.x) + 0.5) * sx - 0.5, cy: (Double(k.columns.2.y) + 0.5) * sy - 0.5, cameraX: Double(position.x), cameraY: Double(position.y), cameraZ: Double(position.z) + (mapGroundOffset ?? 0), quaternionX: Double(q.x), quaternionY: Double(q.y), quaternionZ: Double(q.z), quaternionW: Double(q.w), depthMetres: values))
             lastMapTime = frame.timestamp
             let forward = bodyOrientation.act(SIMD3<Float>(1, 0, 0))
             try publishMap(x: Double(position.x), y: Double(position.y), yaw: atan2(Double(forward.y), Double(forward.x)), status: "ARKit scene depth · measured floor · 10 Hz")
