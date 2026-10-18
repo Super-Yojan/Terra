@@ -19,7 +19,7 @@ history and current verification limits. Radio sessions, actuator timing and
 physical compatibility remain unverified. The [optional bench procedure](docs/hardware/BENCH.md)
 requires separate authorization.
 
-See the [mission-autonomy guide](docs/autonomy/README.md) for four shared-core levels, explicit waypoint authority, safety controls, and experiment logs.
+See the [mission-autonomy guide](docs/autonomy/README.md) for five shared-core levels, explicit waypoint authority, time-bounded exploration, safety controls, and experiment logs.
 
 - `terra-types`: sensor samples, coordinate conventions, commands and motor outputs.
 - `terra-actuators`: configurable actuator layouts, routing, and Bluetooth framing;

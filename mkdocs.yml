@@ -75,6 +75,7 @@ nav:
       - terra-transport: crates/terra-transport.md
       - terra-mapping: crates/terra-mapping.md
       - terra-navigation: crates/terra-navigation.md
+      - terra-exploration: crates/terra-exploration.md
       - terra-autonomy: crates/terra-autonomy.md
       - terra-experiment: crates/terra-experiment.md
       - terra-motors: crates/terra-motors.md

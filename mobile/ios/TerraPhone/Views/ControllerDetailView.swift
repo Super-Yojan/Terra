@@ -14,6 +14,7 @@ struct ControllerDetailView: View {
     @AppStorage("waypointGoalLat") private var goalLat = "38.82981"
     @AppStorage("waypointGoalLon") private var goalLon = "-77.3075"
     @AppStorage("waypointToken") private var waypointToken = "gmu-north"
+    @AppStorage("exploreBudgetSeconds") private var exploreSeconds = "120"
     @State private var entryNote = ""
     @State private var searchClass = "person"
     @State private var searchMinX = "-20"
@@ -89,9 +90,13 @@ struct ControllerDetailView: View {
                 }
                 if destination == .missions {
                 Section("Mission autonomy") {
-                    Picker("Requested level",selection:Binding(get:{brain.autonomyLevel},set:{brain.setAutonomy($0)})) {Text("Teleop").tag("teleop");Text("Assisted teleop").tag("assisted_teleop");Text("L2 · Direct waypoint").tag("waypoint_direct");Text("L3 · Obstacle-aware waypoint").tag("waypoint");Text("Supervised search").tag("supervised");if brain.searchAvailable {Text("L4 target search").tag("target_search")}}
+                    TextField("Explore budget (seconds)", text: $exploreSeconds)
+                        .keyboardType(.decimalPad)
+                        .accessibilityLabel("Explore budget seconds")
+                    Picker("Requested level",selection:Binding(get:{brain.autonomyLevel},set:{brain.setAutonomy($0, budgetSeconds: Double(exploreSeconds))})) {Text("Teleop").tag("teleop");Text("Assisted teleop").tag("assisted_teleop");Text("L2 · Direct waypoint").tag("waypoint_direct");Text("L3 · Obstacle-aware waypoint").tag("waypoint");Text("Autonomous explore").tag("explore");Text("Supervised search").tag("supervised");if brain.searchAvailable {Text("L4 target search").tag("target_search")}}
                         .disabled(brain.hardwareActive && !brain.hardwareFeedback)
                     Text(brain.autonomyReason)
+                    if !brain.explorationSummary.isEmpty { Text(brain.explorationSummary).font(.footnote) }
                     if let proposal=brain.proposedGoal {Text(brain.proposalText);HStack {Button("Approve search target") {brain.decideProposal(proposal,approve:true)};Button("Reject") {brain.decideProposal(proposal,approve:false)}}}
                     Button("Take over") {forward=0;yaw=0;brain.setAutonomy("teleop")}
                     Button("Emergency stop",role:.destructive) {forward=0;yaw=0;brain.emergencyStop()}

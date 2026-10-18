@@ -2,6 +2,7 @@
 
 !!! tip "TL;DR"
     Four base levels plus capability-gated target search. The arbiter does not pick a favorite.
+    Five levels. The arbiter does not pick a favorite.
     Stop latches until a healthy reset.
     Reset does not restore the old goal.
 
@@ -31,8 +32,11 @@ flowchart TD
 | `waypoint` | One operator goal. |
 | `supervised` | A frontier. Wait for approval. |
 | `target_search` | Autonomous exploration and observed target confirmation. Requires a detector. |
+| `explore` | Frontiers until the budget, with no approval. |
 
 `occupancy_telemetry` publishes observed cells only. Hidden mission targets stay out of the packet.
+
+`explore` executes each frontier as a waypoint through this arbiter. See [terra-exploration](terra-exploration.md) and [how to start a run](../autonomy/README.md#start-an-exploration-run).
 
 Run the reference search in Zorvane with `TERRA_MISSION=1`.
 

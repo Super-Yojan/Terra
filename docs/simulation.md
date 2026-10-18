@@ -30,6 +30,8 @@ TERRA_MISSION=1 TERRA_MISSION_SEED=42 TERRA_ROVER_COUNT=2 cargo run -p zorvane
 
 *Pick a level before a waypoint. Stop stays latched until reset.*
 
+Autonomous explore is `{"level":"explore","token":"explore-1","budget_seconds":180}` on `terra/rover/<id>/autonomy`. See [start an exploration run](autonomy/README.md#start-an-exploration-run).
+
 Summarize a log from this repo:
 
 ```sh

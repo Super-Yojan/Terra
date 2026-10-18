@@ -514,6 +514,12 @@ impl MobileController {
                 "goal/proposal",
                 serde_json::to_string(&wire_proposal).unwrap(),
             );
+            if let Some(exploration) = &output.exploration {
+                d.publish(
+                    "exploration/status",
+                    serde_json::to_string(exploration).unwrap(),
+                );
+            }
             if let Some((grid, _, sequence)) = map.as_ref() {
                 match map_publication {
                     Some(publication::Publication::Full) => {
@@ -560,6 +566,7 @@ impl MobileController {
             "navigation": brain.navigation.status(),
             "goal": output.goal,
             "proposal": wire_proposal,
+            "exploration": output.exploration,
             "search": output.search,
             "pending_reports": output.pending_reports,
             "twist": output.twist,
@@ -578,7 +585,8 @@ impl MobileController {
                 "goal": output.goal,
                 "proposal": wire_proposal,
                 "run_id": brain.run_id,
-                "search": output.search,
+                "exploration": output.exploration,
+            "search": output.search,
                 "events": output.events,
             }));
         }
