@@ -16,11 +16,23 @@ use crate::scene::{
 };
 use crate::{CAMERA_SOURCE_NOTE, CAMERA_SOURCE_PLACEHOLDER};
 
+/// Return the eight synthetic scenarios, initialized once and shared thereafter.
+///
+/// # Panics
+///
+/// Panics if the built-in geometry, object extraction, or rendering cannot build the pack.
 pub fn scenarios() -> &'static [Scenario] {
     static PACK: OnceLock<Vec<Scenario>> = OnceLock::new();
     PACK.get_or_init(|| build_pack().unwrap_or_else(|err| panic!("vlm eval pack: {err}")))
 }
 
+/// Generate each scenario's images, prompt, JSON packet, and a manifest under `root`.
+/// Creates directories and overwrites existing fixture files.
+///
+/// # Errors
+///
+/// Returns filesystem, serialization, or occupancy round-trip failures as strings.
+/// Files written before an error are retained.
 pub fn write_fixtures(root: &Path) -> Result<(), String> {
     std::fs::create_dir_all(root).map_err(|err| err.to_string())?;
     let mut manifest = Vec::new();
@@ -744,6 +756,8 @@ mod tests {
     use crate::prompt::user_prompt;
     use serde_json::json;
 
+    /// The eight-case pack covers its required decision categories, keeps labels
+    /// out of prompts, records placeholder provenance, and passes its mock labels.
     #[test]
     fn pack_covers_the_eight_labels() {
         let pack = scenarios();
@@ -775,6 +789,8 @@ mod tests {
         }
     }
 
+    /// Reject enclosed targets and L0 waypoint proposals, ignoring invented model
+    /// coordinates in favor of object-list points and enforcing scenario labels.
     #[test]
     fn enclosed_bucket_and_l0_waypoint_are_rejected() {
         let pack = scenarios();
@@ -874,6 +890,8 @@ mod tests {
         assert!(score_output(&hold.to_string(), person_case).passed());
     }
 
+    /// Checked-in images, prompts, packets, and manifest must match regenerated
+    /// fixture content, with expected labels present only in scoring documents.
     #[test]
     fn committed_fixtures_match_the_generator() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures");

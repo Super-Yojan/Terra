@@ -4,17 +4,38 @@
 //! [`LocalOccupancyMap::recenter`] for moving the window without losing overlapping
 //! world evidence. [`MapSnapshot`] stores row-major cells: -1 is unknown and
 //! 0..=100 is occupancy probability. World +Z is up; optical camera +Z is forward.
+//!
+//! # Example
+//!
+//! ```
+//! use terra_mapping::{LocalOccupancyMap, MapConfig};
+//!
+//! let mut map = LocalOccupancyMap::new(MapConfig::default())?;
+//! assert!(map.snapshot().occupancy.iter().all(|&cell| cell == -1));
+//! map.recenter(2.0, 1.0)?;
+//! // Recentring preserves dimensions and leaves new cells unobserved.
+//! assert_eq!(map.snapshot().width, 200);
+//! # Ok::<(), terra_mapping::MapError>(())
+//! ```
 
 use terra_types::{Quaternion, Vector3};
 
+/// Rolling grid dimensions, depth sampling, and obstacle classification limits.
 #[derive(Clone, Copy, Debug)]
 pub struct MapConfig {
+    /// Grid columns; defaults to 200.
     pub width: u32,
+    /// Grid rows; defaults to 200.
     pub height: u32,
+    /// Cell side length in metres; defaults to 0.1.
     pub resolution: f64,
+    /// Minimum height above supporting ground classified as an obstacle, in metres; defaults to 0.15.
     pub min_obstacle_height: f64,
+    /// Maximum accepted endpoint height above supporting ground, in metres; defaults to 2.0.
     pub max_obstacle_height: f64,
+    /// Maximum Euclidean camera-to-return range in metres; defaults to 15.
     pub max_range: f64,
+    /// Pixel step on each image axis; defaults to 4 and must be nonzero.
     pub pixel_stride: u32,
 }
 impl Default for MapConfig {
@@ -30,37 +51,81 @@ impl Default for MapConfig {
         }
     }
 }
+/// Pinhole calibration for the exact depth image supplied to integration.
 #[derive(Clone, Copy, Debug)]
 pub struct CameraIntrinsics {
+    /// Image width in pixels.
     pub width: u32,
+    /// Image height in pixels.
     pub height: u32,
+    /// Horizontal focal length in pixels.
     pub fx: f64,
+    /// Vertical focal length in pixels.
     pub fy: f64,
+    /// Principal point column in pixels, measured from the top-left image origin.
     pub cx: f64,
+    /// Principal point row in pixels, measured from the top-left image origin.
     pub cy: f64,
 }
 /// Camera optical axes: X right, Y down, Z forward. Pose rotates these into world axes.
 #[derive(Clone, Copy, Debug)]
 pub struct CameraPose {
+    /// Camera optical origin in world metres at image exposure time.
     pub position: Vector3,
+    /// Optical-to-world rotation, normalized during integration.
     pub orientation: Quaternion,
 }
+/// Supporting terrain plane in the same fixed world frame as the depth pose.
+/// Signed height is `(normal · point - offset) / |normal|`, in metres.
+/// This affects height classification only; occupancy cells retain world x/y.
+#[derive(Clone, Copy, Debug)]
+pub struct GroundPlane {
+    /// Upward plane normal; need not be unit length, but must be finite and nonzero.
+    pub normal: Vector3,
+    /// Plane equation offset, scaled consistently with `normal`.
+    pub offset: f64,
+}
+impl Default for GroundPlane {
+    fn default() -> Self {
+        Self {
+            normal: Vector3 {
+                x: 0.0,
+                y: 0.0,
+                z: 1.0,
+            },
+            offset: 0.0,
+        }
+    }
+}
+/// Owned occupancy grid suitable for consumers that do not need mapping internals.
 #[derive(Clone, Debug)]
 pub struct MapSnapshot {
+    /// Number of columns.
     pub width: u32,
+    /// Number of rows.
     pub height: u32,
+    /// Square cell side length in metres.
     pub resolution: f64,
+    /// World x coordinate of the lower-left cell boundary, in metres.
     pub origin_x: f64,
+    /// World y coordinate of the lower-left cell boundary, in metres.
     pub origin_y: f64,
     /// Row-major; rows increase in world +Y. -1 unknown, 0..100 occupancy probability.
     pub occupancy: Vec<i8>,
 }
+/// Invalid mapping input; rejected frames do not update evidence or the last timestamp.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MapError {
+    /// Grid geometry, sampling stride, height interval, or range is unsupported.
     InvalidConfig,
+    /// Camera pose is nonfinite, out of range, outside the grid, or not normalizable.
     InvalidPose,
+    /// Depth storage or camera calibration does not describe a supported image.
     InvalidFrame,
+    /// Exposure time is nonfinite, negative, or not strictly increasing.
     InvalidTime,
+    /// Ground plane is nonfinite, degenerate, or tilted more than 60 degrees from world up.
+    InvalidGroundPlane,
 }
 impl std::fmt::Display for MapError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -68,6 +133,9 @@ impl std::fmt::Display for MapError {
     }
 }
 impl std::error::Error for MapError {}
+/// Bounded occupancy evidence accumulated from depth rays in a rolling world grid.
+/// Each accepted frame updates a cell at most once, with occupied evidence winning
+/// over free evidence when rays disagree within that frame.
 pub struct LocalOccupancyMap {
     config: MapConfig,
     origin_x: f64,
@@ -77,6 +145,13 @@ pub struct LocalOccupancyMap {
     last_timestamp: Option<f64>,
 }
 impl LocalOccupancyMap {
+    /// Allocate an unknown grid centered on world `(0, 0)`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MapError::InvalidConfig`] for zero dimensions, more than 1,000,000
+    /// cells, resolution outside `0.01..=10.0` m, nonfinite or unordered obstacle
+    /// heights, range outside `(0, 100]` m, or zero pixel stride.
     pub fn new(config: MapConfig) -> Result<Self, MapError> {
         if config.width == 0
             || config.height == 0
@@ -104,12 +179,21 @@ impl LocalOccupancyMap {
             last_timestamp: None,
         })
     }
+    /// Erase observations and timestamp history while retaining geometry and origin.
     pub fn clear(&mut self) {
         self.evidence.fill(0.0);
         self.observed.fill(false);
         self.last_timestamp = None;
     }
     /// Shift by whole cells, preserving overlapping world cells. Newly exposed cells are unknown.
+    ///
+    /// The requested center `(x, y)` is in world metres; shifts round to the
+    /// nearest cell. A shift beyond the window discards all old evidence.
+    /// Timestamp history is retained.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MapError::InvalidPose`] for nonfinite coordinates or magnitude above 1e9 m.
     pub fn recenter(&mut self, x: f64, y: f64) -> Result<(), MapError> {
         if !x.is_finite() || !y.is_finite() || x.abs() > 1e9 || y.abs() > 1e9 {
             return Err(MapError::InvalidPose);
@@ -152,7 +236,21 @@ impl LocalOccupancyMap {
         )
     }
     /// Axial depth in metres, top-left row-major. Invalid/no-return values never clear space.
+    ///
     /// Pose must correspond to exposure time. Heights are relative to the caller's world ground plane.
+    /// Each sampled valid return clears its ray up to the endpoint. Endpoints in
+    /// the configured obstacle-height interval add occupied evidence; lower
+    /// returns add free evidence. Returns above the height limit or range limit
+    /// are ignored. Frames with no usable returns still advance timestamp history.
+    ///
+    /// # Errors
+    ///
+    /// - [`MapError::InvalidTime`]: nonfinite, negative, or nonincreasing timestamp.
+    /// - [`MapError::InvalidFrame`]: zero dimensions, more than 4,194,304 pixels,
+    ///   mismatched storage, nonfinite calibration, focal length below `1e-6`,
+    ///   or principal point magnitude above `1e6` pixels.
+    /// - [`MapError::InvalidPose`]: invalid orientation or camera position; position
+    ///   components must be finite, within ±1e9 m, and its x/y cell must lie in the grid.
     pub fn integrate_depth(
         &mut self,
         timestamp: f64,
@@ -160,6 +258,50 @@ impl LocalOccupancyMap {
         pose: CameraPose,
         depth: &[f32],
     ) -> Result<(), MapError> {
+        self.integrate_depth_with_ground_plane(
+            timestamp,
+            intrinsics,
+            pose,
+            depth,
+            GroundPlane::default(),
+        )
+    }
+    /// Integrate depth using signed height above a local supporting terrain plane.
+    ///
+    /// All ray endpoints and occupancy cells stay in the fixed world frame. Only
+    /// the obstacle-height interval is measured along the plane normal, allowing
+    /// elevated or sloped ground to remain free while objects above it stay occupied.
+    /// The caller must supply an exposure-aligned ground estimate; this method does
+    /// not infer traversability from arbitrary depth surfaces.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same errors as [`Self::integrate_depth`], plus
+    /// [`MapError::InvalidGroundPlane`] for nonfinite/degenerate planes or normals
+    /// tilted more than 60 degrees from world up. Rejection leaves the map unchanged.
+    pub fn integrate_depth_with_ground_plane(
+        &mut self,
+        timestamp: f64,
+        intrinsics: CameraIntrinsics,
+        pose: CameraPose,
+        depth: &[f32],
+        ground: GroundPlane,
+    ) -> Result<(), MapError> {
+        let norm = ground
+            .normal
+            .x
+            .hypot(ground.normal.y)
+            .hypot(ground.normal.z);
+        if !ground.normal.finite()
+            || !norm.is_finite()
+            || norm < 1e-12
+            || ground.normal.z / norm < 0.5
+            || !(ground.offset / norm).is_finite()
+        {
+            return Err(MapError::InvalidGroundPlane);
+        }
+        let normal = ground.normal.scaled(1.0 / norm);
+        let ground_offset = ground.offset / norm;
         if !timestamp.is_finite()
             || timestamp < 0.0
             || self.last_timestamp.is_some_and(|t| timestamp <= t)
@@ -217,11 +359,13 @@ impl LocalOccupancyMap {
                     continue;
                 }
                 let endpoint = pose.position.plus(q.rotate(optical));
+                let height = normal.x * endpoint.x + normal.y * endpoint.y + normal.z * endpoint.z
+                    - ground_offset;
                 // High overhead objects provide no ground-level free-space evidence.
-                if endpoint.z > self.config.max_obstacle_height {
+                if height > self.config.max_obstacle_height {
                     continue;
                 }
-                let hit = endpoint.z >= self.config.min_obstacle_height;
+                let hit = height >= self.config.min_obstacle_height;
                 let end = self.cell(endpoint);
                 // Bound traversal by the local grid: never iterate to a distant off-grid endpoint.
                 let (mut x, mut y) = start;
@@ -265,6 +409,7 @@ impl LocalOccupancyMap {
         Ok(())
     }
     /// Copy observed evidence into a row-major probability grid.
+    ///
     /// The origin is the lower-left cell boundary; cell centers add half a cell.
     pub fn snapshot(&self) -> MapSnapshot {
         MapSnapshot {
@@ -291,6 +436,7 @@ impl LocalOccupancyMap {
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// Use a single-pixel camera looking along world +X from 0.5 m above ground.
     fn setup() -> (LocalOccupancyMap, CameraIntrinsics, CameraPose) {
         let map = LocalOccupancyMap::new(MapConfig {
             width: 20,
@@ -322,6 +468,8 @@ mod tests {
         };
         (map, camera_intrinsics, pose)
     }
+    /// Repeated wall returns build occupied endpoint evidence, clear the approach
+    /// ray, and leave occluded cells behind the wall unknown.
     #[test]
     fn wall_marks_ray_free_endpoint_occupied_and_space_behind_unknown() {
         let (mut map, camera_intrinsics, p) = setup();
@@ -334,6 +482,8 @@ mod tests {
         assert!(s.occupancy[10 * 20 + 14] > 90);
         assert_eq!(s.occupancy[10 * 20 + 15], -1);
     }
+    /// A rolling shift preserves a wall at its world location and exposes unknown
+    /// cells; moving beyond all overlap leaves an entirely unknown window.
     #[test]
     fn rolling_preserves_world_evidence_and_exposes_unknown_cells() {
         let (mut map, camera_intrinsics, p) = setup();
@@ -346,6 +496,8 @@ mod tests {
         map.recenter(100.0, 100.0).unwrap();
         assert!(map.snapshot().occupancy.iter().all(|x| *x == -1));
     }
+    /// NaN and out-of-range returns provide no free evidence, duplicate timestamps
+    /// are rejected, and depth storage must match the calibrated image dimensions.
     #[test]
     fn invalid_depth_and_inputs_do_not_clear_unknown_space() {
         let (mut map, camera_intrinsics, p) = setup();
@@ -364,6 +516,8 @@ mod tests {
             .unwrap();
         assert!(map.snapshot().occupancy.iter().all(|x| *x == -1));
     }
+    /// Ground-level returns clear their endpoints, while overhead returns must
+    /// not clear the ground grid underneath them.
     #[test]
     fn ground_is_free_and_overhead_return_is_ignored() {
         let (mut map, camera_intrinsics, mut p) = setup();
@@ -376,5 +530,93 @@ mod tests {
         map.integrate_depth(1.0, camera_intrinsics, p, &[2.0])
             .unwrap();
         assert!(map.snapshot().occupancy.iter().all(|x| *x == -1));
+    }
+
+    /// An elevated 20-degree ramp is ground, while a return 30 cm above that
+    /// same supporting surface remains an obstacle. World x/y must not be rotated.
+    #[test]
+    fn climbing_a_slope_does_not_turn_ground_into_an_obstacle() {
+        let angle = 20_f64.to_radians();
+        for (height_above_ground, occupied) in [(0.0, false), (0.3, true)] {
+            let (mut map, intrinsics, _) = setup();
+            // Camera starts 0.5 m normal to a ramp whose local elevation is 1 m.
+            // Aim a ray 2 m along the ramp and down toward the selected endpoint.
+            let normal = Vector3 {
+                x: -angle.sin(),
+                y: 0.0,
+                z: angle.cos(),
+            };
+            let drop = 0.5 - height_above_ground;
+            let ray_angle = angle - (drop / 2.0_f64).atan();
+            let pose = CameraPose {
+                position: Vector3 {
+                    x: 0.25 + normal.x * 0.5,
+                    y: 0.25,
+                    z: 1.0 + normal.z * 0.5,
+                },
+                orientation: Quaternion::from_rotation_vector(Vector3 {
+                    y: std::f64::consts::FRAC_PI_2 - ray_angle,
+                    ..Vector3::ZERO
+                }),
+            };
+            let depth = [(4.0 + drop * drop).sqrt() as f32];
+            for t in 0..4 {
+                map.integrate_depth_with_ground_plane(
+                    t as f64,
+                    intrinsics,
+                    pose,
+                    &depth,
+                    GroundPlane {
+                        normal,
+                        offset: normal.x * 0.25 + normal.z * 1.0,
+                    },
+                )
+                .unwrap();
+            }
+            // Both independently constructed endpoints fall in world cell (14, 10).
+            let value = map.snapshot().occupancy[10 * 20 + 14];
+            if occupied {
+                assert!(value >= 65, "raised obstacle disappeared: {value}");
+            } else {
+                assert!((0..65).contains(&value), "ramp became an obstacle: {value}");
+            }
+        }
+    }
+
+    /// Invalid terrain estimates cannot erase evidence or consume a frame timestamp.
+    #[test]
+    fn invalid_ground_planes_do_not_change_the_map() {
+        let (mut map, intrinsics, pose) = setup();
+        for ground in [
+            GroundPlane {
+                normal: Vector3::ZERO,
+                offset: 0.0,
+            },
+            GroundPlane {
+                normal: Vector3 {
+                    z: -1.0,
+                    ..Vector3::ZERO
+                },
+                offset: 0.0,
+            },
+            GroundPlane {
+                normal: Vector3 {
+                    x: 1.0,
+                    ..Vector3::ZERO
+                },
+                offset: 0.0,
+            },
+            GroundPlane {
+                offset: f64::NAN,
+                ..GroundPlane::default()
+            },
+        ] {
+            assert_eq!(
+                map.integrate_depth_with_ground_plane(0.0, intrinsics, pose, &[2.0], ground),
+                Err(MapError::InvalidGroundPlane)
+            );
+            assert!(map.snapshot().occupancy.iter().all(|&v| v == -1));
+        }
+        map.integrate_depth(0.0, intrinsics, pose, &[2.0]).unwrap();
     }
 }

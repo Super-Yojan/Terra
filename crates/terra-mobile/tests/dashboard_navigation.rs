@@ -3,6 +3,8 @@ use std::time::{Duration, Instant};
 use terra_mobile::{MobileController, default_control_settings};
 use zenoh::Wait;
 #[test]
+/// Routes geometry settings through loopback with fresh disarmed hardware and checks
+/// configuration revision/acknowledgement while all wheel efforts remain zero.
 fn remote_navigation_settings_reach_the_real_controller_without_motor_output() {
     let socket = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let endpoint = format!("tcp/127.0.0.1:{}", socket.local_addr().unwrap().port());

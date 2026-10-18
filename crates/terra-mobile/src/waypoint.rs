@@ -5,14 +5,20 @@ use terra_types::InputError;
 use terra_waypoint::{GeoOrigin, GoalCommand, WaypointConfig, WaypointController};
 
 #[derive(Clone, Copy, Debug, uniffi::Record)]
+/// Local tangent-plane point relative to a WGS84 origin.
 pub struct TangentMetres {
+    /// Distance north of the origin, metres (+X).
     pub north: f64,
+    /// Distance west of the origin, metres (+Y).
     pub west: f64,
 }
 
 #[derive(Clone, Copy, Debug, uniffi::Record)]
+/// WGS84 point in decimal degrees.
 pub struct GeographicPosition {
+    /// WGS84 latitude, decimal degrees.
     pub latitude: f64,
+    /// WGS84 longitude, decimal degrees.
     pub longitude: f64,
 }
 
@@ -30,6 +36,8 @@ fn geographic_range(latitude: f64, longitude: f64) -> Result<(), ControllerError
 
 /// Project a WGS84 point into the follower frame: `north` is +x, `west` is +y.
 #[uniffi::export]
+/// Inputs are decimal degrees. Returns `InvalidInput` for nonfinite or invalid
+/// coordinates (latitude must lie in ±85°, longitude in ±180°).
 pub fn tangent_metres(
     origin_latitude: f64,
     origin_longitude: f64,
@@ -44,6 +52,8 @@ pub fn tangent_metres(
 
 /// Inverse of [`tangent_metres`]. A map tap in north/west metres becomes the goal coordinate.
 #[uniffi::export]
+/// Origin coordinates are decimal degrees. Rejects nonfinite metre offsets or
+/// invalid geographic coordinates with `InvalidInput`.
 pub fn geographic_position(
     origin_latitude: f64,
     origin_longitude: f64,
@@ -63,13 +73,21 @@ pub fn geographic_position(
 }
 
 #[derive(Clone, Debug, uniffi::Record)]
+/// Waypoint speed, heading, slowing, and arrival parameters.
 pub struct WaypointSettings {
+    /// Cruise forward speed, m/s.
     pub cruise: f64,
+    /// Heading-error proportional gain, per second.
     pub yaw_gain: f64,
+    /// Maximum yaw-rate magnitude, rad/s.
     pub max_yaw_rate: f64,
+    /// Position arrival tolerance, metres.
     pub arrive_radius: f64,
+    /// Final heading tolerance, radians.
     pub align_yaw: f64,
+    /// Distance over which forward speed tapers, metres.
     pub slow_radius: f64,
+    /// Heading-error threshold for permitting forward travel, radians.
     pub heading_gate: f64,
 }
 
@@ -88,6 +106,7 @@ impl WaypointSettings {
 }
 
 #[uniffi::export]
+/// Return the portable waypoint follower defaults.
 pub fn default_waypoint_settings() -> WaypointSettings {
     let config = WaypointConfig::default();
     WaypointSettings {
@@ -102,23 +121,38 @@ pub fn default_waypoint_settings() -> WaypointSettings {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, uniffi::Enum)]
+/// Lifecycle phase reported by the phone waypoint follower.
 pub enum WaypointPhase {
+    /// No active goal; requested motion is zero.
     Idle,
+    /// Follower is approaching the goal or aligning to its requested heading.
     Active,
+    /// Goal position and any requested final heading have been reached.
     Arrived,
 }
 
 #[derive(Clone, Debug, uniffi::Record)]
+/// Velocity intent and goal status from one waypoint-follower evaluation.
 pub struct WaypointStep {
+    /// Requested body forward speed, m/s.
     pub forward: f64,
+    /// Requested body yaw rate, rad/s.
     pub yaw_rate: f64,
+    /// Distance to the goal, metres.
     pub distance: f64,
+    /// Goal lifecycle phase.
     pub phase: WaypointPhase,
+    /// Follower-assigned goal identifier.
     pub goal_id: u64,
+    /// Goal north coordinate relative to the origin, metres.
     pub local_x: f64,
+    /// Goal west coordinate relative to the origin, metres.
     pub local_y: f64,
+    /// WGS84 latitude, decimal degrees.
     pub latitude: Option<f64>,
+    /// WGS84 longitude, decimal degrees.
     pub longitude: Option<f64>,
+    /// Optional caller-provided goal correlation token.
     pub token: Option<String>,
 }
 
@@ -145,6 +179,7 @@ impl From<terra_waypoint::WaypointOutput> for WaypointStep {
 }
 
 #[derive(uniffi::Object)]
+/// Mutex-protected geographic waypoint follower; does not directly drive motors.
 pub struct MobileWaypoint {
     follower: Mutex<WaypointController>,
 }
@@ -152,6 +187,8 @@ pub struct MobileWaypoint {
 #[uniffi::export]
 impl MobileWaypoint {
     #[uniffi::constructor]
+    /// Construct an idle follower with validated settings.
+    /// Returns `InvalidInput` for invalid configuration.
     pub fn new(settings: WaypointSettings) -> Result<Arc<Self>, ControllerError> {
         Ok(Arc::new(Self {
             follower: Mutex::new(WaypointController::new(settings.config())?),
@@ -159,6 +196,8 @@ impl MobileWaypoint {
     }
 
     /// Latitude and longitude of the pose origin. Geographic goals are measured from here.
+    /// Coordinates are decimal degrees; returns `InvalidInput` for invalid origin
+    /// coordinates and `Internal` for a poisoned mutex.
     pub fn set_origin(&self, latitude: f64, longitude: f64) -> Result<(), ControllerError> {
         self.follower
             .lock()
@@ -169,6 +208,11 @@ impl MobileWaypoint {
 
     /// Latch one WGS84 goal. `half_extent` is how far from the origin, in metres, a goal may lie.
     /// Returns false when the point is outside that square or the origin has not been set.
+    /// Coordinates are decimal degrees and optional final yaw is radians. Optional
+    /// tokens contain 1..=64 ASCII alphanumeric or `._:-` bytes. Callers must validate
+    /// geographic bounds and final yaw: this method does not enforce them.
+    /// Returns `InvalidInput` for invalid tokens or nonpositive/nonfinite extent,
+    /// and `Internal` for a poisoned mutex. Nonfinite projected coordinates return false.
     pub fn set_goal(
         &self,
         latitude: f64,
@@ -202,6 +246,8 @@ impl MobileWaypoint {
             .map_err(ControllerError::from)
     }
 
+    /// Clear the active goal so subsequent steps return idle motion.
+    /// Returns `Internal` for a poisoned mutex.
     pub fn cancel(&self) -> Result<(), ControllerError> {
         self.follower
             .lock()
@@ -211,6 +257,8 @@ impl MobileWaypoint {
     }
 
     /// Rover pose in the origin frame: `x` metres north, `y` metres west, `yaw` radians from north.
+    /// Returns a velocity request and copied goal status; does not advance a clock
+    /// or actuate hardware. Returns `Internal` for a poisoned mutex.
     pub fn step(&self, x: f64, y: f64, yaw: f64) -> Result<WaypointStep, ControllerError> {
         let follower = self
             .follower
@@ -220,11 +268,14 @@ impl MobileWaypoint {
     }
 }
 
+/// Deterministic contract and regression scenarios for this module.
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
+    /// Sets a geographic goal north of the origin, checks forward steering and goal metadata,
+    /// then cancels and checks idle zero motion.
     fn phone_facade_steers_toward_a_lat_lon_north_of_the_origin() {
         let follower = MobileWaypoint::new(default_waypoint_settings()).unwrap();
         follower.set_origin(38.8297, -77.3075).unwrap();
@@ -249,6 +300,7 @@ mod tests {
     }
 
     #[test]
+    /// Projects a nearby WGS84 point into north/west metres and checks inverse projection within 1e-9 degrees.
     fn map_tap_round_trips_to_the_same_latitude() {
         let projected = tangent_metres(38.8297, -77.3075, 38.82981, -77.3075).unwrap();
         assert!(projected.north > 12.0 && projected.west.abs() < 1e-6);

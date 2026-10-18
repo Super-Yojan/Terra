@@ -13,10 +13,15 @@ use std::{
 use zenoh::Wait;
 const LEASE: Duration = Duration::from_millis(250);
 #[derive(Debug)]
+/// Endpoint validation, command admission, or Zenoh session failure.
 pub enum TransportError {
+    /// Endpoint or key prefix violates the transport configuration contract.
     InvalidSettings,
+    /// Velocity, action topic, JSON, or payload size is invalid.
     InvalidTarget,
+    /// The connection worker has stopped or disconnect was requested.
     Closed,
+    /// Zenoh, worker creation, or bounded action-queue failure, with diagnostic text.
     Network(String),
 }
 impl std::fmt::Display for TransportError {
@@ -36,6 +41,20 @@ struct State {
     shutdown: bool,
     error: Option<String>,
 }
+/// Thread-backed client for one rover’s leased velocity intent and latest telemetry.
+/// The worker publishes targets at 20 Hz, defaulting to zero after 250 ms without
+/// a refresh. Actions are queued separately. Dropping the client joins the worker.
+///
+/// ```no_run
+/// # fn main() -> Result<(), terra_transport::TransportError> {
+/// let rover = terra_transport::RoverConnection::connect(
+///     "tcp/127.0.0.1:7447", "terra/rover", 9,
+/// )?;
+/// rover.set_target(0.2, 0.0)?;
+/// rover.disconnect();
+/// # Ok(())
+/// # }
+/// ```
 pub struct RoverConnection {
     state: Arc<Mutex<State>>,
     depth: Arc<Mutex<DepthInbox>>,
@@ -65,24 +84,43 @@ fn payload(linear: f64, angular: f64) -> Result<String, TransportError> {
 /// pixel-centre `(width/2, height/2)` minus 0.5.
 #[derive(Clone, Debug)]
 pub struct RemoteDepthFrame {
+    /// Source depth-frame sequence number.
     pub sequence: u64,
+    /// Exposure time in source-clock seconds.
     pub timestamp: f64,
+    /// Depth image width, pixels.
     pub width: u32,
+    /// Depth image height, pixels.
     pub height: u32,
+    /// Horizontal focal length, pixels (equal to `fy` for this wire format).
     pub fx: f64,
+    /// Vertical focal length, pixels, derived from vertical field of view.
     pub fy: f64,
+    /// Horizontal principal point, integer-pixel coordinates: width / 2 − 0.5.
     pub cx: f64,
+    /// Vertical principal point, integer-pixel coordinates: height / 2 − 0.5.
     pub cy: f64,
+    /// Optical camera origin world X, metres.
     pub camera_x: f64,
+    /// Optical camera origin world Y, metres.
     pub camera_y: f64,
+    /// Optical camera origin world Z, metres.
     pub camera_z: f64,
+    /// Optical-camera-to-world quaternion X component, as received.
     pub quaternion_x: f64,
+    /// Optical-camera-to-world quaternion Y component, as received.
     pub quaternion_y: f64,
+    /// Optical-camera-to-world quaternion Z component, as received.
     pub quaternion_z: f64,
+    /// Optical-camera-to-world quaternion scalar component, as received.
     pub quaternion_w: f64,
+    /// Body world X, metres; falls back to camera X if body pose is omitted.
     pub body_x: f64,
+    /// Body world Y, metres; falls back to camera Y if body pose is omitted.
     pub body_y: f64,
+    /// Body heading from world +X toward +Y, radians; optical-forward fallback if omitted.
     pub body_yaw: f64,
+    /// Row-major little-endian decoded axial depths, metres; NaNs are preserved.
     pub depth_metres: Vec<f32>,
 }
 struct DepthInbox {
@@ -108,6 +146,13 @@ fn optical_forward_yaw(x: f64, y: f64, z: f64, w: f64) -> Option<f64> {
     (fx.is_finite() && fy.is_finite()).then_some(fy.atan2(fx))
 }
 /// Decode a Terra depth packet. Frames without an exposure camera pose return `None`.
+/// The packet is a version 1 JSON header, newline, then exactly width × height
+/// little-endian `f32` pixels (`32FC1_LE`). Dimensions must be 1..=2048,
+/// exposure seconds nonnegative, vertical FOV in (0, π) radians, and pose
+/// components finite. Missing body pose falls back to optical-forward heading.
+/// Returns `None` for invalid framing, header, geometry, or pose fallback.
+/// Pixel values and an explicitly supplied camera quaternion are not normalized
+/// or range-checked; NaN depths remain available to downstream filtering.
 pub fn decode_depth_frame(bytes: &[u8]) -> Option<RemoteDepthFrame> {
     let split = bytes.iter().position(|byte| *byte == b'\n')?;
     let header: serde_json::Value = serde_json::from_slice(&bytes[..split]).ok()?;
@@ -190,6 +235,10 @@ pub fn decode_depth_frame(bytes: &[u8]) -> Option<RemoteDepthFrame> {
 }
 impl RoverConnection {
     /// Opens a direct TCP client. Run off the UI thread; connection timeout is 2 seconds.
+    /// Requires a valid `tcp/` or `tls/` endpoint of at most 512 bytes and a
+    /// non-wildcard Zenoh key prefix of at most 256 bytes. Uses explicit discovery-free
+    /// client configuration. Returns `InvalidSettings` for validation failure or
+    /// `Network` for configuration, connection, or worker creation failure.
     pub fn connect(endpoint: &str, prefix: &str, rover_id: u64) -> Result<Self, TransportError> {
         validate(endpoint, prefix)?;
         let mut config = zenoh::Config::default();
@@ -347,6 +396,9 @@ impl RoverConnection {
         self.depth.lock().unwrap().latest.take()
     }
     /// Refresh the 250 ms command lease. Targets are limited to ±2 m/s and ±2 rad/s.
+    /// Returns `InvalidTarget` for nonfinite/out-of-range velocities and revokes
+    /// the previous target; returns `Closed` when the worker is shutting down.
+    /// Success refreshes intent only and does not guarantee rover motion.
     pub fn set_target(&self, linear: f64, angular: f64) -> Result<(), TransportError> {
         // Invalid targets revoke the previous lease immediately.
         if let Err(error) = payload(linear, angular) {
@@ -360,6 +412,13 @@ impl RoverConnection {
         state.target = Some((linear, angular, Instant::now()));
         Ok(())
     }
+    /// Queue an action suffix and JSON payload for the worker. Accepted suffixes are
+    /// `autonomy`, `safety`, `goal`, `goal/decision`, `search`, `search/action`,
+    /// and `search/report/ack`; JSON must fit 2048 bytes.
+    ///
+    /// # Errors
+    /// Returns `InvalidTarget` for topic/JSON/size rejection, `Closed` after shutdown,
+    /// or `Network` when the 64-action queue is full. Success means queued, not delivered.
     pub fn send_action(&self, kind: &str, payload: &str) -> Result<(), TransportError> {
         if !matches!(
             kind,
@@ -385,6 +444,10 @@ impl RoverConnection {
         state.actions.push_back((kind.into(), payload.into()));
         Ok(())
     }
+    /// Return cached autonomy JSON augmented with receipt `age` seconds, optional
+    /// search state and `search_age`, and reports received within 2.5 seconds.
+    /// Malformed authority text falls back to an object; a non-object yields `{}`.
+    /// Missing receipt times are null. This is telemetry, not an authority decision.
     pub fn autonomy_status(&self) -> String {
         let state = self.state.lock().unwrap();
         let mut value: serde_json::Value =
@@ -408,6 +471,8 @@ impl RoverConnection {
         );
         value.to_string()
     }
+    /// Return a human-readable worker error, disconnection, or session/frame-count summary.
+    /// An open session does not imply that the rover accepted the latest command.
     pub fn status(&self) -> String {
         let state = self.state.lock().unwrap();
         if let Some(error) = &state.error {
@@ -420,6 +485,8 @@ impl RoverConnection {
         }
     }
     /// Worker sends zero before closing. Rover-side 500 ms watchdog remains independent.
+    /// Requests shutdown and joins the worker; repeated calls are harmless.
+    /// The zero publish is best effort and can fail with the network.
     pub fn disconnect(&self) {
         self.state.lock().unwrap().shutdown = true;
         if let Some(worker) = self.worker.lock().unwrap().take() {
@@ -432,10 +499,12 @@ impl Drop for RoverConnection {
         self.disconnect();
     }
 }
+/// Deterministic contract and regression scenarios for this module.
 #[cfg(test)]
 mod tests {
     use super::*;
     #[test]
+    /// Checks TCP/topic admission, wildcard rejection, velocity JSON shape, and rejection of NaN or excessive speed.
     fn validates_topic_endpoint_and_target_contract() {
         assert!(validate("tcp/127.0.0.1:7447", "terra/rover").is_ok());
         assert!(validate("udp/127.0.0.1:7447", "terra/rover").is_err());
@@ -447,6 +516,8 @@ mod tests {
     }
     #[test]
     #[ignore = "requires local TCP sockets"]
+    /// Uses a loopback peer to observe rover-scoped motion, expiry of the 250 ms lease,
+    /// then a final zero on disconnect. Ignored by default because local TCP sockets are required.
     fn publishes_selected_rover_expires_lease_and_disconnects_with_zero() {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let endpoint = format!("tcp/127.0.0.1:{}", listener.local_addr().unwrap().port());
@@ -503,6 +574,8 @@ mod tests {
         assert_eq!(last.unwrap()["linear"], 0.0);
         server.close().wait().unwrap();
     }
+    /// Build a one-pixel version 1 little-endian packet with explicit exposure, optical pose,
+    /// and body pose; `sequence` and axial depth in metres vary across scenarios.
     fn posed_depth_packet(sequence: u64, metres: f32) -> Vec<u8> {
         let header = serde_json::json!({
             "rover_id": 9,
@@ -525,6 +598,8 @@ mod tests {
         bytes
     }
     #[test]
+    /// Checks exposure-time/pose/intrinsic decoding, missing-pose rejection, and optical-forward
+    /// body-yaw fallback while preserving NaN depth pixels.
     fn decodes_exposure_pose_and_rejects_frames_without_it() {
         let frame = decode_depth_frame(&posed_depth_packet(3, 2.0)).unwrap();
         assert_eq!(frame.sequence, 3);
@@ -562,6 +637,8 @@ mod tests {
     }
     #[test]
     #[ignore = "requires local TCP sockets"]
+    /// Publishes successive one-pixel depth packets over loopback and verifies consume-once
+    /// retrieval plus frame-count status. Ignored by default because TCP sockets are required.
     fn returns_each_posed_depth_frame_once() {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let endpoint = format!("tcp/127.0.0.1:{}", listener.local_addr().unwrap().port());
@@ -580,6 +657,7 @@ mod tests {
         let server = zenoh::open(config).wait().unwrap();
         let client = RoverConnection::connect(&endpoint, "terra/rover", 9).unwrap();
         // The subscriber is declared on the worker thread after connect returns, so publish until it is live.
+        // Republish until the asynchronous subscriber returns the requested sequence, bounded to three seconds.
         let wait_for = |sequence: u64, metres: f32| {
             let deadline = Instant::now() + Duration::from_secs(3);
             while Instant::now() < deadline {
@@ -618,6 +696,8 @@ mod tests {
 mod control_plane;
 pub use control_plane::ControlPlane;
 /// Bounded intent inbox with protected distinct emergency stops.
+/// Tuple of topic suffix, uninterpreted payload bytes, and local receipt instant.
+/// Consumers validate payloads and calculate age from the instant before acting.
 pub type ControlAction = (String, Vec<u8>, Instant);
 fn stop_token(a: &ControlAction) -> Option<String> {
     if a.0 == "hardware" {
@@ -643,6 +723,11 @@ fn stop_token(a: &ControlAction) -> Option<String> {
 fn is_stop(a: &ControlAction) -> bool {
     stop_token(a).is_some()
 }
+/// Append intent to a queue bounded to 256 entries, preserving distinct stops.
+/// `kind` is a topic suffix; payload validation remains the consumer’s job.
+/// Recognized safety stops and hardware disarms deduplicate by stop token.
+/// When full, evicts the first non-stop; if all queued entries are stops, drops
+/// the new action. `received` is the local monotonic receipt instant.
 pub fn enqueue_control_action(
     q: &mut std::collections::VecDeque<ControlAction>,
     kind: String,
@@ -663,6 +748,8 @@ pub fn enqueue_control_action(
     q.push_back(action);
 }
 /// A stop dominates every other request received in the same control tick, including reset.
+/// Empties the queue and stably partitions non-stops before recognized stops.
+/// Receipt timestamps and relative ordering within each partition are preserved.
 pub fn drain_control_actions(
     q: &mut std::collections::VecDeque<ControlAction>,
 ) -> Vec<ControlAction> {
@@ -672,6 +759,9 @@ pub fn drain_control_actions(
 }
 
 /// Operator intents only. Sensor evidence is supplied by the onboard adapter.
+/// Match the explicit autonomy, safety, goal, teleop, hardware, navigation-settings,
+/// and search intent suffixes. Returns false for sensor or telemetry topics;
+/// this allowlist alone does not validate a payload or grant authority.
 pub fn is_control_topic(kind: &str) -> bool {
     matches!(
         kind,

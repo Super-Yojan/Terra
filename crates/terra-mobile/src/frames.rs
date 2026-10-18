@@ -10,9 +10,13 @@ use std::sync::{Arc, Mutex};
 use terra_types::{InputError, Quaternion, Vector3};
 
 #[derive(Clone, Copy, Debug, PartialEq, uniffi::Record)]
+/// Three-axis result in the frame and units specified by the producing function.
 pub struct AxisSample {
+    /// X component in the producing function’s frame and units.
     pub x: f64,
+    /// Y component in the producing function’s frame and units.
     pub y: f64,
+    /// Z component in the producing function’s frame and units.
     pub z: f64,
 }
 
@@ -30,6 +34,7 @@ fn finite3(x: f64, y: f64, z: f64) -> Result<(), ControllerError> {
 /// Core Motion and Android `SensorManager` use this device frame. The returned
 /// sample is `(forward, left, up)`.
 #[uniffi::export]
+/// Rejects nonfinite components with `InvalidInput`; preserves the input vector units.
 pub fn device_vector_to_body(x: f64, y: f64, z: f64) -> Result<AxisSample, ControllerError> {
     finite3(x, y, z)?;
     let rotated = phone_to_body().rotate(Vector3 { x, y, z });
@@ -41,13 +46,21 @@ pub fn device_vector_to_body(x: f64, y: f64, z: f64) -> Result<AxisSample, Contr
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, uniffi::Record)]
+/// Position in Z-up world metres and orientation of the returned body or optical frame.
 pub struct BodyPose {
+    /// X component; world metres for poses and plant state.
     pub x: f64,
+    /// Y component; world metres for poses and plant state.
     pub y: f64,
+    /// Z component; world metres for poses.
     pub z: f64,
+    /// Returned frame-to-world quaternion X component.
     pub quaternion_x: f64,
+    /// Returned frame-to-world quaternion Y component.
     pub quaternion_y: f64,
+    /// Returned frame-to-world quaternion Z component.
     pub quaternion_z: f64,
+    /// Returned frame-to-world quaternion scalar component.
     pub quaternion_w: f64,
 }
 
@@ -93,6 +106,8 @@ fn camera_quaternion(
 /// `quaternion_*` rotates camera vectors into the Y-up world. Translation is
 /// the camera origin in that world, metres.
 #[uniffi::export]
+/// Returns `InvalidInput` for nonfinite position or an invalid quaternion;
+/// normalizes valid orientations before conversion.
 pub fn y_up_camera_to_body_pose(
     x: f64,
     y: f64,
@@ -124,6 +139,7 @@ pub fn y_up_camera_to_body_pose(
 
 /// Heading of a body quaternion from [`y_up_camera_to_body_pose`], radians from +X.
 #[uniffi::export]
+/// Normalizes the quaternion; returns `InvalidInput` if normalization fails.
 pub fn body_yaw(
     quaternion_x: f64,
     quaternion_y: f64,
@@ -149,6 +165,8 @@ pub fn body_yaw(
 /// Same camera pose, expressed as an optical frame (X right, Y down, Z forward)
 /// for `MobileOccupancyMap`.
 #[uniffi::export]
+/// Position is world metres. Returns `InvalidInput` for nonfinite position or
+/// an invalid quaternion; normalizes the returned optical orientation.
 pub fn y_up_camera_to_optical_pose(
     x: f64,
     y: f64,
@@ -181,6 +199,8 @@ pub fn y_up_camera_to_optical_pose(
 /// First tracked camera height is shifted onto `reference` metres (0.5 for a
 /// phone held as the rover origin). Later samples keep that offset.
 #[uniffi::export]
+/// Returns the existing finite offset unchanged, or `reference - position_z`.
+/// Returns `InvalidInput` if any supplied value is nonfinite.
 pub fn latch_ground_offset(
     latched: Option<f64>,
     position_z: f64,
@@ -214,6 +234,7 @@ struct VelocityFilter {
 #[uniffi::export]
 impl PoseVelocityFilter {
     #[uniffi::constructor]
+    /// Construct an empty velocity filter; the first tracked sample establishes a baseline.
     pub fn new() -> Arc<Self> {
         Arc::new(Self {
             state: Mutex::new(VelocityFilter {
@@ -223,6 +244,7 @@ impl PoseVelocityFilter {
         })
     }
 
+    /// Discard pose history and filtered velocity. Returns `Internal` for a poisoned mutex.
     pub fn reset(&self) -> Result<(), ControllerError> {
         let mut state = self.state.lock().map_err(|_| ControllerError::Internal)?;
         state.previous = None;
@@ -232,6 +254,9 @@ impl PoseVelocityFilter {
 
     /// World-frame velocity in m/s. `None` until two tracked poses land inside
     /// the 200 ms window.
+    /// Positions are world metres and timestamp is seconds. Untracked samples
+    /// clear history before validating coordinates. Tracked nonfinite inputs return
+    /// `InvalidInput`; a poisoned mutex returns `Internal`.
     pub fn push(
         &self,
         x: f64,
@@ -280,19 +305,31 @@ impl PoseVelocityFilter {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, uniffi::Record)]
+/// Planar simulated rover state after a fixed 10 ms plant tick.
 pub struct PlantState {
+    /// Body forward speed, m/s.
     pub forward: f64,
+    /// Body yaw rate, rad/s.
     pub yaw_rate: f64,
+    /// World heading from +X toward +Y, radians.
     pub yaw: f64,
+    /// X component; world metres for poses and plant state.
     pub x: f64,
+    /// Y component; world metres for poses and plant state.
     pub y: f64,
     /// Body velocity expressed in the Z-up world, m/s.
     pub velocity_x: f64,
+    /// World +Y velocity, m/s.
     pub velocity_y: f64,
+    /// Body forward acceleration, m/s².
     pub acceleration_forward: f64,
+    /// Returned frame-to-world quaternion X component.
     pub quaternion_x: f64,
+    /// Returned frame-to-world quaternion Y component.
     pub quaternion_y: f64,
+    /// Returned frame-to-world quaternion Z component.
     pub quaternion_z: f64,
+    /// Returned frame-to-world quaternion scalar component.
     pub quaternion_w: f64,
 }
 
@@ -347,6 +384,7 @@ pub struct SimulatedPlant {
 #[uniffi::export]
 impl SimulatedPlant {
     #[uniffi::constructor]
+    /// Construct a stationary simulated rover at world (0, 0) with zero heading.
     pub fn new() -> Arc<Self> {
         Arc::new(Self {
             plant: Mutex::new(Plant {
@@ -360,6 +398,7 @@ impl SimulatedPlant {
         })
     }
 
+    /// Restore the stationary origin state. Returns `Internal` for a poisoned mutex.
     pub fn reset(&self) -> Result<(), ControllerError> {
         *self.plant.lock().map_err(|_| ControllerError::Internal)? = Plant {
             forward: 0.0,
@@ -372,6 +411,8 @@ impl SimulatedPlant {
         Ok(())
     }
 
+    /// Copy the current simulated pose and sensor state without advancing time.
+    /// Returns `Internal` for a poisoned mutex.
     pub fn state(&self) -> Result<PlantState, ControllerError> {
         Ok(self
             .plant
@@ -380,6 +421,9 @@ impl SimulatedPlant {
             .state())
     }
 
+    /// Advance the plant exactly 0.01 s and return the resulting state.
+    /// Efforts must be finite; this simulator does not clamp their magnitude.
+    /// Returns `InvalidInput` for nonfinite efforts or `Internal` for a poisoned mutex.
     pub fn step(&self, left_effort: f64, right_effort: f64) -> Result<PlantState, ControllerError> {
         if !left_effort.is_finite() || !right_effort.is_finite() {
             return Err(InputError::NonFinite.into());
@@ -391,26 +435,43 @@ impl SimulatedPlant {
 }
 
 #[derive(Clone, Debug, PartialEq, uniffi::Record)]
+/// Synthetic axial depth image with optical intrinsics and camera-to-world pose.
 pub struct SimulatedDepthFrame {
+    /// Depth image width, pixels.
     pub width: u32,
+    /// Depth image height, pixels.
     pub height: u32,
+    /// Horizontal focal length, pixels.
     pub fx: f64,
+    /// Vertical focal length, pixels.
     pub fy: f64,
+    /// Horizontal principal point in integer-pixel coordinates.
     pub cx: f64,
+    /// Vertical principal point in integer-pixel coordinates.
     pub cy: f64,
+    /// Camera origin world +X coordinate, metres.
     pub camera_x: f64,
+    /// Camera origin world +Y coordinate, metres.
     pub camera_y: f64,
+    /// Camera origin world +Z coordinate, metres.
     pub camera_z: f64,
+    /// Returned frame-to-world quaternion X component.
     pub quaternion_x: f64,
+    /// Returned frame-to-world quaternion Y component.
     pub quaternion_y: f64,
+    /// Returned frame-to-world quaternion Z component.
     pub quaternion_z: f64,
+    /// Returned frame-to-world quaternion scalar component.
     pub quaternion_w: f64,
+    /// Row-major axial optical depths in metres; length must equal width × height.
     pub depth_metres: Vec<f32>,
 }
 
 /// Axial depths of a square room whose walls sit at ±6 m, from a camera 0.5 m
 /// above the floor looking along the rover heading. 81 columns, one row.
 #[uniffi::export]
+/// `x` and `y` are world metres, `yaw` is radians. Rays without a forward
+/// wall intersection remain NaN. Returns `InvalidInput` for nonfinite inputs.
 pub fn simulated_room_depth(
     x: f64,
     y: f64,
@@ -550,15 +611,18 @@ fn quaternion_from_matrix(m: [[f64; 3]; 3]) -> Quaternion {
     q.normalized().expect("rotation matrix")
 }
 
+/// Deterministic contract and regression scenarios for this module.
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// Assert equality of deterministic frame/plant results within an absolute tolerance of 1e-9.
     fn approx(a: f64, b: f64) {
         assert!((a - b).abs() < 1e-9, "{a} != {b}");
     }
 
     #[test]
+    /// Checks device top/left/up basis vectors map into forward/left/up body axes and rejects NaN input.
     fn device_axes_match_the_flat_phone_mount() {
         let forward = device_vector_to_body(0.0, 1.0, 0.0).unwrap();
         approx(forward.x, 1.0);
@@ -573,6 +637,7 @@ mod tests {
     }
 
     #[test]
+    /// Checks all Y-up world basis images and the resulting Z-up position coordinates.
     fn yup_basis_lands_on_the_robotics_basis() {
         let q = yup_to_zup();
         let x = q.rotate(Vector3 {
@@ -604,6 +669,7 @@ mod tests {
     }
 
     #[test]
+    /// Checks zero and quarter-turn heading extraction, then rejects a zero quaternion.
     fn body_yaw_reads_the_forward_axis() {
         approx(body_yaw(0.0, 0.0, 0.0, 1.0).unwrap(), 0.0);
         let half = FRAC_PI_2 * 0.5;
@@ -615,6 +681,7 @@ mod tests {
     }
 
     #[test]
+    /// Converts an identity camera pose, checks translated world axes and unit quaternion norm, and rejects an invalid quaternion.
     fn identity_camera_pose_is_a_unit_body_rotation() {
         let pose = y_up_camera_to_body_pose(1.0, 2.0, 3.0, 0.0, 0.0, 0.0, 1.0).unwrap();
         approx(pose.x, -3.0);
@@ -632,6 +699,7 @@ mod tests {
     }
 
     #[test]
+    /// Checks first-sample suppression, the 30 ms low-pass response, and history clearing across tracking loss.
     fn velocity_filter_ramps_then_drops_on_tracking_loss() {
         let filter = PoseVelocityFilter::new();
         assert!(filter.push(0.0, 0.0, 0.0, 0.0, true).unwrap().is_none());
@@ -643,6 +711,7 @@ mod tests {
     }
 
     #[test]
+    /// Checks that the first camera height establishes a fixed offset onto a 0.5 m ground reference.
     fn ground_offset_locks_the_first_camera_height_to_half_a_metre() {
         let offset = latch_ground_offset(None, 1.2, 0.5).unwrap();
         approx(offset, -0.7);
@@ -651,6 +720,7 @@ mod tests {
     }
 
     #[test]
+    /// Applies equal positive efforts for one 10 ms plant tick and checks acceleration, speed, position, and zero turning.
     fn plant_coasts_forward_when_both_efforts_are_positive() {
         let plant = SimulatedPlant::new();
         let before = plant.state().unwrap();
@@ -664,6 +734,7 @@ mod tests {
     }
 
     #[test]
+    /// Checks the synthetic 81×1 depth image and six-metre center ray at zero and quarter-turn headings.
     fn simulated_room_center_ray_hits_the_north_wall() {
         let frame = simulated_room_depth(0.0, 0.0, 0.0).unwrap();
         assert_eq!((frame.width, frame.height), (81, 1));

@@ -8,17 +8,24 @@
 use serde::Serialize;
 use terra_types::InputError;
 
+/// Maximum accepted goal JSON size in bytes, including whitespace.
 pub const MAX_GOAL_BYTES: usize = 2048;
 const METRES_PER_DEGREE: f64 = 40_075_016.686 / 360.0;
 
 /// Map origin. Goals in WGS84 are projected into robotics metres: +x north, +y west.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GeoOrigin {
+    /// Origin latitude in degrees, validated within `[-85, 85]` by [`Self::new`].
     pub latitude: f64,
+    /// Origin longitude in degrees, validated within `[-180, 180]` by [`Self::new`].
     pub longitude: f64,
 }
 
 impl GeoOrigin {
+    /// Construct a projection origin from finite geographic degrees.
+    ///
+    /// Returns [`InputError::OutOfRange`] for non-finite values or latitude outside
+    /// `[-85, 85]` / longitude outside `[-180, 180]`.
     pub fn new(latitude: f64, longitude: f64) -> Result<Self, InputError> {
         if !latitude.is_finite()
             || !longitude.is_finite()
@@ -33,6 +40,10 @@ impl GeoOrigin {
         })
     }
 
+    /// Project geographic degrees into `(north, west)` metres relative to this origin.
+    ///
+    /// Uses a constant metres-per-degree scale and the origin latitude cosine;
+    /// intended for local distances. Inputs are not validated or longitude-wrapped.
     pub fn to_local(self, latitude: f64, longitude: f64) -> (f64, f64) {
         let north = (latitude - self.latitude) * METRES_PER_DEGREE;
         let east =
@@ -41,6 +52,10 @@ impl GeoOrigin {
     }
 
     /// Inverse of [`Self::to_local`]. `x` is metres north, `y` is metres west.
+    /// Return `(latitude, longitude)` in degrees using the same local approximation.
+    ///
+    /// Inputs are not validated and results are not clamped to geographic bounds.
+    /// For a near-zero origin latitude cosine, longitude remains the origin longitude.
     pub fn from_local(self, x: f64, y: f64) -> (f64, f64) {
         let east = -y;
         let latitude = self.latitude + x / METRES_PER_DEGREE;
@@ -54,14 +69,25 @@ impl GeoOrigin {
     }
 }
 
+/// Pursuit speed, heading, and arrival tolerances.
+///
+/// Defaults cruise at 1 m/s with a 0.75 m arrival radius. Validation is performed
+/// by [`WaypointController::new`], not by direct construction.
 #[derive(Clone, Copy, Debug)]
 pub struct WaypointConfig {
+    /// Forward cruise speed in metres/second, in `(0, 5]`.
     pub cruise: f64,
+    /// Positive proportional heading gain in inverse seconds.
     pub yaw_gain: f64,
+    /// Maximum absolute yaw rate in radians/second, in `(0, 5]`.
     pub max_yaw_rate: f64,
+    /// Position arrival tolerance in metres, in `(0, 20]`.
     pub arrive_radius: f64,
+    /// Nonnegative final heading tolerance in radians.
     pub align_yaw: f64,
+    /// Positive distance in metres below which forward intent is reduced.
     pub slow_radius: f64,
+    /// Heading error in radians at which forward intent becomes zero, in `(0, π]`.
     pub heading_gate: f64,
 }
 
@@ -80,6 +106,10 @@ impl Default for WaypointConfig {
 }
 
 impl WaypointConfig {
+    /// Check finite settings, positivity, and the documented upper limits.
+    ///
+    /// Returns [`InputError::InvalidConfiguration`] if any setting is invalid.
+    /// `align_yaw` may be zero; all other settings must be strictly positive.
     pub fn validate(&self) -> Result<(), InputError> {
         let positive = [
             self.cruise,
@@ -105,49 +135,82 @@ impl WaypointConfig {
     }
 }
 
+/// Decoded destination or cancellation request.
+///
+/// Prefer [`decode_goal`] for untrusted inputs. Direct construction bypasses its
+/// geographic, yaw, and token checks; [`WaypointController::accept`] does not repeat all of them.
 #[derive(Clone, Debug, PartialEq)]
 pub enum GoalCommand {
+    /// Clear the active goal and reset its ID to zero.
     Cancel,
+    /// Destination in the origin frame: +x north, +y west, in metres.
     Local {
+        /// Destination north coordinate in metres.
         x: f64,
+        /// Destination west coordinate in metres.
         y: f64,
+        /// Optional final heading in radians from +x toward +y.
         yaw: Option<f64>,
+        /// Optional opaque caller token echoed in status.
         token: Option<String>,
     },
+    /// Geographic destination in degrees, requiring a configured origin.
     Wgs84 {
+        /// Destination latitude in degrees.
         latitude: f64,
+        /// Destination longitude in degrees.
         longitude: f64,
+        /// Optional final heading in radians from +x toward +y.
         yaw: Option<f64>,
+        /// Optional opaque caller token echoed in status.
         token: Option<String>,
     },
 }
 
+/// Instantaneous goal-following state, serialized as a snake-case name.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum GoalState {
+    /// No active goal.
     Idle,
+    /// A goal is latched and position or heading is outside arrival tolerance.
     Active,
+    /// Position and optional final heading satisfy configured arrival tolerances.
     Arrived,
 }
 
+/// Snapshot of the original goal and its instantaneous distance/arrival state.
+///
+/// Optional fields are omitted from JSON when absent. Arrival is recomputed on
+/// each step; it is not latched permanently if the rover later moves away.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct WaypointStatus {
+    /// Current following/arrival state.
     pub state: GoalState,
+    /// Locally assigned nonzero goal ID; zero while idle.
     pub goal_id: u64,
+    /// Optional caller token echoed from the accepted goal.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub token: Option<String>,
+    /// Euclidean distance to the original destination in metres; zero while idle or on invalid pose.
     pub distance: f64,
+    /// Destination north coordinate in metres, or zero while idle.
     pub x: f64,
+    /// Destination west coordinate in metres, or zero while idle.
     pub y: f64,
+    /// Optional final heading in radians; zero faces +x and positive turns toward +y.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub yaw: Option<f64>,
+    /// Original geographic latitude in degrees, absent for local goals.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub latitude: Option<f64>,
+    /// Original geographic longitude in degrees, absent for local goals.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub longitude: Option<f64>,
 }
 
 impl WaypointStatus {
+    /// Return the idle snapshot with zero ID, distance, and coordinates and no metadata.
     pub fn idle() -> Self {
         Self {
             state: GoalState::Idle,
@@ -163,10 +226,14 @@ impl WaypointStatus {
     }
 }
 
+/// Velocity intent and original-goal status for downstream planning/control.
 #[derive(Clone, Debug, PartialEq)]
 pub struct WaypointOutput {
+    /// Nonnegative forward velocity intent in metres/second.
     pub linear: f64,
+    /// Signed yaw-rate intent in radians/second; positive turns left.
     pub angular: f64,
+    /// Original destination and arrival state, independent of intermediate route points.
     pub status: WaypointStatus,
 }
 
@@ -180,6 +247,20 @@ struct LatchedGoal {
     longitude: Option<f64>,
 }
 
+/// Stateful goal holder with stateless pose-to-velocity pursuit.
+///
+/// Construction starts idle without a geographic origin. Local coordinates are
+/// metres north/west, yaw is radians from north toward west. This controller does
+/// not check obstacles or physical motor authorization.
+///
+/// ```
+/// use terra_waypoint::{decode_goal, GoalState, WaypointConfig, WaypointController};
+/// let mut controller = WaypointController::new(WaypointConfig::default()).unwrap();
+/// let goal = decode_goal(br#"{"frame":"local","x":5,"y":0}"#).unwrap();
+/// assert!(controller.accept(&goal, 20.0).unwrap());
+/// assert!(controller.step(0.0, 0.0, 0.0).linear > 0.0);
+/// assert_eq!(controller.step(5.0, 0.0, 0.0).status.state, GoalState::Arrived);
+/// ```
 pub struct WaypointController {
     config: WaypointConfig,
     origin: Option<GeoOrigin>,
@@ -188,6 +269,8 @@ pub struct WaypointController {
 }
 
 impl WaypointController {
+    /// Construct an idle follower, returning [`InputError::InvalidConfiguration`]
+    /// if the pursuit configuration fails validation.
     pub fn new(config: WaypointConfig) -> Result<Self, InputError> {
         config.validate()?;
         Ok(Self {
@@ -198,6 +281,10 @@ impl WaypointController {
         })
     }
 
+    /// Set the geographic projection origin in degrees.
+    ///
+    /// Returns [`InputError::OutOfRange`] under [`GeoOrigin::new`] rules, preserving
+    /// the prior origin on failure. Already latched goals retain their local coordinates.
     pub fn set_origin(&mut self, latitude: f64, longitude: f64) -> Result<(), InputError> {
         self.origin = Some(GeoOrigin::new(latitude, longitude)?);
         Ok(())
@@ -205,6 +292,13 @@ impl WaypointController {
 
     /// Latch a decoded goal. `Ok(false)` leaves the current goal in place
     /// (no origin for a geographic goal, or the point is outside `half_extent`).
+    /// Accept a goal inside the inclusive square `[-half_extent, half_extent]` metres.
+    ///
+    /// Returns [`InputError::InvalidConfiguration`] for a non-finite/nonpositive extent.
+    /// Returns `Ok(false)` without replacing the goal if geographic origin is missing
+    /// or projected/local coordinates are non-finite or outside the square. Cancellation
+    /// returns `Ok(true)` and clears the goal/ID. Each accepted destination advances
+    /// the saturating nonzero ID. Yaw and token validity are assumed from decoding.
     pub fn accept(&mut self, command: &GoalCommand, half_extent: f64) -> Result<bool, InputError> {
         if !half_extent.is_finite() || half_extent <= 0.0 {
             return Err(InputError::InvalidConfiguration);
@@ -256,12 +350,18 @@ impl WaypointController {
         Ok(true)
     }
 
+    /// Clear the destination and reset its ID to zero, preserving the origin.
     pub fn cancel(&mut self) {
         self.goal = None;
         self.goal_id = 0;
     }
 
     /// Follow an intermediate route point without replacing the original goal or its status.
+    /// Return `(forward m/s, yaw rad/s)` toward an intermediate local point.
+    ///
+    /// Pose and target coordinates are metres; yaw is radians. Arrival tolerance is
+    /// reduced to at most 0.05 m and no final-heading alignment is requested. Invalid
+    /// pose/distance yields zero intent. This does not require a latched goal.
     pub fn route_intent(
         &self,
         x: f64,
@@ -280,6 +380,11 @@ impl WaypointController {
 
     /// `x` and `y` are the rover pose in the origin frame, metres. `yaw` is radians, 0 facing +x.
     /// Compute local goal-following intent; downstream planning checks obstacles.
+    /// Return zero intent and idle status without a goal. Otherwise turn toward the
+    /// goal, slow near it, and align any requested final yaw inside the arrival radius.
+    ///
+    /// A non-finite pose/distance returns zero intent with active status and zero
+    /// reported distance. Finite goal yaw is required; use [`decode_goal`] to validate it.
     pub fn step(&self, x: f64, y: f64, yaw: f64) -> WaypointOutput {
         let Some(goal) = &self.goal else {
             return WaypointOutput {
@@ -385,6 +490,14 @@ fn pursuit(
     }
 }
 
+/// Decode a strict JSON object into a validated destination or cancellation.
+///
+/// Accepts only `{"cancel":true}`, a `local` frame with finite `x`/`y` of at most
+/// 20,000 m magnitude, or a `wgs84` frame with latitude `[-85,85]` and longitude
+/// `[-180,180]` degrees. Optional yaw is finite radians of magnitude at most one
+/// turn and is wrapped to `[-π,π)`. Optional tokens contain 1–64 ASCII alphanumeric
+/// characters or `.`, `_`, `:`, `-`. Optional nulls mean absent. Empty, oversized,
+/// malformed, unknown-field, and otherwise invalid messages return `None`.
 pub fn decode_goal(bytes: &[u8]) -> Option<GoalCommand> {
     if bytes.is_empty() || bytes.len() > MAX_GOAL_BYTES {
         return None;
@@ -436,6 +549,10 @@ pub fn decode_goal(bytes: &[u8]) -> Option<GoalCommand> {
     }
 }
 
+/// Serialize a status snapshot to JSON bytes, omitting absent optional fields.
+///
+/// Returns `None` on serialization failure or size above 65,536 bytes. This function
+/// does not validate status semantics or numeric finiteness before serialization.
 pub fn encode_status(status: &WaypointStatus) -> Option<Vec<u8>> {
     let bytes = serde_json::to_vec(status).ok()?;
     (bytes.len() <= 65_536).then_some(bytes)
@@ -500,6 +617,8 @@ fn allowed(
 mod tests {
     use super::*;
 
+    /// Exercises local, geographic, aimed, and cancel JSON fixtures, and rejects
+    /// wrong types, missing/extra keys, unsupported frames, out-of-range latitude, and oversize input.
     #[test]
     fn decodes_local_wgs84_and_cancel_and_rejects_the_rest() {
         let local =
@@ -545,6 +664,8 @@ mod tests {
         assert!(decode_goal(&vec![b'{'; 2049]).is_none());
     }
 
+    /// Uses the Johnson Center geographic fixture to check a roughly 12 m northward
+    /// projection and its degree-coordinate inverse round trip.
     #[test]
     fn local_metres_round_trip_through_the_johnson_center() {
         let origin = GeoOrigin::new(38.8297, -77.3075).unwrap();
@@ -556,6 +677,8 @@ mod tests {
         assert!((longitude + 77.3075).abs() < 1e-9, "{longitude}");
     }
 
+    /// Checks that geographic goals need an origin, out-of-square destinations preserve
+    /// the current goal, and local goals replace geographic metadata.
     #[test]
     fn wgs84_uses_the_origin_and_local_goals_stay_inside_the_square() {
         let mut follower = WaypointController::new(WaypointConfig::default()).unwrap();
@@ -583,6 +706,8 @@ mod tests {
         assert!(status.latitude.is_none());
     }
 
+    /// Checks straight-ahead and perpendicular pursuit, then integrates a 50 ms
+    /// unicycle fixture until both destination position and requested final heading arrive.
     #[test]
     fn pursuit_faces_the_goal_and_a_unicycle_arrives() {
         let follower = WaypointController::new(WaypointConfig::default()).unwrap();
@@ -622,6 +747,8 @@ mod tests {
         assert!(done, "unicycle did not arrive, pose=({x},{y},{yaw})");
     }
 
+    /// Checks geographic metadata and token in active JSON, plus omission of optional
+    /// fields and the zero goal ID in an idle snapshot.
     #[test]
     fn status_json_reports_the_geographic_goal() {
         let mut follower = WaypointController::new(WaypointConfig::default()).unwrap();

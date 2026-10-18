@@ -1,27 +1,44 @@
 //! Sensor-only target confirmation and finite search lifecycle.
 use crate::*;
 use serde::{Deserialize, Serialize};
+/// Stable machine-readable rejection or lifecycle error string.
 pub type SearchError = &'static str;
+/// One detector frame in world coordinates; confirmation requires consistent distinct frames.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TargetObservation {
+    /// Run identifier used to correlate commands and telemetry.
     pub run_id: String,
+    /// Search-session identifier scoped to a run.
     pub search_id: String,
+    /// Strictly increasing detector frame identifier within the search.
     pub frame_id: u64,
+    /// Detector class label, using 1–64 ASCII letters, digits, underscores, or hyphens.
     pub target_class: String,
+    /// Observation confidence in 0–1; must meet the configured minimum.
     pub confidence: f64,
+    /// World-frame target x coordinate, in metres.
     pub world_x: f64,
+    /// World-frame target y coordinate, in metres.
     pub world_y: f64,
+    /// Observation receipt time in seconds on the search clock.
     pub received_at: f64,
+    /// Token identifying the underlying sensor evidence.
     pub evidence_id: String,
 }
+/// Thresholds for accepting independent, fresh, spatially consistent target observations.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConfirmationConfig {
+    /// Minimum observation confidence, finite and on the inclusive 0–1 scale.
     pub confidence: f64,
+    /// Minimum supporting frame count; valid configurations require 3–64.
     pub frames: usize,
+    /// Minimum time span between first and last supporting frames, in positive seconds.
     pub span_s: f64,
+    /// Maximum pairwise separation of supporting positions, in positive metres.
     pub agreement_m: f64,
+    /// Maximum observation age and gap between candidate frames, in positive seconds.
     pub freshness_s: f64,
 }
 impl Default for ConfirmationConfig {
@@ -36,6 +53,7 @@ impl Default for ConfirmationConfig {
     }
 }
 impl ConfirmationConfig {
+    /// Return whether confidence is in 0–1, frame count is 3–64, and all time/distance thresholds are finite and positive.
     pub fn valid(&self) -> bool {
         self.confidence.is_finite()
             && (0.0..=1.0).contains(&self.confidence)
@@ -45,8 +63,11 @@ impl ConfirmationConfig {
                 .all(|v| v.is_finite() && *v > 0.)
     }
 }
+/// Finite target-search lifecycle combining frontier navigation with sensor-only confirmation.
 pub struct SearchController {
+    /// Validated session request retained for correlation and bounds checks.
     pub request: SearchRequest,
+    /// Frontier navigation state used to select search destinations.
     pub navigator: terra_navigation::SearchNavigator,
     config: ConfirmationConfig,
     phase: SearchPhase,
@@ -58,12 +79,20 @@ pub struct SearchController {
     report: Option<SearchReport>,
     goal: Option<(f64, f64)>,
     revision: u64,
+    /// Latest request token and whether it was accepted.
     pub receipt: Option<(String, bool)>,
 }
 impl SearchController {
+    /// Start a validated search at finite nonnegative `now` seconds using default confirmation thresholds and a 0.35 m radius.
+    ///
+    /// Returns `invalid_search` for malformed request/time/configuration, or a navigation configuration error.
     pub fn start(request: SearchRequest, now: f64) -> Result<Self, SearchError> {
         Self::with_config(request, now, ConfirmationConfig::default(), 0.35)
     }
+    /// Start a search with explicit confirmation thresholds and footprint radius in metres.
+    ///
+    /// Requires a valid request, nonnegative finite `now` seconds, valid thresholds, and a navigator-valid radius.
+    /// Returns `invalid_search` or the navigator construction error on rejection.
     pub fn with_config(
         request: SearchRequest,
         now: f64,
@@ -100,6 +129,7 @@ impl SearchController {
             receipt: Some((token, true)),
         })
     }
+    /// Return the current lifecycle phase without advancing time.
     pub fn phase(&self) -> SearchPhase {
         self.phase
     }
@@ -113,6 +143,9 @@ impl SearchController {
             self.goal = None;
         }
     }
+    /// Advance the nondecreasing seconds clock and expire the budget, including while paused.
+    ///
+    /// Returns `invalid_time` for nonfinite or backward time without advancing it.
     pub fn update_time(&mut self, now: f64) -> Result<(), SearchError> {
         if !now.is_finite() || now < self.last_time {
             return Err("invalid_time");
@@ -124,6 +157,9 @@ impl SearchController {
         }
         Ok(())
     }
+    /// Apply a lifecycle action at `now` seconds, clearing confirmation candidates.
+    ///
+    /// Returns a clock error or `search_terminal` if the budget has expired or the session already ended.
     pub fn action(&mut self, action: SearchAction, now: f64) -> Result<(), SearchError> {
         self.update_time(now)?;
         if self.phase.terminal() {
@@ -140,18 +176,24 @@ impl SearchController {
         }
         Ok(())
     }
+    /// Clear candidate evidence and enter attention hold unless already paused or terminal.
     pub fn hold(&mut self, reason: &str) {
         if !self.phase.terminal() && self.phase != SearchPhase::Paused {
             self.candidate.clear();
             self.transition(SearchPhase::NeedsAttention, reason);
         }
     }
+    /// Clear candidate evidence and permanently cancel a nonterminal session with the supplied reason.
     pub fn cancel(&mut self, reason: &str) {
         if !self.phase.terminal() {
             self.candidate.clear();
             self.transition(SearchPhase::Cancelled, reason);
         }
     }
+    /// Accept one fresh, in-bounds, matching-class observation and update confirmation.
+    ///
+    /// Returns a clock, phase, or `invalid_observation` error for invalid correlation, confidence, frame order, or age.
+    /// Disagreement or excessive inter-frame gaps restart the candidate set; consistent frames can complete the search.
     pub fn observe(&mut self, o: TargetObservation, now: f64) -> Result<(), SearchError> {
         self.update_time(now)?;
         if !matches!(self.phase, SearchPhase::Searching | SearchPhase::Confirming) {
@@ -218,6 +260,10 @@ impl SearchController {
         }
         Ok(())
     }
+    /// Advance search at `now` seconds and select a world-metre frontier using the map revision and pose.
+    ///
+    /// Returns `Ok(None)` during holds or terminal phases, and a clock error for nonfinite or backward time.
+    /// Stale confirmation evidence resumes navigation; blocked or exhausted navigation updates the lifecycle.
     pub fn tick(
         &mut self,
         map: &terra_mapping::MapSnapshot,
@@ -253,6 +299,9 @@ impl SearchController {
             }
         }
     }
+    /// Snapshot the session at `now` seconds without advancing lifecycle state.
+    ///
+    /// Elapsed time never precedes the last accepted time; nonfinite `now` falls back to it. Detector health is caller-supplied.
     pub fn status(&self, now: f64, detector_available: bool) -> SearchStatus {
         SearchStatus {
             target_class: self.request.target_class.clone(),

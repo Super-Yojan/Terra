@@ -9,6 +9,11 @@ use terra_autonomy::*;
 use terra_mapping::MapSnapshot;
 use terra_navigation::{Pose, Twist};
 
+/// Simulate 0.1-second kinematic ticks for a four-second exploration budget and write the trace.
+///
+/// The 20 m square map begins unknown outside a 3 m start disc and reveals free cells within 2.2 m.
+/// Positions are metres, yaw is radians, velocities are m/s and rad/s, and timestamps are seconds.
+/// File creation or serialization failures panic because this is a demonstration executable.
 fn main() {
     let path = std::env::args()
         .nth(1)

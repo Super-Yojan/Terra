@@ -1,4 +1,5 @@
 use terra_autonomy::*;
+/// Exercise strict level, budget, teleop-session, and safety JSON contracts, including unknown fields and invalid primitive types.
 #[test]
 fn strict_requests_and_correlation() {
     assert!(decode_level(br#"{"level":"teleop","token":"switch-1"}"#).is_some());

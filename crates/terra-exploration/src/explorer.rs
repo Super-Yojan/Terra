@@ -5,32 +5,51 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use terra_mapping::MapSnapshot;
 use terra_navigation::{Pose, reachable};
+/// Lifecycle phase of a frontier exploration run.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ExplorePhase {
+    /// No run is active and no goal should be issued.
     Idle,
+    /// An exploration run is active.
     Running,
+    /// The exploration run has a frozen terminal result.
     Ended,
 }
+/// Selected world-metre frontier centre and its scorer output.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct FrontierTarget {
+    /// World-frame x coordinate, in metres.
     pub x: f64,
+    /// World-frame y coordinate, in metres.
     pub y: f64,
+    /// Scorer output; larger finite values are preferred.
     pub score: f64,
 }
 /// Published on `terra/rover/<id>/exploration/status` and copied onto autonomy status.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ExplorationStatus {
+    /// Run identifier used to correlate commands and telemetry.
     pub run_id: String,
+    /// Current lifecycle phase.
     pub phase: ExplorePhase,
+    /// Elapsed run time in seconds; frozen once the run ends.
     pub elapsed_seconds: f64,
+    /// Remaining budget in seconds, clamped to zero.
     pub remaining_seconds: f64,
+    /// Run time budget in seconds; positive values enable budget expiry.
     pub budget_seconds: f64,
+    /// Selected frontier destination, if any.
     pub target: Option<FrontierTarget>,
+    /// Observed free-cell area in square metres.
     pub coverage_m2: f64,
+    /// Fraction of occupancy cells observed, including occupied cells, from zero to one.
     pub explored_ratio: f64,
+    /// Terminal reason, absent before the run ends.
     pub end_reason: Option<EndReason>,
+    /// Number of remembered blocked-frontier entries, including expired entries.
     pub blacklist_count: u32,
+    /// Number of frontier assignments made during this run.
     pub frontiers_attempted: u64,
 }
 impl Default for ExplorationStatus {
@@ -101,33 +120,50 @@ struct BlackEntry {
     attempts: u32,
     retry_at: f64,
 }
+/// Exploration event drained by integrations for recording or publication.
 #[derive(Clone, Debug)]
 pub struct ExploreEvent {
+    /// Machine-readable event category.
     pub kind: &'static str,
+    /// Machine-readable explanation of the current decision or transition.
     pub reason: String,
 }
 /// What the arbiter should do with the waypoint follower after one exploration tick.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ExploreAction {
+    /// No run is active and no goal should be issued.
     Idle,
+    /// Issue or continue the world-metre frontier goal.
     Seek {
+        /// Frontier x coordinate, in world metres.
         x: f64,
+        /// Frontier y coordinate, in world metres.
         y: f64,
     },
     /// No usable frontier yet. The blacklist will expire; do not end the run.
     Hold,
+    /// Stop following exploration goals and report the terminal reason.
     Finished(EndReason),
 }
 /// Pose, map, and the goal the follower is already tracking.
 pub struct ExploreTick<'a> {
+    /// Current control-clock time, in seconds.
     pub now: f64,
+    /// World-frame rover pose; position is metres and yaw is radians.
     pub pose: Pose,
+    /// Latest observed occupancy snapshot, when available.
     pub map: Option<&'a MapSnapshot>,
+    /// Whether the local planner could not provide admissible motion.
     pub planner_blocked: bool,
+    /// Whether the follower is currently tracking a goal.
     pub goal_active: bool,
+    /// Whether the follower has reached its current goal.
     pub goal_arrived: bool,
+    /// Tracked follower goal x coordinate, in world metres.
     pub goal_x: f64,
+    /// Tracked follower goal y coordinate, in world metres.
     pub goal_y: f64,
+    /// Follower distance to its goal, in metres.
     pub goal_distance: f64,
 }
 /// Frontier selection and the run state machine. Platform code stays outside.
@@ -182,36 +218,49 @@ impl Default for Explorer {
     }
 }
 impl Explorer {
+    /// Borrow the exploration configuration.
     pub fn config(&self) -> &ExplorationConfig {
         &self.config
     }
+    /// Mutably borrow configuration; callers are responsible for supplying meaningful finite distances and durations.
     pub fn config_mut(&mut self) -> &mut ExplorationConfig {
         &mut self.config
     }
+    /// Replace the stop policy. A subsequent run start resets it and supplies the run budget.
     pub fn set_objective(&mut self, objective: Box<dyn MissionObjective>) {
         self.objective = objective;
     }
+    /// Replace frontier ranking; larger finite scores win and nonfinite scores are skipped.
     pub fn set_scorer(&mut self, scorer: Box<dyn GoalScorer>) {
         self.scorer = scorer;
     }
+    /// Set a finite footprint radius in `(0, 5]` metres; ignore invalid values.
     pub fn set_footprint(&mut self, radius: f64) {
         if radius.is_finite() && radius > 0. && radius <= 5. {
             self.config.footprint_radius = radius;
         }
     }
+    /// Return whether exploration is currently running.
     pub fn is_running(&self) -> bool {
         self.phase == ExplorePhase::Running
     }
+    /// Return the number of frontier assignments made in this run.
     pub fn frontiers_attempted(&self) -> u64 {
         self.frontiers_attempted
     }
+    /// Return the current lifecycle phase without advancing time.
     pub fn phase(&self) -> ExplorePhase {
         self.phase
     }
+    /// Return the terminal reason, or `None` before the run ends.
     pub fn end_reason(&self) -> Option<EndReason> {
         self.end_reason
     }
-    /// Begin a run. The budget clock starts on the first [`Self::step`] call.
+    /// Begin a run. The budget clock starts on the first valid [`Self::step`] call.
+    ///
+    /// Returns `false` without changing state unless the seconds budget is finite
+    /// and in `(0, 86400]`. A valid start clears targets, blacklist, counters, and
+    /// objective state, and queues a start event; the run identifier is copied.
     pub fn start(&mut self, budget_seconds: f64, run_id: &str) -> bool {
         if !budget_seconds.is_finite() || budget_seconds <= 0. || budget_seconds > 86_400. {
             return false;
@@ -239,6 +288,10 @@ impl Explorer {
         true
     }
     /// Record an external detection. The next [`Self::step`] applies `should_stop`.
+    ///
+    /// Ignore detections outside a running session, empty/over-64-byte labels, or
+    /// nonfinite position, confidence, or timestamp values. This hook does not
+    /// enforce confidence bounds, freshness, or sensor provenance.
     pub fn notify_detection(&mut self, detection: Detection) {
         if self.phase != ExplorePhase::Running {
             return;
@@ -259,15 +312,18 @@ impl Explorer {
             reason: format!("label={}", detection.label),
         });
     }
+    /// End an active run, freezing elapsed time at its last tick; idle and ended runs are unchanged.
     pub fn stop(&mut self, reason: EndReason) {
         if self.phase != ExplorePhase::Running {
             return;
         }
         self.finish(reason);
     }
+    /// Drain all queued exploration events in emission order.
     pub fn take_events(&mut self) -> Vec<ExploreEvent> {
         std::mem::take(&mut self.events)
     }
+    /// Snapshot run progress at `now` seconds without changing state; terminal elapsed time stays frozen.
     pub fn status(&self, now: f64) -> ExplorationStatus {
         let elapsed = self.elapsed(now);
         ExplorationStatus {
@@ -284,6 +340,10 @@ impl Explorer {
             frontiers_attempted: self.frontiers_attempted,
         }
     }
+    /// Update coverage and advance one frontier-selection tick.
+    ///
+    /// Use finite nonnegative seconds on a consistent clock, a valid occupancy snapshot, and world-metre follower coordinates.
+    /// Invalid time returns the current terminal/idle action; missing usable frontiers ends the run unless a blacklist retry is pending.
     pub fn step(&mut self, tick: ExploreTick<'_>) -> ExploreAction {
         if let Some(map) = tick.map
             && let Some((area, ratio)) = map_coverage(map)

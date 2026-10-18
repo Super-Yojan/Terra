@@ -2,29 +2,52 @@
 use crate::{ActuatorError, ActuatorValue, Layout, LayoutError};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
+/// Binary frame version byte; currently 1.
 pub const PROTOCOL_VERSION: u8 = 1;
+/// Maximum binary command size in bytes, including its 16-byte header.
 pub const COMMAND_LIMIT: usize = 96;
+/// Maximum serialized JSON control/reply size in bytes (16 KiB).
 pub const JSON_LIMIT: usize = 16 * 1024;
+/// Maximum assembly age in milliseconds; age equal to this limit expires.
 pub const ASSEMBLY_TIMEOUT_MS: u64 = 100;
 fn error(message: &str) -> ActuatorError {
     ActuatorError::InvalidInput(message.into())
 }
+/// Binary command discriminator. Only drive frames carry actuator records.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub enum CommandKind {
+    /// Request a complete set of normalized actuator commands.
     Drive = 1,
+    /// Request arming; service authorization is still required.
     Arm = 2,
+    /// Request removal of output authorization.
     Disarm = 3,
+    /// Request the service emergency-stop policy.
     EmergencyStop = 4,
 }
+/// Decoded binary command with session, layout, and ordering metadata.
+///
+/// Encoding checks shape and normalized values. [`validate_command`] adds active
+/// session/revision, sequence, coverage, and per-actuator limit checks.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CommandFrame {
+    /// Requested command action.
     pub kind: CommandKind,
+    /// Service-issued session identifier.
     pub session: u32,
+    /// Active layout revision expected by the sender.
     pub revision: u32,
+    /// Monotonically increasing session sequence; `u32::MAX` is rejected on validation.
     pub sequence: u32,
+    /// Up to 16 unique-ID records for drive; empty for all other commands.
     pub values: Vec<ActuatorValue>,
 }
+/// Encode a 16-byte `TA` header followed by five-byte actuator records.
+///
+/// Integers and `f32` values use little-endian encoding. Returns
+/// [`ActuatorError::InvalidInput`] for more than 16 records, non-drive records,
+/// duplicate IDs, or non-finite/out-of-range values outside `[-1, 1]`.
 pub fn encode_frame(frame: &CommandFrame) -> Result<Vec<u8>, ActuatorError> {
     if frame.values.len() > 16 || (frame.kind != CommandKind::Drive && !frame.values.is_empty()) {
         return Err(error("invalid record count"));
@@ -44,6 +67,10 @@ pub fn encode_frame(frame: &CommandFrame) -> Result<Vec<u8>, ActuatorError> {
     }
     Ok(out)
 }
+/// Decode and validate a binary frame without authorizing it.
+///
+/// Returns [`ActuatorError::InvalidInput`] for invalid size, alignment, magic,
+/// version, command kind, or any record rejected by [`encode_frame`].
 pub fn decode_frame(bytes: &[u8]) -> Result<CommandFrame, ActuatorError> {
     if bytes.len() < 16
         || bytes.len() > COMMAND_LIMIT
@@ -80,6 +107,12 @@ pub fn decode_frame(bytes: &[u8]) -> Result<CommandFrame, ActuatorError> {
 }
 /// Validate a fully decoded command without advancing sequence state on rejection.
 /// The caller advances its last sequence only after safety acceptance.
+/// Return success only for the supplied session/layout revision and a sequence
+/// strictly above `last_sequence` and below `u32::MAX`. Drive frames must cover
+/// every layout actuator exactly once and respect its inclusive limits.
+///
+/// All rejection paths return [`ActuatorError::InvalidInput`]. The caller must
+/// separately validate the layout and authorize the requested hardware action.
 pub fn validate_command(
     frame: &CommandFrame,
     session: u32,
@@ -111,6 +144,11 @@ pub fn validate_command(
     }
     Ok(())
 }
+/// Bounded in-order reassembly of one logical message at a time.
+///
+/// Fragments have a four-byte header: little-endian `u16` message ID, zero-based
+/// index, and total count. Payloads must be nonempty. Default uses [`COMMAND_LIMIT`];
+/// [`Self::new`] selects an explicit limit. Authentication belongs to the service.
 #[derive(Default)]
 pub struct FragmentAssembler {
     limit: usize,
@@ -124,6 +162,9 @@ struct Assembly {
     data: Vec<u8>,
 }
 impl FragmentAssembler {
+    /// Construct an empty assembler with a byte limit in `1..=JSON_LIMIT`.
+    ///
+    /// Returns [`ActuatorError::InvalidInput`] if the limit is zero or too large.
     pub fn new(limit: usize) -> Result<Self, ActuatorError> {
         if limit == 0 || limit > JSON_LIMIT {
             return Err(error("invalid logical limit"));
@@ -133,9 +174,16 @@ impl FragmentAssembler {
             active: None,
         })
     }
+    /// Discard any incomplete message without changing the size limit.
     pub fn clear(&mut self) {
         self.active = None;
     }
+    /// Accept one fragment at monotonic `now_ms` milliseconds.
+    ///
+    /// Returns `Ok(None)` while incomplete and `Ok(Some(bytes))` on completion.
+    /// A backwards clock or age at least [`ASSEMBLY_TIMEOUT_MS`] discards the old
+    /// assembly before processing this fragment. Invalid headers, ordering, IDs,
+    /// counts, or size return [`ActuatorError::InvalidInput`] and clear the assembly.
     pub fn push(&mut self, bytes: &[u8], now_ms: u64) -> Result<Option<Vec<u8>>, ActuatorError> {
         let result = self.push_inner(bytes, now_ms);
         if result.is_err() {
@@ -194,7 +242,9 @@ impl FragmentAssembler {
 }
 /// Separate characteristic paths: priority binary control never waits for drive.
 pub struct CommandAssemblers {
+    /// Independent assembly state for ordinary drive traffic.
     pub drive: FragmentAssembler,
+    /// Independent assembly state for arm, disarm, and emergency-stop traffic.
     pub priority: FragmentAssembler,
 }
 impl Default for CommandAssemblers {
@@ -206,6 +256,11 @@ impl Default for CommandAssemblers {
     }
 }
 impl CommandAssemblers {
+    /// Assemble and decode a priority fragment at `now_ms` monotonic milliseconds.
+    ///
+    /// Returns `None` until complete; drive frames on this path return an input error.
+    /// A decoded disarm/emergency-stop clears any partial drive message, even before
+    /// session acceptance. Assembly and binary decoding errors propagate unchanged.
     pub fn push_priority(
         &mut self,
         bytes: &[u8],
@@ -225,6 +280,20 @@ impl CommandAssemblers {
         Ok(Some(frame))
     }
 }
+/// Split a nonempty logical message into writes with four-byte fragment headers.
+///
+/// `write_size` and `limit` are bytes including each write header and logical data
+/// respectively. Returns [`ActuatorError::InvalidInput`] if `write_size <= 4`,
+/// the logical limit is outside `1..=JSON_LIMIT`, data exceed that limit, or more
+/// than 255 fragments are needed. No transport writes occur here.
+///
+/// ```
+/// use terra_actuators::protocol::{fragment_message, FragmentAssembler};
+/// let parts = fragment_message(b"hello", 7, 7, 96).unwrap();
+/// let mut receiver = FragmentAssembler::new(96).unwrap();
+/// assert_eq!(receiver.push(&parts[0], 0).unwrap(), None);
+/// assert_eq!(receiver.push(&parts[1], 1).unwrap(), Some(b"hello".to_vec()));
+/// ```
 pub fn fragment_message(
     data: &[u8],
     message_id: u16,
@@ -252,6 +321,10 @@ pub fn fragment_message(
         .collect())
 }
 /// Caller supplies every still outstanding ID, including transmissions awaiting completion.
+/// Search the wrapping `u16` ID space from `next`, advancing it after each candidate.
+///
+/// Returns a currently unused ID, or [`ActuatorError::InvalidInput`] if all 65,536
+/// IDs are active. Exhaustion wraps `next` back to its starting value.
 pub fn allocate_message_id(next: &mut u16, active: &HashSet<u16>) -> Result<u16, ActuatorError> {
     for _ in 0..=u16::MAX {
         let id = *next;
@@ -262,18 +335,24 @@ pub fn allocate_message_id(next: &mut u16, active: &HashSet<u16>) -> Result<u16,
     }
     Err(error("all message IDs active"))
 }
+/// Empty JSON object for operations with no arguments; unknown fields are rejected.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct EmptyPayload {}
+/// Candidate layout to validate and stage before a separate commit.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StagePayload {
+    /// Proposed layout; deserialization alone does not validate hardware compatibility.
     pub layout: Layout,
 }
+/// Identifiers binding a commit to a previously staged request.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CommitPayload {
+    /// Revision of the staged candidate.
     pub staged_revision: u32,
+    /// Request ID of the successful stage operation.
     pub staged_request_id: u32,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -283,18 +362,29 @@ pub struct CommitPayload {
     rename_all = "snake_case",
     deny_unknown_fields
 )]
+/// JSON configuration/service operation; parsing does not execute or authorize it.
 pub enum ControlOperation {
+    /// Read advertised backend capabilities.
     Capabilities(EmptyPayload),
+    /// Read the active layout.
     ReadLayout(EmptyPayload),
+    /// Validate/stage a proposed layout.
     StageLayout(StagePayload),
+    /// Commit the referenced staged candidate.
     CommitLayout(CommitPayload),
+    /// Request service fault reset.
     ResetFault(EmptyPayload),
+    /// Request release of the emergency-stop latch.
     ResetEmergencyStop(EmptyPayload),
 }
+/// Versioned JSON control request with a caller-supplied correlation ID.
 #[derive(Clone, Debug, Serialize)]
 pub struct ControlEnvelope {
+    /// Control schema version; currently 1.
     pub schema_version: u32,
+    /// Caller-supplied identifier echoed in the reply.
     pub request_id: u32,
+    /// Tagged operation and its operation-specific payload.
     #[serde(flatten)]
     pub command: ControlOperation,
 }
@@ -307,6 +397,11 @@ struct EnvelopeWire {
     operation: String,
     payload: Box<serde_json::value::RawValue>,
 }
+/// Decode a strict JSON request of at most [`JSON_LIMIT`] bytes.
+///
+/// Returns [`ActuatorError::InvalidInput`] for malformed JSON, unknown fields or
+/// operations, invalid payload shape, excessive size, or unsupported schema.
+/// Layout semantic validation remains the staging service responsibility.
 pub fn decode_control(data: &[u8]) -> Result<ControlEnvelope, ActuatorError> {
     if data.len() > JSON_LIMIT {
         return Err(error("JSON document too large"));
@@ -338,27 +433,45 @@ pub fn decode_control(data: &[u8]) -> Result<ControlEnvelope, ActuatorError> {
         command,
     })
 }
+/// Serialize a request and validate it again through [`decode_control`].
+///
+/// Returns [`ActuatorError::InvalidInput`] for serialization or decoding failures,
+/// including unsupported schema and documents exceeding [`JSON_LIMIT`].
 pub fn encode_control(envelope: &ControlEnvelope) -> Result<Vec<u8>, ActuatorError> {
     let bytes = serde_json::to_vec(envelope).map_err(|e| error(&e.to_string()))?;
     decode_control(&bytes)?;
     Ok(bytes)
 }
+/// Service result serialized as `ok` or `error`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ControlResult {
+    /// Operation succeeded.
     Ok,
+    /// Operation failed; inspect reply errors and payload.
     Error,
 }
+/// Versioned service response correlated with a control request.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ControlReply {
+    /// Reply schema version; currently 1.
     pub schema_version: u32,
+    /// Correlation identifier copied from the request.
     pub request_id: u32,
+    /// Success or failure reported by the service.
     pub result: ControlResult,
+    /// Layout revision active after processing the request.
     pub active_revision: u32,
+    /// Collected layout validation errors, if applicable.
     pub errors: Vec<LayoutError>,
+    /// Operation-specific response data.
     pub payload: serde_json::Value,
 }
+/// Serialize a schema-1 reply no larger than [`JSON_LIMIT`] bytes.
+///
+/// Returns [`ActuatorError::InvalidInput`] for unsupported schema, serialization
+/// failure, or excessive encoded size. Payload semantics are service-defined.
 pub fn encode_reply(reply: &ControlReply) -> Result<Vec<u8>, ActuatorError> {
     if reply.schema_version != 1 {
         return Err(error("unsupported reply schema"));

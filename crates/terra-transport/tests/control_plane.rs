@@ -1,6 +1,9 @@
+//! Control-plane loopback routing and bounded stop-preserving queue scenarios.
+//! Network scenarios require local TCP sockets and use bounded receipt waits.
 use terra_transport::ControlPlane;
 use zenoh::Wait;
 #[test]
+/// Uses a loopback endpoint to check outbound autonomy status and inbound intent draining.
 fn phone_control_plane_receives_intent_and_publishes_state() {
     let socket = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let endpoint = format!("tcp/127.0.0.1:{}", socket.local_addr().unwrap().port());
@@ -46,10 +49,13 @@ fn phone_control_plane_receives_intent_and_publishes_state() {
     }
 }
 #[test]
+/// Rejects an all-interface bind for the control-plane listener.
 fn listener_is_explicitly_loopback_only() {
     assert!(ControlPlane::listen("tcp/0.0.0.0:7447", "terra/rover", 1).is_err());
 }
 #[test]
+/// Floods a queue with 600 teleop messages and checks the distinct stop survives
+/// within the 256-entry bound and is drained last.
 fn emergency_stop_survives_burst_and_is_drained_last() {
     let mut q = std::collections::VecDeque::new();
     terra_transport::enqueue_control_action(
@@ -71,6 +77,7 @@ fn emergency_stop_survives_burst_and_is_drained_last() {
     assert!(actions.len() <= 256);
 }
 #[test]
+/// Queues distinct and malformed safety stops and verifies the newer stop token is retained.
 fn delayed_or_malformed_stop_cannot_displace_distinct_new_stop() {
     let mut q = std::collections::VecDeque::new();
     for payload in [

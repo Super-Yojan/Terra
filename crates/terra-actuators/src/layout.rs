@@ -4,79 +4,134 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
+/// Versioned hardware assignment document; validate before routing or installing.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Layout {
+    /// Schema format version; currently must equal 1.
     pub schema_version: u8,
+    /// Application-assigned revision used to reject commands for another layout.
     pub revision: u32,
+    /// Ordered actuator assignments; at most 16, with unique IDs.
     pub actuators: Vec<Actuator>,
 }
+/// One named physical output and its routing, calibration, and loss-of-link policy.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Actuator {
+    /// Unique command identifier within this layout.
     pub id: u8,
+    /// Human-readable label; structural validation imposes no content restriction.
     pub name: String,
+    /// Nonempty backend port identifier, matched exactly against capabilities.
     pub port: String,
+    /// Physical output technology determining valid calibration and command range.
     pub kind: OutputKind,
+    /// Whether the hardware adapter reverses normalized polarity; forbidden for unidirectional ESCs.
     pub inverted: bool,
+    /// Normalized clipping bounds applied after routing.
     pub limits: CommandLimits,
+    /// Backend conversion settings matching the output kind.
     pub calibration: Calibration,
+    /// Source of the normalized command.
     pub route: Route,
+    /// Output policy the hardware adapter should apply on loss of authorization.
     pub safe: SafeOutput,
 }
+/// Supported hardware output technologies, serialized as snake-case names.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OutputKind {
+    /// Signed PWM motor power.
     DcMotor,
+    /// Signed ESC power with a neutral pulse.
     BidirectionalEsc,
+    /// Nonnegative ESC power with a stop pulse.
     UnidirectionalEsc,
+    /// Normalized positional servo command.
     PositionalServo,
 }
+/// Inclusive normalized command bounds, finite and ordered.
+///
+/// Both bounds must lie in `[-1, 1]`, or `[0, 1]` for unidirectional ESCs.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CommandLimits {
+    /// Smallest permitted normalized command.
     pub min: f32,
+    /// Largest permitted normalized command.
     pub max: f32,
 }
+/// Physical conversion settings; pulse widths are microseconds and must be
+/// positive, strictly ordered, and below 20,000 at their upper endpoint.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Calibration {
+    /// PWM power scaling for a DC motor.
     DcMotor {
+        /// Finite fraction of available power in `(0, 1]`.
         max_power_fraction: f32,
     },
+    /// Reverse, neutral, and forward endpoints for a reversible ESC.
     BidirectionalEsc {
+        /// Full reverse pulse width in microseconds.
         reverse_us: u32,
+        /// Neutral pulse width in microseconds.
         neutral_us: u32,
+        /// Full forward pulse width in microseconds.
         forward_us: u32,
+        /// Backend-required arming interval in milliseconds; structural validation imposes no bound.
         arming_duration_ms: u32,
     },
+    /// Stop and full-power endpoints for a one-direction ESC.
     UnidirectionalEsc {
+        /// Stopped pulse width in microseconds.
         stop_us: u32,
+        /// Full-power pulse width in microseconds.
         full_power_us: u32,
+        /// Backend-required arming interval in milliseconds; structural validation imposes no bound.
         arming_duration_ms: u32,
     },
+    /// Negative, center, and positive positional endpoints.
     PositionalServo {
+        /// Pulse width at normalized position -1, in microseconds.
         min_us: u32,
+        /// Pulse width at normalized position 0, in microseconds.
         center_us: u32,
+        /// Pulse width at normalized position +1, in microseconds.
         max_us: u32,
     },
 }
+/// Source of actuator intent before clipping; inversion is applied by hardware.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Route {
+    /// Use the normalized left wheel effort.
     LeftEffort,
+    /// Use the normalized right wheel effort.
     RightEffort,
+    /// Mix manual forward and turn inputs linearly, then clip to command limits.
     Manual {
+        /// Finite forward-input multiplier in `[-1, 1]`.
         forward_coefficient: f32,
+        /// Finite turn-input multiplier in `[-1, 1]`.
         turn_coefficient: f32,
     },
+    /// Use the actuator-specific servo position or the configured fallback.
     Servo,
 }
+/// Loss-of-link policy: propulsion requires zero; servos may hold a position or disable.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum SafeOutput {
+    /// Command zero propulsion effort; zero must be inside the configured limits.
     Zero,
-    Position { value: f32 },
+    /// Hold a finite servo position within its limits and `[-1, 1]`.
+    Position {
+        /// Normalized servo position, finite and within the configured limits.
+        value: f32,
+    },
+    /// Disable servo output rather than specifying a position.
     Disabled,
 }
 
@@ -84,30 +139,49 @@ pub enum SafeOutput {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PortCapability {
+    /// Output kinds that this port can generate.
     pub kinds: Vec<OutputKind>,
+    /// Nonempty unique physical resource identifiers consumed by this port.
     pub resources: Vec<String>,
+    /// Shared timer identity, if any; users of one timer must agree on frequency.
     pub timer: Option<String>,
+    /// PWM frequency in hertz; positive for motors and exactly 50 for ESCs/servos.
     pub frequency_hz: u32,
 }
+/// Backend-advertised board, library, ports, and occupied physical resources.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Capabilities {
+    /// Board identity supplied by the backend.
     pub board: String,
+    /// Hardware driver/library name.
     pub library: String,
+    /// Hardware driver/library version string.
     pub library_version: String,
+    /// Output kinds implemented by this backend.
     pub supported_kinds: Vec<OutputKind>,
+    /// Port identifiers and their output/resource constraints.
     pub ports: BTreeMap<String, PortCapability>,
+    /// Resources already unavailable before this layout is assigned.
     pub occupied_resources: BTreeSet<String>,
 }
+/// One collected validation failure with a stable category and human-readable detail.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LayoutError {
+    /// Affected actuator, or `None` for a document-wide failure.
     pub actuator_id: Option<u8>,
+    /// Machine-readable validation category such as `calibration` or `resource_conflict`.
     pub code: String,
+    /// Explanation of the violated constraint.
     pub message: String,
 }
 
 /// Structural validation is also used before routing, without claiming hardware availability.
+/// Collect all schema, identity, range, calibration, routing, and safe-policy errors.
+///
+/// Returns `Ok(())` for a structurally valid document, otherwise all discovered
+/// errors. This check does not consult hardware capabilities or detect port conflicts.
 pub fn validate_structure(layout: &Layout) -> Result<(), Vec<LayoutError>> {
     let mut errors = Vec::new();
     let mut add = |id, code: &str, message: &str| {
@@ -250,6 +324,10 @@ pub fn validate_structure(layout: &Layout) -> Result<(), Vec<LayoutError>> {
     }
 }
 
+/// Validate structure and advertised backend compatibility, collecting all failures.
+///
+/// Checks port uniqueness, supported output kinds, resource ownership, frequencies,
+/// and shared timer compatibility. Returns all errors rather than stopping at the first.
 pub fn validate_layout(
     layout: &Layout,
     capabilities: &Capabilities,
@@ -326,6 +404,8 @@ pub fn validate_layout(
     }
 }
 
+/// Return whether a structurally valid layout has both left/right effort routes
+/// and no manual propulsion mixes. This does not certify hardware compatibility.
 pub fn supports_feedback(layout: &Layout) -> bool {
     validate_structure(layout).is_ok()
         && layout

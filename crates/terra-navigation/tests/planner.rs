@@ -1,5 +1,8 @@
+//! Local planning regressions for braking, unknown space, determinism, and telemetry.
+
 use terra_mapping::MapSnapshot;
 use terra_navigation::*;
+/// Build an observed, obstacle-free 10 m square centered on the default pose.
 fn map() -> MapSnapshot {
     MapSnapshot {
         width: 40,
@@ -10,6 +13,8 @@ fn map() -> MapSnapshot {
         occupancy: vec![0; 1600],
     }
 }
+/// Free space permits forward acceleration, but a wall ahead must reduce the
+/// command and reject the requested constant velocity with its braking tail.
 #[test]
 fn clear_space_and_blocked_braking() {
     let mut m = map();
@@ -20,6 +25,7 @@ fn clear_space_and_blocked_braking() {
         angular: 0.,
     };
     assert!(p.plan(&m, pose, Twist::default(), intent, 0.1).twist.linear > 0.);
+    // Place a full-height wall 0.5 m ahead of the pose, inside the default footprint.
     for y in 0..40 {
         m.occupancy[y * 40 + 22] = 100;
     }
@@ -36,6 +42,8 @@ fn clear_space_and_blocked_braking() {
     assert!(result.twist.linear < 1.);
     assert!(!p.admissible(&m, pose, intent));
 }
+/// Unknown space cannot support forward motion or a frontier proposal on its own;
+/// revealing a free patch creates a finite frontier candidate.
 #[test]
 fn unknown_space_and_frontier() {
     let mut m = map();
@@ -59,6 +67,8 @@ fn unknown_space_and_frontier() {
     assert!(f.0.is_finite());
     assert!(f.1.is_finite());
 }
+/// Repeated reverse-turn requests select identical commands within the sampled
+/// yaw acceleration bound; nonfinite intent or pose must fail closed.
 #[test]
 fn determinism_reverse_turning_and_bad_inputs() {
     let m = map();
@@ -96,12 +106,16 @@ fn determinism_reverse_turning_and_bad_inputs() {
         desired
     ));
 }
+/// The starting-footprint exception permits holding still when underbody cells
+/// are unknown, without needing to classify the surrounding map as free.
 #[test]
 fn known_current_footprint_allows_stationary_hold_in_unknown_map() {
     let mut m = map();
     m.occupancy.fill(-1);
     assert!(LocalPlanner::default().admissible(&m, Pose::default(), Twist::default()));
 }
+/// Unknown underbody cells must not trap the rover when an observed region is
+/// available ahead; both frontier selection and reachability share this exception.
 #[test]
 fn frontier_can_leave_known_robot_footprint_when_grid_under_body_is_unobserved() {
     let mut m = map();
@@ -111,6 +125,7 @@ fn frontier_can_leave_known_robot_footprint_when_grid_under_body_is_unobserved()
             m.occupancy[y * 40 + x] = 0;
         }
     }
+    // Remove only observations under the rover, preserving the free region ahead.
     for y in 0..40 {
         for x in 0..40 {
             let px = -5. + (x as f64 + 0.5) * 0.25;
@@ -125,6 +140,8 @@ fn frontier_can_leave_known_robot_footprint_when_grid_under_body_is_unobserved()
     assert!(reachable(&m, pose, 0.65, target.0, target.1));
 }
 
+/// Recording diagnostics must preserve the chosen command, identify its candidate,
+/// retain rejection reasons, and keep sampled paths and serialized telemetry bounded.
 #[test]
 fn trace_matches_decision_and_records_rejected_candidates() {
     let planner = LocalPlanner::default();
@@ -147,6 +164,7 @@ fn trace_matches_decision_and_records_rejected_candidates() {
             .iter()
             .all(|c| !c.points_mm.is_empty() && c.points_mm.len() <= 16)
     );
+    // With every cell occupied, all candidates fail and no selected index is valid.
     let mut blocked = free;
     blocked.occupancy.fill(100);
     let (decision, trace) = planner.plan_with_trace(&blocked, pose, Twist::default(), intent, 0.1);

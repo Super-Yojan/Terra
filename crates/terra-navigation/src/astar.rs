@@ -5,6 +5,12 @@ use std::collections::{BinaryHeap, VecDeque};
 use terra_mapping::MapSnapshot;
 
 /// Check the swept circular footprint along a straight route segment.
+///
+/// Endpoints use world metres. Samples are at most half a cell apart; unknown
+/// cells are allowed only within the footprint at `pose`, as for local planning.
+/// Invalid input or a segment requiring more than 10,000 steps returns `false`.
+/// `radius` must be finite, positive, and at most 5 m. Both endpoints are checked,
+/// including when `from == to`.
 pub fn route_segment_clear(
     map: &MapSnapshot,
     pose: Pose,
@@ -41,6 +47,39 @@ pub fn route_segment_clear(
 /// A* to a certifiable goal. The goal cell must lie on the map and its footprint
 /// must be known-free. A path whose final centimetres clip an obstacle is trimmed
 /// to the last clear point instead of being discarded.
+///
+/// Returns a compact world-coordinate polyline beginning at `pose`; the final
+/// point can fall short of `(x, y)` when the last segment needs trimming.
+///
+/// # Errors
+///
+/// - `route_invalid_map`: invalid map, nonfinite pose, radius outside `(0, 5]` m,
+///   or more than 250,000 map cells.
+/// - `route_start_outside_map`: the starting position is outside the map.
+/// - `route_goal_outside_map`: the goal is outside the map or has nonfinite coordinates.
+/// - `route_goal_blocked`: the goal footprint touches occupied, unknown, or off-map cells.
+/// - `route_no_path`: no connected route exists or trimming leaves no usable segment.
+///
+/// # Examples
+///
+/// ```
+/// use terra_mapping::MapSnapshot;
+/// use terra_navigation::{astar_route, route_segment_clear, Pose};
+///
+/// let map = MapSnapshot {
+///     width: 40, height: 40, resolution: 0.25,
+///     origin_x: -5.0, origin_y: -5.0,
+///     occupancy: vec![0; 40 * 40],
+/// };
+/// let pose = Pose::default();
+/// let route = astar_route(&map, pose, 0.65, 2.0, 0.0)?;
+/// assert_eq!(route.first(), Some(&[pose.x, pose.y]));
+/// assert_eq!(route.last(), Some(&[2.0, 0.0]));
+/// assert!(route.windows(2).all(|edge|
+///     route_segment_clear(&map, pose, 0.65, edge[0], edge[1])
+/// ));
+/// # Ok::<(), &'static str>(())
+/// ```
 pub fn astar_route(
     map: &MapSnapshot,
     pose: Pose,
@@ -56,6 +95,17 @@ pub fn astar_route(
 /// reachable free cell that most reduces distance to the goal, which is the
 /// frontier in that direction when the goal is unknown or outside the window.
 /// An occupied goal, or a known-free goal with no path, still fails.
+///
+/// A successful route begins at `pose` and uses the same compact polyline format
+/// as [`astar_route`]. Its endpoint may be a reachable cell center closer to
+/// `(x, y)`, so success does not imply that the requested goal was reached.
+///
+/// # Errors
+///
+/// Uses the error strings documented by [`astar_route`]. An unknown or off-map
+/// goal triggers a search for partial progress; if no reachable clear cell is
+/// closer than the starting pose, returns `route_goal_blocked` or
+/// `route_goal_outside_map`, respectively.
 pub fn astar_progress_route(
     map: &MapSnapshot,
     pose: Pose,
@@ -74,6 +124,7 @@ pub fn astar_progress_route(
     }
 }
 
+/// Cached clearance for cell centers, with explicit segment checks near obstacles.
 struct FootprintGrid<'a> {
     map: &'a MapSnapshot,
     pose: Pose,
@@ -96,10 +147,12 @@ impl<'a> FootprintGrid<'a> {
         {
             return Err("route_invalid_map");
         }
+        // Match the conservative cell-corner allowance in `footprint_rejection`.
         let reach = radius + map.resolution * 0.7072;
         let cells = map.occupancy.len();
         let width = map.width as usize;
         let height = map.height as usize;
+        // A blocked border makes distance queries account for leaving the observed map.
         let pad = 1usize;
         let padded_width = width + pad * 2;
         let padded_height = height + pad * 2;
@@ -164,6 +217,7 @@ impl<'a> FootprintGrid<'a> {
             return false;
         }
         let to_point = self.center(to);
+        // The initial pose need not coincide with its cell center.
         if from_pose {
             return route_segment_clear(
                 self.map,
@@ -235,6 +289,8 @@ fn exact_route(
     if start_index == goal_index {
         return commit(grid, vec![[pose.x, pose.y], [x, y]]);
     }
+    // Manhattan distance matches unit-cost, four-connected motion. Heap tuples also
+    // break equal-priority ties by cost and row-major cell index.
     let heuristic = |i: usize| (i % width).abs_diff(goal.0) + (i / width).abs_diff(goal.1);
     let mut costs = vec![usize::MAX; grid.map.occupancy.len()];
     let mut previous = vec![usize::MAX; grid.map.occupancy.len()];
@@ -283,6 +339,7 @@ fn exact_route(
     Err("route_no_path")
 }
 
+/// Search all reachable cells for the closest center that improves on the current pose.
 fn progress_route(
     grid: &FootprintGrid<'_>,
     pose: Pose,
@@ -373,6 +430,7 @@ fn commit(
     if route.len() < 2 {
         return Err("route_no_path");
     }
+    // Remove redundant points on axis-aligned runs, retaining turns and endpoints.
     let mut compact: Vec<[f64; 2]> = Vec::new();
     for point in route {
         if compact.len() >= 2 {
@@ -433,6 +491,8 @@ fn distance_transform(grid: &mut [u64], width: usize, height: usize) {
 }
 
 fn distance_transform_1d(values: &[u64], out: &mut [u64]) {
+    // Each source index defines a parabola: values[i] + (q - i)^2. Maintain
+    // their lower envelope, then evaluate it in one forward pass.
     let n = values.len();
     let mut vertices = vec![0usize; n];
     let mut bounds = vec![0.0; n + 1];
@@ -472,6 +532,8 @@ fn parabola_intersection(values: &[u64], index: usize, q: usize) -> f64 {
 mod tests {
     use super::*;
 
+    /// Cached cell-center clearance must match the direct footprint check for
+    /// occupied, unknown, and free cells, including the starting-footprint exception.
     #[test]
     fn cached_clearance_matches_the_footprint_test() {
         let mut map = MapSnapshot {
@@ -482,6 +544,7 @@ mod tests {
             origin_y: -1.2,
             occupancy: vec![0; 36 * 24],
         };
+        // A fixed seed makes the mixed occupancy fixture reproducible on every run.
         let mut seed = 9_u64;
         for cell in &mut map.occupancy {
             seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);

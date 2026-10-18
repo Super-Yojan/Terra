@@ -109,12 +109,27 @@ and persists separate request-ID ranges for synchronization and configuration.
 
 Phone tracking detects horizontal planes and waits for an ARKit-classified floor
 or the lowest unclassified horizontal ground candidate of at least 0.4 m², stable within 3 cm for one second. Its measured height establishes
-the fixed ground reference for both the occupancy map and the published point cloud;
+the fixed world reference for both the occupancy map and the published point cloud;
 no camera mounting height is assumed. Point the camera toward the floor during startup.
 Until the floor is established, cloud publication and depth integration wait rather
 than classify returns against an invented ground plane. Restart tracking to recalibrate.
-The point cloud includes floor samples; occupancy treats returns below 15 cm above
-that measured floor as free-space evidence rather than obstacle endpoints.
+The same measurement calibrates the camera's clearance above ground. During driving,
+the occupancy mapper uses this clearance with the current rover up axis and camera
+position to follow local terrain elevation, pitch, and roll. Returns below 15 cm
+above that supporting plane provide free-space evidence; objects above the plane
+remain obstacles. World x/y coordinates and point-cloud elevation stay fixed, so
+climbing a slope does not move existing map cells or flatten the published cloud.
+This assumes the rigidly mounted rover is supported on the terrain; it does not
+fit unseen ramps ahead of the rover. Degenerate or more-than-60-degree tilted
+ground estimates pause depth integration. Restart tracking after changing the mount.
+
+Run the ground-reference and slope checks:
+
+```sh
+swiftc mobile/ios/TerraPhone/PhoneLocalization.swift \
+  tests/ios/PhoneGroundTests.swift -o /tmp/terra-ground-tests
+/tmp/terra-ground-tests
+```
 
 Terra disables idle auto-lock while its scene is active and restores normal idle behavior
 when inactive or in the background. Manual actuator layouts receive only the arbiter’s

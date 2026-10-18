@@ -1,4 +1,5 @@
 use terra_experiment::summarize;
+/// Replay repeated completion status and a separate exhausted search, counting confirmation once and route failures independently.
 #[test]
 fn search_summary_counts_confirmation_once_and_keeps_exhaustion_distinct() {
     let trace = vec![

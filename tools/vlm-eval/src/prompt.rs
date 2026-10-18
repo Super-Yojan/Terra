@@ -36,10 +36,13 @@ confidence is your own estimate. It is not a calibrated probability."
     )
 }
 
+/// Return the lowercase SHA-256 digest of the exact shared prompt rules.
 pub fn rules_sha256() -> String {
     sha256_hex(rules_text().as_bytes())
 }
 
+/// Build the model prompt from rules, observed objects, rover state, and map metadata.
+/// Human label notes and expected scoring outcomes are deliberately excluded.
 pub fn user_prompt(scenario: &Scenario) -> String {
     let pose = Pose {
         x: scenario.rover.x,

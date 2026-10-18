@@ -1,6 +1,9 @@
+//! Loopback router-loss and explicit reconnect regression scenario.
+//! Network scenarios require local TCP sockets and use bounded receipt waits.
 use std::time::{Duration, Instant};
 use terra_mobile::{MobileController, default_control_settings};
 use zenoh::Wait;
+/// Open a discovery-free loopback router on the supplied endpoint for reconnect scenarios.
 fn router(endpoint: &str) -> zenoh::Session {
     let mut config = zenoh::Config::default();
     config.insert_json5("mode", "\"router\"").unwrap();
@@ -16,6 +19,8 @@ fn router(endpoint: &str) -> zenoh::Session {
     zenoh::open(config).wait().unwrap()
 }
 #[test]
+/// Accepts a routed waypoint, closes the router, observes failure, explicitly clears
+/// dashboard intent, then reconnects and verifies the old goal is idle rather than replayed.
 fn accepted_goal_does_not_resume_after_router_loss_and_explicit_reconnect() {
     let socket = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let endpoint = format!("tcp/127.0.0.1:{}", socket.local_addr().unwrap().port());

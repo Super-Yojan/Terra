@@ -4,21 +4,56 @@
 //! [`VelocityController::step`] checks sensor health and freshness before applying
 //! feedforward and PI feedback. Wheel efforts share one saturation scale so their
 //! ratio is preserved; anti-windup feeds the achievable effort back into the integrals.
+//!
+//! Targets and estimates share a nonnegative monotonic clock in seconds. Forward
+//! velocity is metres/second and yaw rate is radians/second, with positive yaw
+//! producing greater right-wheel effort. Hardware enable, PWM conversion, and
+//! obstacle checks belong to other layers.
+//!
+//! ```
+//! use terra_control::{ControllerConfig, VelocityController};
+//! use terra_types::{Health, StopReason, VelocityEstimate, VelocityTarget};
+//! let mut controller = VelocityController::new(ControllerConfig::default()).unwrap();
+//! controller.set_target(VelocityTarget {
+//!     timestamp: 0.0, forward: 0.5, yaw_rate: 0.0,
+//! }).unwrap();
+//! let output = controller.step(VelocityEstimate {
+//!     timestamp: 0.0, forward: 0.0, yaw_rate: 0.0, health: Health::Ready,
+//! });
+//! assert_eq!(output.stop_reason, StopReason::None);
+//! assert!(output.left > 0.0 && output.left == output.right);
+//! ```
 
 use terra_types::*;
+/// PI gains and safety limits for differential wheel control.
+///
+/// Defaults target a small rover. All numbers must be finite; call [`Self::validate`]
+/// after changing settings. Gains convert velocity errors into normalized effort.
 #[derive(Clone, Copy, Debug)]
 pub struct ControllerConfig {
+    /// Forward proportional gain in normalized effort per metre/second.
     pub linear_kp: f64,
+    /// Forward integral gain in normalized effort per metre of accumulated error.
     pub linear_ki: f64,
+    /// Yaw proportional gain in normalized effort per radian/second.
     pub yaw_kp: f64,
+    /// Yaw integral gain in normalized effort per radian of accumulated error.
     pub yaw_ki: f64,
+    /// Forward target feedforward gain in effort per metre/second.
     pub linear_feedforward: f64,
+    /// Yaw target feedforward gain in effort per radian/second.
     pub yaw_feedforward: f64,
+    /// Symmetric target speed limit in metres/second; must be in `(0, 20]`.
     pub max_forward: f64,
+    /// Symmetric target yaw-rate limit in radians/second; must be in `(0, 20]`.
     pub max_yaw_rate: f64,
+    /// Maximum absolute wheel effort, in `(0, 1]`.
     pub max_effort: f64,
+    /// Target age in seconds at which the controller stops; must be positive.
     pub target_timeout: f64,
+    /// Largest accepted elapsed step in seconds, in `(0, 1]`.
     pub max_step: f64,
+    /// Back-calculation rate in inverse seconds, applied to saturation error.
     pub anti_windup: f64,
 }
 impl Default for ControllerConfig {
@@ -40,6 +75,9 @@ impl Default for ControllerConfig {
     }
 }
 impl ControllerConfig {
+    /// Check finite gains in `[0, 100]` and positive limits with their stated bounds.
+    ///
+    /// Returns [`InputError::InvalidConfiguration`] if any setting violates those requirements.
     pub fn validate(&self) -> Result<(), InputError> {
         let gains = [
             self.linear_kp,
@@ -73,6 +111,10 @@ impl ControllerConfig {
         Ok(())
     }
 }
+/// Stateful feedforward/PI controller with freshness and sensor-health holds.
+///
+/// Times are nonnegative monotonic seconds in the same clock domain as the target.
+/// A new controller has no target and produces a stale-target hold until one is set.
 pub struct VelocityController {
     config: ControllerConfig,
     target: Option<VelocityTarget>,
@@ -81,6 +123,9 @@ pub struct VelocityController {
     yaw_integral: f64,
 }
 impl VelocityController {
+    /// Construct an idle controller with zero integrals.
+    ///
+    /// Returns [`InputError::InvalidConfiguration`] when `config` fails validation.
     pub fn new(config: ControllerConfig) -> Result<Self, InputError> {
         config.validate()?;
         Ok(Self {
@@ -91,6 +136,7 @@ impl VelocityController {
             yaw_integral: 0.0,
         })
     }
+    /// Discard the target, prior step time, and both accumulated feedback terms.
     pub fn reset(&mut self) {
         self.target = None;
         self.last_step = None;
@@ -100,6 +146,12 @@ impl VelocityController {
         self.linear_integral = 0.0;
         self.yaw_integral = 0.0;
     }
+    /// Latch a target, clamping speeds to the configured symmetric limits.
+    ///
+    /// Forward speed is metres/second and yaw rate is radians/second. A non-finite
+    /// value or negative timestamp clears the target and integrals and returns
+    /// [`InputError::NonFinite`]. An older timestamp returns [`InputError::OutOfOrder`]
+    /// without replacing the target; equal timestamps are allowed.
     pub fn set_target(&mut self, mut target: VelocityTarget) -> Result<(), InputError> {
         if !target.timestamp.is_finite()
             || target.timestamp < 0.0
@@ -127,6 +179,14 @@ impl VelocityController {
     }
     /// Produce wheel effort only after time, sensor health, and target checks pass.
     /// A safety hold clears accumulated feedback so it cannot resume as a surge.
+    /// Use estimated forward metres/second and yaw radians/second to compute effort.
+    ///
+    /// The first accepted timing calculation uses 0.01 seconds. Missing or expired
+    /// targets, future targets, non-increasing or overlong steps, invalid numbers,
+    /// and unhealthy sensors return zero effort with the corresponding stop reason.
+    /// Safety holds clear integrals. Successful efforts lie within `max_effort`.
+    /// A zero target with measured speed and yaw-rate magnitude both below 0.015
+    /// (in their respective units) clears integrals and produces exact zero effort.
     pub fn step(&mut self, estimate: VelocityEstimate) -> MotorOutput {
         let now = estimate.timestamp;
         let dt = self.last_step.map_or(0.01, |last| now - last);
@@ -211,6 +271,8 @@ impl VelocityController {
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// Build a ready sensor fixture at time `t` seconds with forward speed `v`
+    /// in metres/second and yaw rate `w` in radians/second.
     fn estimate(t: f64, v: f64, w: f64) -> VelocityEstimate {
         VelocityEstimate {
             timestamp: t,
@@ -219,6 +281,8 @@ mod tests {
             health: Health::Ready,
         }
     }
+    /// Checks that a forward-left target produces unequal positive wheel efforts,
+    /// then times out at the exact deadline and stops when tracking is lost.
     #[test]
     fn produces_differential_effort_and_neutral_on_timeout_or_tracking_loss() {
         let mut c = VelocityController::new(ControllerConfig::default()).unwrap();
@@ -245,6 +309,8 @@ mod tests {
         state.health = Health::TrackingLost;
         assert_eq!(c.step(state).left, 0.0);
     }
+    /// Simulates a loaded first-order motor plant at 100 Hz, reducing its speed target
+    /// after sustained saturation and checking final forward and yaw convergence.
     #[test]
     fn closes_the_loop_on_a_motor_plant_with_load_and_recovers_from_saturation() {
         let mut c = VelocityController::new(ControllerConfig::default()).unwrap();

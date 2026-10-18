@@ -11,41 +11,75 @@ use crate::pack::scenarios;
 use crate::prompt::{rules_sha256, user_prompt};
 use crate::scene::Scenario;
 
+/// Mock or OpenAI-compatible model evaluation settings.
 #[derive(Clone, Debug)]
 pub struct RunConfig {
+    /// Use deterministic label-derived answers instead of a network model.
     pub mock: bool,
+    /// Optional OpenAI-compatible API base URL; required outside mock mode.
     pub base_url: Option<String>,
+    /// Model name sent to the endpoint or recorded for the mock run.
     pub model: String,
+    /// Optional bearer credential for the evaluation endpoint.
     pub api_key: Option<String>,
+    /// Maximum duration of an individual model request.
     pub timeout: Duration,
 }
 
+/// Serializable result and diagnostics for one scenario.
 #[derive(Clone, Debug, Serialize)]
 pub struct CaseScore {
+    /// Stable identifier shared by prompts, labels, and reports.
     pub id: String,
+    /// Human-readable scenario title.
     pub title: String,
+    /// Whether output parses and satisfies the decision schema and actuator exclusions.
     pub valid_json: bool,
+    /// Whether output contains no forbidden actuator fields.
     pub no_actuator: bool,
+    /// Whether decision category and dump proposal agree with the accepted label.
     pub action_ok: bool,
+    /// Whether waypoint requirements and labelled coordinate tolerance are satisfied.
     pub waypoint_ok: bool,
+    /// Whether all required checks passed.
     pub passed: bool,
+    /// Answer generation time in milliseconds, before local scoring.
     pub latency_ms: u128,
+    /// Diagnostic notes explaining scoring or provenance.
     pub notes: String,
+    /// Truncated model output retained for inspection.
     pub output_excerpt: String,
 }
 
+/// Aggregate evaluation results and provenance for all synthetic scenarios.
 #[derive(Clone, Debug, Serialize)]
 pub struct EvalReport {
+    /// Evaluation source: mock or openai.
     pub mode: String,
+    /// Model name sent to the endpoint or recorded for the mock run.
     pub model: String,
+    /// Optional OpenAI-compatible API base URL; required outside mock mode.
     pub base_url: Option<String>,
+    /// Lowercase SHA-256 digest of the exact shared prompt rules.
     pub rules_sha256: String,
+    /// Camera image provenance label; synthetic fixtures use placeholder images.
     pub camera_source: String,
+    /// Number of scenarios passing all required checks.
     pub passed: usize,
+    /// Number of evaluated scenarios.
     pub total: usize,
+    /// Per-scenario scores in fixture order.
     pub cases: Vec<CaseScore>,
 }
 
+/// Evaluate every scenario in fixture order and aggregate its local scoring checks.
+/// Mock mode runs without network access; other modes send images and prompts
+/// to the configured OpenAI-compatible endpoint.
+///
+/// # Errors
+///
+/// Returns a descriptive string for a missing endpoint, HTTP/request failures,
+/// or an unsupported model response. A failed score remains a report row.
 pub fn run_eval(config: &RunConfig) -> Result<EvalReport, String> {
     if !config.mock && config.base_url.is_none() {
         return Err("pass --base-url or --mock".into());
@@ -87,6 +121,13 @@ pub fn run_eval(config: &RunConfig) -> Result<EvalReport, String> {
     })
 }
 
+/// Write Markdown to `path` and JSON to the same path with a `.json` extension.
+/// Parent directories are created and existing files are overwritten.
+///
+/// # Errors
+///
+/// Returns filesystem or serialization errors as strings. The two writes are
+/// sequential, so a later failure may leave the Markdown report already written.
 pub fn write_report(report: &EvalReport, path: &Path) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() {
@@ -103,6 +144,7 @@ pub fn write_report(report: &EvalReport, path: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Format a results table with provenance and an explicit mock-mode qualification.
 pub fn render_markdown(report: &EvalReport) -> String {
     let mut out = String::new();
     out.push_str("# VLM eval results\n\n");
@@ -226,6 +268,8 @@ fn message_text(value: &serde_json::Value) -> Option<String> {
 mod tests {
     use super::*;
 
+    /// All mock labels pass, while the report explicitly avoids attributing that
+    /// success to a real model endpoint.
     #[test]
     fn mock_run_passes_without_claiming_a_model_score() {
         let report = run_eval(&RunConfig {

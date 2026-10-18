@@ -1,6 +1,9 @@
+//! Search capability, evidence confirmation, and contractual transport scenarios.
+//! Network scenarios require local TCP sockets and use bounded receipt waits.
 use std::{collections::VecDeque, time::Instant};
 use terra_transport::*;
 #[test]
+/// Checks search start/action/report-ack are intent topics while observations and status are excluded.
 fn search_command_topics_are_explicit() {
     for s in ["search", "search/action", "search/report/ack"] {
         assert!(is_control_topic(s));
@@ -9,6 +12,7 @@ fn search_command_topics_are_explicit() {
     assert!(!is_control_topic("search/status"));
 }
 #[test]
+/// Floods search intent around a safety stop and verifies the bounded queue still drains the stop last.
 fn stops_dominate_search_start_and_resume() {
     let mut q = VecDeque::new();
     enqueue_control_action(
@@ -25,6 +29,8 @@ fn stops_dominate_search_start_and_resume() {
     assert!(a.len() <= 256);
 }
 #[test]
+/// Exchanges search status and a cancel action between real loopback control/client sessions
+/// and checks the client exposes authoritative completion state.
 fn remote_search_round_trip_retains_authoritative_state() {
     use std::time::Duration;
     let socket = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -70,6 +76,8 @@ fn remote_search_round_trip_retains_authoritative_state() {
     client.disconnect();
 }
 #[test]
+/// Refreshes two outstanding search reports and verifies both report identities
+/// are replayed on the shared contractual report topic.
 fn all_pending_reports_are_replayed_on_contract_topic() {
     use std::time::Duration;
     use zenoh::Wait;

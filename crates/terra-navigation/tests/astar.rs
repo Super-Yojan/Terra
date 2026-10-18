@@ -1,6 +1,9 @@
+//! Routing regressions for footprint clearance, partial progress, and search cost.
+
 use std::time::Instant;
 use terra_mapping::MapSnapshot;
 use terra_navigation::{Pose, astar_progress_route, astar_route, route_segment_clear};
+/// Build an observed, obstacle-free 7.5 m square with 0.25 m cells.
 fn grid() -> MapSnapshot {
     MapSnapshot {
         width: 30,
@@ -11,6 +14,8 @@ fn grid() -> MapSnapshot {
         occupancy: vec![0; 900],
     }
 }
+/// A finite wall requires a detour that clears the rover's entire footprint.
+/// Every returned edge must remain clear, and the route must still reach the goal.
 #[test]
 fn routes_around_wall_with_footprint_clearance() {
     let mut map = grid();
@@ -31,6 +36,7 @@ fn routes_around_wall_with_footprint_clearance() {
     );
     assert_eq!(route.last(), Some(&[5., 2.]));
 }
+/// Neither a wall spanning the map nor unobserved space may produce an exact route.
 #[test]
 fn sealed_and_unknown_routes_hold() {
     let mut map = grid();
@@ -47,6 +53,8 @@ fn sealed_and_unknown_routes_hold() {
     assert!(astar_route(&map, pose, 0.3, 5., 2.).is_err());
 }
 
+/// Two diagonally touching free cells do not form a traversable passage through
+/// the occupied cells surrounding their shared corner.
 #[test]
 fn diagonal_gap_does_not_cut_an_occupied_corner() {
     let map = MapSnapshot {
@@ -75,6 +83,8 @@ fn diagonal_gap_does_not_cut_an_occupied_corner() {
     );
 }
 
+/// Progress routing may approach off-map or unknown goals through observed space,
+/// while exact routing rejects them and occupied goals remain errors.
 #[test]
 fn outside_and_unknown_goals_route_toward_the_frontier() {
     let map = MapSnapshot {
@@ -94,6 +104,7 @@ fn outside_and_unknown_goals_route_toward_the_frontier() {
         astar_route(&map, pose, 0.65, 16., 0.),
         Err("route_goal_outside_map")
     );
+    // Report timing for this larger window without imposing a timing assertion here.
     let started = Instant::now();
     let route = astar_progress_route(&map, pose, 0.65, 16., 0.).unwrap();
     eprintln!(
@@ -112,6 +123,7 @@ fn outside_and_unknown_goals_route_toward_the_frontier() {
             .all(|p| route_segment_clear(&map, pose, 0.65, p[0], p[1]))
     );
 
+    // Reveal only a local patch: progress must stop short of the unknown goal.
     let mut unknown = map.clone();
     unknown.occupancy.fill(-1);
     for row in 90..110 {
@@ -127,10 +139,13 @@ fn outside_and_unknown_goals_route_toward_the_frontier() {
         Err("route_goal_blocked")
     );
 
+    // An explicitly occupied target must not trigger the partial-progress fallback.
     unknown.occupancy[100 * 200 + 140] = 100;
     assert!(astar_progress_route(&unknown, pose, 0.65, 4.05, 0.05).is_err());
 }
 
+/// Clear endpoints do not guarantee a clear connecting segment. Retain the safe
+/// prefix when a same-cell route grazes an inflated neighboring obstacle.
 #[test]
 fn clipped_final_segment_keeps_the_clear_prefix() {
     let mut map = MapSnapshot {
@@ -141,7 +156,7 @@ fn clipped_final_segment_keeps_the_clear_prefix() {
         origin_y: 0.,
         occupancy: vec![0; 64],
     };
-    // Same cell as the goal. The pose and the goal are each clear, but the
+    // The pose is in the same cell as the goal. Both are clear, but the
     // straight segment between them crosses the inflated neighbour.
     map.occupancy[1 * 8] = 100;
     let pose = Pose {
@@ -164,11 +179,14 @@ fn clipped_final_segment_keeps_the_clear_prefix() {
     );
 }
 
+/// A long zigzag corridor must remain routable even when its compacted polyline
+/// needs more than 512 points; corner count alone is not a reason to reject it.
 #[test]
 fn routes_are_not_rejected_for_corner_count() {
     let width = 3usize;
     let height = 1_000usize;
     let mut occupancy = vec![100i8; width * height];
+    // Repeat a connected left-to-right-to-left pattern to force frequent turns.
     for row in 0..height {
         let free: &[usize] = match row % 6 {
             0 => &[0],
@@ -206,6 +224,8 @@ fn routes_are_not_rejected_for_corner_count() {
     assert_eq!(route.last(), Some(&[2.5, 999.5]));
 }
 
+/// Cross an observed 18 × 12 m map within the existing 30 ms timing budget,
+/// guarding the clearance cache against regressions to repeated footprint scans.
 #[test]
 fn pitch_corner_to_corner_stays_on_the_control_budget() {
     let map = MapSnapshot {

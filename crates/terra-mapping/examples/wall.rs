@@ -1,4 +1,8 @@
 //! Minimal synthetic depth sensor: prints free '.', occupied '#', unknown ' '.
+//!
+//! Run with `cargo run -p terra-mapping --example wall`. A horizontal row of depth
+//! returns builds a wall ahead of a stationary camera; repeated frames strengthen
+//! evidence. Output rows are reversed so world +Y points upward on the terminal.
 use terra_mapping::{CameraIntrinsics, CameraPose, LocalOccupancyMap, MapConfig};
 use terra_types::{Quaternion, Vector3};
 fn main() -> Result<(), Box<dyn std::error::Error>> {

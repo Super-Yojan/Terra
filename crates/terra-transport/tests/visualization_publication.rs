@@ -1,8 +1,12 @@
+//! Sample-driven visualization and replayable ordinary state transport scenarios.
+//! Network scenarios require local TCP sockets and use bounded receipt waits.
 use std::time::Duration;
 use terra_transport::ControlPlane;
 use zenoh::Wait;
 
 #[test]
+/// Checks ordinary status replays while each explicit map/cloud/heartbeat sample
+/// is sent once, including repeated heartbeat identities from new producer observations.
 fn visualization_is_sent_once_but_control_state_still_replays() {
     let socket = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let endpoint = format!("tcp/127.0.0.1:{}", socket.local_addr().unwrap().port());
@@ -62,6 +66,8 @@ fn visualization_is_sent_once_but_control_state_still_replays() {
 }
 
 #[test]
+/// Checks exact occupancy, pointcloud, and heartbeat byte caps and rejection
+/// of non-visualization suffixes by the explicit visualization API.
 fn visualization_enqueue_reports_rejection_and_accepts_retry_with_topic_caps() {
     let socket = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let endpoint = format!("tcp/127.0.0.1:{}", socket.local_addr().unwrap().port());

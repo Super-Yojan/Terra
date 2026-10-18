@@ -18,6 +18,7 @@ enum Message {
     Event(Value),
     Close,
 }
+/// Bounded asynchronous JSONL recorder whose failures mark the run incomplete.
 pub struct RunRecorder {
     sender: SyncSender<Message>,
     worker: Option<JoinHandle<io::Result<()>>>,
@@ -25,6 +26,10 @@ pub struct RunRecorder {
     dropped: Arc<AtomicU64>,
 }
 impl RunRecorder {
+    /// Create or truncate a JSONL file and spawn its bounded recording worker.
+    ///
+    /// `manifest` must be a JSON object; schema and kind are overwritten. Capacity must be 1–65536.
+    /// Returns file-creation or invalid-capacity I/O errors; later worker errors surface through `record`, `failed`, or `close`.
     pub fn create(path: &Path, mut manifest: Value, capacity: usize) -> io::Result<Self> {
         if !(1..=65536).contains(&capacity) {
             return Err(io::Error::new(
@@ -76,6 +81,10 @@ impl RunRecorder {
             dropped,
         })
     }
+    /// Try to queue an event without waiting for disk I/O.
+    ///
+    /// Returns an I/O error if the queue is full, the worker stopped, or recording already failed.
+    /// Any rejection marks the run incomplete and increments the dropped-event count.
     pub fn record(&self, event: Value) -> io::Result<()> {
         if self.failed() {
             self.dropped.fetch_add(1, Ordering::Relaxed);
@@ -90,9 +99,13 @@ impl RunRecorder {
             })
         })
     }
+    /// Return whether a worker or queue failure has made the recording incomplete.
     pub fn failed(&self) -> bool {
         self.failed.load(Ordering::Acquire)
     }
+    /// Drain queued events, write the terminal record, flush, and join the worker.
+    ///
+    /// This may block. Returns worker I/O, panic, or incomplete-recording errors; repeated closes are safe.
     pub fn close(&mut self) -> io::Result<()> {
         if let Some(worker) = self.worker.take() {
             let _ = self.sender.send(Message::Close);
@@ -116,7 +129,17 @@ fn line(w: &mut impl Write, v: &Value) -> io::Result<()> {
     serde_json::to_writer(&mut *w, v)?;
     w.write_all(b"\n")
 }
-/// Ignore only an interrupted final line, never malformed complete records.
+/// Decode newline-terminated JSON records, ignoring an interrupted final line.
+///
+/// Returns the first JSON error from a complete line, including an empty line;
+/// schema and record kind are not validated here.
+///
+/// ```
+/// let records = terra_experiment::read_records(b"{\"kind\":\"manifest\"}\n{unfinished")?;
+/// assert_eq!(records.len(), 1);
+/// assert_eq!(records[0]["kind"], "manifest");
+/// # Ok::<(), serde_json::Error>(())
+/// ```
 pub fn read_records(bytes: &[u8]) -> serde_json::Result<Vec<Value>> {
     let mut records = Vec::new();
     for line in bytes.split_inclusive(|b| *b == b'\n') {

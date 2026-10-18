@@ -1,5 +1,6 @@
 use terra_autonomy::*;
 use terra_navigation::{Pose, Twist};
+/// Build healthy origin-pose evidence at `now` seconds with no map and zero measured motion.
 fn input(now: f64) -> ArbiterInput<'static> {
     ArbiterInput {
         now,
@@ -12,6 +13,7 @@ fn input(now: f64) -> ArbiterInput<'static> {
         healthy: true,
     }
 }
+/// Build an unbound 1 m/s forward teleop request with no yaw rate or session ordering.
 fn tele() -> TeleopRequest {
     TeleopRequest {
         linear: 1.,
@@ -22,6 +24,7 @@ fn tele() -> TeleopRequest {
         sequence: None,
     }
 }
+/// Reselect teleop to clear an old motion lease, then verify stop survives an unhealthy reset and healthy reset does not replay motion.
 #[test]
 fn takeover_clears_old_lease_and_stop_is_latched() {
     let mut a = AutonomyArbiter::default();
@@ -60,6 +63,7 @@ fn takeover_clears_old_lease_and_stop_is_latched() {
     );
     assert_eq!(a.step(input(0.6)).twist, Twist::default());
 }
+/// Reject goals outside waypoint authority, expire operator input, and hold on missing maps or backward control time.
 #[test]
 fn stale_inputs_and_no_implicit_goal_mode() {
     let mut a = AutonomyArbiter::default();
@@ -83,6 +87,7 @@ fn stale_inputs_and_no_implicit_goal_mode() {
     assert_eq!(a.step(input(0.7)).status.reason, "map_stale");
     assert_eq!(a.step(input(0.65)).status.reason, "invalid_time");
 }
+/// Replay an identical takeover token after accepting fresh operator input; idempotency must preserve the new lease.
 #[test]
 fn duplicate_takeover_does_not_clear_fresh_input_twice() {
     let mut a = AutonomyArbiter::default();
@@ -97,6 +102,7 @@ fn duplicate_takeover_does_not_clear_fresh_input_twice() {
     a.set_level(r);
     assert_eq!(a.step(input(0.1)).twist.linear, 1.);
 }
+/// Offer a frontier on a known free core, hold motion until approval, and accept approval against fresh map and pose evidence.
 #[test]
 fn supervised_proposes_but_waits_for_approval() {
     let mut a = AutonomyArbiter::default();
@@ -153,6 +159,7 @@ fn supervised_proposes_but_waits_for_approval() {
         Some("accepted")
     );
 }
+/// Accept a goal, switch to teleop, and replay the old token; the receipt stays accepted without activating a goal.
 #[test]
 fn duplicate_goal_token_does_not_relaunch() {
     let mut a = AutonomyArbiter::default();
@@ -181,6 +188,7 @@ fn duplicate_goal_token_does_not_relaunch() {
         terra_waypoint::GoalState::Idle
     );
 }
+/// Submit a goal with nonfinite yaw under waypoint authority and require rejection.
 #[test]
 fn invalid_direct_goal_is_rejected() {
     let mut a = AutonomyArbiter::default();
@@ -200,6 +208,7 @@ fn invalid_direct_goal_is_rejected() {
         50.
     ));
 }
+/// Accept a zero command then a backward-time motion packet before ticking; the rover must stay stopped.
 #[test]
 fn older_input_cannot_overwrite_newer_zero_between_steps() {
     let mut a = AutonomyArbiter::default();
@@ -209,6 +218,7 @@ fn older_input_cannot_overwrite_newer_zero_between_steps() {
     a.accept_operator(tele(), 0.1);
     assert_eq!(a.step(input(0.3)).twist, Twist::default());
 }
+/// Accept session sequence 2 with zero velocity, then reject sequence 1 even when its receipt time is later.
 #[test]
 fn reordered_session_packet_cannot_renew_motion() {
     let mut a = AutonomyArbiter::default();
@@ -223,6 +233,7 @@ fn reordered_session_packet_cannot_renew_motion() {
     a.accept_operator(old, 0.2);
     assert_eq!(a.step(input(0.3)).twist, Twist::default());
 }
+/// Alternate held keyboard stop and healthy resets with unique tokens; each held stop must latch again.
 #[test]
 fn keyboard_stop_relatches_after_each_reset() {
     let mut a = AutonomyArbiter::default();
@@ -239,6 +250,7 @@ fn keyboard_stop_relatches_after_each_reset() {
         assert_eq!(a.step(input(n as f64 + 0.1)).status.safety, "clear");
     }
 }
+/// Generate a proposal in a new run and reject an approval carrying the old run ID despite a matching proposal number.
 #[test]
 fn previous_run_approval_cannot_launch_reused_proposal_id() {
     let mut a = AutonomyArbiter::default();
@@ -291,6 +303,7 @@ fn previous_run_approval_cannot_launch_reused_proposal_id() {
     assert_eq!(out.status.result.as_deref(), Some("rejected"));
     assert_eq!(out.twist, Twist::default());
 }
+/// Reject teleop packets bound to an old run or a superseded authority revision.
 #[test]
 fn canonical_motion_is_bound_to_authority_and_run() {
     let mut a = AutonomyArbiter::default();
@@ -313,6 +326,7 @@ fn canonical_motion_is_bound_to_authority_and_run() {
     assert_eq!(a.step(input(0.3)).twist, Twist::default());
 }
 
+/// Follow a direct waypoint without a map, then require stale-pose and cancellation holds.
 #[test]
 fn direct_waypoint_needs_no_map_but_retains_sensor_and_cancel_safety() {
     let mut a = AutonomyArbiter::default();
@@ -341,6 +355,7 @@ fn direct_waypoint_needs_no_map_but_retains_sensor_and_cancel_safety() {
     assert_eq!(a.step(input(1.1)).twist, Twist::default());
 }
 
+/// Compare direct and planned waypoint authority on a fully occupied map; stop must still latch and reject subsequent goals.
 #[test]
 fn l2_bypasses_occupied_map_while_l3_stops_and_stop_still_latches() {
     let map = terra_mapping::MapSnapshot {
@@ -394,6 +409,7 @@ fn l2_bypasses_occupied_map_while_l3_stops_and_stop_still_latches() {
     }
 }
 
+/// Cancel a direct waypoint and replay its accepted token; return the cached receipt without restarting motion.
 #[test]
 fn cancelled_l2_token_never_replays_motion() {
     let mut a = AutonomyArbiter::default();
@@ -416,6 +432,7 @@ fn cancelled_l2_token_never_replays_motion() {
     assert_eq!(a.step(input(0.2)).twist, Twist::default());
 }
 
+/// Block assisted teleop with an occupied map, verify the bounded 121-candidate trace, and clear it on emergency stop.
 #[test]
 fn blocked_planner_trace_is_published_and_cleared_on_stop() {
     let mut arbiter = AutonomyArbiter::default();

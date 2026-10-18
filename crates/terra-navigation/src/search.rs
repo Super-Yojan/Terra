@@ -1,19 +1,56 @@
 //! Mission-scoped observed map and deterministic routes. No target truth is accepted here.
+//!
 use crate::{Pose, reachable};
 use terra_mapping::MapSnapshot;
+/// Axis-aligned mission area in world metres, including the rover footprint.
 #[derive(Clone, Copy, Debug)]
 pub struct SearchBounds {
+    /// Lower world x boundary.
     pub min_x: f64,
+    /// Lower world y boundary.
     pub min_y: f64,
+    /// Upper world x boundary.
     pub max_x: f64,
+    /// Upper world y boundary.
     pub max_y: f64,
 }
+/// Next action from the mission's accumulated observations and recovery state.
 #[derive(Clone, Debug, PartialEq)]
 pub enum SearchNavigationDecision {
-    Goal { x: f64, y: f64 },
+    /// Next route waypoint in world metres, rather than necessarily the final frontier.
+    Goal {
+        /// World x coordinate of the waypoint in metres.
+        x: f64,
+        /// World y coordinate of the waypoint in metres.
+        y: f64,
+    },
+    /// No frontier remains and no excluded target is waiting for its cooldown.
     Exhausted,
-    Blocked { reason: &'static str },
+    /// Navigation cannot proceed; `reason` identifies the failed check or recovery limit.
+    Blocked {
+        /// Machine-readable failure code; see [`SearchNavigator::next_goal`].
+        reason: &'static str,
+    },
 }
+/// Accumulates observations across local map windows and follows routes to frontiers.
+///
+/// Construct a new navigator for each mission to reset map memory and recovery failures.
+/// Known cells in incoming windows overwrite previous observations; unknown cells
+/// leave memory intact. All windows must share world coordinates and resolution.
+///
+/// # Examples
+///
+/// ```
+/// use terra_navigation::{SearchBounds, SearchNavigator};
+///
+/// let bounds = SearchBounds {
+///     min_x: -10.0, min_y: -10.0, max_x: 10.0, max_y: 10.0,
+/// };
+/// let mut navigator = SearchNavigator::new(bounds, 0.65)?;
+/// assert_eq!(navigator.observed_cells(), 0);
+/// navigator.replan(); // Observations and recovery history would be retained.
+/// # Ok::<(), &'static str>(())
+/// ```
 pub struct SearchNavigator {
     bounds: SearchBounds,
     radius: f64,
@@ -27,6 +64,15 @@ pub struct SearchNavigator {
     failures: u8,
 }
 impl SearchNavigator {
+    /// Create a mission with a finite positive radius of at most 5 m.
+    ///
+    /// Each bounds dimension must exceed the footprint diameter and be at most 100 m.
+    ///
+    /// # Errors
+    ///
+    /// Returns `invalid search geometry` when a boundary or radius is nonfinite,
+    /// the radius is outside `(0, 5]` m, or either bounds dimension is invalid.
+    /// Map memory is allocated later by [`Self::next_goal`], using the first map's resolution.
     pub fn new(bounds: SearchBounds, radius: f64) -> Result<Self, &'static str> {
         if ![
             bounds.min_x,
@@ -59,16 +105,23 @@ impl SearchNavigator {
             failures: 0,
         })
     }
+    /// Count known cells in accumulated mission memory, including occupied cells.
     pub fn observed_cells(&self) -> usize {
         self.map
             .as_ref()
             .map_or(0, |m| m.occupancy.iter().filter(|&&v| v >= 0).count())
     }
+    /// Discard the active route and progress anchor, retaining observations and failures.
     pub fn replan(&mut self) {
         self.goal = None;
         self.route.clear();
         self.anchor = None;
     }
+    /// Abandon the route, exclude its target for 30 s, and increment recovery failures.
+    ///
+    /// `now` uses the same seconds-based clock as [`Self::next_goal`].
+    /// Supply a finite nonnegative time. Failures accumulate even if there is no
+    /// active target, and [`Self::replan`] does not reset the failure count.
     pub fn invalidate_goal(&mut self, now: f64) {
         if let Some((x, y)) = self.goal.take() {
             if self.excluded.len() == 256 {
@@ -80,6 +133,11 @@ impl SearchNavigator {
         self.anchor = None;
         self.failures = self.failures.saturating_add(1);
     }
+    /// Reset the stall timer after at least 0.25 m of displacement from its anchor.
+    ///
+    /// Establishes an anchor on the first call. Supply a finite pose and a finite,
+    /// nonnegative `now` on the same monotonic seconds-based clock as [`Self::next_goal`].
+    /// This method does not validate its inputs; `next_goal` calls it after validation.
     pub fn record_progress(&mut self, pose: Pose, now: f64) {
         if self
             .anchor
@@ -126,6 +184,7 @@ impl SearchNavigator {
         for y in 0..m.height {
             for x in 0..m.width {
                 let value = m.occupancy[(y * m.width + x) as usize];
+                // Missing observations in a new window must not erase mission memory.
                 if value < 0 {
                     continue;
                 }
@@ -141,6 +200,31 @@ impl SearchNavigator {
         self.last_revision = Some(revision);
         Ok(())
     }
+    /// Merge a local observation and return the next reachable search waypoint.
+    ///
+    /// Revisions must not decrease; `now` must be finite, nonnegative, and monotonic
+    /// in seconds. A target is invalidated after 10 s without recorded progress,
+    /// and three invalidations exhaust recovery for this navigator.
+    ///
+    /// # Decisions
+    ///
+    /// [`SearchNavigationDecision::Goal`] contains the next waypoint, which may
+    /// precede the selected frontier. [`SearchNavigationDecision::Exhausted`]
+    /// means no eligible frontier remains and no target cooldown is pending.
+    /// A blocked decision has one of these reason codes:
+    ///
+    /// - `invalid_time_or_pose`: invalid pose/time, or time moved backward.
+    /// - `invalid_map`: malformed map storage or geometry.
+    /// - `map_revision_regressed`: revision decreased since the last merge.
+    /// - `search_map_capacity`: mission memory would exceed 250,000 cells.
+    /// - `map_frame_changed`: resolution differs from the first accepted map.
+    /// - `outside_search_bounds`: the rover footprint extends outside mission bounds.
+    /// - `search_recovery_exhausted`: at least three goal invalidations accumulated.
+    /// - `frontier_cooldown`: no eligible frontier was found while exclusions remain.
+    /// - `route_outside_local_map`: no usable first waypoint could be certified locally.
+    ///
+    /// The method can update time, map memory, and recovery state before returning
+    /// a blocked decision; a blocked result does not roll those updates back.
     pub fn next_goal(
         &mut self,
         m: &MapSnapshot,
@@ -191,6 +275,7 @@ impl SearchNavigator {
         if let Some((x, y)) = self.goal.take() {
             self.excluded.push((x, y, now + 30.));
         }
+        // Choose frontiers globally from memory; validate follower waypoints locally below.
         let memory = self.map.as_ref().unwrap();
         let excluded: Vec<_> = self.excluded.iter().map(|p| (p.0, p.1)).collect();
         let Some(target) = crate::frontier(memory, pose, self.radius, &excluded) else {

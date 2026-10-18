@@ -1,4 +1,5 @@
 use terra_experiment::*;
+/// Use seed 42 to check repeatable placement, line-of-sight gating, one-time reporting, and rejection of nonfinite time.
 #[test]
 fn deterministic_detection_and_confirmation() {
     let c = MissionConfig::rescue(42);
@@ -14,6 +15,7 @@ fn deterministic_detection_and_confirmation() {
     assert!(!m.status(3.).complete);
     assert!(m.observe(0, target.x, target.y, f64::NAN, true).is_empty());
 }
+/// Write to a process-specific temporary JSONL file, close the recorder, and verify manifest/event/end records before cleanup.
 #[test]
 fn bounded_recorder_flushes_and_identifies_run() {
     let p = std::env::temp_dir().join(format!("terra-log-{}.jsonl", std::process::id()));
@@ -26,6 +28,7 @@ fn bounded_recorder_flushes_and_identifies_run() {
     assert_eq!(records[0]["run_id"], "run-1");
     std::fs::remove_file(p).unwrap();
 }
+/// Reduce the scenario to one survivor; confirmation enters return phase and an origin pose completes the mission.
 #[test]
 fn confirmation_requires_safe_return_for_completion() {
     let mut c = MissionConfig::rescue(1);
@@ -39,6 +42,7 @@ fn confirmation_requires_safe_return_for_completion() {
     m.update_pose(0, 0., 0., 2.);
     assert!(m.status(2.).complete);
 }
+/// Keep unseen targets out of status, then discover and confirm every seeded survivor and return the observing rover.
 #[test]
 fn seeded_mission_never_exposes_hidden_targets_and_completes_all_objectives() {
     let c = MissionConfig::rescue(42);

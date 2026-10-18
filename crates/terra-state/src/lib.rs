@@ -4,12 +4,40 @@
 //! samples from one monotonic clock, then call [`VelocityEstimator::estimate`].
 //! A delayed VIO anchor is advanced using retained IMU history. Missing, stale,
 //! or untracked evidence yields a health state rather than a usable velocity.
+//!
+//! # Example
+//!
+//! ```
+//! use terra_state::{EstimatorConfig, VelocityEstimator};
+//! use terra_types::{Health, ImuSample, Quaternion, Vector3, VioSample};
+//!
+//! let mut estimator = VelocityEstimator::new(EstimatorConfig::default())?;
+//! estimator.push_imu(ImuSample {
+//!     timestamp: 1.0,
+//!     acceleration: Vector3::ZERO,
+//!     angular_velocity: Vector3::ZERO,
+//! })?;
+//! estimator.push_vio(VioSample {
+//!     timestamp: 1.0,
+//!     position: Vector3::ZERO,
+//!     orientation: Quaternion::default(),
+//!     velocity: Vector3 { x: 0.5, ..Vector3::ZERO },
+//!     tracked: true,
+//! })?;
+//! let estimate = estimator.estimate(1.0);
+//! assert_eq!(estimate.health, Health::Ready);
+//! assert_eq!(estimate.forward, 0.5);
+//! # Ok::<(), terra_types::InputError>(())
+//! ```
 
 use std::collections::VecDeque;
 use terra_types::*;
+/// Maximum ages of the sensor evidence, in seconds on a shared monotonic clock.
 #[derive(Clone, Copy, Debug)]
 pub struct EstimatorConfig {
+    /// IMU age at which estimates become stale; defaults to 0.1 s.
     pub imu_timeout: f64,
+    /// VIO age at which estimates become stale; defaults to 0.35 s.
     pub vio_timeout: f64,
 }
 impl Default for EstimatorConfig {
@@ -20,12 +48,20 @@ impl Default for EstimatorConfig {
         }
     }
 }
+/// Retains at most 512 IMU samples and the latest VIO anchor for velocity prediction.
+/// Samples must be ordered within each stream; VIO may arrive behind the IMU stream.
 pub struct VelocityEstimator {
     config: EstimatorConfig,
     imu: VecDeque<ImuSample>,
     vio: Option<VioSample>,
 }
 impl VelocityEstimator {
+    /// Create an estimator with empty sensor history.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InputError::InvalidConfiguration`] unless both timeouts are finite
+    /// and positive and `vio_timeout` is at most 2 s.
     pub fn new(config: EstimatorConfig) -> Result<Self, InputError> {
         if !config.imu_timeout.is_finite()
             || !config.vio_timeout.is_finite()
@@ -41,10 +77,19 @@ impl VelocityEstimator {
             vio: None,
         })
     }
+    /// Discard both streams, requiring new sensor evidence before reporting readiness.
     pub fn reset(&mut self) {
         self.imu.clear();
         self.vio = None;
     }
+    /// Append a calibrated body-frame IMU sample, evicting the oldest beyond 512 samples.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InputError::NonFinite`] for nonfinite components or a negative
+    /// timestamp, [`InputError::OutOfRange`] for acceleration magnitude above
+    /// 1,000 m/s² or angular speed above 100 rad/s, and [`InputError::OutOfOrder`]
+    /// unless its timestamp strictly increases within the retained IMU stream.
     pub fn push_imu(&mut self, sample: ImuSample) -> Result<(), InputError> {
         if !sample.timestamp.is_finite()
             || sample.timestamp < 0.0
@@ -81,6 +126,15 @@ impl VelocityEstimator {
         }
         Ok(())
     }
+    /// Replace the VIO anchor after validating and normalizing its orientation.
+    /// Tracking-loss samples are retained so [`Self::estimate`] can report their status.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InputError::NonFinite`] for nonfinite time, position, or velocity
+    /// or negative time; [`InputError::OutOfRange`] above 100 m/s; and
+    /// [`InputError::InvalidQuaternion`] for an unusable rotation. Timestamps must
+    /// strictly increase within the VIO stream, or [`InputError::OutOfOrder`] is returned.
     pub fn push_vio(&mut self, mut sample: VioSample) -> Result<(), InputError> {
         if !sample.timestamp.is_finite()
             || sample.timestamp < 0.0
@@ -112,7 +166,13 @@ impl VelocityEstimator {
         Ok(())
     }
     /// Advance the latest tracked VIO anchor with bounded IMU history.
+    ///
     /// Unusable evidence returns zero velocity with the reason in `health`.
+    /// `now` is a nonnegative finite timestamp in seconds, no earlier than the
+    /// latest accepted samples. Ages equal to a timeout already count as stale.
+    /// Prediction requires a retained IMU sample at or before the VIO timestamp.
+    /// Forward velocity is projected into predicted body axes; yaw rate comes
+    /// directly from the latest IMU sample's body z angular velocity.
     pub fn estimate(&self, now: f64) -> VelocityEstimate {
         let stopped = |health| VelocityEstimate {
             timestamp: now,
@@ -196,6 +256,7 @@ impl VelocityEstimator {
 #[cfg(test)]
 mod tests {
     use super::*;
+    /// Generate forward acceleration with no angular motion on the shared clock.
     fn imu(t: f64, ax: f64) -> ImuSample {
         ImuSample {
             timestamp: t,
@@ -206,6 +267,7 @@ mod tests {
             angular_velocity: Vector3::ZERO,
         }
     }
+    /// Generate a tracked, world-aligned anchor moving along world +X.
     fn vio(t: f64, v: f64) -> VioSample {
         VioSample {
             timestamp: t,
@@ -218,6 +280,8 @@ mod tests {
             tracked: true,
         }
     }
+    /// IMU acceleration advances the anchor between VIO frames, and a 90-degree
+    /// heading projects world +Y motion onto the rover's forward axis.
     #[test]
     fn predicts_between_vio_frames_and_projects_world_velocity_into_body() {
         let mut estimator = VelocityEstimator::new(EstimatorConfig::default()).unwrap();
@@ -239,6 +303,8 @@ mod tests {
         estimator.push_vio(sample).unwrap();
         assert!((estimator.estimate(0.05).forward - 2.0).abs() < 1e-8);
     }
+    /// Expired IMU evidence, regressed stream timestamps, and explicit tracking
+    /// loss must be surfaced rather than producing a healthy velocity estimate.
     #[test]
     fn lost_tracking_staleness_and_out_of_order_samples_are_detected() {
         let mut estimator = VelocityEstimator::new(EstimatorConfig::default()).unwrap();
@@ -254,6 +320,8 @@ mod tests {
         estimator.push_vio(sample).unwrap();
         assert_eq!(estimator.estimate(1.01).health, Health::TrackingLost);
     }
+    /// Fresh IMU data cannot refresh an old VIO anchor; future samples and invalid
+    /// rotations are rejected, and reset requires both streams to be supplied again.
     #[test]
     fn fresh_imu_cannot_hide_expired_vio_and_reset_requires_new_sensors() {
         let mut estimator = VelocityEstimator::new(EstimatorConfig::default()).unwrap();

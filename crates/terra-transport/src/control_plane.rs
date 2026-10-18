@@ -45,6 +45,10 @@ fn telemetry_snapshot(
     (active, snapshots)
 }
 
+/// Dashboard intent inbox and TTL-bound telemetry publisher for one rover.
+/// Control actions are bounded and drained once; ordinary state is replayed
+/// while fresh. Visualization snapshots are consumed once per producer sample.
+/// Dropping the service stops and joins its network worker.
 pub struct ControlPlane {
     inbox: Inbox,
     states: States,
@@ -52,9 +56,13 @@ pub struct ControlPlane {
     stop: Arc<AtomicBool>,
     failed: Arc<AtomicBool>,
     worker: Option<JoinHandle<()>>,
+    /// Rover identity used in topic paths and fleet advertisements.
     pub rover_id: u64,
 }
 impl ControlPlane {
+    /// Open an explicit loopback TCP dashboard endpoint. Requires the literal
+    /// `tcp/127.0.0.1:` address form and a valid non-wildcard key prefix.
+    /// Returns `InvalidSettings` for rejected configuration or `Network` on open failure.
     pub fn listen(endpoint: &str, prefix: &str, id: u64) -> Result<Self, TransportError> {
         crate::validate(endpoint, prefix)?;
         if !endpoint.starts_with("tcp/127.0.0.1:") {
@@ -64,10 +72,16 @@ impl ControlPlane {
     }
     /// Outbound TCP session, suitable for an explicitly configured Tailscale router.
     /// No listeners, multicast discovery, or automatic application command retries.
+    /// A TCP/TLS endpoint and non-wildcard key prefix are required. Outbound open
+    /// has a three-second timeout. Returns `InvalidSettings` for rejected settings
+    /// or `Network` for configuration, connection, or subscriber failure.
     pub fn connect(endpoint: &str, prefix: &str, id: u64) -> Result<Self, TransportError> {
         crate::validate(endpoint, prefix)?;
         Self::open(endpoint, prefix, id, true, None)
     }
+    /// Open the same outbound session as [`Self::connect`] with Zenoh user/password
+    /// authentication. An empty `user` omits credentials. No application intent is retried.
+    /// Returns `InvalidSettings` for rejected settings or `Network` for open failure.
     pub fn connect_authenticated(
         endpoint: &str,
         prefix: &str,
@@ -221,6 +235,9 @@ impl ControlPlane {
             rover_id: id,
         })
     }
+    /// Drain received intent as `(topic suffix, payload bytes, age_seconds)`.
+    /// Recognized stops are last so they dominate the tick. A failed session clears
+    /// its inbox and returns an empty vector; payload validation belongs to the consumer.
     pub fn take_actions(&self) -> Vec<(String, Vec<u8>, f64)> {
         if self.failed() {
             self.inbox.lock().unwrap().clear();
@@ -231,11 +248,19 @@ impl ControlPlane {
             .map(|(kind, payload, received)| (kind, payload, received.elapsed().as_secs_f64()))
             .collect()
     }
+    /// Replace the latest telemetry slot and refresh its 500 ms TTL.
+    /// Drops oversized values silently: occupancy is capped at 2,000,000 bytes,
+    /// point clouds at 262144 bytes, and other suffixes at 65536 bytes.
+    /// Ordinary state can replay at 10 Hz; visualization is taken once per update.
+    /// Does not parse JSON or acknowledge delivery.
     pub fn publish(&self, kind: &str, value: String) {
         let _ = self.enqueue_state(kind, value);
     }
     /// Enqueue sample-driven visualization, reporting size/failure rejection.
     /// Acceptance is into the bounded latest-state slot, not network delivery.
+    /// Only occupancy, pointcloud, and their heartbeat suffixes are accepted.
+    /// Uses [`Self::publish`] byte caps and returns false for an unsupported topic,
+    /// failed link, or oversized value. JSON/schema validation belongs to the caller.
     pub fn publish_visualization(&self, kind: &str, value: String) -> bool {
         visualization_topic(kind) && !self.failed() && self.enqueue_state(kind, value)
     }
@@ -258,6 +283,10 @@ impl ControlPlane {
         }
     }
     /// Fair replay of bounded outstanding records on one contractual topic.
+    /// Only `search/report` is accepted: at most 128 records, each at most 65536
+    /// bytes. Invalid batches are ignored. The latest batch has a 500 ms TTL and
+    /// can replay once per second while ordinary producer telemetry keeps the
+    /// worker active. Callers refresh unacknowledged reports explicitly.
     pub fn publish_batch(&self, kind: &str, values: Vec<String>) {
         if kind == "search/report" && values.len() <= 128 && values.iter().all(|v| v.len() <= 65536)
         {
@@ -267,6 +296,8 @@ impl ControlPlane {
                 .insert(kind.into(), (values, Instant::now()));
         }
     }
+    /// Return the latched router-loss or publication-failure flag.
+    /// Once set, intent draining discards queued commands; this service does not reconnect.
     pub fn failed(&self) -> bool {
         self.failed.load(Ordering::Acquire)
     }

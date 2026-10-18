@@ -1,6 +1,8 @@
 //! Single-phone prototype router: localhost, Tailscale, or an explicit all-interface bind.
 use std::{net::Ipv4Addr, time::Duration};
 use zenoh::Wait;
+/// Parse an optional Tailscale or all-interface IPv4 bind, open port 7448, and wait
+/// until the Zenoh session closes. Invalid addresses or network configuration return an error.
 fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut endpoints = vec!["tcp/127.0.0.1:7448".to_string()];
     if let Some(address) = std::env::args().nth(1) {

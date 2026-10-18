@@ -45,6 +45,10 @@ pub fn supported_autonomy_levels() -> Vec<String> {
 #[uniffi::export]
 impl MobileController {
     /// Bounded world-space visualization points; never a source of motor authority.
+    /// Requires version 1 JSON, at most 4096 points, and at most 262144 bytes.
+    /// Full content is coalesced; unchanged newer samples can emit heartbeats.
+    /// Returns `InvalidInput` for size/schema rejection and `Internal` for malformed
+    /// JSON or lock failure. No dashboard means no network publication.
     pub fn publish_point_cloud(&self, payload: String) -> Result<(), ControllerError> {
         if payload.len() > 262144 {
             return Err(ControllerError::InvalidInput {
@@ -99,6 +103,8 @@ impl MobileController {
         Ok(())
     }
     /// Publish positioning quality without changing the controller's local motion frame.
+    /// Requires version 1 JSON at most 4096 bytes. With no dashboard this is a no-op.
+    /// Returns `InvalidInput` for size, JSON, or version rejection, or `Internal` on lock failure.
     pub fn publish_localization(&self, payload: String) -> Result<(), ControllerError> {
         if payload.len() > 4096 {
             return Err(ControllerError::InvalidInput {
@@ -120,6 +126,9 @@ impl MobileController {
         }
         Ok(())
     }
+    /// Host a loopback-only TCP dashboard endpoint for the selected rover.
+    /// Run off the UI thread. Returns `InvalidInput` for endpoint/prefix or network
+    /// failure, or `Internal` for a poisoned mutex.
     pub fn host_dashboard(
         &self,
         endpoint: String,
@@ -136,6 +145,9 @@ impl MobileController {
         Ok(())
     }
     /// Attach an outbound dashboard session to this controller; no hardware arming.
+    /// Clears previous remote intent before connecting; run off the UI thread.
+    /// Returns `InvalidInput` for transport validation/connection failure or `Internal`
+    /// for lock failure. Connection does not arm hardware.
     pub fn connect_dashboard(
         &self,
         endpoint: String,
@@ -150,6 +162,9 @@ impl MobileController {
         self.install_dashboard(service)?;
         Ok(())
     }
+    /// Clear remote intent and open an outbound dashboard session with Zenoh credentials.
+    /// An empty user omits credential configuration. Run off the UI thread.
+    /// Returns `InvalidInput` for transport failure or `Internal` for lock failure.
     pub fn connect_dashboard_authenticated(
         &self,
         endpoint: String,
@@ -169,6 +184,8 @@ impl MobileController {
         Ok(())
     }
     /// Drop network transport without clearing an accepted local mission.
+    /// Clears queued hardware requests and tokens; closes the old link asynchronously.
+    /// Returns `Internal` for a poisoned mutex.
     pub fn detach_dashboard_link(&self) -> Result<(), ControllerError> {
         let mut b = self.brain.lock().map_err(|_| ControllerError::Internal)?;
         let service = b.dashboard.take();
@@ -181,6 +198,9 @@ impl MobileController {
         }
         Ok(())
     }
+    /// Replace the dashboard transport while preserving accepted local mission state.
+    /// Old hardware requests are discarded. Run off the UI thread. Returns `InvalidInput`
+    /// for transport failure or `Internal` for lock failure.
     pub fn reconnect_dashboard(
         &self,
         endpoint: String,
@@ -195,6 +215,9 @@ impl MobileController {
         self.install_dashboard(service)?;
         Ok(())
     }
+    /// Replace the link using Zenoh credentials while preserving accepted local mission state.
+    /// An empty user omits credential configuration. Old hardware requests are discarded.
+    /// Returns `InvalidInput` for transport failure or `Internal` for lock failure.
     pub fn reconnect_dashboard_authenticated(
         &self,
         endpoint: String,
@@ -214,6 +237,8 @@ impl MobileController {
         Ok(())
     }
     /// Clear remote intent while preserving sensors, recording and a latched emergency stop.
+    /// Switches authority back to teleop, resets the velocity loop, and closes the
+    /// network link. May block during teardown. Returns `Internal` for lock failure.
     pub fn disconnect_dashboard(&self) -> Result<(), ControllerError> {
         let mut brain = self.brain.lock().map_err(|_| ControllerError::Internal)?;
         let service = brain.dashboard.take();
@@ -232,6 +257,10 @@ impl MobileController {
         drop(service);
         Ok(())
     }
+    /// Consume the next currently admissible hardware request as JSON.
+    /// Revalidates queued arm requests against run, authority revision, safety, and
+    /// a 0.5 s receipt lease; adds remaining `valid_for` seconds. Returns an empty
+    /// string when none survives validation or the controller lock is poisoned.
     pub fn take_hardware_request(&self) -> String {
         let Ok(mut b) = self.brain.lock() else {
             return String::new();
@@ -248,6 +277,9 @@ impl MobileController {
         }
         String::new()
     }
+    /// Store fresh hardware observation JSON and publish it to a connected dashboard.
+    /// Used when validating configuration changes. Returns `InvalidInput` for
+    /// malformed JSON or more than 4096 bytes, and `Internal` for lock failure.
     pub fn publish_hardware_status(&self, payload: String) -> Result<(), ControllerError> {
         if payload.len() > 4096 || serde_json::from_str::<serde_json::Value>(&payload).is_err() {
             return Err(ControllerError::InvalidInput {
@@ -265,6 +297,7 @@ impl MobileController {
         Ok(())
     }
     /// Transport connectivity only, not acknowledgement by an ARGOS operator.
+    /// Returns `connected`, `disconnected`, or `failed`; lock failure also yields `failed`.
     pub fn dashboard_status(&self) -> String {
         self.brain
             .lock()
@@ -278,6 +311,10 @@ impl MobileController {
             })
             .unwrap_or_else(|_| "failed".into())
     }
+    /// Decode and dispatch local autonomy, safety, goal, decision, or search JSON intent.
+    /// `timestamp` is current sensor-clock seconds. Successful dispatch does not
+    /// guarantee authority or motion. Returns `InvalidInput` for unsupported kind,
+    /// decoding failure, rejected goal/search request; `Internal` for lock failure.
     pub fn autonomy_request(
         &self,
         kind: String,
@@ -335,6 +372,8 @@ impl MobileController {
         }
         Ok(())
     }
+    /// Set the WGS84 origin using finite decimal-degree latitude and longitude.
+    /// Returns `InvalidInput` for invalid coordinates or `Internal` for lock failure.
     pub fn autonomy_origin(&self, latitude: f64, longitude: f64) -> Result<(), ControllerError> {
         terra_waypoint::GeoOrigin::new(latitude, longitude)?;
         self.brain
@@ -344,6 +383,11 @@ impl MobileController {
             .set_origin(latitude, longitude);
         Ok(())
     }
+    /// Install a world-frame occupancy snapshot with source time and revision.
+    /// `timestamp` is nonnegative finite sensor-clock seconds; `revision` identifies
+    /// the source sample. Dimensions must be 1..=1000 with an exact cell count,
+    /// resolution at least 0.01 m, and finite origin coordinates.
+    /// Returns `InvalidInput` for failed validation or `Internal` for lock failure.
     pub fn autonomy_map(
         &self,
         grid: OccupancyGrid,
@@ -381,12 +425,18 @@ impl MobileController {
         ));
         Ok(())
     }
+    /// Copy the cached JSON status from the most recent control tick.
+    /// Returns an empty string before the first tick or on lock failure.
     pub fn autonomy_status(&self) -> String {
         self.brain
             .lock()
             .map(|b| b.autonomy_json.clone())
             .unwrap_or_default()
     }
+    /// Create a bounded run recorder at `path` and start a new run identity.
+    /// Resets autonomy, velocity control, and run timing while retaining navigation
+    /// geometry. `run_id` must be a valid token. Returns `InvalidInput` for invalid
+    /// identity or recorder create/close failure, or `Internal` for lock failure.
     pub fn begin_recording(&self, path: String, run_id: String) -> Result<(), ControllerError> {
         if !terra_autonomy::valid_token(&run_id) {
             return Err(ControllerError::InvalidInput {
@@ -424,6 +474,8 @@ impl MobileController {
         brain.sequence = 0;
         Ok(())
     }
+    /// Take and close the current recorder; succeeds when none is active.
+    /// Returns `InvalidInput` for recorder close failure or `Internal` for lock failure.
     pub fn end_recording(&self) -> Result<(), ControllerError> {
         if let Some(mut r) = self
             .brain
@@ -440,10 +492,13 @@ impl MobileController {
     }
 }
 
+/// Dashboard teardown scenarios, including sensor retention and latched emergency stop.
 #[cfg(test)]
 mod dashboard_tests {
     use super::*;
     #[test]
+    /// Starts a waypoint with ready sensors, disconnects twice, and checks idle teleop authority
+    /// while sensor readiness survives teardown.
     fn dashboard_disconnect_clears_goal_and_authority_without_resetting_sensors() {
         let controller = MobileController::new(default_control_settings()).unwrap();
         controller
@@ -507,6 +562,7 @@ mod dashboard_tests {
         controller.disconnect_dashboard().unwrap();
     }
     #[test]
+    /// Latches an emergency stop before dashboard disconnect and verifies the next tick remains stopped.
     fn dashboard_disconnect_preserves_emergency_stop() {
         let controller = MobileController::new(default_control_settings()).unwrap();
         controller

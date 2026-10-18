@@ -1,7 +1,9 @@
 use terra_autonomy::*;
+/// Build a valid 60-second survivor-search session over a 10 m square centred on the origin.
 fn request() -> SearchRequest {
     serde_json::from_str(r#"{"version":1,"run_id":"local","search_id":"s","token":"start","target_class":"survivor","bounds":{"min_x":-5,"min_y":-5,"max_x":5,"max_y":5},"time_budget_s":60}"#).unwrap()
 }
+/// Build a 0.9-confidence survivor observation at (2 m, 1 m), using the supplied frame ID and seconds timestamp.
 fn observation(frame: u64, time: f64) -> TargetObservation {
     TargetObservation {
         run_id: "local".into(),
@@ -15,6 +17,7 @@ fn observation(frame: u64, time: f64) -> TargetObservation {
         evidence_id: format!("frame-{frame}"),
     }
 }
+/// Supply three consistent frames over 0.6 seconds; verify a fixed report and rejection of observations after completion.
 #[test]
 fn distinct_consistent_frames_confirm_once() {
     let mut s = SearchController::start(request(), 0.).unwrap();
@@ -27,6 +30,7 @@ fn distinct_consistent_frames_confirm_once() {
     assert!(s.observe(observation(4, 0.7), 0.7).is_err());
     assert_eq!(s.status(0.7, true).report.unwrap(), report);
 }
+/// Reject duplicate frames, another search ID, a wrong class, and stale evidence without producing a report.
 #[test]
 fn stale_duplicate_foreign_and_wrong_class_never_confirm() {
     let mut s = SearchController::start(request(), 0.).unwrap();
@@ -41,6 +45,7 @@ fn stale_duplicate_foreign_and_wrong_class_never_confirm() {
     assert!(s.observe(observation(2, 0.3), 1.).is_err());
     assert!(s.status(1., true).report.is_none());
 }
+/// Reject low confidence and restart spatially inconsistent candidates so three mixed observations cannot confirm.
 #[test]
 fn low_confidence_or_disagreement_cannot_complete() {
     let mut s = SearchController::start(request(), 0.).unwrap();
@@ -54,6 +59,7 @@ fn low_confidence_or_disagreement_cannot_complete() {
     s.observe(observation(4, 0.7), 0.7).unwrap();
     assert!(s.status(0.7, true).report.is_none());
 }
+/// Check that paused time consumes budget and neither timeout nor cancellation can be resumed or confirmed.
 #[test]
 fn paused_budget_expires_and_cancel_is_terminal() {
     let mut s = SearchController::start(request(), 0.).unwrap();
@@ -66,6 +72,7 @@ fn paused_budget_expires_and_cancel_is_terminal() {
     assert!(s.observe(observation(1, 2.), 2.).is_err());
     assert!(s.action(SearchAction::Resume, 2.).is_err());
 }
+/// Reject a backward timestamp and preserve the elapsed time from the last accepted clock value.
 #[test]
 fn nonmonotonic_time_does_not_extend_search() {
     let mut s = SearchController::start(request(), 1.).unwrap();
@@ -73,6 +80,7 @@ fn nonmonotonic_time_does_not_extend_search() {
     assert!(s.update_time(1.5).is_err());
     assert_eq!(s.status(2., true).elapsed_s, 1.);
 }
+/// Repeatedly pause and resume on a known core with unknown surroundings; navigation must continue returning goals.
 #[test]
 fn ordinary_pause_resume_does_not_consume_route_failure_budget() {
     let mut s = SearchController::start(request(), 0.).unwrap();

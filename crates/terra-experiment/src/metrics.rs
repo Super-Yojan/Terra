@@ -2,11 +2,15 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+/// Clearance episode detector with 0.3 m entry and 0.4 m exit hysteresis.
 #[derive(Default)]
 pub struct NearMiss {
     active: bool,
 }
 impl NearMiss {
+    /// Emit a near-miss start below 0.3 m or end above 0.4 m, once per transition.
+    ///
+    /// Missing, negative, and nonfinite clearances return `None` and preserve the episode state.
     pub fn update(&mut self, clearance: Option<f64>) -> Option<&'static str> {
         let value = clearance.filter(|v| v.is_finite() && *v >= 0.)?;
         if !self.active && value < 0.3 {
@@ -20,31 +24,54 @@ impl NearMiss {
         }
     }
 }
+/// Offline run outcomes; durations use seconds and rates use interventions per minute.
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct RunSummary {
+    /// Whether the recording or mission completed successfully, according to this record.
     pub complete: bool,
+    /// Maximum recorded control-tick time, in seconds from run start.
     pub duration: f64,
+    /// Accepted authority changes whose reason is `operator_selection`.
     pub mode_changes: u64,
+    /// Number of operator takeover events.
     pub takeovers: u64,
+    /// Takeovers, approvals, rejections, and redirects divided by run minutes.
     pub interventions_per_minute: f64,
+    /// Earliest recorded survivor observation time, in seconds from run start.
     pub time_to_first_discovery: Option<f64>,
+    /// First control-tick time reporting mission completion, in seconds.
     pub mission_completion_time: Option<f64>,
+    /// Number of accepted supervised proposal approvals.
     pub approvals: u64,
+    /// Number of accepted supervised proposal rejections.
     pub rejections: u64,
+    /// Number of accepted goal events.
     pub redirects: u64,
+    /// Number of near-miss episode starts.
     pub near_misses: u64,
+    /// Number of contact episode starts.
     pub contacts: u64,
+    /// Per-rover operator exposure in seconds; each adjacent interval is capped at 0.5 s.
     pub operator_control_seconds: f64,
+    /// Whether any recorded control tick reported mission completion.
     pub mission_complete: bool,
+    /// Distinct completed search sessions, keyed by rover, run, and search.
     #[serde(default)]
     pub search_confirmations: u64,
+    /// Distinct exhausted search sessions, separate from confirmations.
     #[serde(default)]
     pub search_exhaustions: u64,
+    /// Number of recorded route-failure events.
     #[serde(default)]
     pub search_route_failures: u64,
+    /// First completed-search tick time, in seconds from run start.
     #[serde(default)]
     pub time_to_target_confirmation: Option<f64>,
 }
+/// Summarize JSON records in input order, tolerating missing fields with defaults.
+///
+/// Times are seconds from run start. Search terminal outcomes are deduplicated by rover/run/search;
+/// recording completeness comes from `run_end`, independently of mission completion.
 pub fn summarize(records: &[Value]) -> RunSummary {
     let mut out = RunSummary::default();
     let mut previous = std::collections::BTreeMap::<u64, (f64, String)>::new();
@@ -129,6 +156,9 @@ pub struct ObservedArea {
     resolution: Option<f64>,
 }
 impl ObservedArea {
+    /// Union observed free grid cells across compatible snapshots and return accumulated area in square metres.
+    ///
+    /// Returns `None` for nonpositive/nonfinite resolution, invalid dimensions/storage, or a resolution change, preserving state.
     pub fn observe(&mut self, map: &terra_mapping::MapSnapshot) -> Option<f64> {
         if !map.resolution.is_finite()
             || map.resolution <= 0.

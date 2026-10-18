@@ -5,11 +5,16 @@ use crate::{ActuatorError, ActuatorValue, Layout, Route, SafeOutput, validate_st
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+/// Normalized chassis and servo intent. All supplied numbers must be finite and
+/// in `[-1, 1]`; unknown servo IDs are rejected. Defaults are all zero with no overrides.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RoutingInput {
+    /// Left wheel effort consumed by left-effort routes.
     pub left_effort: f32,
+    /// Right wheel effort consumed by right-effort routes.
     pub right_effort: f32,
+    /// Manual forward input consumed by manual mixing routes.
     pub forward: f32,
     /// Positive yaw is a left turn: left coefficient negative, right positive.
     pub turn: f32,
@@ -20,6 +25,11 @@ pub struct RoutingInput {
 
 /// Return complete normalized commands. Hardware adapters apply inversion exactly once.
 /// This function does not authorize arming or certify physical resource availability.
+/// Return values in layout order, clipping every routed value to its actuator limits.
+///
+/// Missing servo targets use their safe position, or normalized zero clipped to limits
+/// for disabled servos. Returns [`ActuatorError::InvalidLayout`] for structural errors
+/// and [`ActuatorError::InvalidInput`] for invalid chassis values or servo overrides.
 pub fn route_commands(
     layout: &Layout,
     input: &RoutingInput,

@@ -8,43 +8,72 @@ use terra_exploration::{EndReason, ExplorationStatus, ExploreAction, ExploreTick
 use terra_mapping::MapSnapshot;
 use terra_navigation::{LocalPlanner, Pose, Twist, frontier};
 use terra_waypoint::{GoalCommand, GoalState, WaypointConfig, WaypointController, WaypointStatus};
+/// Bounded decision-log entry emitted by the authority arbiter.
 #[derive(Clone, Debug, Serialize)]
 pub struct DecisionEvent {
+    /// Machine-readable event category.
     pub kind: String,
+    /// Request correlation token; command tokens use 1–64 ASCII letters, digits, or `._:-`.
     pub token: Option<String>,
+    /// Machine-readable explanation of the current decision or transition.
     pub reason: String,
+    /// Requested or event-time motion authority.
     pub level: Level,
 }
+/// One control tick of pose, map, measured motion, timestamps, and health evidence.
 pub struct ArbiterInput<'a> {
+    /// Current control-clock time, in seconds.
     pub now: f64,
+    /// World-frame rover pose; position is metres and yaw is radians.
     pub pose: Pose,
+    /// Pose receipt time, in seconds on the same clock as `now`.
     pub pose_time: f64,
+    /// Latest observed occupancy snapshot, when available.
     pub map: Option<&'a MapSnapshot>,
+    /// Map receipt time in seconds on the control clock, when available.
     pub map_time: Option<f64>,
+    /// Occupancy-map revision associated with this evidence or tick.
     pub map_revision: u64,
+    /// Measured forward velocity (m/s) and yaw rate (rad/s).
     pub measured: Twist,
+    /// Whether the platform sensor and control health checks pass.
     pub healthy: bool,
 }
+/// Selected intent, safety-filtered command, telemetry, and events from one control tick.
 pub struct ArbiterOutput {
+    /// Desired motion before authority and safety filtering.
     pub intent: Twist,
+    /// Allowed motion command; integrations must send this command to control.
     pub twist: Twist,
+    /// Published authority and safety snapshot.
     pub status: AutonomyStatus,
+    /// Current waypoint follower status.
     pub goal: WaypointStatus,
+    /// Frontier awaiting supervised approval, when present.
     pub proposal: Option<GoalProposal>,
+    /// Exploration status, retained after an exploration run ends.
     pub exploration: Option<ExplorationStatus>,
+    /// Decision events drained during this tick.
     pub events: Vec<DecisionEvent>,
+    /// Whether the downstream controller should clear its accumulated state.
     pub reset_controller: bool,
+    /// Target-search lifecycle snapshot when a session exists.
     pub search: Option<SearchStatus>,
+    /// Confirmed reports awaiting delivery acknowledgement.
     pub pending_reports: Vec<SearchReport>,
 }
+/// Stateful authority arbiter, waypoint follower, exploration runner, and target-search coordinator.
 pub struct AutonomyArbiter {
+    /// Local collision-aware planner and its current configuration.
     pub planner: LocalPlanner,
+    /// Optional externally assigned authority for display.
     pub assigned_level: Option<Level>,
     level: Level,
     follower: WaypointController,
     operator: Option<(TeleopRequest, f64)>,
     operator_order: std::collections::BTreeMap<String, u64>,
     latest_operator_time: Option<f64>,
+    /// Run identifier used to correlate commands and telemetry.
     pub run_id: String,
     stopped: bool,
     paused: bool,
@@ -74,6 +103,7 @@ pub struct AutonomyArbiter {
     search_sessions: VecDeque<String>,
     reported_sessions: std::collections::BTreeSet<(String, String)>,
     acknowledged_reports: std::collections::BTreeSet<(String, String, String)>,
+    /// Frontier-exploration state machine and configuration.
     pub explorer: Explorer,
     exploration_budget: Option<f64>,
     explore_blocked: bool,
@@ -166,6 +196,7 @@ impl AutonomyArbiter {
             );
         }
     }
+    /// Set the waypoint WGS84 origin in degrees; invalid coordinates are ignored by the follower.
     pub fn set_origin(&mut self, lat: f64, lon: f64) {
         let _ = self.follower.set_origin(lat, lon);
     }
@@ -216,7 +247,10 @@ impl AutonomyArbiter {
         self.last_plan = None;
         self.planner_trace = None;
     }
-    /// Store a budget used when an `explore` level request omits one. `seconds` must be in `(0, 86400]`.
+    /// Store a budget used when an `explore` level request omits one.
+    ///
+    /// Return `true` for finite `seconds` in `(0, 86400]`; invalid values return
+    /// `false` and leave the previous budget unchanged.
     pub fn set_exploration_budget(&mut self, seconds: f64) -> bool {
         if seconds.is_finite() && seconds > 0. && seconds <= 86_400. {
             self.exploration_budget = Some(seconds);
@@ -229,6 +263,9 @@ impl AutonomyArbiter {
     pub fn notify_detection(&mut self, detection: terra_exploration::Detection) {
         self.explorer.notify_detection(detection);
     }
+    /// Apply a token-correlated authority request, clearing old intent on acceptance.
+    ///
+    /// Invalid tokens are ignored. Budget and detector rejections are exposed through status receipts and decision events.
     pub fn set_level(&mut self, r: LevelRequest) {
         let fp = format!(
             "level:{:?}:{:?}:{:?}",
@@ -296,6 +333,9 @@ impl AutonomyArbiter {
             },
         );
     }
+    /// Accept operator velocities at `now` seconds when authority, lease ordering, and optional run/revision bindings match.
+    ///
+    /// Invalid, stale, reordered, or unauthorized requests are ignored without renewing the motion lease.
     pub fn accept_operator(&mut self, r: TeleopRequest, now: f64) {
         if !now.is_finite()
             || now < 0.
@@ -338,6 +378,10 @@ impl AutonomyArbiter {
         );
         self.operator = Some((r, now));
     }
+    /// Accept or cancel a waypoint and return whether it was accepted.
+    ///
+    /// Local coordinates and `extent` use metres; WGS84 coordinates use degrees and yaw uses radians.
+    /// Invalid, out-of-bounds, unauthorized, or conflicting-token goals return `false`; cancellation clears active intent.
     pub fn accept_goal(&mut self, g: &GoalCommand, extent: f64) -> bool {
         if self.level == Level::TargetSearch {
             self.event("goal_rejected", None, "search_active");
@@ -428,6 +472,9 @@ impl AutonomyArbiter {
         );
         ok
     }
+    /// Apply a valid token-correlated stop/reset; reset is rejected when `healthy` is false.
+    ///
+    /// Stops clear motion intent immediately. Receipts and events expose acceptance or rejection.
     pub fn set_safety(&mut self, r: SafetyRequest, healthy: bool) {
         let fp = format!("safety:{:?}", r.action);
         if !valid_token(&r.token) || self.duplicate(&r.token, &fp) {
@@ -452,6 +499,9 @@ impl AutonomyArbiter {
             },
         );
     }
+    /// Apply a run-correlated supervised decision; approvals recheck freshness, health, expiry, and reachability.
+    ///
+    /// Rejected or stale decisions produce a rejected receipt; resume requires no proposal identifier.
     pub fn decide_proposal(&mut self, r: ProposalDecision, input: &ArbiterInput<'_>) {
         let fp = format!("decision:{}:{:?}:{:?}", r.run_id, r.decision, r.proposal_id);
         if !valid_token(&r.token) || self.duplicate(&r.token, &fp) {
@@ -521,6 +571,9 @@ impl AutonomyArbiter {
             },
         );
     }
+    /// Advertise up to 64 valid classes and a valid version token at nondecreasing `now` seconds.
+    ///
+    /// Returns `invalid_detector_capability` for invalid labels, version, or time, leaving the previous capability intact.
     pub fn set_detector_capability(
         &mut self,
         classes: Vec<String>,
@@ -541,14 +594,20 @@ impl AutonomyArbiter {
         self.detector_time = Some(now);
         Ok(())
     }
+    /// Return whether `class` is advertised and the capability timestamp is at most 0.5 seconds old.
     pub fn detector_available(&self, class: &str, now: f64) -> bool {
         self.detector_classes.iter().any(|c| c == class) && fresh(now, self.detector_time, 0.5)
     }
+    /// Return the current session snapshot and detector freshness, or `None` before a search is created.
     pub fn search_status(&self, now: f64) -> Option<SearchStatus> {
         self.search
             .as_ref()
             .map(|s| s.status(now, self.detector_available(&s.request.target_class, now)))
     }
+    /// Start a validated search under target-search authority with fresh healthy pose, map, and detector evidence.
+    ///
+    /// Returns a machine-readable rejection for correlation, capacity, reused session, bounds, health, or authority failures.
+    /// Matching accepted duplicate tokens are idempotent and do not restart the session.
     pub fn start_search(
         &mut self,
         r: SearchRequest,
@@ -617,6 +676,10 @@ impl AutonomyArbiter {
         self.event("search_accepted", Some(r.token), "search_started");
         Ok(())
     }
+    /// Apply an action to the matching active run and search, with token idempotency.
+    ///
+    /// Resume additionally requires fresh healthy pose, map, and detector evidence.
+    /// Returns validation, correlation, authority, health, clock, or terminal-state errors.
     pub fn apply_search_action(
         &mut self,
         r: SearchActionRequest,
@@ -681,6 +744,9 @@ impl AutonomyArbiter {
         }
         result
     }
+    /// Forward an observation only under target-search authority with a fresh matching detector.
+    ///
+    /// Returns detector/authority, missing-search, or controller observation errors; a new report is queued on confirmation.
     pub fn accept_target_observation(
         &mut self,
         o: TargetObservation,
@@ -717,6 +783,9 @@ impl AutonomyArbiter {
             self.event("report_queued", None, "report_pending");
         }
     }
+    /// Remove a report matching the version, run, search, and report IDs.
+    ///
+    /// Returns `false` for malformed or unknown acknowledgements; repeats of a previously acknowledged report return `true`.
     pub fn ack_search_report(&mut self, r: SearchReportAck) -> bool {
         if r.version != 1
             || (![&r.run_id, &r.search_id, &r.token]

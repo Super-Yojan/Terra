@@ -27,20 +27,37 @@ pub use transport::*;
 pub use waypoint::*;
 
 #[derive(Clone, Debug, uniffi::Record)]
+/// Sensor freshness, PI gains, and wheel effort limits used at construction.
+/// All values must be finite. Gains lie in 0..=100; timeouts and limits must
+/// be positive. See [`MobileController::new`] for configuration validation.
 pub struct ControlSettings {
+    /// Forward proportional gain, effort per m/s of error.
     pub linear_kp: f64,
+    /// Forward integral gain, effort per metre of accumulated error.
     pub linear_ki: f64,
+    /// Yaw proportional gain, effort per rad/s of error.
     pub yaw_kp: f64,
+    /// Yaw integral gain, effort per radian of accumulated error.
     pub yaw_ki: f64,
+    /// Forward feedforward gain, effort per m/s.
     pub linear_feedforward: f64,
+    /// Yaw feedforward gain, effort per rad/s.
     pub yaw_feedforward: f64,
+    /// Maximum commanded forward speed magnitude, m/s (at most 20).
     pub max_forward: f64,
+    /// Maximum commanded yaw-rate magnitude, rad/s (at most 20).
     pub max_yaw_rate: f64,
+    /// Maximum absolute normalized wheel effort, in (0, 1].
     pub max_effort: f64,
+    /// Maximum IMU age, seconds.
     pub imu_timeout: f64,
+    /// Maximum VIO age, seconds.
     pub vio_timeout: f64,
+    /// Maximum target age, seconds.
     pub target_timeout: f64,
+    /// Maximum allowed control tick interval, seconds (at most 1).
     pub max_step: f64,
+    /// Back-calculation gain for effort saturation, per second.
     pub anti_windup: f64,
 }
 impl ControlSettings {
@@ -68,6 +85,14 @@ impl ControlSettings {
     }
 }
 #[uniffi::export]
+/// Return the portable controller and estimator defaults as a UniFFI record.
+///
+/// ```
+/// let controller = terra_mobile::MobileController::new(
+///     terra_mobile::default_control_settings(),
+/// )?;
+/// # Ok::<(), terra_mobile::ControllerError>(())
+/// ```
 pub fn default_control_settings() -> ControlSettings {
     let c = ControllerConfig::default();
     let e = EstimatorConfig::default();
@@ -89,53 +114,97 @@ pub fn default_control_settings() -> ControlSettings {
     }
 }
 #[derive(Clone, Debug, uniffi::Record)]
+/// Timestamped body-frame inertial sample: +X forward, +Y left, +Z up.
+/// Use the same monotonic seconds clock as VIO, targets, and control ticks.
 pub struct ImuReading {
+    /// Sample or intent time in seconds on the shared monotonic clock.
     pub timestamp: f64,
+    /// Body forward acceleration, m/s².
     pub acceleration_forward: f64,
+    /// Body left acceleration, m/s².
     pub acceleration_left: f64,
+    /// Body upward acceleration, m/s².
     pub acceleration_up: f64,
+    /// Body roll angular velocity about +X, rad/s.
     pub gyro_roll: f64,
+    /// Body pitch angular velocity about +Y, rad/s.
     pub gyro_pitch: f64,
+    /// Body yaw angular velocity about +Z, rad/s.
     pub gyro_yaw: f64,
 }
 #[derive(Clone, Debug, uniffi::Record)]
+/// Tracked body pose and world-frame velocity in a right-handed Z-up frame.
+/// Quaternion components rotate body vectors into the world. Use the shared
+/// monotonic seconds clock; report tracking loss with `tracked = false`.
 pub struct VioReading {
+    /// Sample or intent time in seconds on the shared monotonic clock.
     pub timestamp: f64,
+    /// World +X position, metres.
     pub position_x: f64,
+    /// World +Y position, metres.
     pub position_y: f64,
+    /// World +Z position, metres.
     pub position_z: f64,
+    /// Body-to-world quaternion X component, dimensionless.
     pub quaternion_x: f64,
+    /// Body-to-world quaternion Y component, dimensionless.
     pub quaternion_y: f64,
+    /// Body-to-world quaternion Z component, dimensionless.
     pub quaternion_z: f64,
+    /// Body-to-world quaternion scalar component, dimensionless.
     pub quaternion_w: f64,
+    /// World +X velocity, m/s.
     pub velocity_x: f64,
+    /// World +Y velocity, m/s.
     pub velocity_y: f64,
+    /// World +Z velocity, m/s.
     pub velocity_z: f64,
+    /// Whether visual tracking is currently valid.
     pub tracked: bool,
 }
 #[derive(Clone, Debug, uniffi::Record)]
+/// Local operator velocity intent, timestamped on the sensor clock.
+/// Submission does not bypass the autonomy arbiter or grant hardware authority.
 pub struct TwistSetpoint {
+    /// Sample or intent time in seconds on the shared monotonic clock.
     pub timestamp: f64,
+    /// Requested body forward speed, m/s.
     pub forward: f64,
+    /// Requested body yaw rate, rad/s.
     pub yaw_rate: f64,
 }
 #[derive(Clone, Copy, Debug, PartialEq, uniffi::Enum)]
+/// Reason the velocity loop is active or returns stopped wheel efforts.
 pub enum SafetyState {
+    /// Sensor and target checks permit active control.
     Active,
+    /// Required sensors have not initialized.
     SensorNotReady,
+    /// Visual tracking is unavailable.
     TrackingLost,
+    /// Required sensor observations exceeded their freshness limit.
     StaleSensors,
+    /// Velocity intent is unavailable or expired.
     StaleTarget,
+    /// Control timing is invalid.
     InvalidTime,
 }
 #[derive(Clone, Debug, uniffi::Record)]
+/// One control tick: normalized wheel efforts, velocities, and safety reason.
 pub struct ControlOutput {
+    /// Normalized signed left-wheel effort.
     pub left_effort: f64,
+    /// Normalized signed right-wheel effort.
     pub right_effort: f64,
+    /// Estimated body forward speed, m/s.
     pub estimated_forward: f64,
+    /// Estimated body yaw rate, rad/s.
     pub estimated_yaw_rate: f64,
+    /// Selected and limited body forward target, m/s.
     pub target_forward: f64,
+    /// Selected and limited body yaw target, rad/s.
     pub target_yaw_rate: f64,
+    /// Active-loop or stopped-loop state for this tick.
     pub safety: SafetyState,
 }
 impl From<MotorOutput> for ControlOutput {
@@ -159,10 +228,16 @@ impl From<MotorOutput> for ControlOutput {
     }
 }
 #[derive(Debug, thiserror::Error, uniffi::Error)]
+/// Failure reported through UniFFI by validation or shared-state access.
 pub enum ControllerError {
     #[error("{message}")]
-    InvalidInput { message: String },
+    /// Input or configuration failed validation; `message` describes the rejection.
+    InvalidInput {
+        /// Human-readable diagnostic from the rejected operation.
+        message: String,
+    },
     #[error("controller lock was poisoned")]
+    /// Shared controller state could not be locked because its mutex was poisoned.
     Internal,
 }
 impl From<InputError> for ControllerError {
@@ -193,12 +268,21 @@ struct Brain {
     hardware_tokens: std::collections::VecDeque<String>,
 }
 #[derive(uniffi::Object)]
+/// Shared sensor estimator, autonomy arbiter, and velocity controller.
+/// Methods serialize state access with a mutex. Supply timestamped sensors,
+/// submit intent, and call [`Self::step`] on the same monotonic clock.
+/// Returned efforts still require an independently armed hardware adapter.
 pub struct MobileController {
     brain: Mutex<Brain>,
 }
 #[uniffi::export]
 impl MobileController {
     #[uniffi::constructor]
+    /// Construct an idle controller with validated estimator and control settings.
+    ///
+    /// # Errors
+    /// Returns `InvalidInput` for nonfinite or out-of-range gains, limits, or
+    /// freshness settings. No network or hardware connection is opened.
     pub fn new(settings: ControlSettings) -> Result<Arc<Self>, ControllerError> {
         Ok(Arc::new(Self {
             brain: Mutex::new(Brain {
@@ -229,6 +313,11 @@ impl MobileController {
             }),
         }))
     }
+    /// Validate and ingest one body-frame IMU reading.
+    ///
+    /// # Errors
+    /// Returns `InvalidInput` for invalid sensor values or sample ordering and
+    /// `Internal` if shared state cannot be locked.
     pub fn push_imu(&self, sample: ImuReading) -> Result<(), ControllerError> {
         self.brain
             .lock()
@@ -249,6 +338,12 @@ impl MobileController {
             })?;
         Ok(())
     }
+    /// Ingest VIO and, when tracked, update the planar world pose.
+    /// The tracked quaternion is normalized before extracting heading.
+    ///
+    /// # Errors
+    /// Returns `InvalidInput` for invalid readings or sample ordering and
+    /// `Internal` for a poisoned mutex. Pose assignment precedes estimator validation.
     pub fn push_vio(&self, sample: VioReading) -> Result<(), ControllerError> {
         if sample.tracked {
             let q = Quaternion {
@@ -302,6 +397,13 @@ impl MobileController {
             })?;
         Ok(())
     }
+    /// Submit local operator intent to the autonomy arbiter.
+    /// `forward` is m/s and `yaw_rate` is rad/s, each limited in magnitude to 5
+    /// at ingress. The arbiter may further limit or decline the request.
+    ///
+    /// # Errors
+    /// Returns `InvalidInput` for nonfinite timestamps or velocities, or excessive
+    /// velocity magnitudes; returns `Internal` for a poisoned mutex.
     pub fn set_target(&self, target: TwistSetpoint) -> Result<(), ControllerError> {
         let mut brain = self.brain.lock().map_err(|_| ControllerError::Internal)?;
         if !target.timestamp.is_finite()
@@ -325,6 +427,14 @@ impl MobileController {
         );
         Ok(())
     }
+    /// Run one sensor, remote-intent, autonomy, telemetry, and motor-control tick.
+    /// `timestamp` uses the sensor monotonic seconds clock. Stale or unhealthy
+    /// inputs produce stopped efforts with a safety reason; successful submission
+    /// of an intent does not guarantee motion. Also refreshes [`Self::autonomy_status`].
+    ///
+    /// # Errors
+    /// Returns `Internal` for a poisoned mutex or propagates a rejected controller
+    /// target as `InvalidInput`. Timing and freshness stops are returned as output.
     pub fn step(&self, timestamp: f64) -> Result<ControlOutput, ControllerError> {
         let mut brain = self.brain.lock().map_err(|_| ControllerError::Internal)?;
         let estimate = brain.estimator.estimate(timestamp);
@@ -611,6 +721,11 @@ impl MobileController {
         })?;
         Ok(brain.controller.step(estimate).into())
     }
+    /// Reset estimator, velocity loop, and autonomy; detach dashboard and close recording.
+    /// Clears pose and map while retaining configured navigation geometry.
+    ///
+    /// # Errors
+    /// Returns `Internal` for a poisoned mutex. Recorder-close errors are ignored.
     pub fn reset(&self) -> Result<(), ControllerError> {
         let mut brain = self.brain.lock().map_err(|_| ControllerError::Internal)?;
         brain.autonomy = terra_autonomy::AutonomyArbiter::default();
@@ -628,11 +743,17 @@ impl MobileController {
     }
 }
 #[derive(Clone, Debug, uniffi::Record)]
+/// Final velocities and absolute errors from the deterministic motor benchmark.
 pub struct BenchmarkReport {
+    /// Final simulated forward speed, m/s.
     pub final_forward: f64,
+    /// Final simulated yaw rate, rad/s.
     pub final_yaw_rate: f64,
+    /// Absolute final error relative to 0.8 m/s, in m/s.
     pub forward_error: f64,
+    /// Absolute final error relative to 0.3 rad/s, in rad/s.
     pub yaw_error: f64,
+    /// True when both final absolute errors are below 0.05 in their respective units.
     pub passed: bool,
 }
 /// Deterministic 10 s motor plant experiment using the same facade as iOS.
@@ -688,15 +809,18 @@ pub fn run_velocity_benchmark() -> Result<BenchmarkReport, ControllerError> {
         passed: forward_error < 0.05 && yaw_error < 0.05,
     })
 }
+/// Deterministic contract and regression scenarios for this module.
 #[cfg(test)]
 mod tests {
     use super::*;
     #[test]
+    /// Runs the deterministic ten-second phone sensor/control/motor loop and checks its final-error acceptance criterion.
     fn mobile_facade_runs_the_same_sensor_and_motor_loop() {
         let report = run_velocity_benchmark().unwrap();
         assert!(report.passed, "{report:?}");
     }
     #[test]
+    /// Rejects a normalized effort limit above one when constructing the phone facade.
     fn validates_settings_before_crossing_the_ffi_boundary() {
         let mut settings = default_control_settings();
         settings.max_effort = 1.5;
@@ -730,10 +854,12 @@ fn admit_hardware_request(
         _ => None,
     }
 }
+/// Hardware arm freshness/authority checks and stop-priority regression scenarios.
 #[cfg(test)]
 mod hardware_request_tests {
     use super::*;
     #[test]
+    /// Queues disarm before arm and verifies stop-aware draining places disarm last in the control tick.
     fn hardware_disarm_dominates_same_tick_arm() {
         let mut q = std::collections::VecDeque::new();
         terra_transport::enqueue_control_action(
@@ -754,6 +880,7 @@ mod hardware_request_tests {
         assert_eq!(final_request["action"], "disarm");
     }
     #[test]
+    /// Rejects queued arms with stale authority or receipt time while still consuming an old disarm once.
     fn queued_arm_is_revalidated_before_consumption() {
         let c = MobileController::new(default_control_settings()).unwrap();
         let r = r#"{"action":"arm","token":"one","run_id":"run","authority_revision":2}"#;
@@ -780,6 +907,7 @@ mod hardware_request_tests {
         assert!(c.take_hardware_request().is_empty());
     }
     #[test]
+    /// Checks the strict half-second arm lease, run/revision binding, and clear-safety requirement; disarm remains admissible when old.
     fn arm_requires_current_run_revision_and_fresh_receipt() {
         let a = serde_json::json!({"status": {"run_id": "run","revision": 2,"safety": "clear"}});
         let r = br#"{"action":"arm","token":"one","run_id":"run","authority_revision":2}"#;

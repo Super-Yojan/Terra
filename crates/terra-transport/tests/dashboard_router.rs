@@ -1,7 +1,10 @@
+//! Real loopback router lifecycle, telemetry TTL, and payload-budget scenarios.
+//! Network scenarios require local TCP sockets and use bounded receipt waits.
 use std::time::{Duration, Instant};
 use terra_transport::ControlPlane;
 use zenoh::Wait;
 
+/// Reserve an ephemeral loopback endpoint and open a discovery-free router; return both for integration scenarios.
 fn router() -> (zenoh::Session, String) {
     let socket = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let endpoint = format!("tcp/127.0.0.1:{}", socket.local_addr().unwrap().port());
@@ -19,6 +22,7 @@ fn router() -> (zenoh::Session, String) {
         .unwrap();
     (zenoh::open(config).wait().unwrap(), endpoint)
 }
+/// Open an explicit loopback Zenoh client with multicast discovery disabled for router scenarios.
 fn client(endpoint: &str) -> zenoh::Session {
     let mut config = zenoh::Config::default();
     config.insert_json5("mode", "\"client\"").unwrap();
@@ -33,6 +37,7 @@ fn client(endpoint: &str) -> zenoh::Session {
         .unwrap();
     zenoh::open(config).wait().unwrap()
 }
+/// Poll a loopback integration condition every 20 ms, failing after five seconds.
 fn wait_for(mut predicate: impl FnMut() -> bool) {
     let deadline = Instant::now() + Duration::from_secs(5);
     while !predicate() {
@@ -41,6 +46,8 @@ fn wait_for(mut predicate: impl FnMut() -> bool) {
     }
 }
 #[test]
+/// Routes pose and goal intent through a real loopback router, replaces the phone session,
+/// and checks commands queued in the old session are absent from the replacement.
 fn outbound_phone_routes_telemetry_and_commands_without_replay() {
     let (_router, endpoint) = router();
     let operator = client(&endpoint);
@@ -83,6 +90,7 @@ fn outbound_phone_routes_telemetry_and_commands_without_replay() {
     assert!(replacement.take_actions().is_empty());
 }
 #[test]
+/// Checks ordinary pose telemetry is initially delivered but no longer replayed after its 500 ms producer TTL.
 fn cached_telemetry_expires_when_control_ticks_stop() {
     let (_router, endpoint) = router();
     let operator = client(&endpoint);
@@ -102,6 +110,7 @@ fn cached_telemetry_expires_when_control_ticks_stop() {
     );
 }
 #[test]
+/// Closes the loopback router and checks the outbound service latches failure and drains no intent.
 fn router_loss_is_a_latched_failure() {
     let (router, endpoint) = router();
     let service = ControlPlane::connect(&endpoint, "phone-loss", 7).unwrap();
@@ -110,6 +119,7 @@ fn router_loss_is_a_latched_failure() {
     assert!(service.take_actions().is_empty());
 }
 #[test]
+/// Reserves then releases a loopback port and verifies outbound connection to the absent router fails.
 fn unreachable_router_returns_an_error() {
     let socket = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let endpoint = format!("tcp/127.0.0.1:{}", socket.local_addr().unwrap().port());
@@ -118,6 +128,8 @@ fn unreachable_router_returns_an_error() {
 }
 
 #[test]
+/// Transports realistic cloud and occupancy payloads above the ordinary 64 KiB budget,
+/// then verifies oversized cloud and ordinary pose messages are dropped.
 fn sends_real_sized_cloud_and_occupancy_snapshots_but_bounds_other_topics() {
     let (_router, endpoint) = router();
     let operator = client(&endpoint);

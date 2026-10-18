@@ -2,7 +2,11 @@ use crate::{FrontierCandidate, GoalScorer};
 use std::collections::VecDeque;
 use terra_mapping::MapSnapshot;
 use terra_navigation::{Pose, footprint_clear, grid_cell};
-/// Observed free area in square metres, and the fraction of cells that are no longer unknown.
+/// Return observed free area in square metres and the fraction of cells no longer unknown.
+///
+/// Free occupancy is 0–64; negative cells are unknown. Returns `None` for empty
+/// dimensions, dimensions above 1000, mismatched storage, nonfinite origins, or
+/// nonfinite resolution, or resolution below 0.01 m/cell.
 pub fn map_coverage(map: &MapSnapshot) -> Option<(f64, f64)> {
     let cells = map.width as usize * map.height as usize;
     if map.width == 0
@@ -30,7 +34,13 @@ pub fn map_coverage(map: &MapSnapshot) -> Option<(f64, f64)> {
     let area = free as f64 * map.resolution * map.resolution;
     Some((area, known as f64 / cells as f64))
 }
-/// Pick the highest-scoring reachable frontier. `None` means the known free space has no unknown neighbour.
+/// Pick the highest-scoring eligible reachable frontier in world metres.
+///
+/// Returns `None` for invalid pose/map geometry, radius outside `(0, 5]` metres,
+/// or absence of eligible candidates. Candidates need unknown cells nearby,
+/// footprint clearance, distance greater than `max(radius, 0.8)` metres, and
+/// separation from every excluded point. Nonfinite scorer outputs are ignored.
+/// Invalid or nonpositive `exclude_radius` falls back to 1 m.
 ///
 /// Ordering matches `terra_navigation::frontier` when `scorer` is [`crate::InformationGainScorer`]
 /// and `exclude_radius` is 1: right, left, up, down, and a strictly better score replaces the current best.

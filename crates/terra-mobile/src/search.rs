@@ -1,37 +1,65 @@
 //! UniFFI ingress for calibrated detector adapters. Registration is not a detector implementation.
 use crate::*;
 #[derive(Clone, Debug, uniffi::Record)]
+/// Run-scoped target search over an axis-aligned world-space rectangle.
 pub struct MobileSearchRequest {
+    /// Controller run identity; must match the active run.
     pub run_id: String,
+    /// Identity of the search within its run.
     pub search_id: String,
+    /// Caller-generated request token used for correlation and replay protection.
     pub token: String,
+    /// Detector-supported class token to search for or report.
     pub target_class: String,
+    /// Minimum search-bound world X, metres.
     pub min_x: f64,
+    /// Minimum search-bound world Y, metres.
     pub min_y: f64,
+    /// Maximum search-bound world X, metres.
     pub max_x: f64,
+    /// Maximum search-bound world Y, metres.
     pub max_y: f64,
+    /// Requested search duration budget, seconds.
     pub time_budget_s: f64,
 }
 #[derive(Clone, Debug, uniffi::Record)]
+/// Calibrated detector evidence localized into the controller world frame.
 pub struct MobileTargetObservation {
+    /// Controller run identity; must match the active run.
     pub run_id: String,
+    /// Identity of the search within its run.
     pub search_id: String,
+    /// Source frame identifier used to distinguish confirmation evidence.
     pub frame_id: u64,
+    /// Detector-supported class token to search for or report.
     pub target_class: String,
+    /// Detector confidence in the inclusive range 0..=1.
     pub confidence: f64,
+    /// Observed target world X, metres.
     pub world_x: f64,
+    /// Observed target world Y, metres.
     pub world_y: f64,
+    /// Observation receipt time, seconds on the controller monotonic clock.
     pub received_at: f64,
+    /// Identifier of the source evidence retained in the report.
     pub evidence_id: String,
 }
 #[derive(Clone, Debug, uniffi::Record)]
+/// Latest target-search lifecycle state and optional serialized completion report.
 pub struct MobileSearchSnapshot {
+    /// Controller run identity; must match the active run.
     pub run_id: String,
+    /// Identity of the search within its run.
     pub search_id: String,
+    /// Serialized search lifecycle phase name.
     pub phase: String,
+    /// Machine-readable search transition or rejection reason.
     pub reason: String,
+    /// Elapsed search duration, seconds.
     pub elapsed_s: f64,
+    /// Whether a matching detector capability is currently fresh.
     pub detector_available: bool,
+    /// Serialized completion report when available.
     pub report_json: Option<String>,
 }
 fn search_error(message: &str) -> ControllerError {
@@ -94,6 +122,8 @@ pub(crate) fn dispatch_search(
 #[uniffi::export]
 impl MobileController {
     /// Call on each detector heartbeat, including frames with no detections. Empty classes withdraw capability.
+    /// `timestamp` is monotonic seconds. Returns `InvalidInput` for invalid detector
+    /// metadata or time, and `Internal` for a poisoned mutex.
     pub fn register_search_detector(
         &self,
         classes: Vec<String>,
@@ -107,6 +137,9 @@ impl MobileController {
             .set_detector_capability(classes, version, timestamp)
             .map_err(search_error)
     }
+    /// Validate and submit a search using current pose, map, detector, and authority.
+    /// `timestamp` is monotonic seconds. Returns `InvalidInput` for malformed or
+    /// inadmissible requests, and `Internal` for a poisoned mutex or serialization failure.
     pub fn start_target_search(
         &self,
         r: MobileSearchRequest,
@@ -134,6 +167,9 @@ impl MobileController {
             timestamp,
         )
     }
+    /// Submit one detector observation for arbiter validation and confirmation.
+    /// `timestamp` is current monotonic seconds. Returns `InvalidInput` for rejected
+    /// evidence (including mismatched identities or stale data), or `Internal` on lock failure.
     pub fn push_target_observation(
         &self,
         o: MobileTargetObservation,
@@ -159,6 +195,8 @@ impl MobileController {
             )
             .map_err(search_error)
     }
+    /// Read search status at monotonic `timestamp` seconds without stepping motors.
+    /// Returns `None` when no status is available, locking fails, or conversion fails.
     pub fn target_search_snapshot(&self, timestamp: f64) -> Option<MobileSearchSnapshot> {
         let b = self.brain.lock().ok()?;
         let s = b.autonomy.search_status(timestamp)?;

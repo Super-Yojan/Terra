@@ -1,6 +1,7 @@
 use terra_autonomy::*;
 use terra_mapping::MapSnapshot;
 use terra_navigation::{Pose, Twist};
+/// Build a 10 m square unknown map with a 5 m square observed free core for reachable frontiers.
 fn map() -> MapSnapshot {
     let mut m = MapSnapshot {
         width: 40,
@@ -17,6 +18,7 @@ fn map() -> MapSnapshot {
     }
     m
 }
+/// Build fresh healthy origin-pose evidence on map revision 1 at the supplied seconds timestamp.
 fn input(m: &MapSnapshot, now: f64) -> ArbiterInput<'_> {
     ArbiterInput {
         now,
@@ -29,6 +31,7 @@ fn input(m: &MapSnapshot, now: f64) -> ArbiterInput<'_> {
         healthy: true,
     }
 }
+/// Build a 60-second survivor search bounded by ±4 m and correlated to the local run.
 fn req() -> SearchRequest {
     SearchRequest {
         version: 1,
@@ -45,6 +48,7 @@ fn req() -> SearchRequest {
         time_budget_s: 60.,
     }
 }
+/// Build an arbiter with a survivor detector advertised at time zero and target-search authority selected.
 fn arbiter() -> AutonomyArbiter {
     let mut a = AutonomyArbiter::default();
     a.set_detector_capability(vec!["survivor".into()], "sim-v1".into(), 0.)
@@ -57,6 +61,7 @@ fn arbiter() -> AutonomyArbiter {
     });
     a
 }
+/// Reject target-search authority without a detector; with a detector but no session, preserve zero motion.
 #[test]
 fn mode_without_detector_or_request_never_moves() {
     let mut a = AutonomyArbiter::default();
@@ -75,6 +80,7 @@ fn mode_without_detector_or_request_never_moves() {
     assert_eq!(o.twist, Twist::default());
     assert!(!o.status.supported_levels.is_empty());
 }
+/// Start on a known core without approval, then latch a stop and verify reset does not resurrect the cancelled search.
 #[test]
 fn search_drives_without_frontier_approval_and_stop_cancels() {
     let mut a = arbiter();
@@ -102,6 +108,7 @@ fn search_drives_without_frontier_approval_and_stop_cancels() {
     );
     assert_eq!(a.step(input(&m, 0.3)).twist, Twist::default());
 }
+/// Confirm three frames, hold motion, and retain the report until an acknowledgement names the correct run.
 #[test]
 fn search_completion_holds_and_report_ack_is_correlated() {
     let mut a = arbiter();
@@ -142,6 +149,7 @@ fn search_completion_holds_and_report_ack_is_correlated() {
     assert!(a.ack_search_report(ack));
     assert!(a.step(input(&m, 0.8)).pending_reports.is_empty());
 }
+/// Age out detector capability and verify refreshing it alone leaves the search held for explicit resume.
 #[test]
 fn detector_loss_holds_and_requires_explicit_resume() {
     let mut a = arbiter();
@@ -155,6 +163,7 @@ fn detector_loss_holds_and_requires_explicit_resume() {
         .unwrap();
     assert_eq!(a.step(input(&m, 1.2)).twist, Twist::default());
 }
+/// Replay the accepted start token after teleop takeover; acknowledge idempotently while leaving search cancelled.
 #[test]
 fn repeated_start_cannot_relaunch_after_takeover() {
     let mut a = arbiter();
@@ -173,6 +182,7 @@ fn repeated_start_cannot_relaunch_after_takeover() {
         SearchPhase::Cancelled
     );
 }
+/// Start a frontier search and verify a nonzero target-search intent despite short navigation steps.
 #[test]
 fn search_route_intent_is_not_swallowed_by_waypoint_arrival_radius() {
     let mut a = arbiter();
@@ -182,6 +192,7 @@ fn search_route_intent_is_not_swallowed_by_waypoint_arrival_radius() {
     assert_ne!(o.intent, Twist::default());
     assert_eq!(o.status.active_source, "target_search");
 }
+/// Place the rover centre near the search edge so its footprint crosses the boundary; reject the start.
 #[test]
 fn out_of_bounds_start_is_rejected_before_search_acceptance() {
     let mut a = arbiter();
@@ -190,6 +201,7 @@ fn out_of_bounds_start_is_rejected_before_search_acceptance() {
     i.pose.x = 3.9;
     assert!(a.start_search(req(), &i).is_err());
 }
+/// Cancel a valid session, reject a subsequent observation, and verify the next tick remains motionless.
 #[test]
 fn cancel_action_and_foreign_observations_never_resurrect_motion() {
     let mut a = arbiter();
@@ -225,6 +237,7 @@ fn cancel_action_and_foreign_observations_never_resurrect_motion() {
     );
     assert_eq!(a.step(input(&m, 0.3)).twist, Twist::default());
 }
+/// Confirm a target and immediately start another session; the first report must remain queued for delivery.
 #[test]
 fn completed_report_survives_new_search_before_next_control_tick() {
     let mut a = arbiter();
@@ -255,6 +268,7 @@ fn completed_report_survives_new_search_before_next_control_tick() {
     a.start_search(next, &input(&m, 0.7)).unwrap();
     assert_eq!(a.step(input(&m, 0.8)).pending_reports.len(), 1);
 }
+/// Confirm a report and acknowledge its exact identifiers twice; both acknowledgements must succeed.
 #[test]
 fn report_acknowledgements_are_idempotent() {
     let mut a = arbiter();

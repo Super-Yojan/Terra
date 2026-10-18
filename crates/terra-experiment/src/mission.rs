@@ -2,22 +2,34 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
+/// Ground-truth survivor placement for deterministic mission evaluation.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Survivor {
+    /// Unique survivor identifier within this mission.
     pub id: u64,
+    /// World-frame x coordinate, in metres.
     pub x: f64,
+    /// World-frame y coordinate, in metres.
     pub y: f64,
 }
+/// Seeded search-and-return scenario; distances are metres and durations are seconds.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct MissionConfig {
+    /// Scenario identifier carried into mission status.
     pub mission_id: String,
+    /// Seed determining the reproducible survivor layout.
     pub seed: u64,
+    /// Half-width of the square mission region, in metres from the origin.
     pub half_extent: f64,
+    /// Positive finite mission duration, in seconds.
     pub time_budget: f64,
+    /// Maximum Euclidean observation distance, in metres.
     pub detection_range: f64,
+    /// Ground-truth placements; not published as unobserved sightings.
     pub survivors: Vec<Survivor>,
 }
 impl MissionConfig {
+    /// Build a deterministic three-survivor mission with a 600 s budget, 5 m detection range, and 40 m half-extent.
     pub fn rescue(seed: u64) -> Self {
         let offset = (seed % 7) as f64;
         Self {
@@ -46,29 +58,49 @@ impl MissionConfig {
         }
     }
 }
+/// First observed survivor location and its reporting rover.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Sighting {
+    /// Identifier of the observed survivor.
     pub survivor_id: u64,
+    /// World-frame x coordinate, in metres.
     pub x: f64,
+    /// World-frame y coordinate, in metres.
     pub y: f64,
+    /// Identifier of the rover that first observed the survivor.
     pub rover_id: u64,
+    /// Observation time in seconds on the run clock.
     pub observed_at: f64,
+    /// Whether the observing rover has confirmed this sighting.
     pub confirmed: bool,
 }
+/// Mission progress exposing observed targets, confirmations, and return-to-base completion.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MissionStatus {
+    /// Scenario identifier carried into mission status.
     pub mission_id: String,
+    /// Human-readable search, confirmation, and return objective.
     pub objective: String,
+    /// Seed determining the reproducible survivor layout.
     pub seed: u64,
+    /// Current lifecycle phase.
     pub phase: String,
+    /// Number of survivors confirmed by their observing rovers.
     pub confirmed: usize,
+    /// Total survivors that must be confirmed.
     pub required: usize,
+    /// Remaining budget in seconds, clamped to zero.
     pub remaining_seconds: f64,
+    /// Half-width of the square mission region, in metres from the origin.
     pub half_extent: f64,
+    /// Whether the recording or mission completed successfully, according to this record.
     pub complete: bool,
+    /// Whether the budget expired before mission completion.
     pub failed: bool,
+    /// First sightings ordered by survivor identifier; hidden targets are omitted.
     pub observations: Vec<Sighting>,
 }
+/// Deterministic mission evaluator separating sightings, confirmation, and safe return.
 pub struct Mission {
     config: MissionConfig,
     sightings: BTreeMap<u64, Sighting>,
@@ -77,6 +109,10 @@ pub struct Mission {
     returned: BTreeSet<u64>,
 }
 impl Mission {
+    /// Validate and create a mission with no sightings or confirmations.
+    ///
+    /// Returns an error for nonpositive/nonfinite dimensions or timing, zero or over 1000 survivors, duplicate IDs,
+    /// or nonfinite/out-of-bounds placements.
     pub fn new(c: MissionConfig) -> Result<Self, &'static str> {
         if !c.half_extent.is_finite()
             || c.half_extent <= 0.
@@ -108,9 +144,14 @@ impl Mission {
             returned: BTreeSet::new(),
         })
     }
+    /// Borrow all ground-truth placements for simulator evaluation; these are not observation telemetry.
     pub fn candidates(&self) -> &[Survivor] {
         &self.config.survivors
     }
+    /// Return newly visible first sightings within detection range of world-metre `(x, y)`.
+    ///
+    /// `now` is nondecreasing seconds from mission start and must be within budget.
+    /// Nonfinite inputs, backward/expired time, or false line of sight return an empty vector without recording sightings.
     pub fn observe(
         &mut self,
         rover: u64,
@@ -148,6 +189,9 @@ impl Mission {
         }
         new
     }
+    /// Observe only the specified survivor at the given world-metre pose and seconds timestamp.
+    ///
+    /// Uses the same range and time checks as `observe`, assuming line of sight; unknown or already seen IDs yield no sightings.
     pub fn observe_target(
         &mut self,
         rover: u64,
@@ -162,6 +206,9 @@ impl Mission {
         self.config.survivors = others;
         result
     }
+    /// Confirm a first sighting by its original rover at a nondecreasing seconds timestamp within budget.
+    ///
+    /// Returns `false` for invalid time, unknown sightings, another rover, or duplicate confirmation.
     pub fn report(&mut self, rover: u64, id: u64, now: f64) -> bool {
         if !now.is_finite() || now < self.last_time || now > self.config.time_budget {
             return false;
@@ -176,6 +223,9 @@ impl Mission {
         self.last_time = now;
         true
     }
+    /// Mark a rover returned when all targets are confirmed and it is within 2 m of the origin.
+    ///
+    /// Coordinates use metres; invalid or backward times, expired budgets, and nonfinite positions are ignored.
     pub fn update_pose(&mut self, rover: u64, x: f64, y: f64, now: f64) {
         if now.is_finite()
             && now >= self.last_time
@@ -188,6 +238,10 @@ impl Mission {
             self.returned.insert(rover);
         }
     }
+    /// Snapshot mission progress at `now` seconds from mission start.
+    ///
+    /// Completion requires every target confirmed and every observing rover returned; otherwise budget expiry marks failure.
+    /// This method does not validate or advance the clock; callers should supply a finite nonnegative time.
     pub fn status(&self, now: f64) -> MissionStatus {
         let all_confirmed = self.confirmed.len() == self.config.survivors.len();
         let complete = all_confirmed

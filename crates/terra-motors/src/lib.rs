@@ -82,24 +82,29 @@ const EFFORT_SLACK: f64 = 1e-6;
 /// Direction along the rover's forward axis. Absent direction means coast, not brake.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MotorDirection {
+    /// Positive effort along the forward wheel direction.
     Forward,
+    /// Negative effort opposite the forward wheel direction.
     Reverse,
 }
 
 /// One wheel after the adapter. `duty` is a fraction of the PWM period, in `0.0..=1.0`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct WheelPwm {
+    /// PWM on-time fraction in `[0, 1]` for adapter-produced values.
     pub duty: f64,
     /// `None` only while coasting (`duty == 0`). Never a brake request.
     pub direction: Option<MotorDirection>,
 }
 
 impl WheelPwm {
+    /// Zero duty with no direction: coast, never a brake command.
     pub const COAST: Self = Self {
         duty: 0.0,
         direction: None,
     };
 
+    /// Return whether duty is exactly zero and direction is absent.
     pub fn is_coast(self) -> bool {
         self.duty == 0.0 && self.direction.is_none()
     }
@@ -183,10 +188,13 @@ impl std::fmt::Display for OutputHold {
 /// Both wheels plus the driver-enable gate. This is the only struct that should be written to hardware.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ChassisPwm {
+    /// PWM command for the left wheel.
     pub left: WheelPwm,
+    /// PWM command for the right wheel.
     pub right: WheelPwm,
     /// Logical driver enable. False means deassert EN / hold the driver asleep, and both wheels coast.
     pub drive_enabled: bool,
+    /// Reason effort is passed through or inhibited.
     pub hold: OutputHold,
 }
 
@@ -200,6 +208,7 @@ impl ChassisPwm {
         }
     }
 
+    /// Return whether both wheel commands are coast, regardless of driver-enable state.
     pub fn is_coasting(self) -> bool {
         self.left.is_coast() && self.right.is_coast()
     }
@@ -213,11 +222,16 @@ impl ChassisPwm {
 pub struct StampedEffort {
     /// Monotonic seconds when the producer computed `left` and `right`.
     pub commanded_at: f64,
+    /// Normalized left effort, validated by the adapter in `[-1, 1]` with rounding slack.
     pub left: f64,
+    /// Normalized right effort, validated by the adapter in `[-1, 1]` with rounding slack.
     pub right: f64,
 }
 
 impl StampedEffort {
+    /// Package efforts with their producer time in monotonic seconds.
+    ///
+    /// Construction performs no validation; [`MotorAdapter::apply`] checks time/range.
     pub fn new(commanded_at: f64, left: f64, right: f64) -> Self {
         Self {
             commanded_at,
@@ -226,6 +240,8 @@ impl StampedEffort {
         }
     }
 
+    /// Copy wheel efforts from controller output, retaining the supplied producer time
+    /// in seconds. Other controller metadata is not used and no validation occurs.
     pub fn from_output(commanded_at: f64, output: &MotorOutput) -> Self {
         Self::new(commanded_at, output.left, output.right)
     }
@@ -250,6 +266,9 @@ impl Default for MotorAdapterConfig {
 }
 
 impl MotorAdapterConfig {
+    /// Check finite timeout in `(0, 1]` seconds and deadband in `[0, 1)`.
+    ///
+    /// Returns [`InputError::InvalidConfiguration`] for any violated constraint.
     pub fn validate(self) -> Result<(), InputError> {
         validate_timeout(self.command_timeout)?;
         if !self.neutral_deadband.is_finite()
@@ -271,6 +290,13 @@ fn validate_timeout(timeout: f64) -> Result<(), InputError> {
 }
 
 /// Map one signed effort to coast or a single-direction PWM command.
+/// `effort` is a normalized signed fraction; `deadband` must be in `[0, 1)`.
+/// Effort at or below deadband coasts; otherwise duty is its clamped magnitude
+/// and direction follows its sign. No deadband rescaling is applied.
+///
+/// Returns [`InputError::NonFinite`] for non-finite arguments and
+/// [`InputError::OutOfRange`] for invalid deadband or effort magnitude above
+/// `1 + 1e-6`. Efforts within that slack are clamped to full scale.
 pub fn map_effort(effort: f64, deadband: f64) -> Result<WheelPwm, InputError> {
     if !effort.is_finite() || !deadband.is_finite() {
         return Err(InputError::NonFinite);
@@ -294,8 +320,10 @@ pub fn map_effort(effort: f64, deadband: f64) -> Result<WheelPwm, InputError> {
 }
 
 /// Result of offering a producer timestamp to the watchdog. The watchdog does not emit PWM.
+/// Candidate-command time rejection without PWM or state changes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WatchdogFault {
+    /// Non-finite/negative time or a producer timestamp later than receive time.
     InvalidTime,
     /// `now - commanded_at` is already at least the timeout.
     Expired,
@@ -306,9 +334,21 @@ pub enum WatchdogFault {
 /// Freshness of the latched producer timestamp. Independent of the velocity-controller target timeout.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum WatchdogState {
+    /// No producer timestamp has been kicked since construction or clearing.
     Idle,
-    Fresh { age: f64, commanded_at: f64 },
-    Expired { commanded_at: f64 },
+    /// Stored command is younger than the timeout.
+    Fresh {
+        /// Elapsed seconds since the producer computed the command.
+        age: f64,
+        /// Stored producer timestamp in monotonic seconds.
+        commanded_at: f64,
+    },
+    /// Stored command age has reached or exceeded the timeout.
+    Expired {
+        /// Expired producer timestamp in monotonic seconds.
+        commanded_at: f64,
+    },
+    /// Evaluation time is invalid or precedes the stored producer stamp.
     InvalidTime,
 }
 
@@ -320,6 +360,9 @@ pub struct MotorWatchdog {
 }
 
 impl MotorWatchdog {
+    /// Construct an idle watchdog with timeout in `(0, 1]` seconds.
+    ///
+    /// Returns [`InputError::InvalidConfiguration`] for non-finite or out-of-range timeout.
     pub fn new(timeout: f64) -> Result<Self, InputError> {
         validate_timeout(timeout)?;
         Ok(Self {
@@ -328,24 +371,34 @@ impl MotorWatchdog {
         })
     }
 
+    /// Return the configured timeout in seconds.
     pub fn timeout(self) -> f64 {
         self.timeout
     }
 
+    /// Return the most recently kicked producer timestamp in seconds, or `None` while idle.
     pub fn last_commanded_at(self) -> Option<f64> {
         self.last_kick
     }
 
+    /// Forget the producer timestamp, returning to idle without changing timeout.
     pub fn clear(&mut self) {
         self.last_kick = None;
     }
 
     /// Record a producer timestamp that [`Self::check_new`] already accepted.
+    /// `commanded_at` uses the same monotonic seconds as evaluation. This method
+    /// does not validate it; callers must first use [`Self::check_new`].
     pub fn kick(&mut self, commanded_at: f64) {
         self.last_kick = Some(commanded_at);
     }
 
     /// Check a candidate command without mutating. Equal timestamps are in order; only an older one is not.
+    /// Both times are finite nonnegative seconds in one monotonic clock domain.
+    ///
+    /// Returns [`WatchdogFault::InvalidTime`] for invalid/future producer time,
+    /// [`WatchdogFault::OutOfOrder`] for an older stamp, or [`WatchdogFault::Expired`]
+    /// when age is at least the timeout. Repeating a stamp never extends its freshness.
     pub fn check_new(self, now: f64, commanded_at: f64) -> Result<(), WatchdogFault> {
         if !now.is_finite()
             || now < 0.0
@@ -367,6 +420,10 @@ impl MotorWatchdog {
         Ok(())
     }
 
+    /// Classify the stored producer time at `now` seconds without changing state.
+    ///
+    /// Non-finite, negative, or pre-command `now` is invalid. No stored command is
+    /// idle; age at least timeout is expired; otherwise the state includes age in seconds.
     pub fn evaluate(self, now: f64) -> WatchdogState {
         if !now.is_finite() || now < 0.0 {
             return WatchdogState::InvalidTime;
@@ -397,10 +454,12 @@ pub struct EnableGate {
 }
 
 impl EnableGate {
+    /// Return the most recently sampled hardware-enable switch state.
     pub fn hardware_closed(self) -> bool {
         self.hardware_closed
     }
 
+    /// Return whether a command has been latched since the last clearing event.
     pub fn latched(self) -> bool {
         self.latched
     }
@@ -410,6 +469,8 @@ impl EnableGate {
         self.hardware_closed && self.latched
     }
 
+    /// Update the software switch image, clearing the command latch on an opening
+    /// or open-to-closed transition so stored effort cannot restart motion.
     pub fn set_hardware_closed(&mut self, closed: bool) {
         if !closed || !self.hardware_closed {
             self.latched = false;
@@ -417,12 +478,14 @@ impl EnableGate {
         self.hardware_closed = closed;
     }
 
+    /// Latch authorization only while the hardware switch image is closed.
     pub fn latch_command(&mut self) {
         if self.hardware_closed {
             self.latched = true;
         }
     }
 
+    /// Clear command authorization while retaining the sampled switch state.
     pub fn disarm(&mut self) {
         self.latched = false;
     }
@@ -441,6 +504,7 @@ pub struct MotorAdapter {
 
 impl MotorAdapter {
     /// Boots with the hardware switch treated as open, so PWM is coast until enable and a command.
+    /// Returns [`InputError::InvalidConfiguration`] if timeout or deadband is invalid.
     pub fn new(config: MotorAdapterConfig) -> Result<Self, InputError> {
         config.validate()?;
         Ok(Self {
@@ -453,14 +517,17 @@ impl MotorAdapter {
         })
     }
 
+    /// Return a copy of the validated watchdog/deadband configuration.
     pub fn config(&self) -> MotorAdapterConfig {
         self.config
     }
 
+    /// Return the sampled switch state; this alone does not imply PWM is permitted.
     pub fn hardware_enabled(&self) -> bool {
         self.gate.hardware_closed()
     }
 
+    /// Return a copy of the watchdog for observation; mutating it cannot change this adapter.
     pub fn watchdog(&self) -> MotorWatchdog {
         self.watchdog
     }
@@ -469,6 +536,8 @@ impl MotorAdapter {
     ///
     /// A rising or falling edge drops any latched effort. Closing the switch does not
     /// replay the previous command; the next [`Self::apply`] while it stays closed does.
+    /// `now` is finite nonnegative monotonic seconds. Invalid or backwards time
+    /// returns coast with [`OutputHold::InvalidTime`] and disarms the adapter.
     #[must_use]
     pub fn set_hardware_enable(&mut self, closed: bool, now: f64) -> ChassisPwm {
         let was_closed = self.gate.hardware_closed();
@@ -483,12 +552,17 @@ impl MotorAdapter {
     }
 
     /// Apply an effort that was just computed at `now`. Do not use this to replay a stored command.
+    /// Times use monotonic seconds and efforts are normalized fractions. All
+    /// validation and hold behavior are the same as [`Self::apply`].
     #[must_use]
     pub fn apply_effort_now(&mut self, now: f64, left: f64, right: f64) -> ChassisPwm {
         self.apply(now, StampedEffort::new(now, left, right))
     }
 
     /// Apply a [`MotorOutput`] stamped when it was produced, which may be earlier than `now`.
+    /// Both times are monotonic seconds in one clock domain. Only left/right efforts
+    /// are copied; stop reason and estimate metadata do not affect validation.
+    /// Returns the same hardware command and holds as [`Self::apply`].
     #[must_use]
     pub fn apply_output(
         &mut self,
@@ -500,6 +574,11 @@ impl MotorAdapter {
     }
 
     /// Apply one stamped command. The returned value is what hardware should write.
+    /// `now` and the producer stamp are nonnegative monotonic seconds. Efforts
+    /// must pass [`map_effort`]. Invalid/backwards time, invalid effort, out-of-order
+    /// stamps, expired commands, or an open switch return coast with the hold reason
+    /// and remove command authorization. Successful commands latch while enabled.
+    /// The returned `drive_enabled` must also be written to the hardware driver.
     #[must_use]
     pub fn apply(&mut self, now: f64, command: StampedEffort) -> ChassisPwm {
         if self.observe_now(now).is_err() {
@@ -533,6 +612,9 @@ impl MotorAdapter {
     }
 
     /// Re-evaluate the latched command against `now`. Call this when no new effort arrived.
+    /// `now` uses the same monotonic seconds as application. Invalid/backwards time
+    /// disarms with an invalid-time hold; age at least timeout disarms with watchdog
+    /// hold. Otherwise returns live PWM only for a closed switch and latched command.
     #[must_use]
     pub fn poll(&mut self, now: f64) -> ChassisPwm {
         if self.observe_now(now).is_err() {
@@ -612,6 +694,7 @@ mod tests {
     use super::*;
     use terra_types::StopReason;
 
+    /// Build a motor-adapter fixture with timeout in seconds and exact-zero deadband.
     fn adapter(timeout: f64) -> MotorAdapter {
         MotorAdapter::new(MotorAdapterConfig {
             command_timeout: timeout,
@@ -620,6 +703,8 @@ mod tests {
         .unwrap()
     }
 
+    /// Verify the requested hold reason, deasserted enable, zero duty, absent direction,
+    /// and low/low H-bridge inputs on both wheels.
     fn assert_neutral(pwm: ChassisPwm, hold: OutputHold) {
         assert_eq!(pwm.hold, hold, "{hold}");
         assert!(!pwm.drive_enabled);
@@ -632,6 +717,8 @@ mod tests {
         assert_eq!(pwm.right.in1_in2(), (0.0, 0.0));
     }
 
+    /// Checks positive/reverse direction, magnitude-to-duty conversion, integer timer
+    /// rounding, full-scale rounding slack, and both supported H-bridge pin representations.
     #[test]
     fn maps_sign_to_direction_and_magnitude_to_duty() {
         let forward = map_effort(0.5, 0.0).unwrap();
@@ -654,6 +741,7 @@ mod tests {
         assert_eq!(map_effort(1.0 + 5e-7, 0.0).unwrap().duty, 1.0);
     }
 
+    /// Verifies exact zero always coasts and never uses the high/high brake encoding.
     #[test]
     fn zero_effort_is_coast_and_never_both_inputs_high() {
         let coast = map_effort(0.0, 0.0).unwrap();
@@ -667,6 +755,8 @@ mod tests {
         }
     }
 
+    /// Checks inclusive deadband, direction above deadband, invalid effort rejection,
+    /// timeout bounds, and the default motor watchdog configuration.
     #[test]
     fn deadband_and_rejected_efforts() {
         assert!(map_effort(0.25, 0.25).unwrap().is_coast());
@@ -699,6 +789,8 @@ mod tests {
         assert_eq!(MotorAdapterConfig::default().command_timeout, 0.2);
     }
 
+    /// Checks the standalone producer-clock watchdog at the exact expiry boundary,
+    /// including stale replay, out-of-order and negative producer timestamps.
     #[test]
     fn watchdog_expires_on_its_own_clock_and_rejects_replays() {
         let mut watchdog = MotorWatchdog::new(0.25).unwrap();
@@ -738,6 +830,8 @@ mod tests {
         );
     }
 
+    /// Exercises the switch/command latch state machine, ensuring re-closing the
+    /// switch requires a newly latched command.
     #[test]
     fn enable_gate_requires_a_command_after_the_switch_closes() {
         let mut gate = EnableGate::default();
@@ -756,6 +850,8 @@ mod tests {
         assert!(!gate.drive_permitted(), "rising edge disarms");
     }
 
+    /// Checks boot inhibit, open-switch effort rejection, fresh command enablement,
+    /// and no replay of stored effort after reopening and re-closing the switch.
     #[test]
     fn boot_and_open_switch_block_pwm_until_a_fresh_command() {
         let mut motors = adapter(0.25);
@@ -795,6 +891,8 @@ mod tests {
         );
     }
 
+    /// Checks that a fresh zero command coasts while keeping the enabled driver live,
+    /// then watchdog expiry deasserts enable without requesting a brake.
     #[test]
     fn zero_effort_coasts_with_enable_held_and_watchdog_then_drops_enable() {
         let mut motors = adapter(0.25);
@@ -824,6 +922,8 @@ mod tests {
         assert!(resumed.right.is_coast());
     }
 
+    /// Replays an unchanged producer stamp to prove receiving the command again
+    /// does not extend the watchdog window.
     #[test]
     fn same_stamp_does_not_extend_the_watchdog() {
         let mut motors = adapter(0.25);
@@ -846,6 +946,8 @@ mod tests {
         );
     }
 
+    /// Checks that one invalid wheel effort or invalid/backwards clock disables
+    /// both wheels, clears authorization, and requires a fresh command to resume.
     #[test]
     fn invalid_effort_or_clock_drops_both_wheels() {
         let mut motors = adapter(0.25);
@@ -878,6 +980,8 @@ mod tests {
         );
     }
 
+    /// Checks that a delayed older producer stamp disarms instead of replacing
+    /// a newer accepted command.
     #[test]
     fn older_timestamp_disarms_instead_of_replacing_a_newer_command() {
         let mut motors = adapter(0.25);
@@ -896,6 +1000,8 @@ mod tests {
         assert_neutral(motors.poll(0.2), OutputHold::AwaitCommand);
     }
 
+    /// Checks that a fresh deadband command can coast while driver enable remains
+    /// asserted and the hardware switch remains closed.
     #[test]
     fn deadband_coasts_without_opening_the_enable_gate() {
         let mut motors = MotorAdapter::new(MotorAdapterConfig {
@@ -915,6 +1021,8 @@ mod tests {
     }
 
     /// Software stand-in for the wheeled-up bench procedure. It does not spin hardware.
+    /// Runs the software bench sequence through enable, forward/reverse, zero effort,
+    /// watchdog expiry, and switch reopening without touching physical hardware.
     #[test]
     fn software_bench_sequence() {
         let mut motors = adapter(0.25);

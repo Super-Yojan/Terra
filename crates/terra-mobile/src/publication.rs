@@ -30,12 +30,17 @@ pub(crate) fn map_visualization_valid(map: &terra_mapping::MapSnapshot, run: &st
 }
 
 #[derive(Debug, PartialEq)]
+/// Decision for a newer visualization source sample.
 pub(crate) enum Publication {
+    /// Publish full content and establish its source sequence as the baseline.
     Full,
+    /// Publish freshness referencing the accepted full-baseline sequence.
     Heartbeat(u64),
+    /// Publish nothing for this observation.
     Skip,
 }
 
+/// Content/identity cache with strict per-source sequence ordering and timed baseline recovery.
 pub(crate) struct Gate<C, S> {
     content: Option<C>,
     source: Option<S>,
@@ -59,6 +64,8 @@ impl<C, S> Default for Gate<C, S> {
 }
 
 impl<C, S> Gate<C, S> {
+    /// Confirm whether the full baseline entered transport; rejection clears baseline
+    /// state while preserving the observed source-sequence high-water mark.
     pub(crate) fn full_enqueued(&mut self, accepted: bool) {
         if !accepted {
             // A rejected baseline cannot be referenced by a heartbeat. Retain
@@ -73,10 +80,13 @@ impl<C, S> Gate<C, S> {
 }
 
 impl<C: PartialEq, S: PartialEq> Gate<C, S> {
+    /// Return true for a changed source identity or strictly greater source sequence.
     pub(crate) fn is_newer(&self, source: &S, sequence: u64) -> bool {
         self.source.as_ref() != Some(source) || sequence > self.observed_sequence
     }
 
+    /// Invalidate the baseline for a newer incompatible source without permitting replay
+    /// of the same rejected sample. Older or duplicate samples have no effect.
     pub(crate) fn reject_source(&mut self, source: S, sequence: u64) {
         if self.is_newer(&source, sequence) {
             self.source = Some(source);
@@ -85,6 +95,11 @@ impl<C: PartialEq, S: PartialEq> Gate<C, S> {
         }
     }
 
+    /// Observe exact content with source identity, sequence, monotonic instant, and
+    /// heartbeat interval. New identities/content or a two-second recovery deadline
+    /// produce full content; unchanged newer samples can heartbeat. Duplicate/older
+    /// sequences are skipped even if their content differs. `now` must not precede
+    /// previous observations, as elapsed-time calculation uses `duration_since`.
     pub(crate) fn observe(
         &mut self,
         content: C,
@@ -124,15 +139,21 @@ impl<C: PartialEq, S: PartialEq> Gate<C, S> {
     }
 }
 
+/// Cache all occupancy cells and geometry under the run identity.
 pub(crate) type MapGate = Gate<(String, u32, u32, f64, f64, f64, Vec<i8>), String>;
+/// Cache exact parsed cloud content under its frame identity.
 pub(crate) type CloudGate = Gate<serde_json::Value, String>;
 
+/// Deterministic contract and regression scenarios for this module.
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
+    /// Exercises accepted dashboard dimensions and rejects excessive dimensions/cell count,
+    /// invalid resolution/cells/origin, and empty or oversized run identities.
     fn visualization_envelope_matches_dashboard_without_narrowing_local_maps() {
+        // Build unknown-free test geometry with the requested dimensions and valid 0.1 m cells.
         let map = |width, height| terra_mapping::MapSnapshot {
             width,
             height,
@@ -169,6 +190,8 @@ mod tests {
     }
 
     #[test]
+    /// Rejects a newer source sample, verifies it cannot be retried at the same sequence,
+    /// and requires a new full baseline before subsequent heartbeats.
     fn incompatible_new_source_invalidates_baseline_but_not_source_ordering() {
         let now = Instant::now();
         let interval = Duration::from_millis(200);
@@ -196,6 +219,8 @@ mod tests {
     }
 
     #[test]
+    /// Checks older, duplicate, and conflicting samples are suppressed; newer samples
+    /// can heartbeat or replace content, and a changed identity resets ordering.
     fn ordering_is_strict_within_identity_and_resets_only_for_new_identity() {
         let now = Instant::now();
         let interval = Duration::from_millis(200);
@@ -236,6 +261,8 @@ mod tests {
     }
 
     #[test]
+    /// Simulates failed enqueue, preserving the source high-water mark while forcing
+    /// the next newer sample to supply a full baseline before heartbeats resume.
     fn rejected_full_is_retried_and_never_becomes_heartbeat_identity() {
         let now = Instant::now();
         let interval = Duration::from_millis(200);
@@ -262,10 +289,13 @@ mod tests {
     }
 
     #[test]
+    /// Checks stale cached maps cannot seed or recover a visualization baseline,
+    /// including the strict half-second freshness boundary and invalid clock values.
     fn stale_cached_map_cannot_publish_on_attachment_or_recovery() {
         let start = Instant::now();
         let interval = Duration::from_millis(200);
         let mut gate = Gate::default();
+        // Advance source time separately from wall-clock publication time to test stale-cache recovery.
         let mut publish = |now, sample, sequence, elapsed| {
             if !fresh_map_sample(now, sample) {
                 return Publication::Skip;
@@ -300,6 +330,8 @@ mod tests {
     }
 
     #[test]
+    /// Varies each cell, dimensions, resolution, origin, and run identity to require
+    /// a complete map publication instead of a heartbeat.
     fn every_map_cell_geometry_and_run_change_forces_full() {
         let now = Instant::now();
         let interval = Duration::from_millis(200);
@@ -342,6 +374,8 @@ mod tests {
     }
 
     #[test]
+    /// Checks unchanged clouds obey the 500 ms heartbeat interval, duplicates remain suppressed,
+    /// new source samples recover a full baseline after two seconds, and content/frame changes force full payloads.
     fn exact_cloud_content_frame_and_rate_limit() {
         let now = Instant::now();
         let interval = Duration::from_millis(500);
@@ -400,10 +434,13 @@ mod tests {
     }
 
     #[test]
+    /// Checks initial full publication, heartbeat pacing, duplicate suppression,
+    /// two-second recovery, content invalidation, and an explicit gate reset.
     fn freshness_content_recovery_and_reset() {
         let mut gate = Gate::default();
         let start = Instant::now();
         let interval = Duration::from_millis(200);
+        // Vary content, source sequence, and elapsed milliseconds against one gate baseline.
         let mut observe = |content, source, ms| {
             gate.observe(
                 content,

@@ -2,6 +2,7 @@ use terra_autonomy::*;
 use terra_mapping::{MapConfig, MapSnapshot};
 use terra_navigation::{LocalPlanner, Pose, Twist};
 use terra_waypoint::{GoalCommand, GoalState};
+/// Build a free 10 m square grid with a 6 m vertical wall at x = 4 m, leaving a passage around its upper end.
 fn map() -> MapSnapshot {
     let mut map = MapSnapshot {
         width: 40,
@@ -16,6 +17,7 @@ fn map() -> MapSnapshot {
     }
     map
 }
+/// Integrate waypoint commands around a partial wall; require arrival while the published destination and token stay unchanged.
 #[test]
 fn l3_follows_corner_route_and_preserves_original_destination() {
     let mut arbiter = AutonomyArbiter::default();
@@ -72,6 +74,7 @@ fn l3_follows_corner_route_and_preserves_original_destination() {
     }
     assert!(arrived, "route follower failed to arrive: {pose:?}");
 }
+/// Extend the fixture wall across the map; require zero motion with an active goal and a no-path reason.
 #[test]
 fn l3_holds_when_route_is_sealed() {
     let mut arbiter = AutonomyArbiter::default();
@@ -113,6 +116,7 @@ fn l3_holds_when_route_is_sealed() {
     assert_eq!(output.goal.state, GoalState::Active);
 }
 
+/// Seal a previously passable wall and increment map revision; clear the route while retaining the original goal token.
 #[test]
 fn changed_map_invalidates_route_without_losing_the_goal() {
     let mut arbiter = AutonomyArbiter::default();
@@ -149,6 +153,7 @@ fn changed_map_invalidates_route_without_losing_the_goal() {
     assert!(output.status.global_route.is_empty());
 }
 
+/// Build fresh healthy evidence at (2 m, 2 m), using the supplied clock time and map revision.
 fn input(map: &MapSnapshot, now: f64, revision: u64) -> ArbiterInput<'_> {
     ArbiterInput {
         now,
@@ -166,6 +171,7 @@ fn input(map: &MapSnapshot, now: f64, revision: u64) -> ArbiterInput<'_> {
     }
 }
 
+/// Jump the rover to the other side of a wall without changing map revision; require a replacement route around the wall.
 #[test]
 fn localization_jump_replans_without_a_map_revision_change() {
     let mut map = MapSnapshot {
@@ -215,6 +221,7 @@ fn localization_jump_replans_without_a_map_revision_change() {
     assert!(output.status.global_route.iter().any(|p| p[0] < 2.));
 }
 
+/// Add an obstacle that blocks the cached rollout while leaving a route segment visible; require a newly admissible command or stop.
 #[test]
 fn cached_waypoint_command_must_stay_admissible() {
     let map = MapSnapshot {
@@ -310,6 +317,7 @@ fn cached_waypoint_command_must_stay_admissible() {
     assert_ne!(second.twist, first.twist);
 }
 
+/// Simulate travel across an 18 m by 12 m pitch with a rover-centred map and a 9 m reveal radius; require eventual waypoint arrival.
 #[test]
 fn l3_crosses_an_18_by_12_pitch_on_the_rolling_map() {
     let config = MapConfig::default();
@@ -379,6 +387,7 @@ fn l3_crosses_an_18_by_12_pitch_on_the_rolling_map() {
     assert!((pose.x - goal.0).hypot(pose.y - goal.1) <= 0.75);
 }
 
+/// Build a rover-centred snapshot, revealing cells within 9 m; pitch interior is free, exterior occupied, and unseen cells unknown.
 fn rolling_pitch(config: &MapConfig, pose: Pose) -> MapSnapshot {
     let resolution = config.resolution;
     let origin_x =

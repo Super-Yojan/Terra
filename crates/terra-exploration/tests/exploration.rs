@@ -1,6 +1,7 @@
 use terra_exploration::*;
 use terra_mapping::MapSnapshot;
 use terra_navigation::Pose;
+/// Build a 40 × 40 grid at 0.25 m resolution, centred on the origin, filled with the supplied occupancy value.
 fn map(fill: i8) -> MapSnapshot {
     MapSnapshot {
         width: 40,
@@ -11,6 +12,7 @@ fn map(fill: i8) -> MapSnapshot {
         occupancy: vec![fill; 1600],
     }
 }
+/// Build a 4 m square free core in unknown space, or a fully free map when `fill_unknown` is false.
 fn with_known_core(fill_unknown: bool) -> MapSnapshot {
     let mut grid = map(if fill_unknown { -1 } else { 0 });
     if fill_unknown {
@@ -22,6 +24,7 @@ fn with_known_core(fill_unknown: bool) -> MapSnapshot {
     }
     grid
 }
+/// Build an origin-pose exploration tick with caller-controlled time, map, blockage, and follower state; distances are metres.
 fn tick<'a>(
     now: f64,
     map: Option<&'a MapSnapshot>,
@@ -44,6 +47,7 @@ fn tick<'a>(
         goal_distance: distance,
     }
 }
+/// Compare default BFS ranking with navigation on a known core surrounded by unknown cells, then prefer east and exclude that goal.
 #[test]
 fn frontier_selection_matches_navigation_and_respects_a_scorer() {
     let grid = with_known_core(true);
@@ -74,6 +78,7 @@ fn frontier_selection_matches_navigation_and_respects_a_scorer() {
     .unwrap();
     assert!((skipped.x - prefer_east.x).hypot(skipped.y - prefer_east.y) > 1.);
 }
+/// Wall off an assigned frontier after a short planner hold; verify blacklisting selects another goal or waits for a retry.
 #[test]
 fn unreachable_frontier_is_blacklisted_and_does_not_stick() {
     let grid = with_known_core(true);
@@ -119,6 +124,7 @@ fn unreachable_frontier_is_blacklisted_and_does_not_stick() {
         other => panic!("blocked frontier held the run: {other:?}"),
     }
 }
+/// Use one permitted attempt and an exclusion radius covering the map; one blockage must exhaust all frontiers.
 #[test]
 fn repeated_blocks_end_instead_of_holding_forever() {
     let grid = with_known_core(true);
@@ -141,6 +147,7 @@ fn repeated_blocks_end_instead_of_holding_forever() {
         Some(EndReason::NoFrontiersLeft)
     );
 }
+/// Advance an active frontier through a one-second budget and verify terminal elapsed time stays frozen.
 #[test]
 fn budget_expiry_stops_a_live_frontier() {
     let grid = with_known_core(true);
@@ -171,6 +178,7 @@ fn budget_expiry_stops_a_live_frontier() {
         ExploreAction::Finished(EndReason::BudgetExpired)
     );
 }
+/// Verify external stop reasons are latched per run and a fresh run can end with a different reason.
 #[test]
 fn stop_and_takeover_end_the_run() {
     let mut explorer = Explorer::default();
@@ -193,6 +201,7 @@ fn stop_and_takeover_end_the_run() {
     );
     assert_eq!(explorer.status(1.).phase, ExplorePhase::Ended);
 }
+/// Supply a fully free map with no unknown cells; exploration must immediately report no remaining frontiers.
 #[test]
 fn no_frontiers_left_when_the_map_is_fully_known() {
     let grid = map(0);
@@ -207,6 +216,7 @@ fn no_frontiers_left_when_the_map_is_fully_known() {
         Some(EndReason::NoFrontiersLeft)
     );
 }
+/// Inject an irrelevant label followed by a wanted survivor label; the next tick must finish the target objective.
 #[test]
 fn find_target_stub_stops_on_a_reported_detection() {
     let grid = with_known_core(true);
@@ -237,6 +247,7 @@ fn find_target_stub_stops_on_a_reported_detection() {
         ExploreAction::Finished(EndReason::ObjectiveComplete)
     );
 }
+/// Measure a partly known free core and a fully known map, checking positive area and fractional versus complete coverage.
 #[test]
 fn coverage_counts_observed_free_cells() {
     let grid = with_known_core(true);

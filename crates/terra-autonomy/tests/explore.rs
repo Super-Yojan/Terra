@@ -2,6 +2,7 @@ use terra_autonomy::*;
 use terra_exploration::Detection;
 use terra_mapping::MapSnapshot;
 use terra_navigation::{Pose, Twist};
+/// Build fresh healthy evidence for the supplied world pose and map at `now` seconds, with zero measured motion.
 fn input_at(now: f64, pose: Pose, map: &MapSnapshot) -> ArbiterInput<'_> {
     ArbiterInput {
         now,
@@ -14,6 +15,7 @@ fn input_at(now: f64, pose: Pose, map: &MapSnapshot) -> ArbiterInput<'_> {
         healthy: true,
     }
 }
+/// Build a 20 m square unknown map with a 3 m radius free disc around the start.
 fn open_map() -> MapSnapshot {
     let mut map = MapSnapshot {
         width: 80,
@@ -34,6 +36,7 @@ fn open_map() -> MapSnapshot {
     }
     map
 }
+/// Mark unknown cells within 2.2 m of the rover as observed free space to model local sensing.
 fn reveal(map: &mut MapSnapshot, pose: Pose) {
     for y in 0..map.height {
         for x in 0..map.width {
@@ -46,9 +49,11 @@ fn reveal(map: &mut MapSnapshot, pose: Pose) {
         }
     }
 }
+/// Build an exploration-level request with a token and an explicit seconds budget.
 fn explore(token: &str, seconds: f64) -> LevelRequest {
     LevelRequest::new(Level::Explore, token).with_budget_seconds(seconds)
 }
+/// Reject a missing budget, then reuse a configured budget and immediately activate a frontier without supervision.
 #[test]
 fn explore_level_requires_a_budget_and_does_not_wait_for_approval() {
     let mut arbiter = AutonomyArbiter::default();
@@ -79,6 +84,7 @@ fn explore_level_requires_a_budget_and_does_not_wait_for_approval() {
     );
     assert!(started.status.supported_levels.contains(&Level::Explore));
 }
+/// Stop a running exploration, verify reset preserves its terminal hold, then start anew and take teleop authority.
 #[test]
 fn operator_stop_and_takeover_end_exploration() {
     let map = open_map();
@@ -151,6 +157,7 @@ fn operator_stop_and_takeover_end_exploration() {
             .any(|event| event.kind == "exploration_ended")
     );
 }
+/// Exercise a fully known map and stale-map evidence; both terminate exploration with the appropriate reason.
 #[test]
 fn no_frontiers_and_map_stale_stop_cleanly() {
     let known = MapSnapshot {
@@ -195,6 +202,7 @@ fn no_frontiers_and_map_stale_stop_cleanly() {
         Some(EndReason::MapStale)
     );
 }
+/// Finish on an injected wanted detection, restart, and verify goal cancellation ends exploration as an operator stop.
 #[test]
 fn goal_cancel_and_detection_stub_stop_exploration() {
     let map = open_map();
@@ -232,6 +240,7 @@ fn goal_cancel_and_detection_stub_stop_exploration() {
     );
     assert_eq!(cancelled.status.requested_level, Level::Explore);
 }
+/// Integrate commanded motion in 0.1-second steps, reveal nearby free cells, and require movement and coverage growth before the 3-second stop.
 #[test]
 fn simulated_rover_explores_until_the_budget_expires() {
     let mut arbiter = AutonomyArbiter::default();

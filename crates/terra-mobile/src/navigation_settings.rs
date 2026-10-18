@@ -2,12 +2,19 @@
 use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+/// Session-scoped vehicle geometry and avoidance limits; configuration grants no motion authority.
 pub(crate) struct Parameters {
+    /// Assumed body length, metres, validated in 0.1..=3.
     pub length: f64,
+    /// Assumed body width, metres, validated in 0.1..=3.
     pub width: f64,
+    /// Additional radial clearance, metres, validated in 0..=1.
     pub clearance: f64,
+    /// Planner forward speed limit, m/s, validated in 0.05..=2.
     pub max_linear: f64,
+    /// Planner yaw-rate limit, rad/s, validated in 0.1..=2.
     pub max_angular: f64,
+    /// Planner rollout horizon, seconds, validated in 0.5..=5.
     pub horizon: f64,
 }
 impl Default for Parameters {
@@ -25,6 +32,7 @@ impl Default for Parameters {
     }
 }
 impl Parameters {
+    /// Return whether every geometry and avoidance parameter is finite and within its supported range.
     pub fn valid(&self) -> bool {
         [
             (self.length, 0.1, 3.),
@@ -37,6 +45,8 @@ impl Parameters {
         .iter()
         .all(|&(v, min, max)| v.is_finite() && (min..=max).contains(&v))
     }
+    /// Build planner settings with radius equal to half the body diagonal plus clearance.
+    /// Other planner parameters retain portable defaults; this conversion assumes prior validation.
     pub fn planner(&self) -> terra_navigation::PlannerConfig {
         terra_navigation::PlannerConfig {
             radius: self.length.hypot(self.width) / 2. + self.clearance,
@@ -48,14 +58,20 @@ impl Parameters {
     }
 }
 #[derive(Default)]
+/// Applied geometry revision, latest result, and bounded request replay history.
 pub(crate) struct State {
+    /// Currently applied geometry and planner limits.
     pub parameters: Parameters,
+    /// Monotonic accepted-settings revision within this controller session.
     pub revision: u64,
+    /// Most recently processed unique settings token, including rejected requests.
     pub token: Option<String>,
+    /// Latest acceptance or rejection diagnostic.
     pub result: Option<String>,
     seen: std::collections::VecDeque<String>,
 }
 impl State {
+    /// Return versioned navigation configuration status JSON, including radius, revision, and latest result.
     pub fn status(&self) -> serde_json::Value {
         serde_json::json!({"schema_version":1,"revision":self.revision,"parameters":self.parameters,"footprint_radius":self.parameters.planner().radius,"token":self.token,"result":self.result})
     }
@@ -69,6 +85,10 @@ struct Request {
     settings_revision: u64,
     parameters: Parameters,
 }
+/// Apply one bounded, fresh, run/revision-bound settings request only while live
+/// authority, goal, and hardware state permit reconfiguration. `age` is receipt
+/// age in seconds. Invalid envelopes are ignored; unique valid tokens record
+/// an acceptance or rejection result and cannot be replayed.
 pub(crate) fn apply(b: &mut super::Brain, bytes: &[u8], age: f64) {
     if bytes.len() > 2048 {
         return;

@@ -1,5 +1,8 @@
+//! Session geometry validation and stale-authority configuration regression scenarios.
 use super::*;
 #[test]
+/// Checks half-diagonal plus clearance produces the planner radius and rejects
+/// negative clearance or nonfinite vehicle dimensions.
 fn navigation_dimensions_validate_and_derive_a_conservative_footprint() {
     let mut p = navigation_settings::Parameters::default();
     p.length = 0.8;
@@ -14,6 +17,8 @@ fn navigation_dimensions_validate_and_derive_a_conservative_footprint() {
     assert!(!p.valid());
 }
 #[test]
+/// Exercises absent hardware, replayed tokens, a successful geometry update,
+/// stale authority in a batch, and armed-hardware rejection.
 fn navigation_update_requires_fresh_disarmed_idle_hardware_and_current_revisions() {
     let c = MobileController::new(default_control_settings()).unwrap();
     let mut b = c.brain.lock().unwrap();
@@ -64,6 +69,8 @@ fn navigation_update_requires_fresh_disarmed_idle_hardware_and_current_revisions
     );
 }
 #[test]
+/// Applies either a new goal or mode change before settings in the same tick
+/// and verifies live authority prevents configuration based on stale cached status.
 fn preceding_goal_or_mode_change_cannot_use_an_old_status_snapshot() {
     for change in ["goal", "mode"] {
         let c = MobileController::new(default_control_settings()).unwrap();

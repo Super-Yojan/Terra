@@ -10,8 +10,11 @@ pub const ORIGIN: f64 = -10.0;
 
 #[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct Counts {
+    /// Cells with observed occupancy below 65.
     pub free: usize,
+    /// Cells with occupancy at least 65.
     pub occupied: usize,
+    /// Cells with negative occupancy values.
     pub unknown: usize,
 }
 
@@ -194,6 +197,7 @@ pub fn decode_occupancy(text: &str) -> Result<Vec<i8>, String> {
 mod tests {
     use super::*;
 
+    /// The coarse text grid preserves rover, obstacle, and unknown-space symbols.
     #[test]
     fn symbolic_marks_rover_obstacle_and_unknown() {
         let mut map = blank();
@@ -207,6 +211,7 @@ mod tests {
         assert!(lines[0].chars().all(|ch| ch == '?'));
     }
 
+    /// Base64 storage preserves signed unknown values as well as observed occupancy.
     #[test]
     fn occupancy_roundtrip_keeps_unknown() {
         let values = vec![-1, 0, 65, 100];

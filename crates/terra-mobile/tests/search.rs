@@ -1,4 +1,7 @@
+//! Phone search capability and detector-evidence confirmation scenarios.
 use terra_mobile::*;
+/// Feed stationary tracked IMU/VIO and a 40×40 map at `t` seconds. The map uses
+/// 0.25 m cells with a central observed free square and unknown surrounding cells.
 fn sensors(c: &MobileController, t: f64) {
     c.push_imu(ImuReading {
         timestamp: t,
@@ -46,6 +49,7 @@ fn sensors(c: &MobileController, t: f64) {
     .unwrap();
 }
 #[test]
+/// Checks target search is absent without a detector and invalid detector class metadata is rejected.
 fn phone_without_detector_does_not_advertise_l4() {
     let c = MobileController::new(default_control_settings()).unwrap();
     sensors(&c, 1.);
@@ -63,6 +67,8 @@ fn phone_without_detector_does_not_advertise_l4() {
     );
 }
 #[test]
+/// Registers a detector, starts a bounded search, submits three distinct corroborating frames,
+/// and checks completion, report frame identities, and zero selected forward motion.
 fn mobile_search_replays_confirmation_and_exports_report() {
     let c = MobileController::new(default_control_settings()).unwrap();
     sensors(&c, 1.);

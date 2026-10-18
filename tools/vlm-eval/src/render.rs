@@ -433,6 +433,8 @@ mod tests {
     use crate::geom::{blank, fill_disk, fill_rect};
     use terra_navigation::Pose;
 
+    /// The map renders at 800 px square with distinguishable unknown and free
+    /// colors, plus the red rover overlay.
     #[test]
     fn map_is_800_and_uses_the_occupancy_palette() {
         let mut map = blank();

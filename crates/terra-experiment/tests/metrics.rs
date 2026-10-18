@@ -1,4 +1,5 @@
 use terra_experiment::*;
+/// Cross entry and exit clearance thresholds and verify consecutive low-clearance ticks produce only one episode.
 #[test]
 fn near_miss_is_an_episode_not_every_tick() {
     let mut n = NearMiss::default();
@@ -7,6 +8,7 @@ fn near_miss_is_an_episode_not_every_tick() {
     assert_eq!(n.update(Some(0.5)), Some("near_miss_end"));
     assert_eq!(n.update(None), None);
 }
+/// Summarize a manifest, accepted mode change, and incomplete terminal record; preserve both failure and event count.
 #[test]
 fn incomplete_records_are_not_complete_runs() {
     let values = vec![
@@ -22,6 +24,7 @@ fn incomplete_records_are_not_complete_runs() {
     assert!(!summarize(&values).complete);
     assert_eq!(summarize(&values).mode_changes, 1);
 }
+/// Summarize two control ticks spanning 30 seconds; verify discovery/completion times and four interventions per minute.
 #[test]
 fn mission_outcomes_and_interventions_use_run_exposure() {
     let records = vec![

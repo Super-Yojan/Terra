@@ -1,8 +1,12 @@
+//! Loopback recovery after dashboard-incompatible occupancy samples.
+//! Network scenarios require local TCP sockets and use bounded receipt waits.
 use std::time::Duration;
 use terra_mobile::{MobileController, OccupancyGrid, default_control_settings};
 use zenoh::Wait;
 
 #[test]
+/// Uses loopback visualization to reject dashboard-incompatible onboard maps, establish
+/// a valid small baseline, invalidate it with oversized geometry, and recover only on a newer valid sample.
 fn oversized_map_never_heartbeats_until_a_baseline_is_accepted() {
     let socket = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let endpoint = format!("tcp/127.0.0.1:{}", socket.local_addr().unwrap().port());
@@ -26,6 +30,7 @@ fn oversized_map_never_heartbeats_until_a_baseline_is_accepted() {
         .declare_subscriber("map-rejection/7/map/occupancy/**")
         .wait()
         .unwrap();
+    // Install a square occupied source sample and run a control tick at its exposure timestamp.
     let publish = |width, sequence, timestamp| {
         controller
             .autonomy_map(

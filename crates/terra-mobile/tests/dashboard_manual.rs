@@ -4,6 +4,8 @@ use terra_mobile::{MobileController, default_control_settings};
 use zenoh::Wait;
 
 #[test]
+/// Uses a loopback router without sensors to check status publication, absent fake pose,
+/// zero motor output, remote emergency stop, and safe dashboard teardown.
 fn sensor_free_dashboard_publishes_status_without_pose_or_motor_output() {
     let socket = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let endpoint = format!("tcp/127.0.0.1:{}", socket.local_addr().unwrap().port());
@@ -82,6 +84,8 @@ fn sensor_free_dashboard_publishes_status_without_pose_or_motor_output() {
 }
 
 #[test]
+/// Feeds fresh stationary sensors and run/revision-bound teleop through a loopback router,
+/// then checks the mobile arbiter selects the routed operator twist.
 fn dashboard_drive_reaches_the_real_mobile_arbiter_with_queue_age() {
     use terra_mobile::{ImuReading, VioReading};
     let socket = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
