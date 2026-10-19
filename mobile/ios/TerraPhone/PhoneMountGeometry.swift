@@ -1,4 +1,6 @@
 import simd
+import Foundation
+import CoreLocation
 
 /// Upright portrait mount: top edge up, rear camera toward rover forward.
 /// Phone +X is right, +Y is top, +Z points out of the screen (rover backward).
@@ -12,4 +14,15 @@ enum PhoneMountGeometry {
     static let cameraToBody = simd_quatf(simd_float3x3(columns: (
         SIMD3(0, 0, -1), SIMD3(0, -1, 0), SIMD3(-1, 0, 0)
     )))
+    // Core Location landscapeLeft references phone +X (the right edge).
+    // Unlike the portrait top edge, it stays horizontal in the upright mount.
+    static let headingOrientation: CLDeviceOrientation = .landscapeLeft
+
+    static func headingReferenceYaw(worldFromCamera: simd_float3x3) -> Double? {
+        // AR camera +Y is phone +X: pair exactly with headingOrientation above.
+        let reference = worldFromCamera.columns.1
+        guard reference.x.isFinite, reference.y.isFinite, reference.z.isFinite,
+              hypot(reference.x, reference.y) >= 0.3 else { return nil }
+        return atan2(Double(reference.y), Double(reference.x))
+    }
 }

@@ -154,3 +154,33 @@ TerraLog.control.debug("Manual control ready=\(self.hardwareReady)")
 ```
 
 Use `notice` for safety transitions, `info` for normal lifecycle events, `debug` for temporary diagnostics, and `error` for failures. Bluetooth logs include rover armed/arming state, `stop_reason`, fault, gate mode and configuration eligibility whenever these change. Control logs identify the caller requesting motion revocation. Avoid logs on every frame or drive tick, and never log credentials or complete sensor/network payloads. Reinstall the updated app before testing on the phone.
+
+### Raw GPS diagnostics
+
+Home and Settings → Rover setup show raw GPS position availability, measured
+accuracy and fix age. GPS display does not require a compass heading, AR tracking,
+a local pose, or an eight-second alignment interval. A valid location fix is
+available immediately, including approximate location with its reported accuracy.
+Location permission failures, missing fixes, invalid readings and fixes older than
+three seconds report their specific cause. Stopping the phone runtime clears the
+shown report.
+
+Version-1 localization telemetry uses `mode: "gps"` for a valid raw fix and retains
+`gpsLatitude`, `gpsLongitude`, `gpsAccuracy` and `gpsFixAge`. The local `frameID`
+still identifies the tracking frame. Geographic origin, anchor and rotation fields
+remain absent: GPS is not used to invent a local transform. Invalid sensor values
+remain serializable so diagnostic messages can still be published.
+
+ARGOS displays these raw fixes without compass alignment and keeps occupancy and
+local waypoint control in the local view. Outdoor GPS navigation is a separate
+vehicle control capability; the GPS display alone does not enable driving.
+
+Run localization and diagnostic checks:
+
+```sh
+swiftc mobile/ios/TerraPhone/PhoneLocalization.swift \
+  tests/ios/PhoneLocalizationTests.swift -o /tmp/terra-localization-tests
+/tmp/terra-localization-tests
+```
+
+Rebuild and install Terra, then restart the phone runtime to use this update.

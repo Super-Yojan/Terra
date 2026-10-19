@@ -10,9 +10,10 @@ struct PhoneLocalizationInput {
  var headingTime: Double?
  var localX: Double
  var localY: Double
- var topYaw: Double?
+ var headingReferenceYaw: Double?
  var tracked: Bool
  var permissionReason: String? = nil
+ var trackingReason: String? = nil
 }
 struct PhoneLocalizationReport: Codable {
  var version = 1
@@ -20,6 +21,7 @@ struct PhoneLocalizationReport: Codable {
  var mode: String
  var reason: String
  var tracking: String
+ var issues: [String] = []
  var gpsAccuracy: Double?
  var gpsLatitude: Double?
  var gpsLongitude: Double?
@@ -34,36 +36,35 @@ struct PhoneLocalizationReport: Codable {
 struct PhoneLocalizationPolicy {
  private var frameID = UUID().uuidString
  var identifier: String { frameID }
- private var goodSince: Double?
- private var anchor: (Double, Double, Double, Double, Double)?
- mutating func reset() { frameID = UUID().uuidString; goodSince = nil; anchor = nil }
+ mutating func reset() { frameID = UUID().uuidString }
  mutating func update(_ input: PhoneLocalizationInput) -> PhoneLocalizationReport {
-  let freshFix = input.fixTime.map { input.now - $0 >= -1 && input.now - $0 <= 3 } ?? false
-  let freshHeading = input.headingTime.map { input.now - $0 >= -1 && input.now - $0 <= 2 } ?? false
-  let gpsGood = freshFix && input.accuracy.map { $0.isFinite && $0 >= 0 && $0 <= 10 } == true
-   && input.latitude.map { $0.isFinite && abs($0) <= 85 } == true && input.longitude.map { $0.isFinite && abs($0) <= 180 } == true
-  let headingGood = freshHeading && input.headingAccuracy.map { $0.isFinite && $0 >= 0 && $0 <= 15 } == true
-   && input.heading.map { $0.isFinite && $0 >= 0 && $0 < 360 } == true && input.topYaw?.isFinite == true
-  let usable = input.permissionReason == nil && gpsGood && headingGood && input.tracked && input.localX.isFinite && input.localY.isFinite
-  if usable { if goodSince == nil { goodSince = input.now } } else { goodSince = nil }
-  let ready = goodSince.map { input.now - $0 >= 8 } ?? false
-  if ready && anchor == nil {
-   anchor = (input.latitude!, input.longitude!, input.localX, input.localY, -input.heading! * .pi / 180 - input.topYaw!)
+  let fixAge = input.fixTime.flatMap { timestamp -> Double? in
+   let age = input.now - timestamp
+   return age.isFinite && age >= -1 ? max(0, age) : nil
   }
-  let gpsReason: String
-  if let permission = input.permissionReason { gpsReason = permission }
-  else if input.fixTime == nil { gpsReason = "Waiting for GPS fix" }
-  else if !freshFix { gpsReason = "GPS fix stale · waiting for an update" }
-  else if !gpsGood { gpsReason = "GPS accuracy insufficient · requires 10 m or better" }
-  else { gpsReason = "GPS available" }
-  let reason = !input.tracked ? "AR tracking unavailable" : !gpsGood || input.permissionReason != nil ? gpsReason : !headingGood ? "Heading uncertain · requires fresh compass accuracy of 15° or better" : !ready ? "Checking geographic alignment" : "GPS and heading reliable"
-  return PhoneLocalizationReport(frameID: frameID, mode: ready ? "geographic" : "local", reason: reason,
-   tracking: input.tracked ? "normal" : "limited", gpsAccuracy: input.accuracy,
-   gpsLatitude: input.latitude.flatMap { $0.isFinite && abs($0) <= 90 ? $0 : nil },
-   gpsLongitude: input.longitude.flatMap { $0.isFinite && abs($0) <= 180 ? $0 : nil },
-   gpsFixAge: input.fixTime.flatMap { $0.isFinite && input.now.isFinite ? max(0, input.now-$0) : nil }, headingAccuracy: input.headingAccuracy,
-   originLatitude: anchor?.0, originLongitude: anchor?.1, anchorX: anchor?.2, anchorY: anchor?.3, rotation: anchor?.4)
+  let freshFix = fixAge.map { $0 <= 3 } == true
+  let accuracyValid = input.accuracy.map { $0.isFinite && $0 >= 0 } == true
+  let coordinatesValid = input.latitude.map { $0.isFinite && abs($0) <= 90 } == true
+   && input.longitude.map { $0.isFinite && abs($0) <= 180 } == true
+  var issues: [String] = []
+  if let permission = input.permissionReason { issues.append(permission) }
+  if input.fixTime == nil { issues.append("Waiting for GPS fix · move to an open area with a clear view of the sky") }
+  else if !freshFix { issues.append("GPS fix stale · waiting for an update within 3 s") }
+  if input.fixTime != nil && !accuracyValid { issues.append("GPS accuracy unavailable · waiting for a valid location measurement") }
+  if input.fixTime != nil && !coordinatesValid { issues.append("GPS coordinates unavailable or outside the supported latitude/longitude range") }
+  let available = issues.isEmpty
+  let accuracy = input.accuracy.flatMap { $0.isFinite ? $0 : nil }
+  let reason = available
+   ? String(format: "GPS available · accuracy %.1f m · fix %.1f s old", locale: Locale(identifier: "en_US_POSIX"), accuracy!, fixAge!)
+   : issues.joined(separator: "; ")
+  // Raw coordinates are observations only. No north/local transform is inferred.
+  return PhoneLocalizationReport(frameID: frameID, mode: available ? "gps" : "local", reason: reason,
+   tracking: input.tracked ? "normal" : "limited", issues: issues, gpsAccuracy: accuracy,
+   gpsLatitude: available ? input.latitude : nil, gpsLongitude: available ? input.longitude : nil,
+   gpsFixAge: fixAge, headingAccuracy: input.headingAccuracy.flatMap { $0.isFinite ? $0 : nil },
+   originLatitude: nil, originLongitude: nil, anchorX: nil, anchorY: nil, rotation: nil)
  }
+
 }
 
 /// A local supporting plane in the fixed, Z-up mapping world frame.

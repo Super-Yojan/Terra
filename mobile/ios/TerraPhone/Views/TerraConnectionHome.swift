@@ -21,6 +21,7 @@ struct TerraConnectionHome: View {
                     Label(brain.hardwareArmed ? "Motors armed" : "Motors disarmed", systemImage: brain.hardwareArmed ? "exclamationmark.shield" : "shield.checkered")
                         .font(.footnote).foregroundStyle(brain.hardwareArmed ? Color.red : .secondary)
                     Text(brain.phoneTrackingStatus).font(.footnote).foregroundStyle(.secondary)
+                    PhoneLocalizationStatusView(report: brain.localizationReport, trackingActive: brain.phoneTrackingActive)
                 }
             }
             .padding(22).frame(maxWidth: 600, alignment: .leading).frame(maxWidth: .infinity)

@@ -1,31 +1,43 @@
 import Foundation
 @main struct LocalizationTests {
  static func main() {
-  var policy = PhoneLocalizationPolicy()
-  func input(_ now: Double, accuracy: Double = 4, tracked: Bool = true) -> PhoneLocalizationInput {
-   PhoneLocalizationInput(now: now, latitude: 38, longitude: -77, fixTime: now, accuracy: accuracy, heading: 90, headingAccuracy: 5, headingTime: now, localX: 3, localY: -2, topYaw: 0, tracked: tracked)
+  func input(_ now: Double) -> PhoneLocalizationInput {
+   PhoneLocalizationInput(now: now, latitude: 38, longitude: -77, fixTime: now, accuracy: 4, heading: nil, headingAccuracy: nil, headingTime: nil, localX: .nan, localY: .nan, headingReferenceYaw: nil, tracked: false)
   }
-  precondition(policy.update(input(0)).mode == "local")
-  precondition(policy.update(input(7)).mode == "local")
-  let aligned = policy.update(input(8))
-  precondition(aligned.mode == "geographic")
-  precondition(abs((aligned.rotation ?? 0) + Double.pi/2) < 1e-9)
-  precondition(policy.update(input(9, accuracy: 50)).mode == "local")
-  precondition(policy.update(input(10)).mode == "local")
-  precondition(policy.update(input(18)).mode == "geographic")
-  precondition(policy.update(input(19, tracked: false)).mode == "local")
-  policy.reset()
-  precondition(policy.update(input(30)).originLatitude == nil)
-  var missing = input(31); missing.fixTime = nil
-  precondition(policy.update(missing).reason == "Waiting for GPS fix")
-  var stale = input(32); stale.fixTime = 20
-  precondition(policy.update(stale).reason.contains("stale"))
-  var denied = input(33); denied.permissionReason = "Location permission denied"
-  precondition(policy.update(denied).reason.contains("denied"))
-  precondition(policy.update(denied).mode == "local")
-  let measured = policy.update(input(34, accuracy: 50))
-  precondition(measured.gpsLatitude == 38 && measured.gpsFixAge == 0)
-  precondition(measured.reason.contains("accuracy insufficient"))
-  print("Phone localization hysteresis, heading alignment, tracking loss and reset: passed")
+  var policy = PhoneLocalizationPolicy()
+  var failures = 0
+  func expect(_ condition: Bool, _ message: String) {
+   if !condition { print("FAIL: " + message); failures += 1 }
+  }
+  let fix = policy.update(input(0))
+  expect(fix.mode == "gps", "publish raw GPS immediately without AR, compass or eight-second alignment")
+  expect(fix.issues.isEmpty, "compass and AR failures do not block raw GPS")
+  expect(fix.gpsLatitude == 38 && fix.gpsLongitude == -77, "preserve measured coordinates")
+  expect(fix.originLatitude == nil && fix.rotation == nil && fix.anchorX == nil, "raw GPS must not invent a local transform")
+  var coarse = input(1); coarse.accuracy = 45
+  expect(policy.update(coarse).mode == "gps", "show coarse GPS with its reported uncertainty")
+  expect(policy.update(coarse).reason.contains("45"), "display measured GPS accuracy")
+  var stale = input(10); stale.fixTime = 6
+  let old = policy.update(stale)
+  expect(old.mode == "local" && old.gpsLatitude == nil, "hide stale fixes rather than present them as live GPS")
+  expect(old.reason.contains("stale"), "explain stale GPS")
+  var denied = input(11); denied.permissionReason = "Location permission denied"
+  expect(policy.update(denied).reason.contains("permission denied"), "show location permission errors")
+  expect(policy.update(denied).gpsLatitude == nil, "permission failures cannot advertise a live position")
+  for value in [-1.0, Double.nan, Double.infinity] {
+   var bad = input(12); bad.accuracy = value
+   let report = policy.update(bad)
+   expect(report.mode == "local" && report.gpsLatitude == nil, "invalid accuracy cannot produce a live position")
+   expect((try? JSONEncoder().encode(report)) != nil, "bad sensor values must not suppress diagnostic publication")
+  }
+  var badCoordinate = input(13); badCoordinate.latitude = .nan
+  expect(policy.update(badCoordinate).gpsLatitude == nil, "invalid GPS coordinates cannot become a map position")
+  var missing = input(14); missing.fixTime = nil
+  expect(policy.update(missing).reason.contains("Waiting for GPS"), "explain missing GPS")
+  let identifier = policy.identifier; policy.reset()
+  expect(policy.identifier != identifier, "tracking restart still changes the local frame ID")
+  expect(policy.update(input(15)).mode == "gps", "restarting tracking does not introduce an alignment wait")
+  if failures > 0 { exit(1) }
+  print("Raw GPS: immediate publication, no alignment, accuracy, freshness and invalid fixes passed")
  }
 }

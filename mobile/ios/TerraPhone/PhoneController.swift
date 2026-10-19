@@ -66,6 +66,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
     @Published private(set) var hardwareActive = false
     @Published private(set) var hardwareFeedback = false
     @Published private(set) var phoneTrackingActive = false
+    @Published private(set) var localizationReport: PhoneLocalizationReport?
     @Published private(set) var phoneTrackingStatus = "Tracking starts after ARGOS connects"
     private var fleetTrackingManaged = false
     private var fleetTrackingFailed = false
@@ -142,7 +143,8 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
     private var locationHeading: CLHeading?
     private var localizationPolicy = PhoneLocalizationPolicy()
     private var localizationTracked = false
-    private var phoneTopYaw: Double?
+    private var localizationTrackingReason: String?
+    private var phoneHeadingReferenceYaw: Double?
     private var lastLocalizationPublish = -Double.infinity
     private var controller: MobileController?
     private var timer: DispatchSourceTimer?
@@ -171,7 +173,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
         locationManager.desiredAccuracy = kCLLocationAccuracyBest
         locationManager.distanceFilter = kCLDistanceFilterNone
         locationManager.headingFilter = kCLHeadingFilterNone
-        locationManager.headingOrientation = .portrait
+        locationManager.headingOrientation = PhoneMountGeometry.headingOrientation
         motionQueue.maxConcurrentOperationCount = 1
         motionQueue.qualityOfService = .userInteractive
         session.delegate = self
@@ -420,6 +422,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
         if !keepBluetooth { bluetooth.disconnect() }
         hardwareActive = false; requestedHardwareFeedback = nil
         phoneTrackingActive = false; hardwareFeedback = false
+        localizationReport = nil
         fleetTrackingManaged = false; fleetTrackingFailed = false
         phoneTrackingStatus = "Tracking starts after ARGOS connects"
         motion.stopDeviceMotionUpdates()
@@ -480,7 +483,9 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
         target = (0, 0)
         tick = 0; simulatedTime = 0; simulatedForward = 0; simulatedYawRate = 0; simulatedYaw = 0; simulatedAcceleration = 0
         previousPosition = nil; previousPoseTime = nil; filteredVelocity = .zero
-        localizationPolicy.reset(); locationFix = nil; locationHeading = nil; localizationTracked = false; phoneTopYaw = nil; lastLocalizationPublish = -Double.infinity
+        DispatchQueue.main.async { self.localizationReport = nil }
+        localizationTrackingReason = nil
+        localizationPolicy.reset(); locationFix = nil; locationHeading = nil; localizationTracked = false; phoneHeadingReferenceYaw = nil; lastLocalizationPublish = -Double.infinity
     }
     private func startTimer() {
         self.timer?.cancel(); self.timer = nil
@@ -632,6 +637,18 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
             TerraLog.tracking.notice("Camera tracking changed; healthy=\(tracked) state=\(String(describing: frame.camera.trackingState), privacy: .public)")
         }
         localizationTracked = tracked
+        switch frame.camera.trackingState {
+        case .normal: localizationTrackingReason = nil
+        case .notAvailable: localizationTrackingReason = "AR tracking unavailable · restart phone tracking"
+        case .limited(let reason):
+            switch reason {
+            case .initializing: localizationTrackingReason = "AR tracking initializing · slowly scan a textured surface"
+            case .excessiveMotion: localizationTrackingReason = "AR tracking limited by excessive motion · move the phone more slowly"
+            case .insufficientFeatures: localizationTrackingReason = "AR tracking has too few visual features · improve lighting and point the camera at a textured surface"
+            case .relocalizing: localizationTrackingReason = "AR tracking relocalizing · point the camera at the previously tracked area"
+            @unknown default: localizationTrackingReason = "AR tracking limited · keep the camera steady"
+            }
+        }
         sensorEpochLock.lock(); let trackingEpoch = sensorEpoch; sensorEpochLock.unlock()
         DispatchQueue.main.async {
             guard self.sensorEpochMatches(trackingEpoch), self.phoneTrackingActive else { return }
@@ -639,8 +656,8 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
         }
         updatePersonSearch(frame: frame, tracked: tracked, epoch: trackingEpoch)
         let transform = frame.camera.transform
-        let top = worldFromAR * -SIMD3(transform.columns.0.x, transform.columns.0.y, transform.columns.0.z)
-        phoneTopYaw = hypot(top.x, top.y) >= 0.3 ? atan2(Double(top.y), Double(top.x)) : nil
+        phoneHeadingReferenceYaw = PhoneMountGeometry.headingReferenceYaw(
+            worldFromCamera: worldFromAR * simd_float3x3(simd_quatf(transform)))
         let arPosition = SIMD3(transform.columns.3.x, transform.columns.3.y, transform.columns.3.z)
         let position = worldFromAR * arPosition
         let orientation = simd_quatf(worldFromAR) * simd_quatf(transform) * mountCalibration.arCameraToBody.inverse
@@ -980,7 +997,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
         }
     }
     func session(_ session: ARSession, didFailWithError error: Error) { handleTrackingFailure(error) }
-    func sessionWasInterrupted(_ session: ARSession) { controlQueue.async { self.localizationPolicy.reset(); self.localizationTracked = false; self.phoneTopYaw = nil }; handleTrackingFailure(NSError(domain: "Terra", code: 1, userInfo: [NSLocalizedDescriptionKey: "AR session interrupted"])) }
+    func sessionWasInterrupted(_ session: ARSession) { controlQueue.async { self.localizationPolicy.reset(); self.localizationTracked = false; self.phoneHeadingReferenceYaw = nil }; handleTrackingFailure(NSError(domain: "Terra", code: 1, userInfo: [NSLocalizedDescriptionKey: "AR session interrupted"])) }
     func startTargetSearch(targetClass:String,minX:Double,minY:Double,maxX:Double,maxY:Double,budget:Double) {
         controlQueue.async {
             do {
@@ -1798,9 +1815,9 @@ extension PhoneController {
         case .denied: reason = "Location permission denied · allow Terra in Settings"
         case .restricted: reason = "Location permission restricted"
         case .notDetermined: reason = "Waiting for location permission"
-        default: reason = manager.accuracyAuthorization == .reducedAccuracy ? "Precise Location is off · enable it for geographic alignment" : nil
+        default: reason = nil // Approximate GPS is displayed with its reported accuracy.
         }
-        TerraLog.tracking.notice("Location authorization: \(reason ?? "Precise Location allowed", privacy: .public)")
+        TerraLog.tracking.notice("Location authorization: \(reason ?? "Location access allowed", privacy: .public)")
         controlQueue.async { self.locationPermissionReason = reason }
     }
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
@@ -1823,13 +1840,20 @@ extension PhoneController {
         let now = Date().timeIntervalSince1970
         guard now - lastLocalizationPublish >= 1 else { return }
         lastLocalizationPublish = now
+        let poseFresh = previousPoseTime.map { CACurrentMediaTime() - $0 < 1 } == true
         let report = localizationPolicy.update(PhoneLocalizationInput(now: now,
             latitude: locationFix?.coordinate.latitude, longitude: locationFix?.coordinate.longitude,
             fixTime: locationFix?.timestamp.timeIntervalSince1970, accuracy: locationFix?.horizontalAccuracy,
             heading: locationHeading?.trueHeading, headingAccuracy: locationHeading?.headingAccuracy,
             headingTime: locationHeading?.timestamp.timeIntervalSince1970,
-            localX: phonePose?.x ?? 0, localY: phonePose?.y ?? 0, topYaw: phoneTopYaw, tracked: localizationTracked && previousPoseTime.map { CACurrentMediaTime() - $0 < 1 } == true,
-            permissionReason: locationPermissionReason))
+            localX: phonePose?.x ?? 0, localY: phonePose?.y ?? 0, headingReferenceYaw: phoneHeadingReferenceYaw, tracked: localizationTracked && poseFresh,
+            permissionReason: !CLLocationManager.locationServicesEnabled() ? "Location Services are off · enable them in iPhone Settings" : locationPermissionReason,
+            trackingReason: localizationTrackingReason ?? (!poseFresh ? "AR tracking pose stale · waiting for a fresh camera position" : nil)))
+        sensorEpochLock.lock(); let reportEpoch = sensorEpoch; sensorEpochLock.unlock()
+        DispatchQueue.main.async {
+            guard self.sensorEpochMatches(reportEpoch), self.phoneTrackingActive else { return }
+            self.localizationReport = report
+        }
         if report.reason != lastLocalizationReason {
             lastLocalizationReason = report.reason
             TerraLog.tracking.notice("Localization: \(report.reason, privacy: .public); GPS accuracy=\(report.gpsAccuracy ?? -1) age=\(report.gpsFixAge ?? -1); heading accuracy=\(report.headingAccuracy ?? -1)")
