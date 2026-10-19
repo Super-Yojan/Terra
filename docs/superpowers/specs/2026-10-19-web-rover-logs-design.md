@@ -1,7 +1,7 @@
 # Remote rover logs in the ARGOS web dashboard
 
 Date: 2026-10-19
-Status: Design direction approved in chat; this specification awaits review.
+Status: Specification approved in chat, including offline buffering; implementation plan awaits review.
 
 ## Outcome and approved scope
 
@@ -243,6 +243,6 @@ Report hardware/network checks separately from software tests.
 ## Review record
 
 The operator approved the web dashboard and the direct-Pi plus phone-event design
-in conversation. This document fixes the implementation contract; no log feature
-has been implemented or deployed as part of writing it. After specification review,
-write and review the implementation plan before coding.
+in conversation, then accepted the specification after reviewing offline behavior.
+This document fixes the implementation contract; no log feature has been implemented
+or deployed as part of writing it. Review the implementation plan before coding.
