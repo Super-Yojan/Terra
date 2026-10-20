@@ -127,3 +127,35 @@ class PairingIntegrationTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn('disconnect-bus',bus.calls)
             self.assertIn(('Pairable',False),bus.calls)
             self.assertIsNone(load_owner(args.owner))
+
+class OwnerResetIntegrationTests(unittest.IsolatedAsyncioTestCase):
+    async def test_reset_removes_only_owner_on_selected_adapter_without_advertising(self):
+        class ResetBlueZ(BlueZ):
+            async def call_get_managed_objects(self):
+                objects = await super().call_get_managed_objects()
+                for path, address, kind in [
+                    (self.device, 'AA:BB:CC:DD:EE:FF', 'random'),
+                    ('/org/bluez/hci0/dev_OTHER', '11:22:33:44:55:66', 'random'),
+                    ('/org/bluez/hci0/dev_PUBLIC', 'AA:BB:CC:DD:EE:FF', 'public'),
+                    ('/org/bluez/hci1/dev_OWNER', 'AA:BB:CC:DD:EE:FF', 'random'),
+                ]:
+                    objects[path] = {'org.bluez.Device1': {'Address': Variant('s', address), 'AddressType': Variant('s', kind)}}
+                return objects
+            async def call_remove_device(self, path): self.calls.append(('removed', path))
+        bus = ResetBlueZ()
+        with patch.object(bless_server, 'MessageBus', return_value=bus):
+            await pairing.remove_owner_bond(SimpleNamespace(adapter=None), {'address':'AA:BB:CC:DD:EE:FF', 'address_type':'random'})
+        self.assertEqual([c for c in bus.calls if isinstance(c, tuple) and c[0] == 'removed'], [('removed', bus.device)])
+        self.assertNotIn('advertise', bus.calls)
+        self.assertIn(('Pairable', False), bus.calls)
+        self.assertIn(('Discoverable', False), bus.calls)
+        self.assertIn('disconnect-bus', bus.calls)
+
+    async def test_reset_cleanup_failure_closes_bus_and_propagates(self):
+        class FailingBlueZ(BlueZ):
+            async def call_remove_device(self, path): raise RuntimeError('cannot remove bond')
+        bus = FailingBlueZ(); bus.finished = True
+        with patch.object(bless_server, 'MessageBus', return_value=bus):
+            with self.assertRaisesRegex(RuntimeError, 'cannot remove bond'):
+                await pairing.remove_owner_bond(SimpleNamespace(adapter=None), {'address':'AA:BB:CC:DD:EE:FF', 'address_type':'random'})
+        self.assertIn('disconnect-bus', bus.calls)

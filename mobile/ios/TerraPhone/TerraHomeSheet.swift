@@ -1,6 +1,6 @@
 import SwiftUI
 
 enum TerraHomeSheet: String, Identifiable {
-    case rover, fleet, fleetSettings, roverSetup
+    case rover, rovers, fleet, fleetSettings, roverSetup
     var id: String { rawValue }
 }

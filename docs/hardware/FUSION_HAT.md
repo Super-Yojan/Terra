@@ -42,9 +42,10 @@ Servos map around center_us, with configured position or disabled safe policy.
 ## Physical resources and deployment inputs
 
 M0 uses P11/P10, M1 P9/P8, M2 P6/P7, M3 P4/P5. Each motor uses 100 Hz.
-Numerical PWM channels P0–P11 exist in library source but are **not** all assumed
-physically exposed. Provide `pwm_ports` as explicit canonical names verified against
-the actual board and wiring. Default is empty. Pulse outputs use 50 Hz. Timer groups
+The CLI and packaged service advertise PWM channels P0–P11 by default.
+Use `--pwm-ports` or `TERRA_PWM_PORTS` to restrict the list to your board and wiring;
+an explicit empty list disables PWM capabilities while retaining M0–M3. Advertising
+a channel does not verify its physical connector or wiring. Pulse outputs use 50 Hz. Timer groups
 are channel integer divided by four: P0–P3, P4–P7, P8–P11. Mixed motor/pulse use
 within one timer group is rejected even when channels do not overlap. Direct aliases
 such as M0 and P10 are rejected. `occupied_resources` reserves channels owned by

@@ -4,10 +4,19 @@
 use crate::*;
 use serde::Serialize;
 use std::collections::VecDeque;
+use terra_control::{TurningConfig, TurningLimiter};
 use terra_exploration::{EndReason, ExplorationStatus, ExploreAction, ExploreTick, Explorer};
 use terra_mapping::MapSnapshot;
 use terra_navigation::{LocalPlanner, Pose, Twist, frontier};
 use terra_waypoint::{GoalCommand, GoalState, WaypointConfig, WaypointController, WaypointStatus};
+/// Trusted command provenance, assigned at ingress rather than decoded from a packet.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CommandOrigin {
+    LocalManual,
+    FleetTeleop,
+    Autonomous,
+}
 /// Bounded decision-log entry emitted by the authority arbiter.
 #[derive(Clone, Debug, Serialize)]
 pub struct DecisionEvent {
@@ -41,6 +50,8 @@ pub struct ArbiterInput<'a> {
 }
 /// Selected intent, safety-filtered command, telemetry, and events from one control tick.
 pub struct ArbiterOutput {
+    /// Origin of the selected authority.
+    pub command_origin: CommandOrigin,
     /// Desired motion before authority and safety filtering.
     pub intent: Twist,
     /// Allowed motion command; integrations must send this command to control.
@@ -71,6 +82,12 @@ pub struct AutonomyArbiter {
     level: Level,
     follower: WaypointController,
     operator: Option<(TeleopRequest, f64)>,
+    operator_origin: CommandOrigin,
+    turning: TurningLimiter,
+    turning_config: TurningConfig,
+    turning_identity: Option<(String, u64, CommandOrigin)>,
+    maneuver: VecDeque<terra_navigation::ManeuverSegment>,
+    maneuver_goal: Option<u64>,
     operator_order: std::collections::BTreeMap<String, u64>,
     latest_operator_time: Option<f64>,
     /// Run identifier used to correlate commands and telemetry.
@@ -118,6 +135,12 @@ impl Default for AutonomyArbiter {
             level: Level::Teleop,
             follower: WaypointController::new(WaypointConfig::default()).unwrap(),
             operator: None,
+            operator_origin: CommandOrigin::LocalManual,
+            turning: TurningLimiter::new(TurningConfig::default()).unwrap(),
+            turning_config: TurningConfig::default(),
+            turning_identity: None,
+            maneuver: VecDeque::new(),
+            maneuver_goal: None,
             operator_order: Default::default(),
             latest_operator_time: None,
             run_id: "local".into(),
@@ -158,6 +181,37 @@ impl Default for AutonomyArbiter {
     }
 }
 impl AutonomyArbiter {
+    /// Outdoor guidance is admitted only by the L3 authority path.
+    pub fn outdoor_authority(&self) -> bool {
+        self.level == Level::Waypoint && !self.stopped && !self.paused
+    }
+    pub fn has_active_goal(&self, pose: Pose) -> bool {
+        self.follower.step(pose.x, pose.y, pose.yaw).status.state == GoalState::Active
+    }
+    pub fn clear_guidance(&mut self) {
+        self.follower.cancel();
+        self.maneuver.clear();
+    }
+    pub fn update_guidance(&mut self, x: f64, y: f64) {
+        if self.follower.step(x, y, 0.).status.state == GoalState::Idle {
+            let _ = self.follower.accept(
+                &GoalCommand::Local {
+                    x,
+                    y,
+                    yaw: None,
+                    token: None,
+                },
+                20_000.,
+            );
+        } else {
+            self.follower.update_guidance(x, y);
+        }
+        self.maneuver.clear();
+    }
+
+    /// Whether this tick uses direct operator effort rather than sensor-based navigation.
+    pub fn is_manual(&self) -> bool { self.level == Level::Teleop }
+
     /// Check live authority/goal state, including commands accepted earlier in this tick.
     pub fn navigation_configuration_allowed(
         &self,
@@ -236,7 +290,22 @@ impl AutonomyArbiter {
             reason,
         );
     }
+    /// Validated managed turning settings; changing them clears motion history.
+    pub fn configure_turning(
+        &mut self,
+        config: TurningConfig,
+    ) -> Result<(), terra_types::InputError> {
+        self.turning = TurningLimiter::new(config)?;
+        self.turning_config = config;
+        self.last_plan = None;
+        self.reset = true;
+        Ok(())
+    }
     fn clear(&mut self) {
+        self.turning.reset();
+        self.turning_identity = None;
+        self.maneuver.clear();
+        self.maneuver_goal = None;
         if let Some(search) = self.search.as_mut() {
             search.cancel("authority_cleared");
         }
@@ -337,6 +406,15 @@ impl AutonomyArbiter {
     ///
     /// Invalid, stale, reordered, or unauthorized requests are ignored without renewing the motion lease.
     pub fn accept_operator(&mut self, r: TeleopRequest, now: f64) {
+        self.accept_operator_from(r, now, CommandOrigin::LocalManual);
+    }
+    /// Provenance is assigned by a trusted ingress; invalid requests do not change it.
+    pub fn accept_operator_from(
+        &mut self,
+        r: TeleopRequest,
+        now: f64,
+        origin: CommandOrigin,
+    ) -> bool {
         if !now.is_finite()
             || now < 0.
             || self.last_time.is_some_and(|t| now < t)
@@ -346,16 +424,16 @@ impl AutonomyArbiter {
             || r.linear.abs() > 5.
             || r.angular.abs() > 5.
         {
-            return;
+            return false;
         }
         if r.run_id.as_ref().is_some_and(|run| run != &self.run_id)
             || r.authority_revision
                 .is_some_and(|revision| revision != self.revision)
         {
-            return;
+            return false;
         }
         if self.stopped || !matches!(self.level, Level::Teleop | Level::AssistedTeleop) {
-            return;
+            return false;
         }
         if let (Some(session), Some(sequence)) = (&r.operator_session_id, r.sequence) {
             if self
@@ -363,10 +441,10 @@ impl AutonomyArbiter {
                 .get(session)
                 .is_some_and(|last| sequence <= *last)
             {
-                return;
+                return false;
             }
             if self.operator_order.len() >= 128 && !self.operator_order.contains_key(session) {
-                return;
+                return false;
             }
             self.operator_order.insert(session.clone(), sequence);
         }
@@ -377,11 +455,23 @@ impl AutonomyArbiter {
             &format!("sequence:{:?}", r.sequence),
         );
         self.operator = Some((r, now));
+        self.operator_origin = origin;
+        true
     }
     /// Accept or cancel a waypoint and return whether it was accepted.
     ///
     /// Local coordinates and `extent` use metres; WGS84 coordinates use degrees and yaw uses radians.
     /// Invalid, out-of-bounds, unauthorized, or conflicting-token goals return `false`; cancellation clears active intent.
+    pub fn reject_goal(&mut self, g: &GoalCommand, reason: &str) {
+        let token = match g {
+            GoalCommand::Local { token, .. } | GoalCommand::Wgs84 { token, .. } => token.clone(),
+            GoalCommand::Cancel => None,
+        };
+        if let Some(t) = token.clone() {
+            self.acknowledge(t, format!("goal:{g:?}"), false, reason);
+        }
+        self.event("goal_rejected", token, reason);
+    }
     pub fn accept_goal(&mut self, g: &GoalCommand, extent: f64) -> bool {
         if self.level == Level::TargetSearch {
             self.event("goal_rejected", None, "search_active");
@@ -814,6 +904,19 @@ impl AutonomyArbiter {
     /// Run one authority/safety tick and return intent, allowed motion, and status.
     /// Consumers must use the returned `twist`, not bypass holds with `intent`.
     pub fn step(&mut self, input: ArbiterInput<'_>) -> ArbiterOutput {
+        let command_origin = if matches!(self.level, Level::Teleop | Level::AssistedTeleop) {
+            self.operator_origin
+        } else {
+            CommandOrigin::Autonomous
+        };
+        let managed = command_origin != CommandOrigin::LocalManual;
+        let identity = (self.run_id.clone(), self.revision, command_origin);
+        if self.turning_identity.as_ref() != Some(&identity) {
+            self.turning.reset();
+            self.last_plan = None;
+            self.maneuver.clear();
+            self.turning_identity = Some(identity);
+        }
         let valid_time = input.now.is_finite()
             && input.now >= 0.
             && self.last_time.is_none_or(|t| input.now > t);
@@ -873,10 +976,10 @@ impl AutonomyArbiter {
             held = true;
             self.halt_explore(EndReason::OperatorStop);
         } else if !input.healthy
-            || !input.pose.finite()
-            || !fresh(input.now, Some(input.pose_time), 0.5)
-            || !input.measured.linear.is_finite()
-            || !input.measured.angular.is_finite()
+            || (!self.is_manual() && (!input.pose.finite()
+                || !fresh(input.now, Some(input.pose_time), 0.5)
+                || !input.measured.linear.is_finite()
+                || !input.measured.angular.is_finite()))
         {
             reason = "sensor_unhealthy";
             held = true;
@@ -957,7 +1060,8 @@ impl AutonomyArbiter {
                         reason = "search_hold";
                     }
                 }
-                let intent = match self.level {
+                let mut guidance_heading = (goal.y - input.pose.y).atan2(goal.x - input.pose.x);
+                let mut intent = match self.level {
                     Level::Teleop | Level::AssistedTeleop => self
                         .operator
                         .as_ref()
@@ -1057,6 +1161,8 @@ impl AutonomyArbiter {
                                 )
                             });
                             if let Some(point) = target {
+                                guidance_heading =
+                                    (point[1] - input.pose.y).atan2(point[0] - input.pose.x);
                                 // At the final position use the original follower for arrival and final yaw.
                                 let (linear, angular) = if point == [out.status.x, out.status.y] {
                                     (out.linear, out.angular)
@@ -1091,7 +1197,74 @@ impl AutonomyArbiter {
                         }
                     }
                 };
+                if managed {
+                    intent.linear = intent.linear.clamp(
+                        -self
+                            .planner
+                            .config
+                            .max_reverse
+                            .min(self.planner.config.max_linear),
+                        self.planner.config.max_linear,
+                    );
+                    intent.angular = intent.angular.clamp(
+                        -self.planner.config.max_angular,
+                        self.planner.config.max_angular,
+                    );
+                }
                 intent_command = intent;
+                let mut maneuver_active = false;
+                if managed
+                    && command_origin == CommandOrigin::Autonomous
+                    && !self.turning_config.allow_in_place
+                {
+                    if self.maneuver_goal != Some(goal.goal_id) || goal.state != GoalState::Active {
+                        self.maneuver.clear();
+                    }
+                    // Segment completion is measured heading, not nominal rollout time.
+                    while self
+                        .maneuver
+                        .front()
+                        .is_some_and(|s| wrap_heading(s.end.yaw - input.pose.yaw).abs() < 0.08)
+                    {
+                        self.maneuver.pop_front();
+                    }
+                    let needs_turn = goal.state == GoalState::Active
+                        && intent.linear.abs() < 1e-6
+                        && intent.angular.abs() > 1e-6;
+                    if self.maneuver.is_empty() && needs_turn {
+                        if let Some(map) =
+                            planning_map.filter(|_| fresh(input.now, input.map_time, 0.5))
+                        {
+                            let target = if goal.distance <= 0.75 {
+                                goal.yaw.unwrap_or(input.pose.yaw)
+                            } else {
+                                guidance_heading
+                            };
+                            if let Some(segments) = self.planner.heading_maneuver(
+                                map,
+                                input.pose,
+                                target,
+                                &self.turning_config,
+                            ) {
+                                self.maneuver = segments.into();
+                                self.maneuver_goal = Some(goal.goal_id);
+                            }
+                        }
+                    }
+                    if let Some(segment) = self.maneuver.front() {
+                        if fresh(input.now, input.map_time, 0.5) && planning_map.is_some() {
+                            intent = segment.velocity;
+                            maneuver_active = true;
+                        } else {
+                            held = true;
+                            reason = "map_stale";
+                            self.maneuver.clear();
+                        }
+                    } else if needs_turn {
+                        held = true;
+                        reason = "heading_requires_spin_or_replan";
+                    }
+                }
                 if let Some(why) = route_failure {
                     held = true;
                     reason = why;
@@ -1099,19 +1272,39 @@ impl AutonomyArbiter {
                     self.last_plan = None;
                     self.planner_trace = None;
                 }
-                if matches!(self.level, Level::Teleop | Level::WaypointDirect) {
+                if maneuver_active && !held {
+                    let (planned, mut trace) = self.planner.plan_with_turning(
+                        planning_map.unwrap(),
+                        input.pose,
+                        input.measured,
+                        intent,
+                        0.1,
+                        &self.turning,
+                        input.now,
+                    );
+                    trace.maneuver_segments = self.maneuver.iter().cloned().collect();
+                    twist = planned.twist;
+                    reason = planned.reason;
+                    self.planner_trace = Some((input.now, trace));
+                    if twist == Twist::default() || reason == "obstacle_blocked" {
+                        held = true;
+                        reason = "heading_requires_spin_or_replan";
+                        self.maneuver.clear();
+                    }
+                } else if !held && matches!(self.level, Level::Teleop | Level::WaypointDirect) {
                     twist = intent;
                     if source != "none" {
                         reason = "active";
                     }
-                } else if source != "none" {
+                } else if !held && source != "none" {
                     if intent == Twist::default() {
                         twist = intent;
                         reason = "active";
                         self.last_plan = None;
                         self.planner_trace = None;
                     } else if let Some((at, output, why)) = self.last_plan.filter(|p| {
-                        input.now - p.0 < 0.1
+                        !managed
+                            && input.now - p.0 < 0.1
                             && planning_map
                                 .is_some_and(|m| self.planner.admissible(m, input.pose, p.1))
                     }) {
@@ -1126,13 +1319,25 @@ impl AutonomyArbiter {
                                 planner.config.horizon = planner.config.horizon.min(cap);
                             }
                         }
-                        let (planned, trace) = planner.plan_with_trace(
-                            planning_map.unwrap(),
-                            input.pose,
-                            input.measured,
-                            intent,
-                            0.1,
-                        );
+                        let (planned, trace) = if managed {
+                            planner.plan_with_turning(
+                                planning_map.unwrap(),
+                                input.pose,
+                                input.measured,
+                                intent,
+                                0.1,
+                                &self.turning,
+                                input.now,
+                            )
+                        } else {
+                            planner.plan_with_trace(
+                                planning_map.unwrap(),
+                                input.pose,
+                                input.measured,
+                                intent,
+                                0.1,
+                            )
+                        };
                         self.planner_trace =
                             (!trace.candidates.is_empty()).then_some((input.now, trace));
                         twist = planned.twist;
@@ -1187,6 +1392,51 @@ impl AutonomyArbiter {
                     self.explore_blocked = reason == "obstacle_blocked";
                 }
             }
+        }
+        if managed && !held {
+            if source == "none" || twist == Twist::default() {
+                self.turning.reset();
+                if command_origin == CommandOrigin::Autonomous
+                    && intent_command.angular != 0.
+                    && !self.turning_config.allow_in_place
+                {
+                    held = true;
+                    reason = "heading_requires_spin_or_replan";
+                }
+            } else {
+                match self.turning.step(terra_types::VelocityTarget {
+                    timestamp: input.now,
+                    forward: twist.linear,
+                    yaw_rate: twist.angular,
+                }) {
+                    Ok(t) => {
+                        twist = Twist {
+                            linear: t.forward,
+                            angular: t.yaw_rate,
+                        };
+                        if command_origin == CommandOrigin::Autonomous
+                            && twist == Twist::default()
+                            && intent_command.angular != 0.
+                        {
+                            held = true;
+                            reason = "heading_requires_spin_or_replan";
+                        }
+                    }
+                    Err(_) => {
+                        held = true;
+                        reason = "invalid_turn_timing";
+                    }
+                }
+            }
+        }
+        if held {
+            self.turning.reset();
+            self.maneuver.clear();
+        }
+        if (!input.healthy || !fresh(input.now, Some(input.pose_time), 0.5) || !valid_time)
+            && goal.state == GoalState::Arrived
+        {
+            goal.state = GoalState::Active;
         }
         if held && self.level == Level::TargetSearch && reason == "obstacle_blocked" {
             if let Some(search) = self.search.as_mut() {
@@ -1289,6 +1539,7 @@ impl AutonomyArbiter {
         let exploration = status.exploration.clone();
         self.drain_explore_events();
         ArbiterOutput {
+            command_origin,
             intent: intent_command,
             twist,
             status,
@@ -1398,4 +1649,8 @@ fn sustained(since: &mut Option<f64>, now: f64, timeout: f64) -> bool {
 }
 fn fresh(now: f64, time: Option<f64>, limit: f64) -> bool {
     time.is_some_and(|t| t.is_finite() && t >= 0. && now >= t && now - t < limit)
+}
+
+fn wrap_heading(x: f64) -> f64 {
+    (x + std::f64::consts::PI).rem_euclid(std::f64::consts::TAU) - std::f64::consts::PI
 }

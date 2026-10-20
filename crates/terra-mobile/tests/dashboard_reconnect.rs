@@ -48,6 +48,33 @@ fn accepted_goal_does_not_resume_after_router_loss_and_explicit_reconnect() {
             .wait()
             .unwrap();
         now += 0.01;
+        controller
+            .push_imu(terra_mobile::ImuReading {
+                timestamp: now,
+                acceleration_forward: 0.,
+                acceleration_left: 0.,
+                acceleration_up: 0.,
+                gyro_roll: 0.,
+                gyro_pitch: 0.,
+                gyro_yaw: 0.,
+            })
+            .unwrap();
+        controller
+            .push_vio(terra_mobile::VioReading {
+                timestamp: now,
+                position_x: 0.,
+                position_y: 0.,
+                position_z: 0.,
+                quaternion_x: 0.,
+                quaternion_y: 0.,
+                quaternion_z: 0.,
+                quaternion_w: 1.,
+                velocity_x: 0.,
+                velocity_y: 0.,
+                velocity_z: 0.,
+                tracked: true,
+            })
+            .unwrap();
         controller.step(now).unwrap();
         let state: serde_json::Value = serde_json::from_str(&controller.autonomy_status()).unwrap();
         if state["goal"]["token"] == "old-goal" {

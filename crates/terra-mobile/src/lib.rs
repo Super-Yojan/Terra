@@ -13,7 +13,11 @@ uniffi::setup_scaffolding!();
 mod actuators;
 pub use actuators::*;
 mod autonomy;
+pub mod outdoor;
+mod outdoor_bridge;
+pub use outdoor::{GpsFix, HeadingFix};
 mod navigation_settings;
+mod pose_quality;
 mod publication;
 mod search;
 pub use search::{MobileSearchRequest, MobileSearchSnapshot, MobileTargetObservation};
@@ -248,7 +252,12 @@ impl From<InputError> for ControllerError {
     }
 }
 struct Brain {
+    outdoor: outdoor::OutdoorController,
+    outdoor_tokens: std::collections::VecDeque<String>,
+    outdoor_goal_tokens: std::collections::VecDeque<String>,
+    control_limits: (f64, f64),
     estimator: VelocityEstimator,
+    imu_time: Option<f64>,
     controller: VelocityController,
     autonomy: terra_autonomy::AutonomyArbiter,
     pose: Option<(terra_navigation::Pose, f64)>,
@@ -286,7 +295,12 @@ impl MobileController {
     pub fn new(settings: ControlSettings) -> Result<Arc<Self>, ControllerError> {
         Ok(Arc::new(Self {
             brain: Mutex::new(Brain {
+                outdoor: Default::default(),
+                outdoor_tokens: Default::default(),
+                outdoor_goal_tokens: Default::default(),
+                control_limits: (settings.max_forward, settings.max_yaw_rate),
                 estimator: VelocityEstimator::new(settings.estimator())?,
+                imu_time: None,
                 controller: VelocityController::new(settings.controller())?,
                 autonomy: terra_autonomy::AutonomyArbiter::default(),
                 pose: None,
@@ -319,23 +333,21 @@ impl MobileController {
     /// Returns `InvalidInput` for invalid sensor values or sample ordering and
     /// `Internal` if shared state cannot be locked.
     pub fn push_imu(&self, sample: ImuReading) -> Result<(), ControllerError> {
-        self.brain
-            .lock()
-            .map_err(|_| ControllerError::Internal)?
-            .estimator
-            .push_imu(ImuSample {
-                timestamp: sample.timestamp,
-                acceleration: Vector3 {
-                    x: sample.acceleration_forward,
-                    y: sample.acceleration_left,
-                    z: sample.acceleration_up,
-                },
-                angular_velocity: Vector3 {
-                    x: sample.gyro_roll,
-                    y: sample.gyro_pitch,
-                    z: sample.gyro_yaw,
-                },
-            })?;
+        let mut brain = self.brain.lock().map_err(|_| ControllerError::Internal)?;
+        brain.estimator.push_imu(ImuSample {
+            timestamp: sample.timestamp,
+            acceleration: Vector3 {
+                x: sample.acceleration_forward,
+                y: sample.acceleration_left,
+                z: sample.acceleration_up,
+            },
+            angular_velocity: Vector3 {
+                x: sample.gyro_roll,
+                y: sample.gyro_pitch,
+                z: sample.gyro_yaw,
+            },
+        })?;
+        brain.imu_time = Some(sample.timestamp);
         Ok(())
     }
     /// Ingest VIO and, when tracked, update the planar world pose.
@@ -406,6 +418,11 @@ impl MobileController {
     /// velocity magnitudes; returns `Internal` for a poisoned mutex.
     pub fn set_target(&self, target: TwistSetpoint) -> Result<(), ControllerError> {
         let mut brain = self.brain.lock().map_err(|_| ControllerError::Internal)?;
+        if brain.dashboard.is_some() {
+            return Err(ControllerError::InvalidInput {
+                message: "fleet connection owns velocity intent".into(),
+            });
+        }
         if !target.timestamp.is_finite()
             || !target.forward.is_finite()
             || !target.yaw_rate.is_finite()
@@ -448,6 +465,9 @@ impl MobileController {
         for (kind, bytes, age) in incoming {
             match kind.as_str() {
                 "navigation/settings" => navigation_settings::apply(&mut brain, &bytes, age),
+                "navigation/source" | "navigation/resume" => {
+                    let _ = outdoor_bridge::request(&mut brain, &kind, &bytes, timestamp, age);
+                }
                 "hardware" => {
                     let authority: serde_json::Value =
                         serde_json::from_str(&brain.autonomy_json).unwrap_or_default();
@@ -460,6 +480,7 @@ impl MobileController {
                             brain.hardware_tokens.push_back(token);
                             // Disarm takes priority and cancels queued arming.
                             if request["action"] == "disarm" {
+                                brain.outdoor.pause("disarmed");
                                 brain.hardware_requests.clear();
                             }
                             if brain.hardware_requests.len() < 8 {
@@ -481,19 +502,20 @@ impl MobileController {
                 }
                 "teleop" | "cmd_vel" => {
                     if let Some(r) = terra_autonomy::decode_teleop(&bytes) {
-                        brain.autonomy.accept_operator(r, timestamp - age);
+                        brain.autonomy.accept_operator_from(
+                            r,
+                            timestamp - age,
+                            terra_autonomy::CommandOrigin::FleetTeleop,
+                        );
                     }
                 }
                 "goal" => {
-                    if let Some(g) = terra_waypoint::decode_goal(&bytes) {
-                        brain.autonomy.accept_goal(&g, 20_000.);
-                    }
+                    outdoor_bridge::dispatch_goal(&mut brain, &bytes, timestamp, age);
                 }
                 "safety" => {
                     if let Some(r) = terra_autonomy::decode_safety(&bytes) {
-                        brain
-                            .autonomy
-                            .set_safety(r, estimate.health == Health::Ready);
+                        let ready = brain.autonomy.is_manual() || estimate.health == Health::Ready;
+                        brain.autonomy.set_safety(r, ready);
                     }
                 }
                 "search" | "search/action" | "search/report/ack" => {
@@ -503,6 +525,7 @@ impl MobileController {
                 }
                 "goal/decision" => {
                     if let Some(r) = terra_autonomy::decode_decision(&bytes) {
+                        let ready = pose_quality::ready(&brain, timestamp);
                         brain.autonomy.decide_proposal(
                             r,
                             &terra_autonomy::ArbiterInput {
@@ -516,7 +539,7 @@ impl MobileController {
                                     linear: estimate.forward,
                                     angular: estimate.yaw_rate,
                                 },
-                                healthy: estimate.health == Health::Ready,
+                                healthy: ready,
                             },
                         );
                     }
@@ -530,10 +553,27 @@ impl MobileController {
             previous["status"]["requested_level"].as_str(),
             Some("waypoint" | "waypoint_direct")
         ) && previous["goal"]["state"] == "active";
-        let healthy = estimate.health == Health::Ready
+        let outdoor_motion = outdoor_bridge::update(&mut brain, timestamp);
+        // L0 is routed as direct operator effort on the phone. Its authority
+        // must survive camera loss while transport/recording failures still stop it.
+        let healthy = (brain.autonomy.is_manual() || pose_quality::ready(&brain, timestamp))
+            && outdoor_motion
             && (local_waypoint || brain.dashboard.as_ref().is_none_or(|d| !d.failed()))
             && brain.recorder.as_ref().is_none_or(|r| !r.failed());
         brain.autonomy.run_id = brain.run_id.clone();
+        let limits = brain.control_limits;
+        brain.autonomy.planner.config.max_linear = brain
+            .navigation
+            .parameters
+            .max_linear
+            .min(limits.0)
+            .min(if brain.outdoor.selected {
+                0.3
+            } else {
+                f64::INFINITY
+            });
+        brain.autonomy.planner.config.max_angular =
+            brain.navigation.parameters.max_angular.min(limits.1);
         let mut output = brain.autonomy.step(terra_autonomy::ArbiterInput {
             now: timestamp,
             pose: pose.0,
@@ -547,6 +587,33 @@ impl MobileController {
             },
             healthy,
         });
+        let mut outdoor_status = brain.outdoor.status(
+            timestamp,
+            outdoor_bridge::evidence(&brain, timestamp),
+            &brain.run_id,
+        );
+        if brain.outdoor.selected {
+            if brain.outdoor.phase() == "planning"
+                && matches!(
+                    output.status.reason.as_str(),
+                    "obstacle_blocked"
+                        | "route_no_path"
+                        | "route_goal_blocked"
+                        | "heading_requires_spin_or_replan"
+                )
+            {
+                outdoor_status["hold_reason"] = serde_json::json!("route_blocked");
+            }
+            if !outdoor_motion && output.status.safety != "emergency_stop" {
+                output.status.reason = outdoor_status["hold_reason"]
+                    .as_str()
+                    .unwrap_or(brain.outdoor.phase())
+                    .to_string();
+            }
+            if let Some(goal) = brain.outdoor.mission_status() {
+                output.goal = goal;
+            }
+        }
         let clearance = map.as_ref().and_then(|m| {
             terra_navigation::observed_clearance(&m.0, pose.0, brain.autonomy.planner.config.radius)
         });
@@ -597,6 +664,7 @@ impl MobileController {
         } else {
             None
         };
+        let quality = pose_quality::value(&brain, timestamp);
         let mut map_full_rejected = false;
         if let Some(d) = brain.dashboard.as_ref() {
             d.publish("experiment/status",serde_json::json!({
@@ -608,6 +676,10 @@ impl MobileController {
             }).to_string());
             let mut status = serde_json::to_value(&output.status).unwrap();
             status["navigation"] = brain.navigation.status();
+            status["navigation"]["outdoor"] = outdoor_status.clone();
+            d.publish("navigation/outdoor", outdoor_status.to_string());
+            status["pose_quality"] = quality.clone();
+            d.publish("pose/quality", quality.to_string());
             d.publish("autonomy/status", status.to_string());
             d.publish(
                 "search/status",
@@ -675,6 +747,9 @@ impl MobileController {
         brain.map_gate.full_enqueued(!map_full_rejected);
         brain.autonomy_json = serde_json::json!({
             "status": output.status,
+            "command_origin": output.command_origin,
+            "pose_quality": quality,
+            "outdoor": outdoor_status,
             "navigation": brain.navigation.status(),
             "goal": output.goal,
             "proposal": wire_proposal,
@@ -714,6 +789,9 @@ impl MobileController {
             })
             .into());
         }
+        let turning = (output.command_origin != terra_autonomy::CommandOrigin::LocalManual)
+            .then_some(brain.navigation.parameters.turning);
+        brain.controller.set_turning_constraint(turning);
         brain.controller.set_target(VelocityTarget {
             timestamp,
             forward: output.twist.linear,
@@ -728,11 +806,18 @@ impl MobileController {
     /// Returns `Internal` for a poisoned mutex. Recorder-close errors are ignored.
     pub fn reset(&self) -> Result<(), ControllerError> {
         let mut brain = self.brain.lock().map_err(|_| ControllerError::Internal)?;
+        brain.outdoor.cancel();
+        brain.outdoor.invalidate_sensors();
+        brain.outdoor.selected = false;
+        brain.outdoor.revision = brain.outdoor.revision.saturating_add(1);
         brain.autonomy = terra_autonomy::AutonomyArbiter::default();
         let planner = brain.navigation.parameters.planner();
         brain.autonomy.configure_planner(planner);
+        let turning = brain.navigation.parameters.turning;
+        brain.autonomy.configure_turning(turning)?;
         brain.dashboard = None;
         brain.pose = None;
+        brain.imu_time = None;
         brain.map = None;
         if let Some(mut r) = brain.recorder.take() {
             let _ = r.close();

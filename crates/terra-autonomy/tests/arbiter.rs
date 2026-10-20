@@ -477,3 +477,17 @@ fn blocked_planner_trace_is_published_and_cleared_on_stop() {
     );
     assert!(arbiter.step(evidence(0.2)).status.planner_trace.is_none());
 }
+
+#[test]
+fn manual_does_not_need_pose_but_still_stops_for_health_and_expired_input() {
+    let mut a = AutonomyArbiter::default();
+    a.accept_operator(tele(), 1.);
+    let mut evidence = input(1.1);
+    evidence.pose_time = 0.;
+    evidence.pose.x = f64::NAN;
+    assert_eq!(a.step(evidence).twist.linear, 1.);
+    let mut failed_link = input(1.2);
+    failed_link.healthy = false;
+    assert_eq!(a.step(failed_link).status.reason, "sensor_unhealthy");
+    assert_eq!(a.step(input(2.)).twist, Twist::default());
+}

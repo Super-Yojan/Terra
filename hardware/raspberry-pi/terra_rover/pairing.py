@@ -107,6 +107,30 @@ class ButtonSetupStatus(ServiceInterface):
         await self.commit(device.value)
         return data[offset:]
 
+async def remove_owner_bond(args, owner):
+    """Revoke only the saved owner on the configured adapter; never advertise."""
+    transport = BlessTransport('Terra ownership reset', SERVICE_UUID, args.adapter)
+    await transport.prepare()
+    try:
+        bus = transport.bus
+        manager = bus.get_proxy_object('org.bluez', '/', await bus.introspect('org.bluez', '/')).get_interface('org.freedesktop.DBus.ObjectManager')
+        objects = await manager.call_get_managed_objects()
+        adapter = transport.adapter.path
+        proxy = bus.get_proxy_object('org.bluez', adapter, await bus.introspect('org.bluez', adapter))
+        properties = proxy.get_interface('org.freedesktop.DBus.Properties')
+        for key in ('Pairable', 'Discoverable'):
+            await properties.call_set('org.bluez.Adapter1', key, Variant('b', False))
+        for path, interfaces in objects.items():
+            fields = interfaces.get('org.bluez.Device1', {})
+            if not path.startswith(adapter + '/') or not fields: continue
+            address = fields.get('Address', Variant('s', '')).value.upper()
+            address_type = fields.get('AddressType', Variant('s', '')).value
+            if (address, address_type) == (owner['address'], owner['address_type']):
+                # BlueZ RemoveDevice disconnects the device and removes its bond.
+                await proxy.get_interface('org.bluez.Adapter1').call_remove_device(path)
+    finally:
+        await transport.close()
+
 async def pair_owner(args, indicators, name):
     if load_owner(args.owner) is not None:
         raise RuntimeError('owner already provisioned')

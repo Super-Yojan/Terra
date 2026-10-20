@@ -188,6 +188,7 @@ impl MobileController {
     /// Returns `Internal` for a poisoned mutex.
     pub fn detach_dashboard_link(&self) -> Result<(), ControllerError> {
         let mut b = self.brain.lock().map_err(|_| ControllerError::Internal)?;
+        b.outdoor.pause("authority_lost");
         let service = b.dashboard.take();
         b.hardware_requests.clear();
         b.hardware_tokens.clear();
@@ -241,6 +242,7 @@ impl MobileController {
     /// network link. May block during teardown. Returns `Internal` for lock failure.
     pub fn disconnect_dashboard(&self) -> Result<(), ControllerError> {
         let mut brain = self.brain.lock().map_err(|_| ControllerError::Internal)?;
+        brain.outdoor.pause("authority_lost");
         let service = brain.dashboard.take();
         brain.hardware_requests.clear();
         brain.hardware_tokens.clear();
@@ -326,21 +328,21 @@ impl MobileController {
             message: "invalid autonomy request".into(),
         };
         match kind.as_str() {
+            "navigation/source" | "navigation/resume" => {
+                outdoor_bridge::request(&mut b, &kind, payload.as_bytes(), timestamp, 0.)?
+            }
             "autonomy" => b
                 .autonomy
                 .set_level(terra_autonomy::decode_level(payload.as_bytes()).ok_or_else(invalid)?),
             "safety" => {
-                let healthy = b.estimator.estimate(timestamp).health == Health::Ready;
+                let healthy = b.autonomy.is_manual() || b.estimator.estimate(timestamp).health == Health::Ready;
                 b.autonomy.set_safety(
                     terra_autonomy::decode_safety(payload.as_bytes()).ok_or_else(invalid)?,
                     healthy,
                 );
             }
             "goal" => {
-                if !b.autonomy.accept_goal(
-                    &terra_waypoint::decode_goal(payload.as_bytes()).ok_or_else(invalid)?,
-                    20_000.,
-                ) {
+                if !outdoor_bridge::dispatch_goal(&mut b, payload.as_bytes(), timestamp, 0.) {
                     return Err(invalid());
                 }
             }
@@ -348,6 +350,7 @@ impl MobileController {
                 let pose = b.pose.unwrap_or_default();
                 let map = b.map.clone();
                 let e = b.estimator.estimate(timestamp);
+                let ready = pose_quality::ready(&b, timestamp);
                 b.autonomy.decide_proposal(
                     terra_autonomy::decode_decision(payload.as_bytes()).ok_or_else(invalid)?,
                     &terra_autonomy::ArbiterInput {
@@ -361,7 +364,7 @@ impl MobileController {
                             linear: e.forward,
                             angular: e.yaw_rate,
                         },
-                        healthy: e.health == Health::Ready,
+                        healthy: ready,
                     },
                 );
             }
@@ -464,9 +467,14 @@ impl MobileController {
         }
         brain.recorder = Some(recorder);
 
+        brain.outdoor.cancel();
+        brain.outdoor.selected = false;
+        brain.outdoor.revision = brain.outdoor.revision.saturating_add(1);
         brain.autonomy = terra_autonomy::AutonomyArbiter::default();
         let planner = brain.navigation.parameters.planner();
         brain.autonomy.configure_planner(planner);
+        let turning = brain.navigation.parameters.turning;
+        brain.autonomy.configure_turning(turning)?;
         brain.autonomy.run_id = run_id.clone();
         brain.controller.reset();
         brain.run_id = run_id;

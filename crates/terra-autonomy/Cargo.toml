@@ -9,3 +9,5 @@ terra-navigation.workspace = true
 terra-exploration.workspace = true
 terra-mapping.workspace = true
 terra-waypoint.workspace = true
+terra-control.workspace = true
+terra-types.workspace = true

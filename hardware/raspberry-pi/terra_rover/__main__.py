@@ -157,11 +157,11 @@ def main():
     parser.add_argument('--name', default='Terra Rover')
     parser.add_argument('--config', type=Path, default=Path('/var/lib/terra-rover/layout.json'))
     parser.add_argument('--owner', type=Path, default=Path('/var/lib/terra-rover/owner.json'))
-    parser.add_argument('--pwm-ports', default='', help='comma-separated physically exposed P0-P11 ports')
+    parser.add_argument('--pwm-ports', default=','.join(f'P{i}' for i in range(12)), help='comma-separated PWM ports (default: P0-P11; empty disables PWM ports)')
     parser.add_argument('--gate-file', type=Path, help='optional Pi-connected interlock; omitted for an external battery cutoff')
     parser.add_argument('--bench-mode', action='store_true', help='supervised real-hardware bench mode with session-only software enable; no physical cutoff')
     parser.add_argument('--adapter')
-    parser.add_argument('--button-pairing', action='store_true', help='Fusion HAT button first-owner enrollment; then normal operation')
+    parser.add_argument('--button-pairing', action='store_true', help='Fusion HAT USR enrollment and ownership reset; then normal operation')
     parser.add_argument('--button-file', type=Path, default=Path('/sys/class/fusion_hat/fusion_hat/button'))
     parser.add_argument('--led-file', type=Path, default=Path('/sys/class/fusion_hat/fusion_hat/led'))
     parser.add_argument('--device-name-file', type=Path, default=Path('/var/lib/terra-rover/device-name.json'))
@@ -210,6 +210,7 @@ async def run_normal(args, name):
             backend = FusionHatBackend(ports,
                 file_gate_reader(args.gate_file) if args.gate_file is not None else None,
                 external_power_cutoff=args.gate_file is None)
-    await BlePeripheral(name, args.adapter).run(backend, args.config, args.owner)
+    await BlePeripheral(name, args.adapter).run(backend, args.config, args.owner,
+        manage_signals=not getattr(args, 'button_pairing', False))
 
 if __name__ == '__main__': main()

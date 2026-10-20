@@ -2440,9 +2440,11 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+ "terra-control",
  "terra-exploration",
  "terra-mapping",
  "terra-navigation",
+ "terra-types",
  "terra-waypoint",
 ]
 
@@ -2450,6 +2452,7 @@ dependencies = [
 name = "terra-control"
 version = "0.1.0"
 dependencies = [
+ "serde",
  "terra-state",
  "terra-types",
 ]
@@ -2513,7 +2516,9 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+ "terra-control",
  "terra-mapping",
+ "terra-types",
 ]
 
 [[package]]

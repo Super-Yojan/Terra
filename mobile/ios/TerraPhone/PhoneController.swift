@@ -75,6 +75,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
     @Published private(set) var activeLayoutRevision: UInt32 = 0
     @Published private(set) var hardwareFault: String?
     @Published private(set) var connectionFacts = TerraConnectionFacts()
+    @Published private(set) var savedRovers = TerraSavedRovers()
     @Published private(set) var roverDisplayName = UserDefaults.standard.string(forKey: "preferredHardwareRoverName") ?? "Your rover"
     private var roverNames: [UUID: String] = [:]
     private var roverConnectionFailed = false
@@ -88,17 +89,20 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
     private var dashboardGeneration: UInt64 = 0
     private var configurationGeneration: UInt64 = 0
     private var resetFaultRequest: UInt32?
+    @Published private(set) var hardwareMotionPaused = false
     @Published private(set) var hardwareArmed = false
     @Published private(set) var hardwareArming = false
     @Published private(set) var hardwareBenchMode = false
     @Published private(set) var hardwareBenchEnabled = false
     @Published private(set) var hardwareStatus = "Disconnected"
+    @Published private(set) var lastStopDiagnostic = TerraStopDiagnostic()
     @Published private(set) var capabilitiesJSON = "{}"
     @Published private(set) var committedLayoutJSON = "{}"
     @Published private(set) var configurationStatus = "No staged layout"
     @Published private(set) var discoveredRovers: [RoverPeripheral] = []
     @Published private(set) var servoPositions: [UInt8: Double] = [:]
     @Published private(set) var feedbackCompatible = false
+    @Published private(set) var vioControlCompatible = false
     @Published private(set) var acknowledgedCommitRevision: UInt32?
     private var requestedHardwareFeedback: UUID?
     private var feedbackConnectionSawUnready = false
@@ -124,11 +128,12 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
     private let sensorEpochLock = NSLock()
     private var dashboardEmergencyStop = false
     private var emergencyResetRequest: UInt32?
+    private var hardwarePauseRequested = false
     private var hardwareMotionRevoked = true
     private let personDetector = PersonSearchDetector()
     private var detectorHealth = "not started"
     private var feedbackTrackingHealthy = false
-    private var openLoopWaypointDisarmed = false
+    private var phoneFrameOrder = PhoneFrameOrder()
     private var bleReady = false
     private var bleCompatible = false
     private var phoneStartedAt = 0.0
@@ -141,6 +146,8 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
     private var lastLocalizationReason = ""
     private var locationFix: CLLocation?
     private var locationHeading: CLHeading?
+    private var outdoorFixTime: Date?
+    private var outdoorHeadingTime: Date?
     private var localizationPolicy = PhoneLocalizationPolicy()
     private var localizationTracked = false
     private var localizationTrackingReason: String?
@@ -186,7 +193,9 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
     func engageWaypoint(originLatitude: Double, originLongitude: Double, latitude: Double, longitude: Double, token: String, halfExtent: Double) {
         let token = token.trimmingCharacters(in: .whitespacesAndNewlines)
         controlQueue.async {
-            guard self.mode != .stopped, !self.bleActive || self.bleFeedback else {
+            let vioWaypoint = TerraFleetManualDrive.requiresVioControl(self.controller?.autonomyStatus() ?? "{}")
+            let vioLayout = (try? ActuatorDriveProfileSet.decode(json: self.bleLayout).supportsVioControl) == true
+            guard self.mode != .stopped, !self.bleActive || self.bleFeedback || (vioWaypoint && self.mode == .phone && vioLayout) else {
                 DispatchQueue.main.async {
                     #if targetEnvironment(simulator)
                     self.waypointStatus = "Start a rover or connect to Bevy, then go"
@@ -475,6 +484,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
                 try self.controller?.beginRecording(path:log.path,runId:UUID().uuidString)
                 DispatchQueue.main.async {self.runLog=log}
         }
+        if mode == .phone { try self.controller?.resetOutdoorFrame() }
         self.occupancyMap = try MobileOccupancyMap(settings: defaultOccupancySettings())
         mapGroundOffset = nil; groundPolicy.reset(); lastMapTime = -Double.infinity
         DispatchQueue.main.async { self.occupancy = nil; self.mapPose = .zero; self.mapStatus = mode == .simulation ? "Simulated depth · 10 Hz" : (ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) ? "Waiting for scene depth" : "Scene depth unavailable on this device") }
@@ -485,6 +495,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
         previousPosition = nil; previousPoseTime = nil; filteredVelocity = .zero
         DispatchQueue.main.async { self.localizationReport = nil }
         localizationTrackingReason = nil
+        outdoorFixTime = nil; outdoorHeadingTime = nil
         localizationPolicy.reset(); locationFix = nil; locationHeading = nil; localizationTracked = false; phoneHeadingReferenceYaw = nil; lastLocalizationPublish = -Double.infinity
     }
     private func startTimer() {
@@ -503,7 +514,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
         if controller.dashboardStatus() == "connected" {
             do { _ = try controller.step(timestamp: now) }
             catch {
-                target = (0, 0); revokeHardwareMotion(reason: "manual dashboard update failed: \(error)")
+                target = (0, 0); pauseHardwareMotion(reason: "manual dashboard update failed: \(error)")
                 try? controller.disconnectDashboard()
                 DispatchQueue.main.async { self.status = "Dashboard control update: \(error.localizedDescription)" }
             }
@@ -574,7 +585,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
                 let continuingWaypoint = TerraFleetManualDrive.localWaypointActive(controller.autonomyStatus())
                 if continuingWaypoint { try controller.detachDashboardLink() }
                 else {
-                    self.target = (0, 0); self.revokeHardwareMotion(reason: "dashboard link failed with no active local waypoint")
+                    self.target = (0, 0); self.pauseHardwareMotion(reason: "dashboard link failed with no active local waypoint")
                     try controller.disconnectDashboard()
                 }
                 DispatchQueue.main.async {
@@ -592,17 +603,12 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
             tick += 1
             let autonomy = controller.autonomyStatus()
             let fullyManual = TerraFleetManualDrive.isFullyManual(autonomy)
-            let disarmWaypoint = bleActive && !bleFeedback && TerraFleetManualDrive.openLoopMustDisarmWaypoint(autonomy)
-            if disarmWaypoint && !openLoopWaypointDisarmed {
-                openLoopWaypointDisarmed = true
-                target = (0, 0)
-                let payload = String(decoding: (try? JSONSerialization.data(withJSONObject: ["level": "teleop", "token": UUID().uuidString])) ?? Data(), as: UTF8.self)
-                try? controller.autonomyRequest(kind: "autonomy", payload: payload, timestamp: now)
-                DispatchQueue.main.async { self.autonomyReason = "L3 stays disarmed until wheel feedback is available" }
-            } else if !disarmWaypoint {
-                openLoopWaypointDisarmed = false
+            let vioWaypoint = TerraFleetManualDrive.requiresVioControl(autonomy)
+            let vioCompatible = (try? ActuatorDriveProfileSet.decode(json: bleLayout).supportsVioControl) == true
+            if bleActive && (bleFeedback || vioWaypoint) {
+                feedbackTrackingHealthy = mode == .phone && TerraFleetManualDrive.vioReady(autonomy)
+                if vioWaypoint && !vioCompatible { revokeHardwareMotion(reason: "L3 requires differential motor routes") }
             }
-            if bleActive && bleFeedback { feedbackTrackingHealthy = output.safety == .active }
             if bleActive && fullyManual && tick % 5 == 0 {
                 // L0 has no sensor-driven motor correction. The arbiter still
                 // gates the operator command by authority, freshness and safety.
@@ -610,20 +616,16 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
                 let wheels = command.wheelEfforts
                 routeHardware(left: wheels.left, right: wheels.right, now: ProcessInfo.processInfo.systemUptime, manualTarget: command)
             }
-            if bleActive && bleFeedback && !fullyManual {
-                if !feedbackTrackingHealthy {
-                    revokeHardwareMotion(reason: "feedback controller safety=\(String(describing: output.safety)); time=\(now) target=(\(output.targetForward),\(output.targetYawRate)) estimated=(\(output.estimatedForward),\(output.estimatedYawRate)) effort=(\(output.leftEffort),\(output.rightEffort))")
+            if bleActive && (bleFeedback || vioWaypoint) && !fullyManual {
+                if !feedbackTrackingHealthy || output.safety != .active {
+                    pauseHardwareMotion(reason: "Autonomy: \(TerraStopDiagnostic.autonomyReason(autonomy)); feedback controller safety=\(String(describing: output.safety)); time=\(now) target=(\(output.targetForward),\(output.targetYawRate)) estimated=(\(output.estimatedForward),\(output.estimatedYawRate)) effort=(\(output.leftEffort),\(output.rightEffort))")
                 }
-                if tick % 5 == 0 { routeHardware(left: output.leftEffort, right: output.rightEffort, now: ProcessInfo.processInfo.systemUptime) }
+                if tick % 5 == 0 { routeHardware(left: output.leftEffort, right: output.rightEffort, now: ProcessInfo.processInfo.systemUptime, closedLoop: true) }
             }
-            if bleActive && !bleFeedback && !fullyManual && tick % 5 == 0 && controller.dashboardStatus() == "connected" {
-                if disarmWaypoint {
-                    routeHardware(left: 0, right: 0, now: ProcessInfo.processInfo.systemUptime, manualTarget: .zero)
-                } else {
-                    let command = TerraFleetManualDrive.command(autonomy)
-                    let wheels = command.wheelEfforts
-                    routeHardware(left: wheels.left, right: wheels.right, now: ProcessInfo.processInfo.systemUptime, manualTarget: command)
-                }
+            if bleActive && !bleFeedback && !vioWaypoint && !fullyManual && tick % 5 == 0 && controller.dashboardStatus() == "connected" {
+                let command = TerraFleetManualDrive.command(autonomy)
+                let wheels = command.wheelEfforts
+                routeHardware(left: wheels.left, right: wheels.right, now: ProcessInfo.processInfo.systemUptime, manualTarget: command)
             }
             if tick % 10 == 0 { publish(output);updateAuthority() }
             if mode == .phone { publishLocalization(controller) }
@@ -631,6 +633,10 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
     }
     func session(_ session: ARSession, didUpdate frame: ARFrame) {
         guard mode == .phone, frame.timestamp >= phoneStartedAt, let controller else { return }
+        guard phoneFrameOrder.accept(frame.timestamp, notBefore: phoneStartedAt) else {
+            TerraLog.tracking.warning("Repeated or older AR frame skipped; timestamp=\(frame.timestamp) lastAccepted=\(self.phoneFrameOrder.lastTimestamp ?? 0)")
+            return
+        }
         let tracked: Bool
         if case .normal = frame.camera.trackingState { tracked = true } else { tracked = false }
         if localizationTracked != tracked {
@@ -705,8 +711,8 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
             if bleActive {
                 feedbackTrackingHealthy = false
                 let fullyManual = TerraFleetManualDrive.isFullyManual(controller.autonomyStatus())
-                if DriveJoystickSafety.trackingLossRequiresDisarm(feedback: bleFeedback, fullyManual: fullyManual) {
-                    revokeHardwareMotion(reason: "camera tracking lost in tracking-dependent mode")
+                if DriveJoystickSafety.trackingLossRequiresDisarm(feedback: bleFeedback || TerraFleetManualDrive.requiresVioControl(controller.autonomyStatus()), fullyManual: fullyManual) {
+                    pauseHardwareMotion(reason: localizationTrackingReason ?? "Camera tracking lost in tracking-dependent mode")
                 }
             }
         }
@@ -1023,10 +1029,10 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
     }
     func setAutonomy(_ level:String, budgetSeconds: Double? = nil) {
         controlQueue.async {
-            // Open-loop Bluetooth cannot take an autonomy level. L3 in particular
-            // stays disarmed until wheel feedback exists; update() also drops a
-            // latched waypoint back to teleop and commands zero effort.
-            guard !self.bleActive || self.bleFeedback else { return }
+            if self.bleActive && level != "teleop" {
+                let vioLayout = (try? ActuatorDriveProfileSet.decode(json: self.bleLayout).supportsVioControl) == true
+                guard self.bleFeedback || (level == "waypoint" && self.mode == .phone && vioLayout) else { return }
+            }
             self.target=(0,0)
             do {
                 var body: [String: Any] = ["level": level, "token": UUID().uuidString]
@@ -1079,13 +1085,16 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
                     }
                 }
             }
+            let vioReady = mode == .phone && TerraFleetManualDrive.vioReady(controller.autonomyStatus())
             DispatchQueue.main.async {
                 let remote = (try? JSONSerialization.jsonObject(with: Data(self.bluetooth.statusJSON.utf8))) as? [String: Any] ?? [:]
                 var state: [String: Any] = ["schema_version": 1, "ready": self.hardwareReady,
-                    "armed": self.hardwareArmed, "arming": self.hardwareArming,
+                    "armed": self.hardwareArmed, "arming": self.hardwareArming, "motion_feedback_source": "phone_vio", "motion_feedback_ready": vioReady,
                     "token": self.dashboardHardwareToken, "result": self.dashboardHardwareResult,
                     "reason": self.hardwareStatus]
+                state["stop_diagnostic"] = self.lastStopDiagnostic.message
                 state["stop_reason"] = remote["stop_reason"]
+                state["motion_paused"] = self.hardwareMotionPaused
                 if let fault = self.hardwareFault { state["fault"] = fault }
                 if let payload = try? JSONSerialization.data(withJSONObject: state) {
                     try? controller.publishHardwareStatus(payload: String(decoding: payload, as: UTF8.self))
@@ -1103,7 +1112,14 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
         }
         #endif
         let status=(object["status"] as? [String:Any]) ?? object
-        let level=status["requested_level"] as? String ?? "teleop", reason=status["reason"] as? String ?? "Unknown"
+        let level=status["requested_level"] as? String ?? "teleop"
+        let outdoor = object["outdoor"] as? [String: Any]
+        let reason: String
+        if outdoor?["source"] as? String == "outdoor_gps" {
+            let phase = outdoor?["hold_reason"] as? String ?? outdoor?["phase"] as? String ?? "idle"
+            let accuracy = outdoor?["gps_accuracy_m"] as? Double
+            reason = "Outdoor GPS · " + phase.replacingOccurrences(of: "_", with: " ") + (accuracy.map { String(format: " · ±%.1f m", $0) } ?? "")
+        } else { reason = status["reason"] as? String ?? "Unknown" }
         let goal=object["goal"] as? [String:Any]
         let proposal=object["proposal"] as? [String:Any]
         let reports=(object[self.mode == .remote ? "reports":"pending_reports"] as? [[String:Any]]) ?? []
@@ -1166,6 +1182,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
         }
     }
     private func fail(_ error: Error, context: String = "Controller") {
+        retainStopReason("\(context): \(String(describing: error))")
         TerraLog.control.error("Controller failure: \(context, privacy: .public): \(error.localizedDescription, privacy: .public)")
         let detail = "\(context): \(error.localizedDescription)"
         #if DEBUG
@@ -1197,12 +1214,27 @@ struct RoverPeripheral: Identifiable, Decodable {
 }
 
 extension PhoneController {
+    private func retainStopReason(_ reason: String) {
+        let time = Date().timeIntervalSince1970
+        DispatchQueue.main.async { self.lastStopDiagnostic.record(reason, at: time) }
+    }
+    func clearStopReason() { lastStopDiagnostic.clear() }
     private func sensorEpochMatches(_ epoch: Int) -> Bool {
         sensorEpochLock.lock(); defer { sensorEpochLock.unlock() }; return sensorEpoch == epoch
     }
+    private func pauseHardwareMotion(reason: String) {
+        target = (0, 0); resetServoTargets()
+        guard !hardwareMotionRevoked else { return }
+        retainStopReason(reason)
+        bluetooth.pauseMotion()
+        hardwarePauseRequested = true
+        hardwareMotionRevoked = true
+    }
     private func revokeHardwareMotion(reason: String = #function) {
         target = (0, 0); resetServoTargets()
-        if !hardwareMotionRevoked {
+        if !hardwareMotionRevoked || hardwarePauseRequested {
+            hardwarePauseRequested = false
+            retainStopReason(reason)
             TerraLog.control.notice("Revoking motion; caller=\(reason, privacy: .public) mode=\(String(describing: self.mode), privacy: .public) feedback=\(self.bleFeedback)")
             let autonomy = controller?.autonomyStatus() ?? "unavailable"
             TerraLog.control.notice("Disarm context; bleActive=\(self.bleActive) compatible=\(self.bleCompatible) trackingHealthy=\(self.feedbackTrackingHealthy) emergencyStop=\(self.dashboardEmergencyStop) router=\(self.controller?.dashboardStatus() ?? "unavailable", privacy: .public) autonomy=\(autonomy, privacy: .public)")
@@ -1245,10 +1277,19 @@ extension PhoneController {
             if invalidated { editorRequest = nil; retryableEditorRequest = nil; hasRetryableActuatorRequest = false; presetUpload = nil; removeAfterBegin = nil; actuatorPageLoading = false }
         }
 
+        if let reason = TerraStopDiagnostic.piDisarmReason(wasArmed: hardwareArmed, isArmed: bluetooth.armed, status: remoteStatus) {
+            retainStopReason(reason)
+        }
+        let paused = remoteStatus?["motion_paused"] as? Bool == true || remoteStatus?["stop_reason"] as? String == "watchdog_paused"
+        if paused && !hardwareMotionPaused {
+            controlQueue.async { self.target = (0, 0); self.resetServoTargets() }
+        }
+        hardwareMotionPaused = paused
         hardwareArmed = bluetooth.armed; hardwareArming = bluetooth.arming
         capabilitiesJSON = bluetooth.capabilitiesJSON; committedLayoutJSON = bluetooth.driveProfileJSON
         discoveredRovers = (try? JSONDecoder().decode([RoverPeripheral].self, from: Data(bluetooth.peripheralsJSON.utf8))) ?? []
         feedbackCompatible = (try? ActuatorDriveProfileSet.decode(json: committedLayoutJSON).supportsFeedback) ?? false
+        vioControlCompatible = (try? ActuatorDriveProfileSet.decode(json: committedLayoutJSON).supportsVioControl) ?? false
         let layout = committedLayoutJSON
         let ready = hardwareReady
         let compatible = feedbackCompatible
@@ -1278,7 +1319,7 @@ extension PhoneController {
     func autoConnectHardware() {
         #if !targetEnvironment(simulator)
         guard automaticConnectionEnabled(), !connectionPolicy.enabled else { return }
-        let preferred = UserDefaults.standard.string(forKey: "preferredHardwareRover").flatMap(UUID.init(uuidString:))
+        let preferred = savedRovers.selected
         connectionPolicy.begin(preferred: preferred)
         roverConnectionFailed = false
         routerSuppressed = false; routerRetryAt = nil
@@ -1300,9 +1341,29 @@ extension PhoneController {
     }
     func disconnectHardware() { stop() }
     func forgetHardwareRover() {
-        stop(); UserDefaults.standard.removeObject(forKey: "preferredHardwareRover")
-        UserDefaults.standard.removeObject(forKey: "preferredHardwareRoverName")
+        guard let id = savedRovers.selected else { return }
+        forgetHardwareRover(id)
+    }
+    func forgetHardwareRover(_ id: UUID) {
+        let wasSelected = savedRovers.selected == id
+        if wasSelected { stop() }
+        savedRovers.forget(id)
+        guard wasSelected else { return }
         roverDisplayName = "Your rover"
+        autoConnectHardware()
+    }
+    func selectHardwareRover(_ id: UUID) {
+        guard savedRovers.rovers.contains(where: { $0.id == id }) else { return }
+        stop()
+        savedRovers.select(id)
+        roverDisplayName = savedRovers.rovers.first(where: { $0.id == id })?.name ?? "Terra rover"
+        UserDefaults.standard.set(true, forKey: "autoConnectHardware")
+        autoConnectHardware()
+    }
+    func addHardwareRover() {
+        stop(); savedRovers.clearSelection()
+        roverDisplayName = "New rover"
+        UserDefaults.standard.set(true, forKey: "autoConnectHardware")
         autoConnectHardware()
     }
     private func discovered(_ rover: TerraDiscoveredRover, generation: UInt64) {
@@ -1341,12 +1402,10 @@ extension PhoneController {
         switch event {
         case .paired(let id):
             rememberRoverName(id)
-            UserDefaults.standard.set(id.uuidString, forKey: "preferredHardwareRover")
             connectionPolicy.paired(id, now: connectionNow)
             bluetooth.startDiscovery(generation: connectionPolicy.generation)
         case .authenticated(let id):
             roverConnectionFailed = false; rememberRoverName(id)
-            UserDefaults.standard.set(id.uuidString, forKey: "preferredHardwareRover")
             connectionPolicy.authenticated(id)
         case .closed(let retryable):
             roverConnectionFailed = true
@@ -1402,9 +1461,9 @@ extension PhoneController {
         refreshConnectionPresentation()
     }
     private func rememberRoverName(_ id: UUID) {
-        guard let name = roverNames[id] else { return }
+        let name = roverNames[id] ?? savedRovers.rovers.first(where: { $0.id == id })?.name ?? "Terra rover"
         roverDisplayName = name
-        UserDefaults.standard.set(name, forKey: "preferredHardwareRoverName")
+        savedRovers.remember(id: id, name: name)
     }
     private func refreshConnectionPresentation() {
         let defaults = UserDefaults.standard
@@ -1541,7 +1600,7 @@ extension PhoneController {
         }
     }
     func armHardware(expectedRun: String? = nil, expectedRevision: UInt64? = nil, expiresAt: TimeInterval? = nil) {
-        guard requestedHardwareFeedback == nil, hardwareReady, !hardwareArmed, !hardwareArming else { return }
+        guard requestedHardwareFeedback == nil, hardwareReady, (!hardwareArmed || hardwareMotionPaused), !hardwareArming else { return }
         sensorEpochLock.lock(); let epoch = sensorEpoch; sensorEpochLock.unlock()
         controlQueue.async {
             guard self.sensorEpochMatches(epoch), !self.dashboardEmergencyStop else { return }
@@ -1568,11 +1627,15 @@ extension PhoneController {
                 }
             }
             let fullyManual = TerraFleetManualDrive.isFullyManual(self.controller?.autonomyStatus() ?? "{}")
-            guard DriveJoystickSafety.hardwareArmAllowed(feedback: self.bleFeedback, fullyManual: fullyManual, trackingHealthy: self.feedbackTrackingHealthy, compatible: self.bleCompatible) else {
+            let vioWaypoint = TerraFleetManualDrive.requiresVioControl(self.controller?.autonomyStatus() ?? "{}")
+            let vioCompatible = (try? ActuatorDriveProfileSet.decode(json: self.bleLayout).supportsVioControl) == true
+            let freshVio = self.mode == .phone && TerraFleetManualDrive.vioReady(self.controller?.autonomyStatus() ?? "{}") && self.previousPoseTime.map { (0...0.35).contains(CACurrentMediaTime() - $0) } == true
+            guard DriveJoystickSafety.hardwareArmAllowed(feedback: self.bleFeedback || vioWaypoint, fullyManual: fullyManual, trackingHealthy: freshVio, compatible: vioWaypoint ? vioCompatible : self.bleCompatible) else {
                 DispatchQueue.main.async { self.configurationStatus = "Feedback tracking is not ready to arm"; self.dashboardHardwareResult = "rejected: feedback tracking not ready" }
                 return
             }
-            self.target = (0, 0); self.resetServoTargets(); self.hardwareMotionRevoked = false
+            self.target = (0, 0); self.resetServoTargets(); self.hardwareMotionRevoked = false; self.hardwarePauseRequested = false
+            DispatchQueue.main.async { self.lastStopDiagnostic.clear() }
             TerraLog.control.notice("Arm accepted by phone; fullyManual=\(fullyManual) feedback=\(self.bleFeedback)")
             self.bluetooth.arm()
         }
@@ -1600,15 +1663,16 @@ extension PhoneController {
         let values = servoTargets.reduce(into: [UInt8: Double]()) { result, entry in if let id = UInt8(entry.key) { result[id] = entry.value } }
         DispatchQueue.main.async { self.servoPositions = values }
     }
-    private func routeHardware(left: Double, right: Double, now: TimeInterval, manualTarget: DriveJoystickCommand? = nil) {
-        guard bleActive, bleReady, !dashboardEmergencyStop, !bleFeedback || bleCompatible else { return }
+    private func routeHardware(left: Double, right: Double, now: TimeInterval, manualTarget: DriveJoystickCommand? = nil, closedLoop: Bool = false) {
+        guard bleActive, bleReady, !hardwareMotionRevoked, !dashboardEmergencyStop, !bleFeedback || bleCompatible else { return }
         do {
             // Resolve numeric values before erasing their types into Any. Otherwise
             // Swift can infer feedback's neutral literal as Int inside this dictionary.
             let forward: Double = manualTarget?.forward ?? (bleFeedback ? 0 : target.forward)
             let turn: Double = manualTarget?.yaw ?? (bleFeedback ? 0 : target.yaw)
             let input: [String: Any] = ["left_effort": left, "right_effort": right, "forward": forward, "turn": turn, "servo_positions": servoTargets]
-            let routed = try ActuatorDriveProfileSet.decode(json: bleLayout).route(input: input)
+            let profile = try ActuatorDriveProfileSet.decode(json: bleLayout)
+            let routed = try closedLoop ? profile.routeClosedLoop(left: left, right: right, servos: servoTargets) : profile.route(input: input)
             let values = String(decoding: try JSONSerialization.data(withJSONObject: routed), as: UTF8.self)
             bluetooth.drive(valuesJSON: values, producedAt: now)
         } catch {
@@ -1818,7 +1882,12 @@ extension PhoneController {
         default: reason = nil // Approximate GPS is displayed with its reported accuracy.
         }
         TerraLog.tracking.notice("Location authorization: \(reason ?? "Location access allowed", privacy: .public)")
-        controlQueue.async { self.locationPermissionReason = reason }
+        controlQueue.async {
+            self.locationPermissionReason = reason
+            if manager.authorizationStatus == .denied || manager.authorizationStatus == .restricted {
+                try? self.controller?.invalidateOutdoorSensors()
+            }
+        }
     }
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         guard let fix = locations.last else { return }
@@ -1833,11 +1902,25 @@ extension PhoneController {
         // Temporary acquisition failures do not erase a previously measured fix.
         // Its original timestamp still enforces the freshness limit.
         if (error as? CLError)?.code == .denied {
-            controlQueue.async { self.locationFix = nil; self.locationHeading = nil; self.locationPermissionReason = "Location permission denied" }
+            controlQueue.async { self.locationFix = nil; self.locationHeading = nil; self.locationPermissionReason = "Location permission denied"; try? self.controller?.invalidateOutdoorSensors() }
         }
     }
     private func publishLocalization(_ controller: MobileController) {
         let now = Date().timeIntervalSince1970
+        let monotonic = CACurrentMediaTime()
+        try? controller.enableOutdoorGps()
+        if let fix = locationFix, outdoorFixTime != fix.timestamp {
+            outdoorFixTime = fix.timestamp
+            try? controller.pushGps(sample: GpsFix(timestamp: monotonic - (now - fix.timestamp.timeIntervalSince1970), latitude: fix.coordinate.latitude, longitude: fix.coordinate.longitude, accuracy: fix.horizontalAccuracy), now: monotonic)
+        }
+        if let heading = locationHeading, outdoorHeadingTime != heading.timestamp,
+           let reference = phoneHeadingReferenceYaw, let pose = phonePose,
+           previousPoseTime.map({ monotonic - $0 >= 0 && monotonic - $0 <= 0.35 }) == true {
+            outdoorHeadingTime = heading.timestamp
+            // Pair compass phone-right reference with that same AR axis, then rotate to rover forward.
+            let corrected = PhoneMountGeometry.roverTrueHeading(compass: heading.trueHeading, roverYaw: pose.yaw, referenceYaw: reference)
+            try? controller.pushHeading(sample: HeadingFix(timestamp: monotonic - (now - heading.timestamp.timeIntervalSince1970), trueHeading: corrected, accuracy: heading.headingAccuracy), now: monotonic)
+        }
         guard now - lastLocalizationPublish >= 1 else { return }
         lastLocalizationPublish = now
         let poseFresh = previousPoseTime.map { CACurrentMediaTime() - $0 < 1 } == true

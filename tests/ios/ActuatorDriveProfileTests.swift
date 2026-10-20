@@ -38,6 +38,13 @@ import Foundation
         let manual = json.replacingOccurrences(of: "\"type\":\"left_effort\"", with: "\"type\":\"manual\",\"forward_coefficient\":1,\"turn_coefficient\":-1")
         let manualProfile = try ActuatorDriveProfileSet.decode(json: manual)
         precondition(!manualProfile.supportsFeedback)
+        precondition(manualProfile.supportsVioControl)
+        let closed = try manualProfile.routeClosedLoop(left: 0.4, right: -0.2, servos: [:])
+        precondition(abs((closed[0]["value"] as! Double) - 0.4) < 0.00001)
+        precondition(abs((closed[1]["value"] as! Double) + 0.2) < 0.00001)
+        let throttleOnly = manual.replacingOccurrences(of: "\"turn_coefficient\":-1", with: "\"turn_coefficient\":0")
+        let throttleProfile = try ActuatorDriveProfileSet.decode(json: throttleOnly)
+        precondition(!throttleProfile.supportsVioControl)
         let manualOutput = try manualProfile.route(input: input)
         precondition(abs((manualOutput[0]["value"] as! Double) - 0.2) < 0.00001)
         do { _ = try profile.route(input: ["left_effort": Double.nan]); preconditionFailure("Invalid input accepted") } catch { }

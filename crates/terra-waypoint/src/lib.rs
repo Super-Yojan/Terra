@@ -350,6 +350,15 @@ impl WaypointController {
         Ok(true)
     }
 
+    /// Update only the local guidance position, retaining mission identity and metadata.
+    pub fn update_guidance(&mut self, x: f64, y: f64) {
+        if x.is_finite() && y.is_finite() {
+            if let Some(g) = self.goal.as_mut() {
+                g.x = x;
+                g.y = y;
+            }
+        }
+    }
     /// Clear the destination and reset its ID to zero, preserving the origin.
     pub fn cancel(&mut self) {
         self.goal = None;

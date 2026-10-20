@@ -15,7 +15,7 @@ struct DriveControlPanel: View {
         DriveJoystickSafety.canArm(ready: ready, manual: manual, stopped: stopRequested, foreground: scenePhase == .active)
             && !brain.hardwareArming && (!hardware || !brain.hardwareBenchMode || brain.hardwareBenchEnabled)
     }
-    private var canDrive: Bool { canArm && locallyArmed && (!hardware || brain.hardwareArmed) && !brain.dashboardConnected }
+    private var canDrive: Bool { canArm && !brain.hardwareMotionPaused && locallyArmed && (!hardware || brain.hardwareArmed) && !brain.dashboardConnected }
     private var armPending: Bool { hardware && locallyArmed && !brain.hardwareArmed }
     var body: some View {
         VStack(spacing: 18) {
@@ -42,6 +42,15 @@ struct DriveControlPanel: View {
             HStack(spacing: 12) {
                 readout("Forward", value: command.forward, unit: hardware && !brain.hardwareFeedback ? "effort" : "m/s")
                 readout("Turn", value: command.yaw, unit: hardware && !brain.hardwareFeedback ? "effort" : "rad/s")
+            }
+            if brain.hardwareMotionPaused {
+                Button("Resume Motion") {
+                    neutralize()
+                    locallyArmed = true
+                    brain.armHardware()
+                }.disabled(!canArm || brain.dashboardConnected)
+                Text("Armed, but stopped after a command interruption. Resume does not restore the old joystick command.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
             HStack(spacing: 12) {
                 Button {
@@ -112,6 +121,7 @@ struct DriveControlPanel: View {
     }
     private var statusText: String {
         if stopRequested { return "Stopped · Reset Required" }
+        if brain.hardwareMotionPaused { return "Armed · Motion Paused" }
         if brain.hardwareArming { return "Arming at Safe Output…" }
         if armPending { return "Waiting for Arm Acknowledgement…" }
         if brain.dashboardConnected { return brain.hardwareArmed ? "ARGOS Control · Hardware Armed" : "ARGOS Control · Disarmed" }

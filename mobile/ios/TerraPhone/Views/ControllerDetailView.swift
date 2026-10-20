@@ -1,5 +1,21 @@
 import SwiftUI
 
+struct TerraStopReasonView: View {
+    @ObservedObject var brain: PhoneController
+    var body: some View {
+        if let reason = brain.lastStopDiagnostic.message {
+            VStack(alignment: .leading, spacing: 8) {
+                if let time = brain.lastStopDiagnostic.timestamp {
+                    Text(Date(timeIntervalSince1970: time), style: .time).font(.caption).foregroundStyle(.secondary)
+                }
+                Text(reason).font(.subheadline).textSelection(.enabled)
+                Text("Retained through reconnects. Clears when you arm again or clear it here.").font(.caption).foregroundStyle(.secondary)
+                Button("Clear reason") { brain.clearStopReason() }
+            }
+        }
+    }
+}
+
 struct ControllerDetailView: View {
     @ObservedObject var brain: PhoneController
     var destination: TerraDestination = .drive
@@ -26,6 +42,9 @@ struct ControllerDetailView: View {
     private let waypointReach = 49.0
     var body: some View {
         Form {
+                if brain.lastStopDiagnostic.message != nil {
+                    Section("Last disarm reason") { TerraStopReasonView(brain: brain) }
+                }
                 if destination == .drive {
                     Section("Manual Control") { DriveControlPanel(brain: brain) }
                         .id(TerraDestination.drive)
@@ -95,7 +114,7 @@ struct ControllerDetailView: View {
                         .keyboardType(.decimalPad)
                         .accessibilityLabel("Explore budget seconds")
                     Picker("Requested level",selection:Binding(get:{brain.autonomyLevel},set:{brain.setAutonomy($0, budgetSeconds: Double(exploreSeconds))})) {Text("Teleop").tag("teleop");Text("Assisted teleop").tag("assisted_teleop");Text("L2 · Direct waypoint").tag("waypoint_direct");Text("L3 · Obstacle-aware waypoint").tag("waypoint");Text("Autonomous explore").tag("explore");Text("Supervised search").tag("supervised");if brain.searchAvailable {Text("L4 target search").tag("target_search")}}
-                        .disabled(brain.hardwareActive && !brain.hardwareFeedback)
+                        .disabled(brain.hardwareActive && !brain.hardwareFeedback && !(brain.phoneTrackingActive && brain.vioControlCompatible))
                     Text(brain.autonomyReason)
                     if !brain.explorationSummary.isEmpty { Text(brain.explorationSummary).font(.footnote) }
                     if let proposal=brain.proposedGoal {Text(brain.proposalText);HStack {Button("Approve search target") {brain.decideProposal(proposal,approve:true)};Button("Reject") {brain.decideProposal(proposal,approve:false)}}}
@@ -151,7 +170,7 @@ struct ControllerDetailView: View {
                         LabeledContent("Distance", value: String(format: "%.1f m", brain.waypointDistance))
                     }
                     Button("Go to waypoint") { goToWaypoint() }
-                        .disabled(brain.waypointActive || (brain.hardwareActive && !brain.hardwareFeedback))
+                        .disabled(brain.waypointActive || (brain.hardwareActive && !brain.hardwareFeedback && !(brain.autonomyLevel == "waypoint" && brain.phoneTrackingActive && brain.vioControlCompatible)))
                     Button("Cancel waypoint", role: .destructive) { brain.cancelWaypoint() }
                         .disabled(!brain.waypointActive)
                     if !entryNote.isEmpty {

@@ -1,5 +1,27 @@
 import Foundation
 
+/// Keep the first cause through subsequent disarm acknowledgements and reconnects.
+struct TerraStopDiagnostic {
+    private(set) var message: String?
+    private(set) var timestamp: TimeInterval?
+    mutating func record(_ reason: String, at time: TimeInterval) {
+        guard message == nil, !reason.isEmpty else { return }
+        message = reason
+        timestamp = time
+    }
+    mutating func clear() { message = nil; timestamp = nil }
+    static func autonomyReason(_ json: String) -> String {
+        let root = (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any]
+        return (root?["status"] as? [String: Any])?["reason"] as? String ?? "unavailable"
+    }
+    static func piDisarmReason(wasArmed: Bool, isArmed: Bool, status: [String: Any]?) -> String? {
+        guard wasArmed, !isArmed, let status, status["armed"] as? Bool == false else { return nil }
+        let reason = status["stop_reason"] as? String ?? "unspecified"
+        let fault = status["fault"] as? String
+        return "Pi disarmed: \(reason)\(fault.map { " · fault: " + $0 } ?? "")"
+    }
+}
+
 /// Screen up is forward; screen left is positive yaw in the rover body frame.
 struct DriveJoystickCommand: Equatable {
     let forward: Double
@@ -37,14 +59,17 @@ enum DriveJoystickSafety {
 
 /// Route only the arbiter-selected manual intent, never an unvalidated network payload.
 enum TerraFleetManualDrive {
-    /// L3 wheel commands come from the closed-loop velocity controller. Without
-    /// wheel feedback, open-loop Bluetooth must drop waypoint back to teleop and
-    /// send zero effort. Applying planner efforts on that path would keep driving
-    /// a plant the phone can no longer correct.
-    static func openLoopMustDisarmWaypoint(_ json: String) -> Bool {
+    /// L3 uses phone VIO motion estimates, independently of the actuator routing format.
+    static func requiresVioControl(_ json: String) -> Bool {
         guard let root = (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any],
               let status = root["status"] as? [String: Any] else { return false }
         return status["requested_level"] as? String == "waypoint" || status["effective_level"] as? String == "waypoint"
+    }
+    static func vioReady(_ json: String) -> Bool {
+        guard let root = (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any],
+              let quality = root["pose_quality"] as? [String: Any], quality["degraded"] as? Bool == false,
+              let age = quality["pose_age_s"] as? Double, age.isFinite, (0...0.35).contains(age) else { return false }
+        return true
     }
     static func localWaypointActive(_ json: String) -> Bool {
         guard let root = (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any],
@@ -69,7 +94,16 @@ enum TerraFleetManualDrive {
               let linear = twist["linear"] as? Double, let angular = twist["angular"] as? Double,
               linear.isFinite, angular.isFinite, abs(linear) <= 0.5, abs(angular) <= 1 else { return .zero }
         print("I am here")
-        return DriveJoystickCommand(forward: linear / 0.5, yaw: angular)
+        let forward = linear / 0.5
+        let managed = ["fleet_teleop", "autonomous"].contains(root["command_origin"] as? String ?? "")
+        let navigation = root["navigation"] as? [String: Any]
+        let parameters = navigation?["parameters"] as? [String: Any]
+        let turning = parameters?["turning"] as? [String: Any]
+        let allowSpin = turning?["allow_in_place"] as? Bool ?? false
+        // Feedback has its own Rust wheel constraint. This path maps fleet
+        // velocity directly to normalized effort; protect that final mix too.
+        let yaw = managed && !allowSpin ? min(abs(forward), max(-abs(forward), angular)) : angular
+        return DriveJoystickCommand(forward: forward, yaw: yaw)
     }
 }
 

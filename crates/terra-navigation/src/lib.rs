@@ -55,6 +55,17 @@ mod astar;
 pub use astar::*;
 mod search;
 pub use search::*;
+mod maneuver;
+pub use maneuver::ManeuverSegment;
+fn direction(v: f64) -> &'static str {
+    if v < 0. {
+        "reverse"
+    } else if v > 0. {
+        "forward"
+    } else {
+        "stationary"
+    }
+}
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use terra_mapping::MapSnapshot;
@@ -94,6 +105,12 @@ impl Pose {
 /// prediction horizon is 2 s.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PlannerConfig {
+    /// Conservative reverse speed cap, metres/second.
+    #[serde(default = "default_reverse")]
+    pub max_reverse: f64,
+    /// Nonnegative cost per reverse metre/second.
+    #[serde(default = "default_reverse_penalty")]
+    pub reverse_penalty: f64,
     /// Circular rover footprint radius in metres.
     pub radius: f64,
     /// Maximum forward or reverse speed magnitude in metres per second.
@@ -109,9 +126,17 @@ pub struct PlannerConfig {
     /// Constant-velocity prediction duration in seconds, before the braking tail.
     pub horizon: f64,
 }
+fn default_reverse() -> f64 {
+    0.15
+}
+fn default_reverse_penalty() -> f64 {
+    0.05
+}
 impl Default for PlannerConfig {
     fn default() -> Self {
         Self {
+            max_reverse: default_reverse(),
+            reverse_penalty: default_reverse_penalty(),
             radius: 0.65,
             max_linear: 2.,
             max_angular: 2.,
@@ -140,6 +165,9 @@ pub struct PlanningDecision {
 /// offsets from `origin`, keeping all 121 paths below the telemetry size budget.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct PlannerTrace {
+    /// Nominal multi-point arc segments; refreshed/rechecked during execution.
+    #[serde(default)]
+    pub maneuver_segments: Vec<ManeuverSegment>,
     /// Seconds elapsed since this candidate set was evaluated.
     pub age: f64,
     /// World pose from which every candidate was simulated.
@@ -152,6 +180,9 @@ pub struct PlannerTrace {
 /// Sampled geometry and rejection status for one simulated velocity.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct CandidateTrace {
+    /// Forward, reverse, or stationary.
+    #[serde(default)]
+    pub direction: String,
     /// Velocity evaluated for this candidate.
     pub velocity: Twist,
     /// World-axis x/y offsets from the trace origin, rounded to millimetres.
@@ -230,6 +261,7 @@ impl LocalPlanner {
     fn valid(&self) -> bool {
         let config = &self.config;
         [
+            config.max_reverse,
             config.radius,
             config.max_linear,
             config.max_angular,
@@ -240,6 +272,9 @@ impl LocalPlanner {
         ]
         .iter()
         .all(|v| v.is_finite() && *v > 0.)
+            && config.max_reverse <= 2.
+            && config.reverse_penalty.is_finite()
+            && config.reverse_penalty >= 0.
             && config.radius <= 5.
             && config.horizon <= 10.
     }
@@ -283,8 +318,17 @@ impl LocalPlanner {
             ]
         };
         while elapsed < duration {
-            let rejection =
-                footprint_rejection(map, sample_pose.x, sample_pose.y, config.radius, Some(pose));
+            let rejection = footprint_rejection(
+                map,
+                sample_pose.x,
+                sample_pose.y,
+                config.radius,
+                if trajectory.linear < 0. {
+                    None
+                } else {
+                    Some(pose)
+                },
+            );
             if record && (elapsed >= next_record || rejection.is_some()) {
                 points.push(offset(sample_pose));
                 next_record = elapsed + record_interval;
@@ -309,7 +353,17 @@ impl LocalPlanner {
             points.push(offset(sample_pose));
         }
         (
-            footprint_rejection(map, sample_pose.x, sample_pose.y, config.radius, Some(pose)),
+            footprint_rejection(
+                map,
+                sample_pose.x,
+                sample_pose.y,
+                config.radius,
+                if trajectory.linear < 0. {
+                    None
+                } else {
+                    Some(pose)
+                },
+            ),
             points,
         )
     }
@@ -337,7 +391,8 @@ impl LocalPlanner {
         intent: Twist,
         dt: f64,
     ) -> PlanningDecision {
-        self.plan_recorded(map, pose, current, intent, dt, false).0
+        self.plan_recorded(map, pose, current, intent, dt, false, None)
+            .0
     }
     /// Plan as in [`Self::plan`], also recording candidate paths and the selected index.
     ///
@@ -353,7 +408,20 @@ impl LocalPlanner {
         intent: Twist,
         dt: f64,
     ) -> (PlanningDecision, PlannerTrace) {
-        self.plan_recorded(map, pose, current, intent, dt, true)
+        self.plan_recorded(map, pose, current, intent, dt, true, None)
+    }
+    /// Preview managed candidates before collision checks; commit the selected twist in the arbiter.
+    pub fn plan_with_turning(
+        &self,
+        map: &MapSnapshot,
+        pose: Pose,
+        current: Twist,
+        intent: Twist,
+        dt: f64,
+        limiter: &terra_control::TurningLimiter,
+        now: f64,
+    ) -> (PlanningDecision, PlannerTrace) {
+        self.plan_recorded(map, pose, current, intent, dt, true, Some((limiter, now)))
     }
     fn plan_recorded(
         &self,
@@ -363,8 +431,10 @@ impl LocalPlanner {
         intent: Twist,
         dt: f64,
         record: bool,
+        turning: Option<(&terra_control::TurningLimiter, f64)>,
     ) -> (PlanningDecision, PlannerTrace) {
         let mut trace = PlannerTrace {
+            maneuver_segments: Vec::new(),
             age: 0.,
             origin: pose,
             candidates: Vec::new(),
@@ -390,10 +460,20 @@ impl LocalPlanner {
             return (stop, trace);
         }
         let config = &self.config;
-        let min_linear = (current.linear - config.acceleration * dt).max(-config.max_linear);
-        let max_linear = (current.linear + config.acceleration * dt).min(config.max_linear);
-        let min_angular = (current.angular - config.yaw_acceleration * dt).max(-config.max_angular);
-        let max_angular = (current.angular + config.yaw_acceleration * dt).min(config.max_angular);
+        let min_linear = (current.linear - config.acceleration * dt).clamp(
+            -config.max_reverse.min(config.max_linear),
+            config.max_linear,
+        );
+        let max_linear = (current.linear + config.acceleration * dt)
+            .min(config.max_linear)
+            .clamp(
+                -config.max_reverse.min(config.max_linear),
+                config.max_linear,
+            );
+        let min_angular = (current.angular - config.yaw_acceleration * dt)
+            .clamp(-config.max_angular, config.max_angular);
+        let max_angular = (current.angular + config.yaw_acceleration * dt)
+            .clamp(-config.max_angular, config.max_angular);
         let mut best: Option<(f64, Twist)> = None;
         // Fixed sample order and strict score improvement make ties deterministic.
         for linear_sample in 0..=10 {
@@ -403,9 +483,25 @@ impl LocalPlanner {
                     angular: min_angular
                         + (max_angular - min_angular) * angular_sample as f64 / 10.,
                 };
+                let trajectory = if let Some((limiter, now)) = turning {
+                    let Ok(t) = limiter.clone().step(terra_types::VelocityTarget {
+                        timestamp: now,
+                        forward: trajectory.linear,
+                        yaw_rate: trajectory.angular,
+                    }) else {
+                        continue;
+                    };
+                    Twist {
+                        linear: t.forward,
+                        angular: t.yaw_rate,
+                    }
+                } else {
+                    trajectory
+                };
                 let (rejection, points_mm) = self.evaluate(map, pose, trajectory, record);
                 if record {
                     trace.candidates.push(CandidateTrace {
+                        direction: direction(trajectory.linear).into(),
                         velocity: trajectory,
                         points_mm,
                         rejection: rejection.map(str::to_owned),
@@ -415,7 +511,8 @@ impl LocalPlanner {
                     continue;
                 }
                 let score = (trajectory.linear - intent.linear).powi(2)
-                    + 0.3 * (trajectory.angular - intent.angular).powi(2);
+                    + 0.3 * (trajectory.angular - intent.angular).powi(2)
+                    + config.reverse_penalty * (-trajectory.linear).max(0.);
                 if best.is_none_or(|b| score < b.0) {
                     best = Some((score, trajectory));
                     if record {

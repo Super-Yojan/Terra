@@ -38,8 +38,19 @@ def status_read_document(payload):
             'hardware_gate_open_confirmed', 'configuration_allowed', 'last_sequence', 'stop_reason')
     compact = {key: payload[key] for key in keys if key in payload}
     raw = json.dumps(compact, separators=(',', ':'), allow_nan=False).encode()
-    if len(raw) > 512 and isinstance(compact.get('fault'), str):
-        compact['fault'] = 'rover_fault'
+    if len(raw) > 512 and compact.get('fault') and compact.get('stop_reason') == compact['fault']:
+        compact['stop_reason'] = 'fault'
+        raw = json.dumps(compact, separators=(',', ':'), allow_nan=False).encode()
+    # Both fields can contain the same arbitrarily long backend exception.
+    # Keep useful prefixes, sizing the encoded JSON (including Unicode escapes),
+    # rather than replacing the fault or letting the output worker crash.
+    while len(raw) > 512:
+        candidates = [key for key in ('fault', 'stop_reason')
+                      if isinstance(compact.get(key), str) and len(compact[key]) > 4]
+        if not candidates:
+            break
+        key = max(candidates, key=lambda key: len(json.dumps(compact[key])))
+        compact[key] = compact[key][:max(1, len(compact[key]) * 3 // 4 - 3)] + '...'
         raw = json.dumps(compact, separators=(',', ':'), allow_nan=False).encode()
     if len(raw) > 512:
         raise ProtocolError('admission status exceeds ATT read limit')
@@ -63,10 +74,57 @@ class BlePeripheral:
                            [('drive', 96), ('priority', 96), ('json', JSON_LIMIT)]}
         self.routes = {}
         self.stop = threading.Event()
+        self.worker_error = None
         self.status_bytes = b'{}'
         self.reply_bytes = b'{}'
         self.notification_size = 20
         self.next_message = 0
+        self.unsubscribed_since = {}
+        self.last_connection_recovery = None
+    def _stalled_owner(self, path):
+        device = self.devices.get(path, {})
+        status = self.chars.get('status')
+        return (self.owner is not None and device.get('Connected')
+                and device.get('Bonded') and device.get('Paired')
+                and (device.get('Address'), device.get('AddressType')) ==
+                    (self.owner['address'], self.owner['address_type'])
+                and not (self.peer == path and status is not None and status.notifying))
+
+    async def recover_stalled_connection(self, now):
+        # A connected BlueZ device may outlive the phone's GATT session (for
+        # example through a classic audio connection). Phone-side cancellation
+        # alone cannot clear that state. Give admission/subscription a full
+        # minute, then disconnect only the bonded owner, never remove its bond.
+        candidates = {path for path in self.devices if self._stalled_owner(path)}
+        self.unsubscribed_since = {
+            path: self.unsubscribed_since.get(path, now) for path in candidates
+        }
+        if self.last_connection_recovery is not None and now - self.last_connection_recovery < 120:
+            return
+        for path, started in self.unsubscribed_since.items():
+            if now - started < 60:
+                continue
+            self.last_connection_recovery = now
+            try:
+                description = await asyncio.wait_for(self.bus.introspect('org.bluez', path), 5)
+                # Introspection yields: a healthy subscription may have arrived.
+                if not self._stalled_owner(path) or self.unsubscribed_since.get(path) != started:
+                    return
+                device = self.bus.get_proxy_object('org.bluez', path, description).get_interface('org.bluez.Device1')
+                self.disconnect(path, now)
+                logging.getLogger(__name__).warning(
+                    'Recovering stalled owner connection after %.1fs without Terra status subscription',
+                    now - started)
+                await asyncio.wait_for(device.call_disconnect(), 5)
+            except Exception as exc:
+                logging.getLogger(__name__).warning('Owner connection recovery failed: %s', exc)
+            return
+
+    async def _connection_watchdog(self):
+        while not self.stop.is_set():
+            await self.recover_stalled_connection(time.monotonic())
+            await asyncio.sleep(1)
+
     def clear(self):
         for assembler in self.assemblers.values(): assembler.clear()
         self.routes.clear()
@@ -99,6 +157,7 @@ class BlePeripheral:
             if len(self.events) == self.events.maxlen: raise DBusError('org.bluez.Error.InProgress', 'worker queue full')
             self.events.append((self.generation, kind, value, time.monotonic()))
     def disconnect(self, peer, now):
+        self.unsubscribed_since.pop(peer, None)
         if peer != self.peer: return
         self.peer = None; self.generation += 1; self.clear()
         for char in self.chars.values(): char.notifying = False
@@ -176,7 +235,34 @@ class BlePeripheral:
         try: pieces = fragment_message(raw, self.next_message, size, JSON_LIMIT)
         except ProtocolError: return
         for piece in pieces: self.chars[characteristic].publish(piece)
+    async def join_worker(self, worker):
+        await asyncio.to_thread(worker.join)
+        if self.worker_error is not None:
+            raise RuntimeError('output worker failed: ' + str(self.worker_error)) from self.worker_error
+
+    async def monitor_worker(self, worker):
+        await self.join_worker(worker)
+        if not self.stop.is_set():
+            raise RuntimeError('output worker stopped unexpectedly')
+
     def _worker(self):
+        try:
+            self._output_loop()
+        except BaseException as exc:
+            self.worker_error = exc
+            logging.getLogger(__name__).exception('Output worker failed; stopping Bluetooth service')
+        finally:
+            try:
+                self.store.end_connection(time.monotonic())
+                if self.safety.layout is not None:
+                    self.backend.apply(self.safety.tick(time.monotonic(), False))
+            except BaseException as exc:
+                self.worker_error = self.worker_error or exc
+            finally:
+                try: self.backend.close()
+                except BaseException as exc: self.worker_error = self.worker_error or exc
+
+    def _output_loop(self):
         while not self.stop.is_set():
             started = time.monotonic()
             with self.lock:
@@ -239,11 +325,7 @@ class BlePeripheral:
                 self.loop.call_soon_threadsafe(self._emit, 'status', json.loads(self.status_bytes), self.generation)
                 self.last_status = now
             self.stop.wait(max(0, .010-(time.monotonic()-started)))
-        self.store.end_connection(time.monotonic())
-        try:
-            if self.safety.layout is not None: self.backend.apply(self.safety.tick(time.monotonic(), False))
-        finally: self.backend.close()
-    async def run(self, backend, store_path: Path, owner_store: Path):
+    async def run(self, backend, store_path: Path, owner_store: Path, *, manage_signals=True):
         self.owner = json.loads(Path(owner_store).read_text())
         if os.stat(owner_store).st_mode & 0o077: raise RuntimeError('owner file must have mode 0600')
         self.backend = backend; self.safety = SafetyController(backend.capabilities())
@@ -253,6 +335,7 @@ class BlePeripheral:
         self.notification_size = 20
         transport = BlessTransport(self.name, SERVICE_UUID, self.adapter)
         worker = None
+        disconnect_task = done_task = recovery_task = worker_task = None
         try:
             await transport.prepare()
             self.bus = transport.bus
@@ -313,19 +396,28 @@ class BlePeripheral:
             dbus = self.bus.get_proxy_object('org.freedesktop.DBus', '/org/freedesktop/DBus', await self.bus.introspect('org.freedesktop.DBus', '/org/freedesktop/DBus')).get_interface('org.freedesktop.DBus')
             await dbus.call_add_match("type='signal',sender='org.bluez',interface='org.freedesktop.DBus.Properties',member='PropertiesChanged',path_namespace='"+adapter+"'")
             done = asyncio.Event()
-            for sig in (signal.SIGINT, signal.SIGTERM): self.loop.add_signal_handler(sig, done.set)
+            if manage_signals:
+                for sig in (signal.SIGINT, signal.SIGTERM): self.loop.add_signal_handler(sig, done.set)
             worker = threading.Thread(target=self._worker, name='terra-output', daemon=False); worker.start()
+            worker_task = asyncio.create_task(self.monitor_worker(worker))
             await transport.start()
+            recovery_task = asyncio.create_task(self._connection_watchdog())
             disconnect_task = asyncio.create_task(self.bus.wait_for_disconnect())
             done_task = asyncio.create_task(done.wait())
-            await asyncio.wait([disconnect_task, done_task], return_when=asyncio.FIRST_COMPLETED)
+            completed, _ = await asyncio.wait([disconnect_task, done_task, worker_task], return_when=asyncio.FIRST_COMPLETED)
+            if worker_task in completed:
+                worker_task.result()
             for task in (disconnect_task, done_task): task.cancel()
         finally:
+            for task in (disconnect_task, done_task, recovery_task, worker_task):
+                if task is not None: task.cancel()
+            await asyncio.gather(*(task for task in (disconnect_task, done_task, recovery_task, worker_task) if task is not None), return_exceptions=True)
             self.stop.set()
             try:
-                if worker is not None: await asyncio.to_thread(worker.join)
+                if worker is not None: await self.join_worker(worker)
                 else: backend.close()
             finally:
                 try: await transport.close()
                 finally:
-                    for sig in (signal.SIGINT, signal.SIGTERM): self.loop.remove_signal_handler(sig)
+                    if manage_signals:
+                        for sig in (signal.SIGINT, signal.SIGTERM): self.loop.remove_signal_handler(sig)

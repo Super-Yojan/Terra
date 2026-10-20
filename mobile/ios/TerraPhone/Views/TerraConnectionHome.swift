@@ -17,6 +17,11 @@ struct TerraConnectionHome: View {
                 roverSection
                 Divider()
                 fleetSection
+                if brain.lastStopDiagnostic.message != nil {
+                    Divider()
+                    Text("Last disarm reason").font(.headline)
+                    TerraStopReasonView(brain: brain)
+                }
                 if facts.authenticated {
                     Label(brain.hardwareArmed ? "Motors armed" : "Motors disarmed", systemImage: brain.hardwareArmed ? "exclamationmark.shield" : "shield.checkered")
                         .font(.footnote).foregroundStyle(brain.hardwareArmed ? Color.red : .secondary)
@@ -44,6 +49,8 @@ struct TerraConnectionHome: View {
     private var roverSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Rover").font(.headline).foregroundStyle(.secondary)
+            Button("Choose rover or add rover") { sheet = .rovers }
+                .foregroundStyle(.primary).frame(minHeight: 44)
             statusRow(name: brain.roverDisplayName, status: roverStatus, symbol: "sensor.tag.radiowaves.forward", busy: roverBusy)
             RoverModelView().frame(height: 160)
                 .clipShape(RoundedRectangle(cornerRadius: 16))
@@ -128,7 +135,7 @@ struct TerraConnectionHome: View {
     private var roverExplanation: String {
         switch facts.roverState {
         case .simulator: return "Bluetooth pairing requires a physical iPhone. Simulation tools are in Settings → Debug tools."
-        case .searching: return "Keep your rover nearby. For first setup, hold its USR button for 3 seconds until the LED blinks, then accept the pairing popup."
+        case .searching: return "Keep the selected rover nearby. To pair a new phone, hold the rover’s USR button for 3 seconds until the LED blinks. This clears its previous owner. Accept the pairing popup within 60 seconds."
         case .pairing: return "Choose Connect in the pairing popup to connect this rover."
         case .connecting: return "Establishing your authenticated Bluetooth connection."
         case .configuring: return "Reading the rover’s saved configuration. Motors remain disarmed."

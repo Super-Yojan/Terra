@@ -38,3 +38,11 @@ flowchart TD
 *The motor watchdog is a different timer: 0.2 s in `terra-motors`.*
 
 A settled zero target and a near-zero estimate clear the integrators.
+
+## Managed turning
+
+`TurningConfig` and `TurningLimiter` provide source-scoped yaw/radius/slew limits.
+The arbiter applies them to fleet and autonomous commands before planning/output;
+`VelocityController::set_turning_constraint` additionally constrains managed wheel
+mixing and feeds actual constrained efforts into anti-windup. Direct phone manual
+control remains exempt. See [turning and reversing policy](../autonomy/turning-policy.md).

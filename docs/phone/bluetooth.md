@@ -18,17 +18,24 @@
 
 1. Rover on. TerraPhone open.
 2. Hold USR for three seconds. Window lasts 60 seconds.
-3. **Find rovers**. Pick `terra-XXXXXX`. Accept the iOS prompt.
-4. Reconnect after the three flashes.
+3. Accept the **Connect / Not now** popup for `terra-XXXXXX` and the iOS pairing prompt if shown.
+4. Three flashes confirm ownership; the app reconnects automatically.
 5. Stage a layout, commit, then Arm when it is safe.
 
-Just Works for the first owner. Keep it supervised. A rover that already has an owner ignores the button.
+Just Works enrollment requires the physical hold. Keep it supervised. On an owned rover,
+the same three-second hold stops motor outputs, disconnects the old phone, and clears
+its owner record and Bluetooth bond before opening pairing. The name and layout stay
+saved. If the window expires, the rover stays unowned; release USR and hold again.
 
 ![GATT path after the bond](../assets/pi-stack.svg)
 
 *Read status before writes. Fresh drive is 20 Hz. Rover watchdog is 200 ms.*
 
-Automatic reconnect prefers the last rover that synchronized. Several candidates need a manual pick. Turn it off under **Connect Automatically**.
+Open **Choose rover or add rover** on Home to select a saved rover or use **Add rover**.
+The phone remembers multiple confirmed pairings and reconnects to the selected rover.
+Switching disconnects and disarms the current rover. Forgetting a rover removes only
+that phone’s saved entry; ownership is reset using USR. Turn automatic connection off
+in Settings.
 
 Developer numeric pairing is `--setup-owner` with the customer service stopped. Full bytes: [Bluetooth peripheral](../hardware/BLUETOOTH.md).
 

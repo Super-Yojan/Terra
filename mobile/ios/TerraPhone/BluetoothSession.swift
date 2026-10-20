@@ -7,6 +7,7 @@ final class BluetoothSession {
     private(set) var session: UInt32?
     private(set) var revision: UInt32 = 0
     private(set) var sequence: UInt32 = 0
+    private(set) var motionPaused = false
     private(set) var armed = false
     private(set) var arming = false
     private(set) var ready = false
@@ -17,7 +18,7 @@ final class BluetoothSession {
     var motionRequested: Bool { armRequested }
     func reset() {
         generation &+= 1; session = nil; revision = 0; sequence = 0
-        armed = false; arming = false; ready = false; layoutAvailable = false; faulted = false; statusAt = nil; armRequested = false
+        motionPaused = false; armed = false; arming = false; ready = false; layoutAvailable = false; faulted = false; statusAt = nil; armRequested = false
     }
     func invalidateLayout() { ready = false; stop() }
     func synchronized(revision: UInt32) { ready = session != nil && layoutAvailable && !faulted && self.revision == revision }
@@ -33,6 +34,7 @@ final class BluetoothSession {
         faulted = value["fault"] is String || value["emergency_stop"] as? Bool == true
         if !layoutAvailable || faulted { invalidateLayout() }
         // An unsolicited status cannot resurrect local motion permission.
+        motionPaused = value["motion_paused"] as? Bool == true || value["stop_reason"] as? String == "watchdog_paused"
         armed = armRequested && value["armed"] as? Bool == true
         arming = armRequested && value["arming"] as? Bool == true
         if let last = value["last_sequence"] as? UInt32 { sequence = max(sequence, last) }
@@ -41,6 +43,7 @@ final class BluetoothSession {
         }
         if let fault = value["fault"] as? String { return [.state("Fault: \(fault) · disarmed")] }
         if value["emergency_stop"] as? Bool == true { return [.state("Emergency stop latched · disarmed")] }
+        if armed && motionPaused { return [.state("Armed · motion paused · Resume required")] }
         let disarmed = value["stop_reason"] as? String == "watchdog" ? "Disarmed · command stream stopped" : "Disarmed"
         return [.state(armed ? "Armed" : arming ? "Arming at safe output" : disarmed)]
     }
@@ -61,7 +64,7 @@ final class BluetoothSession {
         guard ready, let statusAt = statusAt, now >= statusAt, now - statusAt < 0.3 else { throw BluetoothPolicyError.unavailable }
         let frame = try control("arm"); armRequested = true; return frame
     }
-    func stop() { armRequested = false; armed = false; arming = false }
+    func stop() { motionPaused = false; armRequested = false; armed = false; arming = false }
     func statusAge(now: TimeInterval) -> TimeInterval? {
         statusAt.map { now - $0 }
     }

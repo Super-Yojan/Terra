@@ -203,30 +203,48 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
         log.error("Closing link: \(reason, privacy: .public)"); let old = peripheral; peripheral = nil; clear(); if let old = old { retiring = old; central.cancelPeripheralConnection(old) }; publish(reason) }
     private func terminal(_ reason: String) { emit(.closed(retryable: true)); peripheral?.delegate = nil; peripheral = nil; retiring = nil; clear(); publish(reason) }
     private func current(_ p: CBPeripheral) -> Bool { peripheral === p && callbackGeneration == policy.generation }
+    private var motionInhibited = false
     func send(frame: Data, producedAt: TimeInterval) { queue.async {
-        guard self.awaitingSafeSequence == nil else { return }
+        guard !self.motionInhibited, self.awaitingSafeSequence == nil else { return }
         for effect in self.policy.drive(frame, producedAt: producedAt, now: self.now) {
             if case .send(let bytes) = effect { do { self.pendingDrive = try self.packet(bytes, characteristic: self.driveID, producedAt: producedAt); self.pump() } catch { self.close("Invalid drive frame") } }
         }
     } }
     func drive(valuesJSON: String, producedAt: TimeInterval) { queue.async {
         // Expected motion inhibition must not preempt fragmented repair/reset requests.
-        guard self.policy.ready, self.policy.motionRequested else { return }
+        guard !self.motionInhibited, self.policy.ready, self.policy.motionRequested else { return }
         do {
             guard self.awaitingSafeSequence == nil, self.now >= producedAt, self.now - producedAt < 0.1 else { return }
             let values = try JSONSerialization.jsonObject(with: Data(valuesJSON.utf8))
             // Safe output remains freshly produced throughout the ESC arming interval.
-            let selected: Any = (self.policy.armed && self.awaitingSafeSequence == nil) ? values : self.safeValues
+            let selected: Any = (self.policy.armed && !self.policy.motionPaused && self.awaitingSafeSequence == nil) ? values : self.safeValues
             let frame = try self.policy.frame(values: selected)
             for effect in self.policy.drive(frame, producedAt: producedAt, now: self.now) {
                 if case .send(let bytes) = effect { self.pendingDrive = try self.packet(bytes, characteristic: self.driveID, producedAt: producedAt) }
             }; self.pump()
         } catch { self.stop() }
     } }
+    /// Send neutral once, then let the Pi latch its command-timeout pause.
+    /// Status notifications remain active; only explicit arm/resume releases it.
+    func pauseMotion() { queue.async {
+        self.motionInhibited = true
+        self.pendingDrive = nil
+        do {
+            let produced = self.now
+            let safe = try self.policy.frame(values: self.safeValues)
+            for effect in self.policy.drive(safe, producedAt: produced, now: self.now) {
+                if case .send(let bytes) = effect {
+                    self.pendingDrive = try self.packet(bytes, characteristic: self.driveID, producedAt: produced)
+                }
+            }
+            self.pump()
+        } catch { self.stop() }
+    } }
     func arm() { queue.async {
         self.log.notice("Arm requested; ready=\(self.policy.ready)")
         do {
             guard self.policy.ready, self.awaitingSafeSequence == nil else { throw BluetoothPolicyError.unavailable }
+            self.motionInhibited = false
             let produced = self.now
             let safe = try self.policy.frame(values: self.safeValues)
             for effect in self.policy.drive(safe, producedAt: produced, now: self.now) {
@@ -377,7 +395,7 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
             }
         }
         guard var packet = active else { return }
-        if let produced = packet.producedAt, now < produced || now - produced >= 0.1 { active = nil; stop(); return }
+        if let produced = packet.producedAt, now < produced || now - produced >= 0.1 { active = nil; motionInhibited = true; pauseMotion(); return }
         guard let characteristic = characteristics[packet.characteristic], !packet.chunks.isEmpty else { active = nil; return }
         let bytes = packet.chunks.removeFirst(); active = packet; writeAt = now
         p.writeValue(bytes, for: characteristic, type: .withResponse)

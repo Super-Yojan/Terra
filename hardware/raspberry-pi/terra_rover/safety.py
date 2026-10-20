@@ -2,6 +2,7 @@
 from copy import deepcopy
 from dataclasses import dataclass
 import math
+import logging
 from .layout import normalize_layout, validate_layout, validate_structure
 from .protocol import CommandFrame, CommandKind, ProtocolError, decode_frame, encode_frame, validate_command
 
@@ -37,6 +38,7 @@ class SafetyController:
 
     def _disarm(self, reason):
         self.armed = False
+        self.motion_paused = False
         self.arming = False
         self.reason = reason
         self.mailbox = None
@@ -67,7 +69,16 @@ class SafetyController:
     def _expire(self, now):
         stamp = self.mailbox[1] if self.mailbox else self.safe_received
         if stamp is not None and now >= stamp + WATCHDOG_SECONDS:
-            self._disarm('watchdog')
+            if self.armed:
+                # Retain the hardware arm state, but discard every old motion.
+                if not self.motion_paused:
+                    self.arrival_boundary = now
+                self.motion_paused = True
+                self.reason = 'watchdog_paused'
+                self.mailbox = None
+                self.safe_received = None
+            else:
+                self._disarm('watchdog')
 
     def configure(self, layout: dict, now: float):
         if not self._clock(now): raise ValueError('invalid clock')
@@ -120,16 +131,34 @@ class SafetyController:
         elif frame.kind == CommandKind.ARM:
             if self.arrival_boundary is not None and received_at <= self.arrival_boundary: return False
             if self.safe_received is not None and received_at < self.safe_received: return False
-            if self.armed or self.arming or not self.subscribed or not self.hardware_gate or self.fault or self.emergency_stop or self.safe_received is None:
+            if (self.armed and not self.motion_paused) or self.arming or not self.subscribed or not self.hardware_gate or self.fault or self.emergency_stop or self.safe_received is None:
                 return False
+            if self.motion_paused:
+                self.motion_paused = False
+                self.reason = 'awaiting_command'
+                self.armed_at = now
+                self.mailbox = None
+                self.last_sequence = frame.sequence
+                return True
             durations = [a['calibration'].get('arming_duration_ms', 0) for a in self.layout['actuators']]
             self.arming = True
             self.reason = 'arming'
             self.arm_deadline = now + max(durations, default=0) / 1000
         else:
             if self.fault or self.emergency_stop: return False
-            if self.arrival_boundary is not None and received_at <= self.arrival_boundary: return False
-            if self.armed:
+            if self.arrival_boundary is not None and received_at <= self.arrival_boundary:
+                if self.motion_paused:
+                    # A packet racing timeout detection is discarded, not a
+                    # protocol fault that would turn the pause into a disarm.
+                    self.last_sequence = frame.sequence
+                    return True
+                return False
+            if self.motion_paused:
+                # Consume sequence numbers, never actuator values. Only a fresh
+                # neutral frame followed by explicit ARM can release the pause.
+                if self._safe_frame(frame):
+                    self.safe_received = received_at
+            elif self.armed:
                 if self.armed_at is None or received_at <= self.armed_at: return False
                 self.mailbox = (frame.values, received_at)
             else:
@@ -165,7 +194,7 @@ class SafetyController:
                 self.armed_at = now
                 self.mailbox = None  # only a frame accepted after completion may actuate
         commands = self._safe_outputs()
-        if self.armed and self.mailbox:
+        if self.armed and not self.motion_paused and self.mailbox:
             commands = tuple(OutputCommand(v.id, v.value) for v in self.mailbox[0])
         return OutputBatch(commands, self.armed, self.arming, self.reason, self.fault, self.emergency_stop)
 
@@ -183,6 +212,8 @@ class SafetyController:
 
     def latch_fault(self, reason: str, now: float):
         self._clock(now)
+        if self.fault != str(reason):
+            logging.getLogger(__name__).error('Rover fault: %s', reason)
         self.fault = str(reason)
         self._disarm(self.fault)
 
@@ -200,7 +231,7 @@ class SafetyController:
         valid_clock = self._clock(now)
         if valid_clock: self._expire(now)
         return dict(schema_version=1, session=self.session, active_revision=self.layout['revision'] if self.layout else None,
-                    armed=self.armed, arming=self.arming, hardware_gate=self.hardware_gate,
+                    armed=self.armed, arming=self.arming, motion_paused=self.motion_paused, hardware_gate=self.hardware_gate,
                     status_subscribed=self.subscribed, fault=self.fault, emergency_stop=self.emergency_stop,
                     stop_reason=self.reason, last_sequence=self.last_sequence,
                     command_age_ms=(max(0.0, (now - self.last_drive_at) * 1000)

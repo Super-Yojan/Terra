@@ -32,6 +32,7 @@ struct ContentView: View {
             NavigationStack {
                 switch item {
                 case .rover: RoverConnectionDetails(brain: brain)
+                case .rovers: RoverSelectionView(brain: brain)
                 case .fleet: FleetConnectionDetails(brain: brain)
                 case .fleetSettings: FleetConnectionSettings(brain: brain)
                 case .roverSetup: RoverSetupView(brain: brain)
