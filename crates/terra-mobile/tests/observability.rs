@@ -85,3 +85,17 @@ fn invalid_local_command_retains_rejection() {
     let events = JournalReader::open(&path).unwrap().export().unwrap();
     assert!(events.iter().any(|e| e.input.kind == "command.rejected"));
 }
+
+#[test]
+fn rover_selection_before_observer_initialization_is_not_overwritten() {
+    let d = tempfile::tempdir().unwrap();
+    let path = d.path().join("events.db");
+    let c = MobileController::new(default_control_settings()).unwrap();
+    c.set_observability_rover("5".into());
+    c.start_observability(json!({"path":path,"producer_id":"phone","rover_id":"4"}).to_string())
+        .unwrap();
+    c.step(1.).unwrap();
+    c.flush_observability(2.).unwrap();
+    let events = JournalReader::open(&path).unwrap().export().unwrap();
+    assert!(events.iter().all(|e| e.input.rover_id == "5"));
+}

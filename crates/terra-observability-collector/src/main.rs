@@ -10,6 +10,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             path: path.into(),
             max_bytes: limit("TERRA_OBSERVABILITY_EVENT_BYTES", 10 * 1024 * 1024 * 1024)?,
             retention_seconds: limit("TERRA_OBSERVABILITY_RETENTION_SECONDS", 30 * 86400)?,
+            export_max_bytes: limit("TERRA_OBSERVABILITY_EXPORT_BYTES", 2 * 1024 * 1024 * 1024)?,
             attachment_max_bytes: limit(
                 "TERRA_OBSERVABILITY_ATTACHMENT_BYTES",
                 5 * 1024 * 1024 * 1024,

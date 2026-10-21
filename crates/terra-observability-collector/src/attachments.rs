@@ -2,6 +2,14 @@ use crate::{Scope, Store};
 use rusqlite::params;
 use sha2::{Digest, Sha256};
 use terra_observability::{JournalError, valid_hash};
+#[derive(Debug)]
+pub struct InvalidAttachment;
+impl std::fmt::Display for InvalidAttachment {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("invalid attachment or scope")
+    }
+}
+impl std::error::Error for InvalidAttachment {}
 impl Store {
     pub fn put_attachment(
         &self,
@@ -17,8 +25,12 @@ impl Store {
             || bytes.len() as u64 > self.config.attachment_max_bytes
             || format!("{:x}", Sha256::digest(bytes)) != hash
         {
-            return Err("invalid attachment or scope".into());
+            return Err(Box::new(InvalidAttachment));
         }
+        let _guard = self
+            .attachment_lock
+            .lock()
+            .map_err(|_| "attachment storage lock unavailable")?;
         let directory = self.config.path.with_extension("attachments");
         std::fs::create_dir_all(&directory)?;
         let db = self.db()?;
@@ -28,6 +40,9 @@ impl Store {
             let mut files = std::fs::read_dir(&directory)?
                 .filter_map(Result::ok)
                 .filter_map(|f| {
+                    if !f.file_name().to_str().is_some_and(valid_hash) {
+                        return None;
+                    }
                     let m = f.metadata().ok()?;
                     Some((m.modified().ok()?, m.len(), f.path()))
                 })
@@ -56,6 +71,10 @@ impl Store {
         Ok(())
     }
     pub fn attachment(&self, scope: &Scope, hash: &str) -> Result<Vec<u8>, JournalError> {
+        let _guard = self
+            .attachment_lock
+            .lock()
+            .map_err(|_| "attachment storage lock unavailable")?;
         if !valid_hash(hash) {
             return Err("invalid attachment hash".into());
         }
@@ -88,6 +107,10 @@ fn note_loss(db: &rusqlite::Connection, hash: &str) -> Result<(), JournalError> 
 }
 impl Store {
     pub fn prune_attachments(&self) -> Result<(), JournalError> {
+        let _guard = self
+            .attachment_lock
+            .lock()
+            .map_err(|_| "attachment storage lock unavailable")?;
         let directory = self.config.path.with_extension("attachments");
         if !directory.exists() {
             return Ok(());
@@ -96,6 +119,9 @@ impl Store {
         db.execute_batch("CREATE TABLE IF NOT EXISTS attachments(hash TEXT,rover TEXT,producer TEXT,bytes INTEGER,stored_ns INTEGER,PRIMARY KEY(hash,rover,producer))")?;
         let now = std::time::SystemTime::now();
         for entry in std::fs::read_dir(&directory)?.filter_map(Result::ok) {
+            if !entry.file_name().to_str().is_some_and(valid_hash) {
+                continue;
+            }
             if entry
                 .metadata()?
                 .modified()

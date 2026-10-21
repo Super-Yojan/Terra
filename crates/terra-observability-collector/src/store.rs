@@ -10,6 +10,7 @@ pub struct StoreConfig {
     pub max_bytes: u64,
     pub retention_seconds: u64,
     pub attachment_max_bytes: u64,
+    pub export_max_bytes: u64,
 }
 impl Default for StoreConfig {
     fn default() -> Self {
@@ -18,12 +19,14 @@ impl Default for StoreConfig {
             max_bytes: 10 * 1024 * 1024 * 1024,
             retention_seconds: 30 * 86400,
             attachment_max_bytes: 5 * 1024 * 1024 * 1024,
+            export_max_bytes: 2 * 1024 * 1024 * 1024,
         }
     }
 }
 #[derive(Clone)]
 pub struct Store {
     pub config: StoreConfig,
+    pub(crate) attachment_lock: std::sync::Arc<std::sync::Mutex<()>>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct StoredEvent {
@@ -36,13 +39,17 @@ impl Store {
         if config.max_bytes < 1024
             || config.retention_seconds == 0
             || config.attachment_max_bytes == 0
+            || config.export_max_bytes == 0
         {
             return Err("invalid store limits".into());
         }
         if let Some(p) = config.path.parent() {
             std::fs::create_dir_all(p)?;
         }
-        let store = Self { config };
+        let store = Self {
+            config,
+            attachment_lock: Default::default(),
+        };
         let db = store.db()?;
         db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; CREATE TABLE IF NOT EXISTS observations(cursor INTEGER PRIMARY KEY AUTOINCREMENT,producer TEXT,boot TEXT,seq INTEGER,rover TEXT,session TEXT,received_ns INTEGER,payload TEXT,hash TEXT,bytes INTEGER, UNIQUE(producer,boot,seq)); CREATE INDEX IF NOT EXISTS observations_scope ON observations(rover,session,cursor); CREATE TABLE IF NOT EXISTS retention_gaps(producer TEXT,rover TEXT,at_ns INTEGER,count INTEGER,attachments INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(producer,rover));")?;
         Ok(store)

@@ -41,3 +41,9 @@ The inventory covers operational events, decision transitions and sampled state.
 It does not claim instruction-level tracing, all OS logs, full-rate image/depth or
 an explanation of every rejected planner candidate beyond the emitted planner
 trace. Complete source journals and explicit gap records remain authoritative.
+
+Mission exports preserve operator-connection IDs in the original attributes and
+use explicit mission correlation to include dashboard send and phone receipt in
+one recording. Source/collector loss records are retained as labelled diagnostic
+context, not retroactively assigned to a mission. The router journal worker
+reconnects from its last committed cursor on EOF or storage failure.

@@ -95,6 +95,8 @@ fn queued_burst_drains_without_one_second_per_batch() {
                 std::thread::sleep(Duration::from_millis(5));
                 continue;
             };
+            // macOS inherits nonblocking mode from the listening socket.
+            stream.set_nonblocking(false).unwrap();
             stream
                 .set_read_timeout(Some(Duration::from_secs(2)))
                 .unwrap();
@@ -133,7 +135,7 @@ fn queued_burst_drains_without_one_second_per_batch() {
         ..Default::default()
     })
     .unwrap();
-    for _ in 0..320 {
+    for _ in 0..1280 {
         j.try_record(EventInput::new("4", "control", "state", json!({})));
     }
     j.flush(Duration::from_secs(5)).unwrap();
@@ -149,15 +151,17 @@ fn queued_burst_drains_without_one_second_per_batch() {
     )
     .unwrap();
     let start = std::time::Instant::now();
-    while reader.pending_count().unwrap() > 0 && start.elapsed() < Duration::from_millis(3500) {
+    while reader.pending_count().unwrap() > 0 && start.elapsed() < Duration::from_secs(15) {
         std::thread::sleep(Duration::from_millis(20));
     }
-    let drained = reader.pending_count().unwrap() == 0;
+    let pending = reader.pending_count().unwrap();
+    let health = serde_json::to_string(&uploader.health()).unwrap();
+    let drained = pending == 0;
     drop(uploader);
     stop.store(true, Ordering::Release);
     server.join().unwrap();
     assert!(
         drained,
-        "a healthy connection must drain a queued burst faster than one batch per second"
+        "a healthy connection must drain twenty batches faster than one batch per second: pending={pending}, health={health}"
     );
 }

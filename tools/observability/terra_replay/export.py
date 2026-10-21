@@ -151,6 +151,19 @@ def _log_evidence(rec, root, manifest, directory):
             missing += 1
             rec.log(root+'/missing',rr.TextLog('Missing or evicted attachment: '+item.get('name','unknown'),level='WARN'))
         else: blobs[item['name']] = raw; metadata[item['name']] = item
+    # Occupancy-only snapshots do not imply a new camera exposure. For a camera
+    # evidence bundle, explicitly expire absent channels rather than forward-fill them.
+    if manifest.get('evidence_type') != 'occupancy':
+        if manifest.get('time_basis') == 'receipt_only':
+            if 'rgb' not in blobs: rec.log(root+'/receipt_only/rgb',rr.Clear(recursive=True))
+        else:
+            if 'rgb' not in blobs:rec.log(geometry+'/camera/rgb',rr.Clear(recursive=True))
+            if 'depth' not in blobs:
+                for entity in ('camera/depth','classified_endpoints','ground','obstacle_min','obstacle_max'):
+                    rec.log(geometry+'/'+entity,rr.Clear(recursive=True))
+    if 'camera_to_world' in manifest:
+        pose=manifest['camera_to_world']
+        rec.log(geometry+'/camera',rr.Transform3D(translation=pose['position'],quaternion=rr.Quaternion(xyzw=pose['quaternion_xyzw'])))
     if 'rgb' in blobs:
         item=metadata['rgb']
         if item['encoding']=='rgba8':
@@ -205,7 +218,7 @@ def export_session(source_dir: Path, output_rrd: Path, config: ExportConfig) -> 
     selected.sort(key=lambda r:(r['event']['input']['wall_time_ns'],r['event']['id']['producer_id'],r['event']['id']['boot_id'],r['event']['id']['sequence']))
     revision=hashlib.sha256(json.dumps({'exporter_schema':1,'sdk_version':rr.__version__,'events':selected},sort_keys=True).encode()).hexdigest()
     output_rrd=Path(output_rrd);output_rrd.parent.mkdir(parents=True,exist_ok=True)
-    index=[];missing=0
+    index=[];missing=0;last_frames={}
     alignments={}
     for row in selected:
         e=row['event'];a=e['input'].get('attributes',{})
@@ -245,7 +258,7 @@ def export_session(source_dir: Path, output_rrd: Path, config: ExportConfig) -> 
             if clock:
                 rec.set_time('estimated_server_time',timestamp=np.datetime64(data['wall_time_ns']+clock['offset_ns'],'ns'))
                 rec.log(root+'/metrics/clock_rtt_uncertainty_seconds',rr.Scalars(clock['uncertainty_ns']/1e9))
-            event_text=('[unassociated context] ' if row.get('association') else '')+data['kind']+' '+json.dumps(attrs,sort_keys=True,ensure_ascii=False)[:2000]
+            event_text=(('['+row['association']+'] ') if row.get('association') else '')+data['kind']+' '+json.dumps(attrs,sort_keys=True,ensure_ascii=False)[:2000]
             rec.log(root+'/events/'+_segment(data['component']),rr.TextLog(event_text,level={'warning':'WARN','error':'ERROR','debug':'DEBUG'}.get(data['severity'],'INFO')))
             index.append({'id':identity,'kind':data['kind'],'association':row.get('association'),'wall_time_ns':data['wall_time_ns'],'monotonic_ns':data['monotonic_ns'],'received_ns':row['received_ns'],'frame_id':attrs.get('frame_id'),'estimated_server_wall_ns':data['wall_time_ns']+clock['offset_ns'] if clock else None,'clock_uncertainty_ns':clock['uncertainty_ns'] if clock else None})
             for metric in ['left_effort','right_effort','estimated_forward','estimated_yaw_rate','target_forward','target_yaw_rate','pose_age','map_age','imu_age','map_timeout','pose_timeout','command_age_ms']:
@@ -257,6 +270,12 @@ def export_session(source_dir: Path, output_rrd: Path, config: ExportConfig) -> 
             if route:rec.log(root+'/route',rr.LineStrips3D([[[p[0],p[1],0] for p in route]]))
             pose=attrs.get('pose')
             if isinstance(pose,dict) and 'x' in pose and 'y' in pose:rec.log(root+'/pose',rr.Points3D([[pose['x'],pose['y'],0]],radii=0.15))
+            if 'attachments' in attrs and attrs.get('time_basis') != 'receipt_only':
+                frame=_segment(attrs.get('frame_id','unknown'))
+                previous=last_frames.get(root)
+                if previous is not None and previous!=frame:
+                    rec.log(root+'/frames/'+previous,rr.Clear(recursive=True))
+                last_frames[root]=frame
             if 'attachments' in attrs:
                 missing+=_log_evidence(rec,root,attrs,directory)
         rec.flush()

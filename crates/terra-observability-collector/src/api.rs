@@ -138,7 +138,16 @@ async fn put_attachment(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .map(|_| StatusCode::NO_CONTENT)
-        .map_err(|_| StatusCode::BAD_REQUEST)
+        .map_err(|error| {
+            if error
+                .downcast_ref::<crate::attachments::InvalidAttachment>()
+                .is_some()
+            {
+                StatusCode::BAD_REQUEST
+            } else {
+                StatusCode::SERVICE_UNAVAILABLE
+            }
+        })
 }
 async fn get_attachment(
     State(app): State<App>,

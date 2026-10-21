@@ -31,7 +31,8 @@ it never renumbers source events or sends drive commands.
 The default layout shows event text, motion curves, occupancy, camera/depth and
 3D ground/obstacle boundaries. Unknown occupancy is gray. The classifier uses
 the captured calibration, ground plane and actual mapper height thresholds.
-Missing attachments stay explicitly missing. Simulator RGB is receipt-only and
+Missing attachments stay explicitly missing; unavailable channels and superseded
+coordinate frames are cleared so an older image cannot appear registered to new depth. Simulator RGB is receipt-only and
 displayed separately from calibrated depth because its exposure is unavailable.
 
 `wall_clock_approx` is approximate across machines. `estimated_server_time`

@@ -94,3 +94,30 @@ def test_sqlite_selection_is_applied_before_event_limit(tmp_path):
  from terra_replay.export import _read_source
  rows,_=_read_source(database,ExportConfig(session='wanted',max_events=2))
  assert len(rows)==1 and rows[0]['event']['input']['session_id']=='wanted'
+
+def test_missing_rgb_clears_image_and_reset_clears_old_frame(tmp_path,monkeypatch):
+ import rerun as rr
+ from terra_replay.export import _log_evidence
+ from PIL import Image
+ import io
+ d=source(tmp_path,[]);raw=io.BytesIO();Image.new('RGB',(2,2)).save(raw,format='PNG');blob=raw.getvalue();digest=hashlib.sha256(blob).hexdigest();(d/'attachments'/digest).write_bytes(blob)
+ base={'frame_id':'A','exposure_ns':1,'rgb_exposure_ns':1,'attachments':[{'name':'rgb','sha256':digest,'byte_length':len(blob),'encoding':'png','dimensions':[2,2]}]}
+ rec=rr.RecordingStream('clear-regression',recording_id='clear');out=tmp_path/'clears.rrd';rec.save(out)
+ calls=[]
+ class Observer:
+  def log(self,path,entity,**kwargs):calls.append((path,isinstance(entity,rr.Clear)));rec.log(path,entity,**kwargs)
+ observed=Observer();rec.set_time('tick',sequence=1);_log_evidence(observed,'/source',base,d/'attachments')
+ base['attachments']=[];base['rgb_missing_reason']='unavailable';base['exposure_ns']=2
+ rec.set_time('tick',sequence=2);_log_evidence(observed,'/source',base,d/'attachments')
+ rec.flush();rec.disconnect()
+ assert any(path=='/source/frames/A/camera/rgb' and clear for path,clear in calls), 'missing RGB must clear the previous calibrated image'
+ assert 'Clear:is_recursive' in RrdReader(out).stream().collect().summary()
+ # A reset is handled by export_session, not by assigning coordinates across frames.
+ first=event(1,'mapping.evidence',base.copy());second=event(2,'mapping.evidence',dict(base,frame_id='B'))
+ reset_calls=[];original=rr.RecordingStream.log
+ def trace(self,path,entity,*args,**kwargs):
+  reset_calls.append((path,isinstance(entity,rr.Clear)));return original(self,path,entity,*args,**kwargs)
+ monkeypatch.setattr(rr.RecordingStream,'log',trace)
+ source(tmp_path,[first,second]);export_session(d,tmp_path/'reset.rrd',ExportConfig())
+ assert ('/rovers/4/sources/phone/frames/A',True) in reset_calls
+ assert 'Clear:is_recursive' in RrdReader(tmp_path/'reset.rrd').stream().collect().summary()

@@ -112,3 +112,44 @@ async fn clock_probe_requires_source_auth_and_returns_server_time() {
     let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert!(value["server_wall_ns"].as_u64().unwrap() > 0);
 }
+
+#[tokio::test]
+async fn transient_attachment_storage_failure_is_retryable() {
+    let d = tempfile::tempdir().unwrap();
+    let path = d.path().join("db");
+    let store = Store::open(StoreConfig {
+        path: path.clone(),
+        ..Default::default()
+    })
+    .unwrap();
+    let credentials = vec![Credential {
+        token_sha256: format!("{:x}", Sha256::digest(b"writer")),
+        scope: Scope {
+            producer_id: "phone".into(),
+            rovers: vec!["4".into()],
+            read: false,
+        },
+    }];
+    let app = router(App::new(store, credentials));
+    let bytes = b"camera";
+    let hash = format!("{:x}", Sha256::digest(bytes));
+    std::fs::write(path.with_extension("attachments"), b"unavailable mount").unwrap();
+    let request = || {
+        Request::builder()
+            .method("PUT")
+            .uri(format!("/v1/attachments/{hash}"))
+            .header("authorization", "Bearer writer")
+            .header("x-rover-id", "4")
+            .body(Body::from(bytes.as_slice()))
+            .unwrap()
+    };
+    assert_eq!(
+        app.clone().oneshot(request()).await.unwrap().status(),
+        StatusCode::SERVICE_UNAVAILABLE
+    );
+    std::fs::remove_file(path.with_extension("attachments")).unwrap();
+    assert_eq!(
+        app.oneshot(request()).await.unwrap().status(),
+        StatusCode::NO_CONTENT
+    );
+}

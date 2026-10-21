@@ -1,6 +1,12 @@
 import Foundation
 @main struct ObservationTests {
  static func main() {
+  let pending = TerraObservation()
+  pending.setContext(roverID: "5", sessionID: "latest")
+  var pendingRover = ""
+  pending.attach(roverID: "4", sessionID: "run", sink: { raw in pendingRover = (try! JSONSerialization.jsonObject(with: Data(raw.utf8)) as! [String: Any])["rover_id"] as! String; return true })
+  pending.record(component: "phone", kind: "start", attributes: [:])
+  precondition(pendingRover == "5", "late initialization must not undo the selected rover")
   let observer = TerraObservation()
   var records: [[String: Any]] = []
   observer.attach(roverID: "4", sessionID: "run", sink: { raw in records.append(try! JSONSerialization.jsonObject(with: Data(raw.utf8)) as! [String: Any]); return true })

@@ -181,6 +181,8 @@ impl Default for AutonomyArbiter {
     }
 }
 impl AutonomyArbiter {
+    /// Current map-age limit, exposed for diagnostics without changing admission.
+    pub fn map_freshness_timeout(&self) -> f64 { 0.5 }
     /// Outdoor guidance is admitted only by the L3 authority path.
     pub fn outdoor_authority(&self) -> bool {
         self.level == Level::Waypoint && !self.stopped && !self.paused

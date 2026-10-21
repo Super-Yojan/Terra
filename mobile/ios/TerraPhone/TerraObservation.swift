@@ -5,16 +5,18 @@ final class TerraObservation: @unchecked Sendable {
     private let lock = NSLock()
     private var sink: ((String) -> Bool)?
     private var roverID = "_producer"
+    private var selectedRover: String?
     private var sessionID = UUID().uuidString
     private var previous: [String: Data] = [:]
     private(set) var rejected: UInt64 = 0
     func attach(roverID: String, sessionID: String, sink: @escaping (String) -> Bool) {
         lock.lock(); defer { lock.unlock() }
-        self.roverID = roverID; self.sessionID = sessionID; self.sink = sink
+        self.roverID = selectedRover ?? roverID; self.sessionID = sessionID; self.sink = sink
         previous.removeAll()
     }
     func setContext(roverID: String, sessionID: String? = nil) {
         lock.lock(); defer { lock.unlock() }
+        selectedRover = roverID
         guard self.roverID != roverID || (sessionID != nil && self.sessionID != sessionID) else { return }
         self.roverID = roverID
         if let sessionID { self.sessionID = sessionID }

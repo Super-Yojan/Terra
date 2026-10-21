@@ -115,9 +115,13 @@ failed proxy installation restores the prior proxy files.
 
 Collector service overrides accept `TERRA_OBSERVABILITY_EVENT_BYTES` (default
 10 GiB), `TERRA_OBSERVABILITY_ATTACHMENT_BYTES` (5 GiB), and
-`TERRA_OBSERVABILITY_RETENTION_SECONDS` (30 days). Periodic retention records
+`TERRA_OBSERVABILITY_RETENTION_SECONDS` (30 days), and
+`TERRA_OBSERVABILITY_EXPORT_BYTES` (2 GiB total retained export files). Periodic retention records
 loss summaries. Export conversion runs one job at a time, with time/source limits
-and a bounded export history. The observer can read only allowlisted router/TLS
+and a bounded export history. Completed jobs release temporary source attachment
+copies; oversized jobs fail and clean up rather than consume the event/attachment
+budget. As with SQLite, use a filesystem quota for a strict physical disk limit.
+The observer can read only allowlisted router/TLS
 unit journals. Router tracing is enabled in the rebuilt router binary; installing
 the observer alone does not replace/restart an already-running router binary.
 
@@ -164,6 +168,7 @@ See [replay commands](../../tools/observability/README.md). During an outage,
 leave the original source queue/identity intact. Restore connectivity and
 credentials; retries use the original IDs/timestamps and duplicate delivery is
 idempotent. Camera attachments transfer before their metadata is acknowledged.
+Temporary collector storage failures return a retryable server response.
 Corrupt/evicted/permanently rejected attachments create causal gap records and
 do not block later metadata. An unavailable network or invalid credential keeps
 the original batch pending. A queue is for diagnostic evidence; expired drive
@@ -183,3 +188,19 @@ identity check, authenticated reader export, flat ground, a known raised object,
 camera pitch/roll and an operator-led drive/hold run. Compare before/after
 control output with observation enabled/failed. Do not cause motion or reset
 pairing remotely to test recording.
+
+## Coordinated source releases
+
+ARGOS and native Zorvane use the sibling `../Terra/crates/terra-observability`
+source dependency. Their CI bootstrap scripts pin the reviewed Terra commit;
+normal simulator runtime dependencies keep their existing git revision. A clean
+local build needs the three repositories side by side. Publish the reviewed
+Terra commit before pushing the dependent ARGOS/Zorvane commits or CI cannot
+fetch that source. Update both bootstrap pins when changing the shared crate.
+The pinned source must be the approved release, not an arbitrary branch tip.
+
+Reviewed recovery behavior includes concurrent attachment quota enforcement,
+journal reconnect from the last committed cursor, mission/connection identity
+separation, source/collector loss context in exports, and explicit clearing of
+missing RGB/depth and superseded frames. An empty camera view after an outage is
+intentional: a prior image is never presented as the current depth exposure.

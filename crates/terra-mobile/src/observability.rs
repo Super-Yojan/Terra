@@ -6,7 +6,6 @@ use terra_observability::{EventInput, Journal, JournalConfig, RecordOutcome};
 struct Attached {
     journal: Arc<Journal>,
     evidence: terra_observability::EvidenceWriter,
-    rover: String,
     path: PathBuf,
     uploader: Option<terra_observability::UploadHandle>,
     settings: terra_observability::ObservationSettings,
@@ -14,6 +13,7 @@ struct Attached {
 #[derive(Default)]
 pub(super) struct ObservationState {
     attached: RwLock<Option<Attached>>,
+    rover: RwLock<Option<String>>,
     last: Mutex<(String, f64)>,
 }
 #[derive(Deserialize)]
@@ -36,7 +36,13 @@ impl ObservationState {
         if let Ok(a) = self.attached.try_read()
             && let Some(a) = a.as_ref()
         {
-            let mut event = EventInput::new(&a.rover, component, kind, attributes);
+            let Ok(rover) = self.rover.try_read() else {
+                return;
+            };
+            let Some(rover) = rover.as_deref() else {
+                return;
+            };
+            let mut event = EventInput::new(rover, component, kind, attributes);
             event.session_id = Some(run.into());
             event.monotonic_ns = (time.max(0.) * 1e9).min(u64::MAX as f64) as u64;
             a.journal.try_record(event);
@@ -66,7 +72,7 @@ impl ObservationState {
         .to_string();
         let transition = key != last.0;
         if transition {
-            self.event("autonomy","autonomy.transition",serde_json::json!({"previous":last.0,"reason":status["status"]["reason"],"status":status,"pose_age":brain.pose.map(|p|time-p.1),"map_age":brain.map.as_ref().map(|m|time-m.1),"imu_age":brain.imu_time.map(|t|time-t),"map_timeout":brain.autonomy.map_freshness_timeout(),"pose_timeout":terra_types::timing::POSE_FRESHNESS_SECONDS,"router_connected":brain.dashboard.as_ref().map(|d|!d.failed()),"recorder_failed":brain.recorder.as_ref().is_some_and(|r|r.failed())}),&brain.run_id,time);
+            self.event("autonomy","autonomy.transition",serde_json::json!({"previous":last.0,"reason":status["status"]["reason"],"status":status,"pose_age":brain.pose.map(|p|time-p.1),"map_age":brain.map.as_ref().map(|m|time-m.1),"imu_age":brain.imu_time.map(|t|time-t),"map_timeout":brain.autonomy.map_freshness_timeout(),"pose_timeout":super::pose_quality::FRESHNESS_SECONDS,"router_connected":brain.dashboard.as_ref().map(|d|!d.failed()),"recorder_failed":brain.recorder.as_ref().is_some_and(|r|r.failed())}),&brain.run_id,time);
             last.0 = key;
         }
         let interval = self
@@ -96,6 +102,16 @@ impl MobileController {
                 message: "invalid observability settings".into(),
             });
         }
+        {
+            let mut rover = self
+                .observation
+                .rover
+                .write()
+                .map_err(|_| ControllerError::Internal)?;
+            if rover.is_none() {
+                *rover = Some(config.rover_id.clone());
+            }
+        }
         let evidence_path = config.path.with_extension("evidence");
         let journal = Journal::open(JournalConfig {
             path: config.path.clone(),
@@ -112,12 +128,18 @@ impl MobileController {
             .attached
             .write()
             .map_err(|_| ControllerError::Internal)?;
+        let selected = self
+            .observation
+            .rover
+            .read()
+            .map_err(|_| ControllerError::Internal)?;
         journal.try_record(EventInput::new(
-            &config.rover_id,
+            selected.as_deref().unwrap_or(&config.rover_id),
             "phone",
             "lifecycle.start",
             serde_json::json!({"version":env!("CARGO_PKG_VERSION")}),
         ));
+        drop(selected);
         let journal = Arc::new(journal);
         let evidence = terra_observability::EvidenceWriter::open(
             evidence_path,
@@ -130,7 +152,6 @@ impl MobileController {
         *attached = Some(Attached {
             journal,
             evidence,
-            rover: config.rover_id,
             path: config.path,
             uploader: None,
             settings: config.settings,
@@ -138,10 +159,9 @@ impl MobileController {
         Ok(())
     }
     pub fn set_observability_rover(&self, rover_id: String) {
-        if let Ok(mut a) = self.observation.attached.try_write()
-            && let Some(a) = a.as_mut()
-        {
-            a.rover = rover_id;
+        // Context has no disk/network work and survives attachment startup or replacement.
+        if let Ok(mut rover) = self.observation.rover.write() {
+            *rover = Some(rover_id);
         }
     }
     pub fn record_observation(&self, event_json: String) -> bool {
@@ -228,8 +248,14 @@ impl MobileController {
         let Some(a) = attached.as_ref() else {
             return false;
         };
+        let Ok(rover) = self.observation.rover.try_read() else {
+            return false;
+        };
         let mut event = EventInput::new(
-            manifest["rover_id"].as_str().unwrap_or(&a.rover),
+            manifest["rover_id"]
+                .as_str()
+                .or(rover.as_deref())
+                .unwrap_or("_producer"),
             "mapping",
             "mapping.evidence",
             serde_json::json!({}),

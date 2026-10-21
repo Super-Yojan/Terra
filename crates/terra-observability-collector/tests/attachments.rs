@@ -52,3 +52,40 @@ fn configured_attachment_quota_is_enforced() {
             .is_err()
     );
 }
+
+#[test]
+fn concurrent_uploads_never_exceed_attachment_quota_or_share_temporary_files() {
+    for _ in 0..4 {
+        let d = tempfile::tempdir().unwrap();
+        let store = Store::open(StoreConfig {
+            path: d.path().join("db"),
+            attachment_max_bytes: 512 * 1024,
+            ..Default::default()
+        })
+        .unwrap();
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(8));
+        let handles = (0..8)
+            .map(|n| {
+                let s = store.clone();
+                let b = barrier.clone();
+                std::thread::spawn(move || {
+                    let bytes = vec![n / 2; 256 * 1024];
+                    let hash = format!("{:x}", Sha256::digest(&bytes));
+                    b.wait();
+                    s.put_attachment(&scope("4"), "4", &hash, &bytes).unwrap();
+                })
+            })
+            .collect::<Vec<_>>();
+        for h in handles {
+            h.join().unwrap();
+        }
+        let bytes: u64 = std::fs::read_dir(store.config.path.with_extension("attachments"))
+            .unwrap()
+            .map(|e| e.unwrap().metadata().unwrap().len())
+            .sum();
+        assert!(
+            bytes <= store.config.attachment_max_bytes,
+            "concurrent writes exceeded quota: {bytes}"
+        );
+    }
+}

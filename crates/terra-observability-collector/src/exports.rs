@@ -126,6 +126,18 @@ fn run_export(
     request: &ExportRequest,
     id: &str,
 ) -> Result<(), JournalError> {
+    let result = run_export_inner(app, scope, request, id);
+    if result.is_err() {
+        let _ = std::fs::remove_dir_all(app.store.config.path.with_extension("exports").join(id));
+    }
+    result
+}
+fn run_export_inner(
+    app: &App,
+    scope: &Scope,
+    request: &ExportRequest,
+    id: &str,
+) -> Result<(), JournalError> {
     let root = app.store.config.path.with_extension("exports");
     std::fs::create_dir_all(&root)?;
     // Bounded export history. Active conversion owns the single slot.
@@ -142,11 +154,19 @@ fn run_export(
     let source = directory.join("source");
     let attachments = source.join("attachments");
     std::fs::create_dir_all(&attachments)?;
+    let metadata_budget = app.store.config.export_max_bytes.min(256 * 1024 * 1024);
+    enforce_export_budget(
+        &root,
+        app.store.config.export_max_bytes,
+        metadata_budget,
+        Some(&directory),
+    )?;
     let mut file = std::fs::File::create(source.join("events.jsonl"))?;
     let mut count = 0usize;
     let mut bytes = 0usize;
     let mut hashes = HashSet::new();
     let mut sources = HashSet::new();
+    let mut losses = Vec::new();
     let mut first_wall = u64::MAX;
     let mut last_wall = 0u64;
     let budget = Instant::now();
@@ -160,7 +180,7 @@ fn run_export(
                 let line = serde_json::to_vec(&value)?;
                 count += 1;
                 bytes += line.len();
-                if count > 100_000 || bytes > 256 * 1024 * 1024 {
+                if count > 100_000 || bytes as u64 > metadata_budget {
                     return Err("export too large; narrow time range".into());
                 }
                 file.write_all(&line)?;
@@ -183,6 +203,14 @@ fn run_export(
                 .store
                 .events(scope, Some(&request.session_id), cursor, 1000)?;
             let next = events.iter().map(|e| e.cursor).max().unwrap_or(cursor);
+            if cursor == 0 {
+                losses.extend(
+                    events
+                        .iter()
+                        .filter(|e| e.cursor == 0 && e.event.input.kind == "observability.gap")
+                        .cloned(),
+                );
+            }
             if next <= cursor {
                 break;
             }
@@ -214,10 +242,13 @@ fn run_export(
         };
         // Pi service events need not carry a phone mission ID. Preserve that fact while
         // including only nearby same-rover context, with explicit association metadata.
-        let mut contexts=db.prepare("SELECT cursor,received_ns,payload FROM observations WHERE rover=? AND session IS NULL AND json_extract(payload,'$.input.wall_time_ns') BETWEEN ? AND ? ORDER BY cursor LIMIT 100001")?;
+        let mut contexts=db.prepare("SELECT cursor,received_ns,payload FROM observations WHERE rover=? AND (session IS NULL OR ((json_extract(payload,'$.input.attributes.payload.run_id')=? OR json_extract(payload,'$.input.attributes.run_id')=?) AND session!=?)) AND json_extract(payload,'$.input.wall_time_ns') BETWEEN ? AND ? ORDER BY cursor LIMIT 100001")?;
         for row in contexts.query_map(
             rusqlite::params![
                 request.rover_id,
+                request.session_id,
+                request.session_id,
+                request.session_id,
                 first_wall.saturating_sub(10_000_000_000),
                 last_wall.saturating_add(10_000_000_000)
             ],
@@ -230,11 +261,47 @@ fn run_export(
                 event: serde_json::from_str(&payload)?,
             };
             sources.insert((e.event.id.producer_id.clone(), e.event.id.boot_id.clone()));
-            append(&e, Some("nearby_unassociated_context"))?;
+            let association = if e.event.input.session_id.is_some() {
+                "explicit_mission_correlation"
+            } else {
+                "nearby_unassociated_context"
+            };
+            append(&e, Some(association))?;
+        }
+        if scope.rovers.iter().any(|r| r == "_producer") {
+            let mut router_context=db.prepare("SELECT cursor,received_ns,payload FROM observations WHERE producer='gcp-router' AND rover='_producer' AND json_extract(payload,'$.input.wall_time_ns') BETWEEN ? AND ? ORDER BY cursor LIMIT 100001")?;
+            for row in router_context.query_map(
+                rusqlite::params![
+                    first_wall.saturating_sub(60_000_000_000),
+                    last_wall.saturating_add(60_000_000_000)
+                ],
+                decode,
+            )? {
+                let (cursor, received_ns, payload) = row?;
+                append(
+                    &crate::StoredEvent {
+                        cursor,
+                        received_ns,
+                        event: serde_json::from_str(&payload)?,
+                    },
+                    Some("router_service_context"),
+                )?;
+            }
+        }
+        for e in losses {
+            if e.event.input.rover_id == request.rover_id
+                || (e.event.input.rover_id == "_producer"
+                    && (sources
+                        .iter()
+                        .any(|(producer, _)| producer == &e.event.id.producer_id)
+                        || e.event.id.producer_id == "gcp-router"))
+            {
+                append(&e, Some("retention_loss_context"))?;
+            }
         }
         // Include alignment context only for producer boots actually present in this export.
         for (producer, boot) in sources {
-            let mut clocks=db.prepare("SELECT cursor,received_ns,payload FROM observations WHERE producer=? AND boot=? AND rover='_producer' AND json_extract(payload,'$.input.kind')='clock.alignment' AND json_extract(payload,'$.input.wall_time_ns') BETWEEN ? AND ? ORDER BY cursor LIMIT 100001")?;
+            let mut clocks=db.prepare("SELECT cursor,received_ns,payload FROM observations WHERE producer=? AND boot=? AND rover='_producer' AND json_extract(payload,'$.input.kind') IN ('clock.alignment','observability.gap','observability.health','upload.failed','upload.recovered') AND json_extract(payload,'$.input.wall_time_ns') BETWEEN ? AND ? ORDER BY cursor LIMIT 100001")?;
             for row in clocks.query_map(
                 rusqlite::params![
                     producer,
@@ -251,7 +318,7 @@ fn run_export(
                         received_ns,
                         event: serde_json::from_str(&payload)?,
                     },
-                    Some("clock_context"),
+                    Some("producer_diagnostic_context"),
                 )?;
             }
         }
@@ -259,12 +326,24 @@ fn run_export(
     file.sync_all()?;
     for hash in hashes {
         if let Ok(data) = app.store.attachment(scope, &hash) {
+            enforce_export_budget(
+                &root,
+                app.store.config.export_max_bytes,
+                data.len() as u64,
+                Some(&directory),
+            )?;
             std::fs::write(attachments.join(hash), data)?;
         }
     }
     if count == 0 {
         return Err("no session events".into());
     }
+    enforce_export_budget(
+        &root,
+        app.store.config.export_max_bytes,
+        0,
+        Some(&directory),
+    )?;
     let output = directory.join("recording.rrd");
     let stderr = std::fs::File::create(directory.join("conversion.log"))?;
     let mut child = std::process::Command::new(&app.exports.python)
@@ -277,8 +356,27 @@ fn run_export(
         .spawn()?;
     let start = Instant::now();
     loop {
+        if let Err(error) = enforce_export_budget(
+            &root,
+            app.store.config.export_max_bytes,
+            0,
+            Some(&directory),
+        ) {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(error);
+        }
         if let Some(status) = child.try_wait()? {
             if status.success() {
+                // The RRD and canonical sidecars are sufficient for playback. Release
+                // temporary attachment copies immediately after conversion.
+                std::fs::remove_dir_all(&source)?;
+                enforce_export_budget(
+                    &root,
+                    app.store.config.export_max_bytes,
+                    0,
+                    Some(&directory),
+                )?;
                 return Ok(());
             }
             return Err("export conversion failed".into());
@@ -349,4 +447,48 @@ pub async fn artifact(
         )
         .body(Body::from_stream(stream))
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+}
+
+fn directory_bytes(path: &std::path::Path) -> Result<u64, JournalError> {
+    let mut total = 0u64;
+    if !path.exists() {
+        return Ok(0);
+    }
+    for entry in std::fs::read_dir(path)? {
+        let entry = entry?;
+        let metadata = entry.file_type()?;
+        if metadata.is_dir() {
+            total = total.saturating_add(directory_bytes(&entry.path())?);
+        } else if metadata.is_file() {
+            total = total.saturating_add(entry.metadata()?.len());
+        }
+    }
+    Ok(total)
+}
+/// Reclaim completed exports before reserving bytes; the active conversion is
+/// never silently removed. Its caller must cancel conversion if it exceeds budget.
+pub fn enforce_export_budget(
+    root: &std::path::Path,
+    maximum: u64,
+    reserve: u64,
+    active: Option<&std::path::Path>,
+) -> Result<(), JournalError> {
+    let mut total = directory_bytes(root)?;
+    let mut directories = std::fs::read_dir(root)?
+        .filter_map(Result::ok)
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()) && Some(e.path().as_path()) != active)
+        .collect::<Vec<_>>();
+    directories.sort_by_key(|e| e.file_name());
+    for entry in directories {
+        if total.saturating_add(reserve) <= maximum {
+            break;
+        }
+        let size = directory_bytes(&entry.path())?;
+        std::fs::remove_dir_all(entry.path())?;
+        total = total.saturating_sub(size);
+    }
+    if total.saturating_add(reserve) > maximum {
+        return Err("export byte budget exceeded; narrow the session or time range".into());
+    }
+    Ok(())
 }
