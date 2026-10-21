@@ -78,8 +78,13 @@ world transforms, ground normal/offset, measured clearance and mapper thresholds
 
 ## Scoped credentials and GCP release
 
-Build the collector for the GCP machine's Linux architecture from the reviewed
-Terra checkout, not the macOS binary:
+From ARGOS, `bash packaging/gcp/build-observability-release.sh` builds a
+credential-free Linux x86_64 bundle using cargo-zigbuild/Zig and the installed
+`x86_64-unknown-linux-gnu` Rust target. It prints a private local archive path
+and includes file checksums. This prepares files only; it never contacts GCP.
+
+Alternatively, build on a Linux host for the GCP machine's architecture from
+the reviewed Terra checkout. A macOS native binary will not run on that host:
 
 ```sh
 cargo build --release -p terra-observability-collector --locked
