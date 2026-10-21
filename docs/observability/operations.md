@@ -7,9 +7,11 @@ See [coverage](coverage.md) and [event schema](event-schema.md) for exact scope.
 
 ## Status and deployment boundary
 
-Source code, local tests, iOS build and a synthetic Rerun preview are available.
-GCP installation, Pi installation and physical field acceptance are separate,
-operator-controlled steps. No field run or production deployment is implied.
+The GCP collector was deployed and verified on 2026-10-21. See the
+[deployment record](deployments/2026-10-21-gcp.md) for the host, limits and checks.
+This Mac's ARGOS and Zorvane upload settings are provisioned; relaunch the rebuilt
+apps to enable uploads. Phone and Pi provisioning and physical field acceptance
+remain outstanding. The deployment verification was synthetic, not a field run.
 The existing router remains on TLS port 7448. The new collector listens only on
 127.0.0.1:7450 behind `/observability/*` on the existing HTTPS host. It has its
 own user, database, limits and credentials. No cloud service-account key is
