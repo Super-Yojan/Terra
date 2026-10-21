@@ -156,34 +156,35 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
     private let observationCapture = PhoneObservationCapture()
     private let occupancySettings = defaultOccupancySettings()
     private let observation = TerraObservation()
+    private let observationQueue = DispatchQueue(label: "terra.observation.startup", qos: .utility)
     private var controller: MobileController? {
-        didSet {
-            guard let current = controller else { return }
-            let rover = UserDefaults.standard.string(forKey: "dashboardRoverID") ?? "_producer"
-            let directory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Observability", isDirectory: true)
-            let producer = "phone-" + (UserDefaults.standard.string(forKey: "observationProducerID") ?? {
-                let id = UUID().uuidString; UserDefaults.standard.set(id, forKey: "observationProducerID"); return id
-            }())
-            let observer = observation
-            DispatchQueue.global(qos: .utility).async {
-                do {
-                    var config: [String: Any] = ["path": directory.appendingPathComponent("events.db").path, "producer_id": producer, "rover_id": rover]
-                    if let settingsData = try? Data(contentsOf: directory.appendingPathComponent("settings.json")), settingsData.count <= 65536,
-                       let settings = try? JSONSerialization.jsonObject(with: settingsData) as? [String: Any] { config["settings"] = settings }
-                    let raw = String(decoding: try JSONSerialization.data(withJSONObject: config), as: UTF8.self)
-                    try current.startObservability(configJson: raw)
-                    if let settings = try? JSONSerialization.jsonObject(with: Data(current.observabilitySettings().utf8)) as? [String: Any],
-                       let evidenceSeconds = settings["evidence_sample_seconds"] as? Double, let mapSeconds = settings["map_sample_seconds"] as? Double {
-                        self.observationCapture.configure(evidenceSeconds: evidenceSeconds, mapSeconds: mapSeconds)
-                    }
-                    observer.attach(roverID: rover, sessionID: current.observationRunId(), sink: { current.recordObservation(eventJson: $0) })
-                    observer.record(component: "phone", kind: "lifecycle.controller_attached", attributes: [:])
-                    if let upload = ObservationUploadSettings.load(directory: directory, producer: producer) {
-                        do { try current.startObservabilityUpload(endpoint: upload.endpoint, token: upload.token) }
-                        catch { observer.record(component: "observability", kind: "upload.configuration_failed", attributes: [:]) }
-                    } else { observer.record(component: "observability", kind: "upload.unconfigured", attributes: [:]) }
-                } catch { TerraLog.control.error("Observability storage unavailable; control continues") }
-            }
+        didSet { if let current = controller { configureObservability(current, primary: false) } }
+    }
+    private func configureObservability(_ current: MobileController, primary: Bool) {
+        let rover = UserDefaults.standard.string(forKey: "dashboardRoverID") ?? "_producer"
+        let directory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Observability", isDirectory: true)
+        let producer = "phone-" + (UserDefaults.standard.string(forKey: "observationProducerID") ?? {
+            let id = UUID().uuidString; UserDefaults.standard.set(id, forKey: "observationProducerID"); return id
+        }())
+        let observer = observation
+        observationQueue.async {
+            do {
+                var config: [String: Any] = ["path": directory.appendingPathComponent("events.db").path, "producer_id": producer, "rover_id": rover]
+                if let settingsData = try? Data(contentsOf: directory.appendingPathComponent("settings.json")), settingsData.count <= 65536,
+                   let settings = try? JSONSerialization.jsonObject(with: settingsData) as? [String: Any] { config["settings"] = settings }
+                let raw = String(decoding: try JSONSerialization.data(withJSONObject: config), as: UTF8.self)
+                try current.startObservability(configJson: raw)
+                if let settings = try? JSONSerialization.jsonObject(with: Data(current.observabilitySettings().utf8)) as? [String: Any],
+                   let evidenceSeconds = settings["evidence_sample_seconds"] as? Double, let mapSeconds = settings["map_sample_seconds"] as? Double {
+                    self.observationCapture.configure(evidenceSeconds: evidenceSeconds, mapSeconds: mapSeconds)
+                }
+                if primary { observer.attach(roverID: rover, sessionID: current.observationRunId(), sink: { current.recordObservation(eventJson: $0) }) }
+                observer.record(component: "phone", kind: "lifecycle.controller_attached", attributes: [:])
+                if primary, let upload = ObservationUploadSettings.load(directory: directory, producer: producer) {
+                    do { try current.startObservabilityUpload(endpoint: upload.endpoint, token: upload.token) }
+                    catch { observer.record(component: "observability", kind: "upload.configuration_failed", attributes: [:]) }
+                } else if primary { observer.record(component: "observability", kind: "upload.unconfigured", attributes: [:]) }
+            } catch { TerraLog.control.error("Observability storage unavailable; control continues") }
         }
     }
     private var timer: DispatchSourceTimer?
@@ -208,6 +209,11 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
     private let worldFromAR = simd_float3x3(columns: (SIMD3(0, -1, 0), SIMD3(0, 0, 1), SIMD3(-1, 0, 0)))
     override init() {
         super.init()
+        // This object is used only as a journal API; it never steps or controls hardware.
+        if let journal = try? MobileController(settings: defaultControlSettings()) {
+            configureObservability(journal, primary: true)
+        }
+        bluetooth.observe(using: observation)
         locationManager.delegate = self
         locationManager.desiredAccuracy = kCLLocationAccuracyBest
         locationManager.distanceFilter = kCLDistanceFilterNone
@@ -332,6 +338,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
                 }
                 DispatchQueue.main.async {
                     guard self.sensorEpochMatches(epoch), self.dashboardAttemptMatches(attempt) else { return }
+                    self.observation.record(component: "router", kind: "connection.established", attributes: ["local_waypoint_retained": continuingWaypoint])
                     self.connectionPolicy.routerConnected(); self.routerRetryAt = nil
                     self.dashboardConnecting = false; self.dashboardConnected = true
                     self.dashboardStatus = continuingWaypoint ? "Router restored · local waypoint retained" : "Router connected · rover \(id) · hardware remains disarmed"
@@ -339,6 +346,9 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
                     self.refreshConnectionPresentation()
                 }
             } catch {
+                guard self.sensorEpochMatches(epoch), self.dashboardAttemptMatches(attempt) else { return }
+                let failure = error as NSError
+                self.observation.record(component: "router", kind: "connection.failed", attributes: ["error_domain": failure.domain, "error_code": failure.code])
                 DispatchQueue.main.async {
                     guard self.sensorEpochMatches(epoch), self.dashboardAttemptMatches(attempt) else { return }
                     self.dashboardConnecting = false; self.dashboardConnected = false
@@ -350,6 +360,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
         }
     }
     func disconnectDashboard() {
+        observation.record(component: "router", kind: "connection.disconnect_requested", attributes: ["source": "operator"])
         routerSuppressed = true; routerRetryAt = nil; invalidateDashboardAttempt()
         controlQueue.async {
             self.target = (0, 0); self.revokeHardwareMotion(reason: "operator disconnected dashboard")
@@ -551,17 +562,20 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
         if controller.dashboardStatus() == "connected" {
             do { _ = try controller.step(timestamp: now) }
             catch {
+                observation.record(component: "router", kind: "connection.lost", attributes: ["reason": "manual_dashboard_update_failed"])
                 target = (0, 0); pauseHardwareMotion(reason: "manual dashboard update failed: \(error)")
                 try? controller.disconnectDashboard()
                 DispatchQueue.main.async { self.status = "Dashboard control update: \(error.localizedDescription)" }
             }
         }
         if TerraManualRouterSafety.emergencyStopped(statusJSON: controller.autonomyStatus()), !dashboardEmergencyStop {
+            observation.recordSafetyRequest(reset: false, source: "router_authority", route: "bluetooth")
             dashboardEmergencyStop = true; target = (0, 0); resetServoTargets()
             bluetooth.emergencyStop(); hardwareMotionRevoked = true
             DispatchQueue.main.async { self.autonomyReason = "Router emergency stop · reset explicitly" }
         }
         if controller.dashboardStatus() != "connected" {
+            observation.recordChanged(component: "router", kind: "connection.unavailable", attributes: ["status": controller.dashboardStatus(), "mode": "bluetooth_manual"])
             if controller.dashboardStatus() == "failed" { try? controller.disconnectDashboard() }
             DispatchQueue.main.async {
                 guard self.dashboardAttemptMatches(attempt), self.dashboardConnected else { return }
@@ -620,6 +634,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
             let output = try controller.step(timestamp: now)
             if tick % 10 == 0 && controller.dashboardStatus() == "failed" {
                 let continuingWaypoint = TerraFleetManualDrive.localWaypointActive(controller.autonomyStatus())
+                observation.record(component: "router", kind: "connection.lost", attributes: ["local_waypoint_retained": continuingWaypoint])
                 if continuingWaypoint { try controller.detachDashboardLink() }
                 else {
                     self.target = (0, 0); self.pauseHardwareMotion(reason: "dashboard link failed with no active local waypoint")
@@ -1125,6 +1140,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
         // stopped the motion timer while retaining its synchronized BLE link.
         let hardwareConnected = hardwareReady || hardwareConfigurationReady || bluetooth.connectedIdentifier != nil
         controlQueue.async {
+            self.observation.recordSafetyRequest(reset: reset, source: "operator", route: (self.bleActive || hardwareConnected) ? "bluetooth" : self.mode == .remote ? "zenoh" : "local_authority")
             if self.bleActive || hardwareConnected {
                 self.target = (0, 0); self.resetServoTargets()
                 if reset { DispatchQueue.main.async { self.emergencyResetRequest = self.sendConfiguration("reset_emergency_stop", payload: [:]) } } else { self.bluetooth.emergencyStop() }
@@ -1493,7 +1509,7 @@ extension PhoneController {
         case .closed(let retryable):
             roverConnectionFailed = true
             pairingCandidate = nil
-            disconnectDashboardForLifecycle()
+            disconnectDashboardForLifecycle(reason: "bluetooth_closed")
             connectionPolicy.failed(retryable: retryable, now: connectionNow)
         }
     }
@@ -1505,7 +1521,7 @@ extension PhoneController {
                 pairingCandidate = nil; connectionPolicy.decline(candidate.id)
             }
             if connectionPolicy.attemptExpired(now: connectionNow) {
-                bluetooth.disconnect(); disconnectDashboardForLifecycle()
+                bluetooth.disconnect(); disconnectDashboardForLifecycle(reason: "connection_attempt_expired")
                 connectionPolicy.failed(retryable: true, now: connectionNow)
             }
             if connectionPolicy.retryDue(now: connectionNow) {
@@ -1530,7 +1546,7 @@ extension PhoneController {
         defaults.set(settings.prefix, forKey: "dashboardTopicPrefix")
         defaults.set(String(settings.roverID), forKey: "dashboardRoverID")
         routerSuppressed = false; routerRetryAt = nil
-        disconnectDashboardForLifecycle()
+        disconnectDashboardForLifecycle(reason: "settings_changed")
         serviceAutomaticConnections(); refreshConnectionPresentation()
         return true
     }
@@ -1593,7 +1609,8 @@ extension PhoneController {
         dashboardGenerationLock.lock(); defer { dashboardGenerationLock.unlock() }; return dashboardGeneration
     }
     private func dashboardAttemptMatches(_ token: UInt64) -> Bool { dashboardAttemptToken() == token }
-    private func disconnectDashboardForLifecycle() {
+    private func disconnectDashboardForLifecycle(reason: String) {
+        observation.record(component: "router", kind: "connection.disconnect_requested", attributes: ["source": "connection_policy", "reason": reason])
         invalidateDashboardAttempt()
         controlQueue.async {
             try? self.controller?.disconnectDashboard(); self.goalLatched = false

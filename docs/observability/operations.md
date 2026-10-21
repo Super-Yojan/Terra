@@ -176,6 +176,44 @@ Journal rotation can remove unforwarded entries; source local journals remain
 the fallback. A Pi rebuilt binary and physical run are not verified by a macOS
 test or simulator build.
 
+### Offline Pi access
+
+Internet is not required for the Pi's local journal or for a local SSH connection.
+An Ethernet link, a shared local Wi-Fi network, or supported USB Ethernet gadget
+mode can provide installation and log retrieval access. A USB cable alone does
+not enable SSH: confirm the board model and OS first, then configure gadget mode
+on the existing installation. Do not reimage the rover's SD card for logging.
+
+On supported Raspberry Pi OS Trixie installations, Raspberry Pi provides
+[`rpi-usb-gadget`](https://github.com/raspberrypi/rpi-usb-gadget) for USB networking.
+Use the board's supported device-mode port and a data-capable cable. Mac Internet
+Sharing can subsequently give the Pi an upload route; without that route, its
+queue remains local until connectivity returns. USB networking and internet
+sharing are separate configuration steps. Preserve the rover's power arrangement.
+
+Once connected, inspect the installed daemon version before upgrading. Install
+the independent forwarder and its credentials, then enable structured source
+logging in the rover daemon during a stationary upgrade. An older compiled
+daemon will not acquire the new safety events merely by installing the forwarder.
+
+### Emergency-stop investigation coverage
+
+The phone records `safety.requested` with operator/router source and selected
+route, Bluetooth stop-command queue success/failure, raw hardware safety fields
+including emergency latch and last sequence, and router/Bluetooth connection
+transitions. Hardware fields use an allowlist to exclude ownership credentials.
+Pi `command.accepted`/`command.rejected` records include command sequence, session,
+revision, and resulting emergency-stop/armed/stop-reason state. Joining these
+records distinguishes a requested stop from an already latched stop and a lost
+link. A queued Bluetooth command is not proof of delivery; the Pi acceptance
+event is the receiving-side evidence.
+
+Before the next diagnostic run, verify a real phone source and Pi source appear
+in the collector, then interrupt only the observer's upload network to confirm
+backlog delivery. Never exercise emergency stop by issuing motion commands as
+part of a logging installation. Missing phone/Pi events remain a coverage gap,
+even if dashboard state continues to arrive.
+
 ## Replay and outage diagnosis
 
 See [replay commands](../../tools/observability/README.md). During an outage,

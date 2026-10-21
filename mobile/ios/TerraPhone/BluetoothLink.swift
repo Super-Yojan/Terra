@@ -21,6 +21,8 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
     enum Lifecycle { case paired(UUID), authenticated(UUID), closed(retryable: Bool) }
     var onDiscovery: ((TerraDiscoveredRover, UInt64) -> Void)?
     var onLifecycle: ((Lifecycle, UInt64) -> Void)?
+    private var observation: TerraObservation?
+    func observe(using observation: TerraObservation) { queue.async { self.observation = observation } }
     private var automationGeneration: UInt64 = 0
     private var attemptStarted: TimeInterval?
     private var suppressCloseEvent = false
@@ -111,6 +113,7 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
         if text != lastLoggedConnection {
             lastLoggedConnection = text
             log.info("Connection: \(text, privacy: .public)")
+            observation?.record(component: "bluetooth", kind: "connection.state", attributes: ["status": text, "generation": policy.generation])
         }
         recordConnection(text)
         DispatchQueue.main.async { self.status = text }
@@ -197,6 +200,7 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
         DispatchQueue.main.async { self.connectionGeneration = generation; self.configurationReady = false; self.isReady = false; self.armed = false; self.arming = false; self.connectedIdentifier = nil; self.capabilitiesJSON = "{}"; self.layoutIndexJSON = "{}"; self.driveProfileJSON = "{}"; self.statusJSON = "{}" }
     }
     private func close(_ reason: String) {
+        observation?.record(component: "bluetooth", kind: "connection.closed", attributes: ["reason": reason, "generation": policy.generation, "sequence": policy.sequence])
         if peripheral != nil && !suppressCloseEvent {
             emit(.closed(retryable: TerraBluetoothFailurePolicy.retryable(reason)))
         }
@@ -253,10 +257,18 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
         } catch { self.publish("Synchronize layout and safe output before arming") }
     } }
     func emergencyStop() { queue.async {
+        self.observation?.record(component: "bluetooth", kind: "command.requested", attributes: ["command_kind": "emergency_stop", "session": self.policy.session.map { $0 as Any } ?? NSNull(), "revision": self.policy.revision, "previous_sequence": self.policy.sequence])
         self.log.notice("Emergency stop requested")
         self.policy.stop(); self.awaitingSafeSequence = nil; self.awaitingSafeAt = nil; self.armSafe = nil; self.pendingDrive = nil
-        do { self.priority = try self.packet(self.policy.control("emergency_stop"), characteristic: self.controlID); self.pump() }
-        catch { self.close("Emergency stop; reconnect required") }
+        do {
+            self.priority = try self.packet(self.policy.control("emergency_stop"), characteristic: self.controlID)
+            self.observation?.record(component: "bluetooth", kind: "command.queued", attributes: ["command_kind": "emergency_stop", "sequence": self.policy.sequence, "revision": self.policy.revision])
+            self.pump()
+        }
+        catch {
+            self.observation?.record(component: "bluetooth", kind: "command.queue_failed", attributes: ["command_kind": "emergency_stop"])
+            self.close("Emergency stop; reconnect required")
+        }
     } }
     func disarm() { queue.async { self.stop() } }
     private func stop() {
@@ -464,7 +476,13 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
     }
     func centralManager(_ central: CBCentralManager, didConnect p: CBPeripheral) { guard current(p) else { return }; p.discoverServices([serviceID]) }
     func centralManager(_ central: CBCentralManager, didFailToConnect p: CBPeripheral, error: Error?) { if retiring === p { p.delegate = nil; retiring = nil; connectDeferredIfPossible(); return }; guard current(p) else { return }; terminal("Connection failed; reconnect explicitly") }
-    func centralManager(_ central: CBCentralManager, didDisconnectPeripheral p: CBPeripheral, error: Error?) { if retiring === p { p.delegate = nil; retiring = nil; connectDeferredIfPossible(); return }; guard current(p) else { return }; terminal("Disconnected; explicit reconnect and arm required") }
+    func centralManager(_ central: CBCentralManager, didDisconnectPeripheral p: CBPeripheral, error: Error?) {
+        if retiring === p { p.delegate = nil; retiring = nil; connectDeferredIfPossible(); return }
+        guard current(p) else { return }
+        let failure = error as NSError?
+        observation?.record(component: "bluetooth", kind: "connection.disconnected", attributes: ["error_domain": failure?.domain ?? "none", "error_code": failure?.code ?? 0, "generation": policy.generation, "sequence": policy.sequence])
+        terminal("Disconnected; explicit reconnect and arm required")
+    }
     func peripheral(_ p: CBPeripheral, didDiscoverServices error: Error?) {
         guard current(p) else { return }
         guard error == nil, let service = p.services?.first(where: { $0.uuid == serviceID }) else { close("Terra service unavailable"); return }
@@ -521,6 +539,7 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
             }
             if c.uuid == statusID {
                 if object["type"] as? String == "status" {
+                    observation?.recordHardwareStatus(object)
                     let safetySummary = "armed=\(object["armed"] ?? "missing") arming=\(object["arming"] ?? "missing") stop_reason=\(object["stop_reason"] ?? "missing") fault=\(object["fault"] ?? "none") gate=\(object["gate_mode"] ?? "missing") configuration_allowed=\(object["configuration_allowed"] ?? "missing")"
                     if safetySummary != lastLoggedSafety {
                         lastLoggedSafety = safetySummary

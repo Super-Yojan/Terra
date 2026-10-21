@@ -124,6 +124,9 @@ class SafetyController:
         result = self._accept(frame, received_at, now)
         record_event('bluetooth', 'command.accepted' if result else 'command.rejected',
                      {'sequence': getattr(frame, 'sequence', None), 'command_kind': getattr(getattr(frame, 'kind', None), 'value', None),
+                      'session': getattr(frame, 'session', None), 'revision': getattr(frame, 'revision', None),
+                      'emergency_stop': self.emergency_stop, 'armed': self.armed,
+                      'stop_reason': self.reason,
                       'age': now-received_at if self._finite_time(now) and self._finite_time(received_at) else None})
         return result
 
