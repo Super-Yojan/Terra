@@ -13,6 +13,8 @@ uniffi::setup_scaffolding!();
 mod actuators;
 pub use actuators::*;
 mod autonomy;
+mod observability;
+pub use observability::ObservationAttachment;
 pub mod outdoor;
 mod outdoor_bridge;
 pub use outdoor::{GpsFix, HeadingFix};
@@ -283,6 +285,7 @@ struct Brain {
 /// Returned efforts still require an independently armed hardware adapter.
 pub struct MobileController {
     brain: Mutex<Brain>,
+    observation: observability::ObservationState,
 }
 #[uniffi::export]
 impl MobileController {
@@ -294,6 +297,7 @@ impl MobileController {
     /// freshness settings. No network or hardware connection is opened.
     pub fn new(settings: ControlSettings) -> Result<Arc<Self>, ControllerError> {
         Ok(Arc::new(Self {
+            observation: Default::default(),
             brain: Mutex::new(Brain {
                 outdoor: Default::default(),
                 outdoor_tokens: Default::default(),
@@ -463,6 +467,7 @@ impl MobileController {
             .map(|d| d.take_actions())
             .unwrap_or_default();
         for (kind, bytes, age) in incoming {
+            self.observation.event("router", "command.received", serde_json::json!({"topic":kind,"queue_age":age,"payload":serde_json::from_slice::<serde_json::Value>(&bytes).ok()}), &brain.run_id, timestamp);
             match kind.as_str() {
                 "navigation/settings" => navigation_settings::apply(&mut brain, &bytes, age),
                 "navigation/source" | "navigation/resume" => {
@@ -502,10 +507,17 @@ impl MobileController {
                 }
                 "teleop" | "cmd_vel" => {
                     if let Some(r) = terra_autonomy::decode_teleop(&bytes) {
-                        brain.autonomy.accept_operator_from(
+                        let admitted = brain.autonomy.accept_operator_from(
                             r,
                             timestamp - age,
                             terra_autonomy::CommandOrigin::FleetTeleop,
+                        );
+                        self.observation.event(
+                            "autonomy",
+                            "command.admission",
+                            serde_json::json!({"topic":kind,"admitted":admitted,"age":age}),
+                            &brain.run_id,
+                            timestamp,
                         );
                     }
                 }
@@ -759,6 +771,16 @@ impl MobileController {
             "twist": output.twist,
         })
         .to_string();
+        for event in &output.events {
+            self.observation.event(
+                "autonomy",
+                "decision.event",
+                serde_json::to_value(event).unwrap_or_default(),
+                &brain.run_id,
+                timestamp,
+            );
+        }
+        self.observation.tick(&brain, timestamp, &estimate);
         if let Some(r) = brain.recorder.as_ref() {
             let _ = r.record(serde_json::json!({
                 "kind": "control_tick",
@@ -782,12 +804,13 @@ impl MobileController {
         }
         if output.status.safety != "clear" {
             brain.controller.reset();
-            return Ok(MotorOutput::stopped(if estimate.health == Health::Ready {
+            let stopped = MotorOutput::stopped(if estimate.health == Health::Ready {
                 StopReason::StaleTarget
             } else {
                 StopReason::SensorNotReady
-            })
-            .into());
+            });
+            self.observation.effort(&brain, timestamp, &stopped);
+            return Ok(stopped.into());
         }
         let turning = (output.command_origin != terra_autonomy::CommandOrigin::LocalManual)
             .then_some(brain.navigation.parameters.turning);
@@ -797,7 +820,9 @@ impl MobileController {
             forward: output.twist.linear,
             yaw_rate: output.twist.angular,
         })?;
-        Ok(brain.controller.step(estimate).into())
+        let effort = brain.controller.step(estimate);
+        self.observation.effort(&brain, timestamp, &effort);
+        Ok(effort.into())
     }
     /// Reset estimator, velocity loop, and autonomy; detach dashboard and close recording.
     /// Clears pose and map while retaining configured navigation geometry.

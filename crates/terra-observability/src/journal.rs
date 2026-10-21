@@ -113,7 +113,8 @@ impl Journal {
         })
     }
     /// Bounded in-memory admission only. Never waits on disk, network or a mutex.
-    pub fn try_record(&self, input: EventInput) -> RecordOutcome {
+    pub fn try_record(&self, mut input: EventInput) -> RecordOutcome {
+        crate::redact(&mut input.attributes);
         if !input.validate() || serde_json::to_vec(&input).map_or(true, |b| b.len() > 128 * 1024) {
             return RecordOutcome::Invalid;
         }
@@ -167,6 +168,20 @@ impl Journal {
 fn open_db(path: &Path) -> Result<Connection, JournalError> {
     if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
         std::fs::create_dir_all(parent)?;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(path)
+        {
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(e) => return Err(e.into()),
+        }
     }
     let db = Connection::open(path)?;
     db.busy_timeout(Duration::from_secs(2))?;
@@ -244,6 +259,38 @@ pub struct JournalReader {
     path: PathBuf,
 }
 impl JournalReader {
+    pub(crate) fn attachment_gap(
+        &self,
+        source: &EventEnvelope,
+        hash: &str,
+        reason: &str,
+    ) -> Result<(), JournalError> {
+        use sha2::{Digest, Sha256};
+        let identity = format!(
+            "{:x}",
+            Sha256::digest(format!("{:?}:{hash}:{reason}", source.id).as_bytes())
+        );
+        let mut event = source.clone();
+        event.id.boot_id = format!("delivery-{identity}");
+        event.id.sequence = 0;
+        event.input.cause_id = Some(source.id.clone());
+        event.input.kind = "observability.gap".into();
+        event.input.component = "observability".into();
+        event.input.wall_time_ns = wall_time_ns();
+        event.input.monotonic_ns = 0;
+        event.input.attributes =
+            serde_json::json!({"reason":reason,"attachment_sha256":hash,"time_basis":"wall_only"});
+        let payload = serde_json::to_string(&event)?;
+        let db = open_db(&self.path)?;
+        db.execute("INSERT OR IGNORE INTO events(producer,boot,seq,payload,bytes,stored_ns) VALUES(?,?,?,?,?,?)",params![event.id.producer_id,event.id.boot_id,0,payload,payload.len(),wall_time_ns()])?;
+        Ok(())
+    }
+
+    pub fn pending_count(&self) -> Result<u64, JournalError> {
+        let db = open_db(&self.path)?;
+        Ok(db.query_row("SELECT COUNT(*) FROM events WHERE ack=0", [], |r| r.get(0))?)
+    }
+
     pub fn open(path: &Path) -> Result<Self, JournalError> {
         let _ = open_db(path)?;
         Ok(Self { path: path.into() })

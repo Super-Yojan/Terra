@@ -3,6 +3,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 import math
 import logging
+from .observability import record_event
 from .layout import normalize_layout, validate_layout, validate_structure
 from .protocol import CommandFrame, CommandKind, ProtocolError, decode_frame, encode_frame, validate_command
 
@@ -37,6 +38,12 @@ class SafetyController:
         self._disarm('boot')
 
     def _disarm(self, reason):
+        if (getattr(self, 'armed', False) or getattr(self, 'arming', False)
+                or getattr(self, 'reason', None) != reason):
+            record_event('safety', 'motion.disarm', {'reason': reason,
+                         'previous_armed': getattr(self, 'armed', False),
+                         'previous_arming': getattr(self, 'arming', False),
+                         'sequence': self.last_sequence, 'source_time': self.last_time})
         self.armed = False
         self.motion_paused = False
         self.arming = False
@@ -72,6 +79,7 @@ class SafetyController:
             if self.armed:
                 # Retain the hardware arm state, but discard every old motion.
                 if not self.motion_paused:
+                    record_event('safety', 'motion.pause', {'reason': 'watchdog_paused', 'age': now-stamp, 'limit': WATCHDOG_SECONDS, 'sequence': self.last_sequence})
                     self.arrival_boundary = now
                 self.motion_paused = True
                 self.reason = 'watchdog_paused'
@@ -113,6 +121,13 @@ class SafetyController:
         if not self.subscribed: self._disarm('status_unsubscribed')
 
     def accept(self, frame: CommandFrame, received_at: float, now: float) -> bool:
+        result = self._accept(frame, received_at, now)
+        record_event('bluetooth', 'command.accepted' if result else 'command.rejected',
+                     {'sequence': getattr(frame, 'sequence', None), 'command_kind': getattr(getattr(frame, 'kind', None), 'value', None),
+                      'age': now-received_at if self._finite_time(now) and self._finite_time(received_at) else None})
+        return result
+
+    def _accept(self, frame: CommandFrame, received_at: float, now: float) -> bool:
         if not self._clock(now): return False
         self._expire(now)
         if not self._finite_time(received_at) or received_at > now or now >= received_at + WATCHDOG_SECONDS:
@@ -190,6 +205,7 @@ class SafetyController:
             if self.arming and now >= self.arm_deadline:
                 self.arming = False
                 self.armed = True
+                record_event('safety', 'motion.armed', {'sequence': self.last_sequence, 'source_time': now})
                 self.reason = 'awaiting_command'
                 self.armed_at = now
                 self.mailbox = None  # only a frame accepted after completion may actuate

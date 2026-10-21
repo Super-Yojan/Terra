@@ -323,57 +323,63 @@ impl MobileController {
         payload: String,
         timestamp: f64,
     ) -> Result<(), ControllerError> {
-        let mut b = self.brain.lock().map_err(|_| ControllerError::Internal)?;
-        let invalid = || ControllerError::InvalidInput {
-            message: "invalid autonomy request".into(),
-        };
-        match kind.as_str() {
-            "navigation/source" | "navigation/resume" => {
-                outdoor_bridge::request(&mut b, &kind, payload.as_bytes(), timestamp, 0.)?
-            }
-            "autonomy" => b
-                .autonomy
-                .set_level(terra_autonomy::decode_level(payload.as_bytes()).ok_or_else(invalid)?),
-            "safety" => {
-                let healthy = b.autonomy.is_manual() || b.estimator.estimate(timestamp).health == Health::Ready;
-                b.autonomy.set_safety(
-                    terra_autonomy::decode_safety(payload.as_bytes()).ok_or_else(invalid)?,
-                    healthy,
-                );
-            }
-            "goal" => {
-                if !outdoor_bridge::dispatch_goal(&mut b, payload.as_bytes(), timestamp, 0.) {
-                    return Err(invalid());
+        let outcome = (|| {
+            let mut b = self.brain.lock().map_err(|_| ControllerError::Internal)?;
+            let invalid = || ControllerError::InvalidInput {
+                message: "invalid autonomy request".into(),
+            };
+            match kind.as_str() {
+                "navigation/source" | "navigation/resume" => {
+                    outdoor_bridge::request(&mut b, &kind, payload.as_bytes(), timestamp, 0.)?
                 }
-            }
-            "goal/decision" => {
-                let pose = b.pose.unwrap_or_default();
-                let map = b.map.clone();
-                let e = b.estimator.estimate(timestamp);
-                let ready = pose_quality::ready(&b, timestamp);
-                b.autonomy.decide_proposal(
-                    terra_autonomy::decode_decision(payload.as_bytes()).ok_or_else(invalid)?,
-                    &terra_autonomy::ArbiterInput {
-                        now: timestamp,
-                        pose: pose.0,
-                        pose_time: pose.1,
-                        map: map.as_ref().map(|m| &m.0),
-                        map_time: map.as_ref().map(|m| m.1),
-                        map_revision: map.as_ref().map(|m| m.2).unwrap_or(0),
-                        measured: terra_navigation::Twist {
-                            linear: e.forward,
-                            angular: e.yaw_rate,
+                "autonomy" => b.autonomy.set_level(
+                    terra_autonomy::decode_level(payload.as_bytes()).ok_or_else(invalid)?,
+                ),
+                "safety" => {
+                    let healthy = b.autonomy.is_manual()
+                        || b.estimator.estimate(timestamp).health == Health::Ready;
+                    b.autonomy.set_safety(
+                        terra_autonomy::decode_safety(payload.as_bytes()).ok_or_else(invalid)?,
+                        healthy,
+                    );
+                }
+                "goal" => {
+                    if !outdoor_bridge::dispatch_goal(&mut b, payload.as_bytes(), timestamp, 0.) {
+                        return Err(invalid());
+                    }
+                }
+                "goal/decision" => {
+                    let pose = b.pose.unwrap_or_default();
+                    let map = b.map.clone();
+                    let e = b.estimator.estimate(timestamp);
+                    let ready = pose_quality::ready(&b, timestamp);
+                    b.autonomy.decide_proposal(
+                        terra_autonomy::decode_decision(payload.as_bytes()).ok_or_else(invalid)?,
+                        &terra_autonomy::ArbiterInput {
+                            now: timestamp,
+                            pose: pose.0,
+                            pose_time: pose.1,
+                            map: map.as_ref().map(|m| &m.0),
+                            map_time: map.as_ref().map(|m| m.1),
+                            map_revision: map.as_ref().map(|m| m.2).unwrap_or(0),
+                            measured: terra_navigation::Twist {
+                                linear: e.forward,
+                                angular: e.yaw_rate,
+                            },
+                            healthy: ready,
                         },
-                        healthy: ready,
-                    },
-                );
+                    );
+                }
+                "search" | "search/action" | "search/report/ack" => {
+                    search::dispatch_search(&mut b, &kind, payload.as_bytes(), timestamp)?
+                }
+                _ => return Err(invalid()),
             }
-            "search" | "search/action" | "search/report/ack" => {
-                search::dispatch_search(&mut b, &kind, payload.as_bytes(), timestamp)?
-            }
-            _ => return Err(invalid()),
-        }
-        Ok(())
+            Ok(())
+        })();
+        let run = self.observation_run_id();
+        self.observation.event("operator", if outcome.is_ok() { "command.dispatched" } else { "command.rejected" }, serde_json::json!({"topic":kind,"payload":serde_json::from_str::<serde_json::Value>(&payload).ok(),"error":outcome.as_ref().err().map(|e: &ControllerError|e.to_string())}), &run, timestamp);
+        outcome
     }
     /// Set the WGS84 origin using finite decimal-degree latitude and longitude.
     /// Returns `InvalidInput` for invalid coordinates or `Internal` for lock failure.

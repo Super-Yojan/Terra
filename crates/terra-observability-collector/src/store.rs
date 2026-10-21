@@ -9,6 +9,7 @@ pub struct StoreConfig {
     pub path: PathBuf,
     pub max_bytes: u64,
     pub retention_seconds: u64,
+    pub attachment_max_bytes: u64,
 }
 impl Default for StoreConfig {
     fn default() -> Self {
@@ -16,6 +17,7 @@ impl Default for StoreConfig {
             path: "collector.db".into(),
             max_bytes: 10 * 1024 * 1024 * 1024,
             retention_seconds: 30 * 86400,
+            attachment_max_bytes: 5 * 1024 * 1024 * 1024,
         }
     }
 }
@@ -31,7 +33,10 @@ pub struct StoredEvent {
 }
 impl Store {
     pub fn open(config: StoreConfig) -> Result<Self, JournalError> {
-        if config.max_bytes < 1024 || config.retention_seconds == 0 {
+        if config.max_bytes < 1024
+            || config.retention_seconds == 0
+            || config.attachment_max_bytes == 0
+        {
             return Err("invalid store limits".into());
         }
         if let Some(p) = config.path.parent() {
@@ -39,7 +44,7 @@ impl Store {
         }
         let store = Self { config };
         let db = store.db()?;
-        db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; CREATE TABLE IF NOT EXISTS observations(cursor INTEGER PRIMARY KEY AUTOINCREMENT,producer TEXT,boot TEXT,seq INTEGER,rover TEXT,session TEXT,received_ns INTEGER,payload TEXT,hash TEXT,bytes INTEGER, UNIQUE(producer,boot,seq)); CREATE INDEX IF NOT EXISTS observations_scope ON observations(rover,session,cursor); CREATE TABLE IF NOT EXISTS retention_gaps(producer TEXT,rover TEXT,at_ns INTEGER,count INTEGER);")?;
+        db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; CREATE TABLE IF NOT EXISTS observations(cursor INTEGER PRIMARY KEY AUTOINCREMENT,producer TEXT,boot TEXT,seq INTEGER,rover TEXT,session TEXT,received_ns INTEGER,payload TEXT,hash TEXT,bytes INTEGER, UNIQUE(producer,boot,seq)); CREATE INDEX IF NOT EXISTS observations_scope ON observations(rover,session,cursor); CREATE TABLE IF NOT EXISTS retention_gaps(producer TEXT,rover TEXT,at_ns INTEGER,count INTEGER,attachments INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(producer,rover));")?;
         Ok(store)
     }
     pub fn db(&self) -> Result<Connection, JournalError> {
@@ -135,16 +140,18 @@ impl Store {
             }
         }
         if cursor == 0 {
-            let mut gaps = db.prepare("SELECT producer,rover,at_ns,count FROM retention_gaps")?;
+            let mut gaps =
+                db.prepare("SELECT producer,rover,at_ns,count,attachments FROM retention_gaps")?;
             for gap in gaps.query_map([], |r| {
                 Ok((
                     r.get::<_, String>(0)?,
                     r.get::<_, String>(1)?,
                     r.get::<_, u64>(2)?,
                     r.get::<_, u64>(3)?,
+                    r.get::<_, u64>(4)?,
                 ))
             })? {
-                let (producer, rover, at, count) = gap?;
+                let (producer, rover, at, count, attachments) = gap?;
                 if scope.rovers.contains(&rover)
                     || (rover == "_producer" && scope.producer_id == producer)
                 {
@@ -155,15 +162,10 @@ impl Store {
                             schema_version: 1,
                             id: EventId {
                                 producer_id: producer,
-                                boot_id: "collector-retention".into(),
+                                boot_id: format!("collector-retention-{count}-{attachments}"),
                                 sequence: at,
                             },
-                            input: EventInput::new(
-                                &rover,
-                                "collector",
-                                "observability.gap",
-                                serde_json::json!({"evicted_events":count,"at_ns":at}),
-                            ),
+                            input: {let mut input=EventInput::new(&rover,"collector","observability.gap",serde_json::json!({"evicted_events":count,"evicted_attachments":attachments,"at_ns":at}));input.wall_time_ns=at;input},
                         },
                     });
                 }
@@ -208,7 +210,7 @@ impl Store {
             }
             tx.execute("DELETE FROM observations WHERE cursor=?", [id])?;
             tx.execute(
-                "INSERT INTO retention_gaps(producer,rover,at_ns,count) VALUES(?,?,?,1)",
+                "INSERT INTO retention_gaps(producer,rover,at_ns,count) VALUES(?,?,?,1) ON CONFLICT(producer,rover) DO UPDATE SET count=count+1,at_ns=MAX(at_ns,excluded.at_ns)",
                 params![producer, rover, at],
             )?;
             total = total.saturating_sub(bytes);

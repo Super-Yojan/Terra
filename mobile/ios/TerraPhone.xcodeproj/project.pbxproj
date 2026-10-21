@@ -7,6 +7,8 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		A10B0B5E0000000000000003 /* PhoneObservationCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10B0B5E0000000000000004 /* PhoneObservationCapture.swift */; };
+		A10B0B5E0000000000000001 /* TerraObservation.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10B0B5E0000000000000002 /* TerraObservation.swift */; };
 		014E5986C12CC878354BE533 /* View+TerraPairingConsent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B42D733D17017ED54DF9E3E /* View+TerraPairingConsent.swift */; };
 		06793BBE2D9E7876A63D0C2A /* ActuatorPagination.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C11A546598F9DA3655EF0C0 /* ActuatorPagination.swift */; };
 		08906BAF4104CBE47B269B2D /* PhoneController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C2FA04187CC39D929F3A531 /* PhoneController.swift */; };
@@ -63,6 +65,8 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		A10B0B5E0000000000000004 /* PhoneObservationCapture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhoneObservationCapture.swift; sourceTree = "<group>"; };
+		A10B0B5E0000000000000002 /* TerraObservation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerraObservation.swift; sourceTree = "<group>"; };
 		05345BECCAB64836C1C5C910 /* FleetConnectionDetails.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = FleetConnectionDetails.swift; sourceTree = "<group>"; };
 		0D2EB8FAB5C424C195564DB7 /* MountCalibration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MountCalibration.swift; sourceTree = "<group>"; };
 		15314EB9500C69B32E097620 /* ConnectionPresentation.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ConnectionPresentation.swift; sourceTree = "<group>"; };
@@ -227,6 +231,8 @@
 				2F8B011E9994CB657937B755 /* TerraHomeSheet.swift */,
 				C4D93BE22AB9B98C9B52E714 /* TerraStyle.swift */,
 				25948E386E416BE1611442F7 /* TerraLog.swift */,
+				A10B0B5E0000000000000004 /* PhoneObservationCapture.swift */,
+				A10B0B5E0000000000000002 /* TerraObservation.swift */,
 				D04DB8926762D65151B5C411 /* ActuatorDriveProfile.swift */,
 				5C11A546598F9DA3655EF0C0 /* ActuatorPagination.swift */,
 				58BEF209DEE2945A7D96965A /* BluetoothFragmentAssembler.swift */,
@@ -347,6 +353,8 @@
 				5275EB91F7E2093DB3D7EB09 /* TerraHomeSheet.swift in Sources */,
 				558521300E8F01C5ADFC1428 /* TerraStyle.swift in Sources */,
 				3DF9E05C49FEB1A06432E1A7 /* TerraLog.swift in Sources */,
+				A10B0B5E0000000000000003 /* PhoneObservationCapture.swift in Sources */,
+				A10B0B5E0000000000000001 /* TerraObservation.swift in Sources */,
 				A58122FA6F3E1A8414B6B6C3 /* ActuatorDriveProfile.swift in Sources */,
 				06793BBE2D9E7876A63D0C2A /* ActuatorPagination.swift in Sources */,
 				F0EA40F2756462AED7DD4EE2 /* BluetoothFragmentAssembler.swift in Sources */,

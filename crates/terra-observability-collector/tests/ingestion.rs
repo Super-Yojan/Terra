@@ -81,3 +81,18 @@ fn secrets_rejected() {
     e.input.attributes = json!({"nested":{"password":"secret"}});
     assert!(s.ingest(&scope(), &[e]).is_err());
 }
+#[test]
+fn retention_gap_counts_every_evicted_event() {
+    let (_d, s) = db();
+    for seq in 0..5 {
+        s.ingest(&scope(), &[event(seq)]).unwrap();
+    }
+    s.prune(u64::MAX).unwrap();
+    let rows = s.events(&scope(), None, 0, 100).unwrap();
+    let lost: u64 = rows
+        .iter()
+        .filter(|e| e.event.input.kind == "observability.gap")
+        .map(|e| e.event.input.attributes["evicted_events"].as_u64().unwrap())
+        .sum();
+    assert_eq!(lost, 5);
+}

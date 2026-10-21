@@ -79,7 +79,7 @@ struct PhoneGroundPlane {
 /// with a local supporting plane. Never move world points to flatten the terrain.
 struct PhoneGroundPolicy {
  private(set) var offset: Double?
- private var clearance: Double?
+ private(set) var clearance: Double?
  private var candidate: Double?
  private var since: Double?
  mutating func reset() { offset = nil; clearance = nil; candidate = nil; since = nil }

@@ -153,7 +153,39 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
     private var localizationTrackingReason: String?
     private var phoneHeadingReferenceYaw: Double?
     private var lastLocalizationPublish = -Double.infinity
-    private var controller: MobileController?
+    private let observationCapture = PhoneObservationCapture()
+    private let occupancySettings = defaultOccupancySettings()
+    private let observation = TerraObservation()
+    private var controller: MobileController? {
+        didSet {
+            guard let current = controller else { return }
+            let rover = UserDefaults.standard.string(forKey: "dashboardRoverID") ?? "_producer"
+            let directory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Observability", isDirectory: true)
+            let producer = "phone-" + (UserDefaults.standard.string(forKey: "observationProducerID") ?? {
+                let id = UUID().uuidString; UserDefaults.standard.set(id, forKey: "observationProducerID"); return id
+            }())
+            let observer = observation
+            DispatchQueue.global(qos: .utility).async {
+                do {
+                    var config: [String: Any] = ["path": directory.appendingPathComponent("events.db").path, "producer_id": producer, "rover_id": rover]
+                    if let settingsData = try? Data(contentsOf: directory.appendingPathComponent("settings.json")), settingsData.count <= 65536,
+                       let settings = try? JSONSerialization.jsonObject(with: settingsData) as? [String: Any] { config["settings"] = settings }
+                    let raw = String(decoding: try JSONSerialization.data(withJSONObject: config), as: UTF8.self)
+                    try current.startObservability(configJson: raw)
+                    if let settings = try? JSONSerialization.jsonObject(with: Data(current.observabilitySettings().utf8)) as? [String: Any],
+                       let evidenceSeconds = settings["evidence_sample_seconds"] as? Double, let mapSeconds = settings["map_sample_seconds"] as? Double {
+                        self.observationCapture.configure(evidenceSeconds: evidenceSeconds, mapSeconds: mapSeconds)
+                    }
+                    observer.attach(roverID: rover, sessionID: current.observationRunId(), sink: { current.recordObservation(eventJson: $0) })
+                    observer.record(component: "phone", kind: "lifecycle.controller_attached", attributes: [:])
+                    if let upload = ObservationUploadSettings.load(directory: directory, producer: producer) {
+                        do { try current.startObservabilityUpload(endpoint: upload.endpoint, token: upload.token) }
+                        catch { observer.record(component: "observability", kind: "upload.configuration_failed", attributes: [:]) }
+                    } else { observer.record(component: "observability", kind: "upload.unconfigured", attributes: [:]) }
+                } catch { TerraLog.control.error("Observability storage unavailable; control continues") }
+            }
+        }
+    }
     private var timer: DispatchSourceTimer?
     private var mode: Mode = .stopped
     private var target = (forward: 0.0, yaw: 0.0)
@@ -248,6 +280,9 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
     }
     /// Dashboard transport is independent of the Simulator-only Bevy hardware link.
     func connectDashboard(endpoint: String, prefix: String, roverID: String) {
+        observation.setContext(roverID: roverID)
+        controller?.setObservabilityRover(roverId: roverID)
+        observation.record(component: "router", kind: "connection.requested", attributes: [:])
         guard !dashboardConnecting, !dashboardConnected else { return }
         let attempt = dashboardAttemptToken()
         guard let id = UInt64(roverID.trimmingCharacters(in: .whitespacesAndNewlines)) else {
@@ -347,7 +382,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
         let endpoint = endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
         controlQueue.async {
             do {
-                self.occupancyMap = try MobileOccupancyMap(settings: defaultOccupancySettings())
+                self.occupancyMap = try MobileOccupancyMap(settings: self.occupancySettings)
                 self.mapGroundOffset = nil; self.groundPolicy.reset()
                 self.lastMapTime = -Double.infinity
                 self.zenoh = try MobileZenohClient(endpoint: endpoint, prefix: "terra/rover", roverId: id)
@@ -422,6 +457,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
     /// keepBluetooth leaves the rover link up for the actuator layout screen,
     /// which is pushed from this root and would otherwise drop on navigation.
     func stop(keepBluetooth: Bool = false) {
+        observation.record(component: "phone", kind: "lifecycle.stop", attributes: ["keep_bluetooth": keepBluetooth])
         connectionPolicy.stop(); pairingCandidate = nil; nearbyPairing.removeAll()
         routerSuppressed = true; routerRetryAt = nil; invalidateDashboardAttempt()
         dashboardConnecting = false
@@ -471,6 +507,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
         }
     }
     private func prepare(_ mode: Mode) throws {
+        observation.record(component: "phone", kind: "lifecycle.prepare", attributes: ["mode": String(describing: mode)])
         let preserveRuntime = mode == .phone && self.mode == .bluetoothManual && self.controller != nil
         if !preserveRuntime {
             try? self.controller?.reset()
@@ -485,7 +522,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
                 DispatchQueue.main.async {self.runLog=log}
         }
         if mode == .phone { try self.controller?.resetOutdoorFrame() }
-        self.occupancyMap = try MobileOccupancyMap(settings: defaultOccupancySettings())
+        self.occupancyMap = try MobileOccupancyMap(settings: self.occupancySettings)
         mapGroundOffset = nil; groundPolicy.reset(); lastMapTime = -Double.infinity
         DispatchQueue.main.async { self.occupancy = nil; self.mapPose = .zero; self.mapStatus = mode == .simulation ? "Simulated depth · 10 Hz" : (ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) ? "Waiting for scene depth" : "Scene depth unavailable on this device") }
         self.mode = mode
@@ -862,6 +899,9 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
             occupancyPublicationRevision += 1
             try controller?.autonomyMap(grid:grid,timestamp:lastMapTime.isFinite ? lastMapTime:simulatedTime,revision:occupancyPublicationRevision)
         }
+        if let controller {
+            observationCapture.captureMap(grid: grid, exposure: lastMapTime.isFinite ? lastMapTime : simulatedTime, frameID: localizationPolicy.identifier, revision: occupancyPublicationRevision, rover: UserDefaults.standard.string(forKey: "dashboardRoverID") ?? "_producer", controller: controller)
+        }
         DispatchQueue.main.async { self.occupancy = grid; self.mapPose = SIMD3(x, y, yaw); self.mapStatus = status }
     }
     private func updateSimulatedMap(x: Double, y: Double, yaw: Double, timestamp: Double) throws {
@@ -949,14 +989,24 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
         }
     }
     private func updatePhoneMap(frame: ARFrame, position: SIMD3<Float>, roverPosition: SIMD3<Float>, bodyOrientation: simd_quatf) {
-        guard frame.timestamp - lastMapTime >= 0.1, let depth = frame.sceneDepth, let map = occupancyMap else { return }
+        guard frame.timestamp - lastMapTime >= 0.1 else { return }
+        guard let depth = frame.sceneDepth, let map = occupancyMap else {
+            observation.recordChanged(component: "mapping", kind: "mapping.health", attributes: ["reason": frame.sceneDepth == nil ? "depth_unavailable" : "map_unavailable"])
+            return
+        }
         let up = bodyOrientation.act(SIMD3<Float>(0, 0, 1))
         guard let ground = groundPolicy.groundPlane(
             cameraPosition: SIMD3(Double(position.x), Double(position.y), Double(position.z)),
-            bodyUp: SIMD3(Double(up.x), Double(up.y), Double(up.z))) else { return }
+            bodyUp: SIMD3(Double(up.x), Double(up.y), Double(up.z))) else {
+            observation.recordChanged(component: "mapping", kind: "mapping.health", attributes: ["reason": "ground_reference_unavailable"])
+            return
+        }
         let buffer = depth.depthMap
         guard CVPixelBufferGetPixelFormatType(buffer) == kCVPixelFormatType_DepthFloat32,
-              CVPixelBufferLockBaseAddress(buffer, .readOnly) == kCVReturnSuccess else { return }
+              CVPixelBufferLockBaseAddress(buffer, .readOnly) == kCVReturnSuccess else {
+            observation.recordChanged(component: "mapping", kind: "mapping.health", attributes: ["reason": "depth_buffer_unavailable"])
+            return
+        }
         defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
         let width = CVPixelBufferGetWidth(buffer), height = CVPixelBufferGetHeight(buffer)
         guard let base = CVPixelBufferGetBaseAddress(buffer) else { return }
@@ -982,14 +1032,39 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
         let sy = Double(height) / Double(frame.camera.imageResolution.height)
         // AR camera axes right/up/back -> optical right/down/forward.
         let q = (simd_quatf(worldFromAR) * simd_quatf(frame.camera.transform) * simd_quatf(angle: .pi, axis: SIMD3(1, 0, 0))).vector
-        guard mapGroundOffset != nil else { return }
+        guard mapGroundOffset != nil else {
+            observation.recordChanged(component: "mapping", kind: "mapping.health", attributes: ["reason": "ground_offset_unavailable"])
+            return
+        }
         do {
             try map.recenter(x: Double(roverPosition.x), y: Double(roverPosition.y))
             try map.integrateDepthWithGroundPlane(frame: MappingDepthFrame(timestamp: frame.timestamp, width: UInt32(width), height: UInt32(height), fx: Double(k.columns.0.x) * sx, fy: Double(k.columns.1.y) * sy, cx: (Double(k.columns.2.x) + 0.5) * sx - 0.5, cy: (Double(k.columns.2.y) + 0.5) * sy - 0.5, cameraX: Double(position.x), cameraY: Double(position.y), cameraZ: Double(position.z) + (mapGroundOffset ?? 0), quaternionX: Double(q.x), quaternionY: Double(q.y), quaternionZ: Double(q.z), quaternionW: Double(q.w), depthMetres: values), ground: MappingGroundPlane(normalX: ground.normal.x, normalY: ground.normal.y, normalZ: ground.normal.z, offset: ground.offset))
             lastMapTime = frame.timestamp
+            observation.recordChanged(component: "mapping", kind: "mapping.health", attributes: ["reason": "accepted"])
+            observation.record(component: "mapping", kind: "mapping.integrated", attributes: ["exposure_ns": UInt64(frame.timestamp * 1e9), "valid_depth_samples": values.reduce(0) { $0 + ($1.isFinite && $1 > 0 ? 1 : 0) }, "total_depth_samples": values.count, "ground_normal": [ground.normal.x, ground.normal.y, ground.normal.z], "ground_offset": ground.offset])
             let forward = bodyOrientation.act(SIMD3<Float>(1, 0, 0))
             try publishMap(x: Double(roverPosition.x), y: Double(roverPosition.y), yaw: atan2(Double(forward.y), Double(forward.x)), status: "ARKit scene depth · terrain-relative ground · 10 Hz")
-        } catch { DispatchQueue.main.async { self.mapStatus = "Map: " + error.localizedDescription } }
+            if let controller {
+                let bodyRelative = bodyOrientation.inverse.act(position - roverPosition)
+                let mountQ = (bodyOrientation.inverse * simd_quatf(vector: q)).vector
+                let run = controller.observationRunId()
+                let k = frame.camera.intrinsics
+                let metadata: [String: Any] = [
+                    "rover_id": UserDefaults.standard.string(forKey: "dashboardRoverID") ?? "_producer", "session_id": run,
+                    "exposure_ns": UInt64(frame.timestamp * 1e9), "frame_id": localizationPolicy.identifier,
+                    "depth_intrinsics": ["width": width, "height": height, "fx": Double(k.columns.0.x) * sx, "fy": Double(k.columns.1.y) * sy, "cx": (Double(k.columns.2.x) + 0.5) * sx - 0.5, "cy": (Double(k.columns.2.y) + 0.5) * sy - 0.5],
+                    "rgb_intrinsics": ["width": Int(frame.camera.imageResolution.width), "height": Int(frame.camera.imageResolution.height), "fx": Double(k.columns.0.x), "fy": Double(k.columns.1.y), "cx": Double(k.columns.2.x), "cy": Double(k.columns.2.y)],
+                    "image_orientation": "ARKit native landscape pixels; optical right/down/forward",
+                    "camera_to_world": ["position": [Double(position.x), Double(position.y), Double(position.z) + (mapGroundOffset ?? 0)], "quaternion_xyzw": [q.x, q.y, q.z, q.w]],
+                    "camera_to_body": ["position": [bodyRelative.x, bodyRelative.y, bodyRelative.z], "quaternion_xyzw": [mountQ.x, mountQ.y, mountQ.z, mountQ.w]],
+                    "body_pose": ["position": [Double(roverPosition.x), Double(roverPosition.y), Double(roverPosition.z) + (mapGroundOffset ?? 0)], "quaternion_xyzw": [bodyOrientation.vector.x, bodyOrientation.vector.y, bodyOrientation.vector.z, bodyOrientation.vector.w]],
+                    "ground_plane": ["normal": [ground.normal.x, ground.normal.y, ground.normal.z], "offset": ground.offset],
+                    "clearance": groundPolicy.clearance ?? 0, "world_offset": mapGroundOffset ?? 0,
+                    "thresholds": ["min_obstacle_height": occupancySettings.minObstacleHeight, "max_obstacle_height": occupancySettings.maxObstacleHeight, "max_range": occupancySettings.maxRange, "pixel_stride": occupancySettings.pixelStride],
+                    "map_revision": occupancyPublicationRevision, "integration_result": "accepted"]
+                observationCapture.capture(frame: frame, depth: values, width: width, height: height, grid: try? map.snapshot(), manifest: metadata, controller: controller)
+            }
+        } catch { observation.recordChanged(component: "mapping", kind: "mapping.health", attributes: ["reason": "integration_failed", "error": error.localizedDescription]); DispatchQueue.main.async { self.mapStatus = "Map: " + error.localizedDescription } }
     }
     private func handleTrackingFailure(_ error: Error) {
         sensorEpochLock.lock(); let epoch = sensorEpoch; sensorEpochLock.unlock()
@@ -1065,6 +1140,10 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
         controlQueue.async {do {let payload=String(decoding:try JSONSerialization.data(withJSONObject:["run_id":run,"proposal_id":id,"decision":approve ? "approve":"reject","token":UUID().uuidString]),as:UTF8.self);if self.mode == .remote{try self.zenoh?.sendAction(kind:"goal/decision",payload:payload)}else{try self.controller?.autonomyRequest(kind:"goal/decision",payload:payload,timestamp:self.mode == .simulation ? self.simulatedTime:CACurrentMediaTime())}}catch{DispatchQueue.main.async{self.autonomyReason=error.localizedDescription}}}
     }
     private func updateAuthority() {
+        if let run = controller?.observationRunId(), !run.isEmpty {
+            observation.setContext(roverID: UserDefaults.standard.string(forKey: "dashboardRoverID") ?? "_producer", sessionID: run)
+        }
+        observation.recordChanged(component: "router", kind: "connection.state", attributes: ["status": controller?.dashboardStatus() ?? "unavailable"])
         if let controller {
             let request = controller.takeHardwareRequest()
             if let r = (try? JSONSerialization.jsonObject(with: Data(request.utf8))) as? [String: Any],
@@ -1182,6 +1261,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
         }
     }
     private func fail(_ error: Error, context: String = "Controller") {
+        observation.record(component: "phone", kind: "lifecycle.failure", attributes: ["context": context, "error": error.localizedDescription])
         retainStopReason("\(context): \(String(describing: error))")
         TerraLog.control.error("Controller failure: \(context, privacy: .public): \(error.localizedDescription, privacy: .public)")
         let detail = "\(context): \(error.localizedDescription)"
@@ -1225,6 +1305,7 @@ extension PhoneController {
     private func pauseHardwareMotion(reason: String) {
         target = (0, 0); resetServoTargets()
         guard !hardwareMotionRevoked else { return }
+        observation.record(component: "control", kind: "motion.pause", attributes: ["reason": reason])
         retainStopReason(reason)
         bluetooth.pauseMotion()
         hardwarePauseRequested = true
@@ -1233,6 +1314,7 @@ extension PhoneController {
     private func revokeHardwareMotion(reason: String = #function) {
         target = (0, 0); resetServoTargets()
         if !hardwareMotionRevoked || hardwarePauseRequested {
+            observation.record(component: "control", kind: "motion.disarm", attributes: ["reason": reason, "paused": hardwarePauseRequested])
             hardwarePauseRequested = false
             retainStopReason(reason)
             TerraLog.control.notice("Revoking motion; caller=\(reason, privacy: .public) mode=\(String(describing: self.mode), privacy: .public) feedback=\(self.bleFeedback)")
@@ -1261,6 +1343,7 @@ extension PhoneController {
             acknowledgedCommitRevision = nil
             configurationStatus = "Connection changed · stage draft again"
         }
+        observation.recordChanged(component: "bluetooth", kind: "hardware.state", attributes: ["status": bluetooth.status, "ready": bluetooth.isReady, "armed": bluetooth.armed, "arming": bluetooth.arming])
         hardwareStatus = bluetooth.status; hardwareReady = bluetooth.isReady
         if let identifier = bluetooth.connectedIdentifier {
             UserDefaults.standard.set(identifier.uuidString, forKey: "preferredHardwareRover")

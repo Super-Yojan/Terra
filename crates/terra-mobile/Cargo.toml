@@ -5,6 +5,7 @@ edition.workspace = true
 [lib]
 crate-type = ["lib", "staticlib", "cdylib"]
 [dependencies]
+terra-observability.workspace = true
 terra-actuators.workspace = true
 serde = { version = "1", features = ["derive"] }
 terra-autonomy.workspace = true
@@ -27,4 +28,5 @@ path = "src/bin/bindgen.rs"
 required-features = ["bindgen"]
 
 [dev-dependencies]
+tempfile = "3"
 zenoh = { version = "=1.10.1", default-features = false, features = ["transport_tcp"] }

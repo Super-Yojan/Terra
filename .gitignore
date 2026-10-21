@@ -20,3 +20,12 @@
 /hardware/raspberry-pi/dist/
 /hardware/raspberry-pi/*.egg-info/
 /hardware/raspberry-pi/**/__pycache__/
+
+# Operational evidence and local replay tooling
+/observability/
+/tools/observability/.venv/
+/tools/observability/*.egg-info/
+/tools/observability/**/__pycache__/
+/tools/observability/.pytest_cache/
+/tests/rover/__pycache__/
+/tests/observability/__pycache__/

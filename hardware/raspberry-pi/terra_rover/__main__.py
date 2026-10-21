@@ -150,6 +150,8 @@ async def setup(args):
         await transport.close()
 
 def main():
+    from .observability import configure_from_environment
+    configure_from_environment()
     parser = argparse.ArgumentParser(description='Terra owner-only actuator peripheral')
     parser.add_argument('--check-bundle', action='store_true', help='verify bundled driver and D-Bus libraries without accessing hardware')
     parser.add_argument('--mock', action='store_true')

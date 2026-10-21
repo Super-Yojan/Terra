@@ -86,15 +86,27 @@ fn ack_eviction_precedes_pending_eviction() {
         ..setup(&path)
     })
     .unwrap();
-    j.try_record(event());
+    let mut large = event();
+    large.attributes["padding"] = "x".repeat(3700).into();
+    j.try_record(large);
     j.flush(Duration::from_secs(2)).unwrap();
     let r = JournalReader::open(&path).unwrap();
     let first = r.batch(1).unwrap()[0].id.clone();
-    r.ack(&[first]).unwrap();
+    r.ack(std::slice::from_ref(&first)).unwrap();
     for _ in 0..6 {
         j.try_record(event());
     }
     j.flush(Duration::from_secs(2)).unwrap();
+    let db = rusqlite::Connection::open(&path).unwrap();
+    assert_eq!(
+        db.query_row(
+            "SELECT COUNT(*) FROM events WHERE producer=? AND boot=? AND seq=?",
+            rusqlite::params![first.producer_id, first.boot_id, first.sequence],
+            |r| r.get::<_, u64>(0)
+        )
+        .unwrap(),
+        0
+    );
     assert!(
         !r.batch(100)
             .unwrap()
