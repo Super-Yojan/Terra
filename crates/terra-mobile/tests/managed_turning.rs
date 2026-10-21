@@ -78,7 +78,12 @@ fn active_goal_stops_at_central_pose_freshness_threshold() {
 #[test]
 fn manual_authority_remains_available_without_camera_or_imu() {
     let c = MobileController::new(default_control_settings()).unwrap();
-    c.set_target(TwistSetpoint { timestamp: 1., forward: 0.2, yaw_rate: 0. }).unwrap();
+    c.set_target(TwistSetpoint {
+        timestamp: 1.,
+        forward: 0.2,
+        yaw_rate: 0.,
+    })
+    .unwrap();
     c.step(1.01).unwrap();
     let status: serde_json::Value = serde_json::from_str(&c.autonomy_status()).unwrap();
     assert_eq!(status["pose_quality"]["degraded"], true);
@@ -93,13 +98,28 @@ fn manual_authority_remains_available_without_camera_or_imu() {
 #[test]
 fn manual_emergency_stop_requires_explicit_reset_but_not_camera_tracking() {
     let c = MobileController::new(default_control_settings()).unwrap();
-    c.set_target(TwistSetpoint { timestamp: 1., forward: 0.2, yaw_rate: 0. }).unwrap();
-    c.autonomy_request("safety".into(), r#"{"action":"stop","token":"stop"}"#.into(), 1.01).unwrap();
+    c.set_target(TwistSetpoint {
+        timestamp: 1.,
+        forward: 0.2,
+        yaw_rate: 0.,
+    })
+    .unwrap();
+    c.autonomy_request(
+        "safety".into(),
+        r#"{"action":"stop","token":"stop"}"#.into(),
+        1.01,
+    )
+    .unwrap();
     c.step(1.02).unwrap();
     let stopped: serde_json::Value = serde_json::from_str(&c.autonomy_status()).unwrap();
     assert_eq!(stopped["status"]["safety"], "emergency_stop");
     assert_eq!(stopped["twist"]["linear"], 0.);
-    c.autonomy_request("safety".into(), r#"{"action":"reset","token":"reset"}"#.into(), 1.03).unwrap();
+    c.autonomy_request(
+        "safety".into(),
+        r#"{"action":"reset","token":"reset"}"#.into(),
+        1.03,
+    )
+    .unwrap();
     c.step(1.04).unwrap();
     let reset: serde_json::Value = serde_json::from_str(&c.autonomy_status()).unwrap();
     assert_eq!(reset["status"]["safety"], "clear");

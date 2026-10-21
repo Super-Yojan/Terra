@@ -1,4 +1,4 @@
-use terra_mobile::outdoor::{distance_bearing, Evidence, GpsFix, HeadingFix, OutdoorController};
+use terra_mobile::outdoor::{Evidence, GpsFix, HeadingFix, OutdoorController, distance_bearing};
 use terra_navigation::Pose;
 fn evidence() -> Evidence {
     Evidence {
@@ -102,8 +102,8 @@ fn stale_pause_requires_explicit_resume_and_distinct_arrival() {
 fn invalid_samples_and_hardware_fail_closed() {
     let mut c = OutdoorController::default();
     sensors(&mut c, 1., 0.);
-    assert!(c
-        .gps(
+    assert!(
+        c.gps(
             GpsFix {
                 timestamp: 2.,
                 latitude: 0.,
@@ -112,7 +112,8 @@ fn invalid_samples_and_hardware_fail_closed() {
             },
             1.
         )
-        .is_err());
+        .is_err()
+    );
     c.gps(
         GpsFix {
             timestamp: 1.1,
@@ -343,8 +344,8 @@ fn rejected_sensor_latches_pause_immediately() {
     let mut c = OutdoorController::default();
     sensors(&mut c, 1., 0.);
     c.start(0.001, 0., "m".into(), 5., 1., evidence()).unwrap();
-    assert!(c
-        .gps(
+    assert!(
+        c.gps(
             GpsFix {
                 timestamp: 2.,
                 latitude: f64::NAN,
@@ -353,7 +354,8 @@ fn rejected_sensor_latches_pause_immediately() {
             },
             1.
         )
-        .is_err());
+        .is_err()
+    );
     assert_eq!(c.phase(), "paused");
     assert!(c.tick(1.1, evidence()).is_none());
 }
@@ -362,8 +364,8 @@ fn invalidation_does_not_erase_replay_watermark() {
     let mut c = OutdoorController::default();
     sensors(&mut c, 1., 0.);
     c.invalidate_sensors();
-    assert!(c
-        .gps(
+    assert!(
+        c.gps(
             GpsFix {
                 timestamp: 1.,
                 latitude: 0.,
@@ -372,9 +374,10 @@ fn invalidation_does_not_erase_replay_watermark() {
             },
             1.1
         )
-        .is_err());
-    assert!(c
-        .heading(
+        .is_err()
+    );
+    assert!(
+        c.heading(
             HeadingFix {
                 timestamp: 1.,
                 true_heading: 0.,
@@ -382,7 +385,8 @@ fn invalidation_does_not_erase_replay_watermark() {
             },
             1.1
         )
-        .is_err());
+        .is_err()
+    );
 }
 
 #[test]
@@ -436,20 +440,63 @@ fn vio_loss_pauses_without_encoders_and_recovery_does_not_resume() {
 fn default_radius_accepts_ten_metre_gps_but_not_worse() {
     let mut c = OutdoorController::default();
     sensors(&mut c, 1., 0.);
-    c.gps(GpsFix { timestamp: 1.1, latitude: 0., longitude: 0., accuracy: 10. }, 1.1).unwrap();
+    c.gps(
+        GpsFix {
+            timestamp: 1.1,
+            latitude: 0.,
+            longitude: 0.,
+            accuracy: 10.,
+        },
+        1.1,
+    )
+    .unwrap();
     assert_eq!(c.radius, 10.);
     assert!(c.readiness(1.1, evidence(), c.radius).is_none());
-    c.gps(GpsFix { timestamp: 1.2, latitude: 0., longitude: 0., accuracy: 10.1 }, 1.2).unwrap();
-    assert_eq!(c.readiness(1.2, evidence(), c.radius), Some("gps_uncertain"));
+    c.gps(
+        GpsFix {
+            timestamp: 1.2,
+            latitude: 0.,
+            longitude: 0.,
+            accuracy: 10.1,
+        },
+        1.2,
+    )
+    .unwrap();
+    assert_eq!(
+        c.readiness(1.2, evidence(), c.radius),
+        Some("gps_uncertain")
+    );
 }
 
 #[test]
 fn temporary_heading_limit_keeps_accuracy_and_freshness_gates() {
     let mut c = OutdoorController::default();
     sensors(&mut c, 1., 0.);
-    c.heading(HeadingFix { timestamp: 1.1, true_heading: 0., accuracy: 35. }, 1.1).unwrap();
+    c.heading(
+        HeadingFix {
+            timestamp: 1.1,
+            true_heading: 0.,
+            accuracy: 35.,
+        },
+        1.1,
+    )
+    .unwrap();
     assert_eq!(c.readiness(1.1, evidence(), c.radius), None);
-    assert_eq!(c.readiness(3.2, evidence(), c.radius), Some("heading_uncertain"));
-    c.heading(HeadingFix { timestamp: 3.3, true_heading: 0., accuracy: 35.1 }, 3.3).unwrap();
-    assert_eq!(c.readiness(3.3, evidence(), c.radius), Some("heading_uncertain"));
+    assert_eq!(
+        c.readiness(3.2, evidence(), c.radius),
+        Some("heading_uncertain")
+    );
+    c.heading(
+        HeadingFix {
+            timestamp: 3.3,
+            true_heading: 0.,
+            accuracy: 35.1,
+        },
+        3.3,
+    )
+    .unwrap();
+    assert_eq!(
+        c.readiness(3.3, evidence(), c.radius),
+        Some("heading_uncertain")
+    );
 }

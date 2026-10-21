@@ -1,5 +1,5 @@
 //! Phone FFI records around the shared geographic waypoint controller.
-pub use terra_autonomy::outdoor::{distance_bearing, Evidence, OutdoorController};
+pub use terra_autonomy::outdoor::{Evidence, OutdoorController, distance_bearing};
 #[derive(Clone, Copy, Debug, uniffi::Record)]
 pub struct GpsFix {
     pub timestamp: f64,
@@ -16,11 +16,20 @@ pub struct HeadingFix {
 
 impl From<GpsFix> for terra_autonomy::outdoor::GpsFix {
     fn from(sample: GpsFix) -> Self {
-        Self { timestamp: sample.timestamp, latitude: sample.latitude, longitude: sample.longitude, accuracy: sample.accuracy }
+        Self {
+            timestamp: sample.timestamp,
+            latitude: sample.latitude,
+            longitude: sample.longitude,
+            accuracy: sample.accuracy,
+        }
     }
 }
 impl From<HeadingFix> for terra_autonomy::outdoor::HeadingFix {
     fn from(sample: HeadingFix) -> Self {
-        Self { timestamp: sample.timestamp, true_heading: sample.true_heading, accuracy: sample.accuracy }
+        Self {
+            timestamp: sample.timestamp,
+            true_heading: sample.true_heading,
+            accuracy: sample.accuracy,
+        }
     }
 }

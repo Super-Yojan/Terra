@@ -1,5 +1,5 @@
 //! Geographic mission state, independent of the local pose and occupancy frame.
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use terra_navigation::Pose;
 #[derive(Clone, Copy, Debug)]
 pub struct GpsFix {

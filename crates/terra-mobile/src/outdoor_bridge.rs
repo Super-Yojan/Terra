@@ -17,7 +17,11 @@ pub(crate) fn evidence(b: &Brain, now: f64) -> Evidence {
             .map
             .as_ref()
             .is_some_and(|(_, t, _)| now.is_finite() && (0.0..=0.5).contains(&(now - t))),
-        hardware_ready: h.is_some_and(|h| h["ready"] == true && h["motion_paused"] != true && h["stop_reason"] != "watchdog_paused"),
+        hardware_ready: h.is_some_and(|h| {
+            h["ready"] == true
+                && h["motion_paused"] != true
+                && h["stop_reason"] != "watchdog_paused"
+        }),
         armed: h.is_some_and(|h| h["armed"] == true && h["arming"] == false),
         authority: b.autonomy.outdoor_authority(),
     }
@@ -265,9 +269,12 @@ mod pause_tests {
     fn armed_watchdog_pause_is_not_ready_for_outdoor_motion() {
         let c = MobileController::new(default_control_settings()).unwrap();
         let mut b = c.brain.lock().unwrap();
-        b.hardware_observation = Some((serde_json::json!({
-            "ready":true,"armed":true,"arming":false,"stop_reason":"watchdog_paused"
-        }), std::time::Instant::now()));
+        b.hardware_observation = Some((
+            serde_json::json!({
+                "ready":true,"armed":true,"arming":false,"stop_reason":"watchdog_paused"
+            }),
+            std::time::Instant::now(),
+        ));
         let e = evidence(&b, 1.);
         assert!(e.armed);
         assert!(!e.hardware_ready);
