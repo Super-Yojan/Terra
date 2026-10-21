@@ -106,16 +106,29 @@ pub fn initialize_runtime(role: &str) {
             });
         let settings = crate::ObservationSettings::from_environment().ok()?;
         let mut observer = RuntimeObserver::open_with_settings(&path, &producer, settings).ok()?;
-        if let (Ok(endpoint), Ok(token_file)) = (
+        let upload = match (
             std::env::var("TERRA_OBSERVABILITY_ENDPOINT"),
             std::env::var("TERRA_OBSERVABILITY_UPLOAD_TOKEN_FILE"),
-        ) && let Ok(token) = std::fs::read_to_string(token_file)
+        ) {
+            (Ok(endpoint), Ok(token_file)) => Some(SavedUploadConfig {
+                endpoint,
+                token_file: token_file.into(),
+            }),
+            (Err(std::env::VarError::NotPresent), Err(std::env::VarError::NotPresent)) => {
+                load_upload_config(&path.with_file_name("upload.json"))
+                    .ok()
+                    .flatten()
+            }
+            _ => None,
+        };
+        if let Some(config) = upload
+            && let Ok(token) = std::fs::read_to_string(config.token_file)
             && let Ok(reader) = crate::JournalReader::open(&path)
         {
             observer._uploader = crate::UploadHandle::start(
                 reader,
                 crate::UploadConfig {
-                    endpoint,
+                    endpoint: config.endpoint,
                     token: token.trim().into(),
                     evidence_directory: Some(path.with_extension("evidence")),
                     clock_journal: Some(observer.journal.clone()),
@@ -175,4 +188,31 @@ pub fn runtime_evidence_directory() -> Option<std::path::PathBuf> {
     OBSERVER
         .get()
         .and_then(|o| o.as_ref().map(|o| o.path.with_extension("evidence")))
+}
+
+/// Private per-application upload settings, used when explicit environment
+/// settings are absent. The token itself stays in a separate protected file.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SavedUploadConfig {
+    pub endpoint: String,
+    pub token_file: std::path::PathBuf,
+}
+pub fn load_upload_config(path: &Path) -> Result<Option<SavedUploadConfig>, JournalError> {
+    let metadata = match std::fs::metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    if metadata.len() > 65536 {
+        return Err("oversized upload settings".into());
+    }
+    let mut config: SavedUploadConfig = serde_json::from_slice(&std::fs::read(path)?)?;
+    if config.token_file.is_relative() {
+        config.token_file = path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join(config.token_file);
+    }
+    Ok(Some(config))
 }

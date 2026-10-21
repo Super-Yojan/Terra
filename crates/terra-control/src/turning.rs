@@ -1,5 +1,6 @@
 //! Managed motion limits. Local Bluetooth manual driving does not use this policy.
 use serde::{Deserialize, Serialize};
+use terra_types::timing;
 use terra_types::{InputError, VelocityTarget};
 /// Units: rad/s, rad/s², rad/s² and metres, respectively.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -75,13 +76,15 @@ impl TurningLimiter {
     pub fn step(&mut self, mut target: VelocityTarget) -> Result<VelocityTarget, InputError> {
         let dt = self
             .previous
-            .map_or(0.01, |p| target.timestamp - p.timestamp);
+            .map_or(timing::TURNING_INITIAL_STEP_SECONDS, |p| {
+                target.timestamp - p.timestamp
+            });
         if !target.timestamp.is_finite()
             || target.timestamp < 0.
             || !target.forward.is_finite()
             || !target.yaw_rate.is_finite()
             || dt <= 0.
-            || dt > 0.100000001
+            || dt > timing::TURNING_MAX_STEP_SECONDS + timing::TURNING_STEP_TOLERANCE_SECONDS
         {
             self.reset();
             return Err(InputError::OutOfOrder);

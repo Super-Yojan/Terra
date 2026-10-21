@@ -34,7 +34,14 @@ TERRA_OBSERVABILITY_ENDPOINT=https://HOST/observability
 TERRA_OBSERVABILITY_UPLOAD_TOKEN_FILE=/private/config/dashboard-laptop.token
 ```
 
-Only the first three are needed for local recording; a missing upload endpoint
+Native apps also read a private `upload.json` beside `events.db` when neither
+upload environment variable is set. Its fields are `endpoint` and `token_file`;
+a relative token path resolves beside that file. This makes normal app launches
+upload automatically after provisioning, without adding credentials to launch
+arguments. Keep the directory mode0700 and both config/token files mode0600.
+Phone imports use the separate Keychain procedure below.
+
+Only the first three environment variables are needed for local recording; a missing upload endpoint
 keeps events local. `TERRA_OBSERVABILITY_DISABLED=1` disables native recording.
 Copy [source-settings.example.json](source-settings.example.json) to change
 recording rates and budgets in one place. Partial overrides are accepted;

@@ -46,9 +46,9 @@ impl Default for ConfirmationConfig {
         Self {
             confidence: 0.8,
             frames: 3,
-            span_s: 0.5,
+            span_s: terra_types::timing::SEARCH_CONFIRMATION_SPAN_SECONDS,
             agreement_m: 1.,
-            freshness_s: 0.5,
+            freshness_s: terra_types::timing::SEARCH_OBSERVATION_FRESHNESS_SECONDS,
         }
     }
 }

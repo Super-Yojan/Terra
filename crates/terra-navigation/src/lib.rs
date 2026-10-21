@@ -143,7 +143,7 @@ impl Default for PlannerConfig {
             acceleration: 1.,
             yaw_acceleration: 2.,
             braking: 1.,
-            horizon: 2.,
+            horizon: terra_types::timing::PLANNER_HORIZON_SECONDS,
         }
     }
 }

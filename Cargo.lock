@@ -2906,6 +2906,7 @@ dependencies = [
  "serde",
  "terra-mapping",
  "terra-navigation",
+ "terra-types",
 ]
 
 [[package]]
