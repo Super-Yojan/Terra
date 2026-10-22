@@ -79,3 +79,37 @@ The new USB queue tests cover bounded requests, fixed database access, original
 identity preservation, selected acknowledgment, and retaining queued records on
 cloud failure followed by delivery on reconnection. The installer and private
 configuration contain no credentials in version control.
+
+
+## Wi-Fi verification and replacement image preparation
+
+The existing Pi joined `Super_AC` at `192.168.40.50`. A deliberately labeled
+`logging.setup_check` event originating on the Pi was acknowledged by GCP over
+its direct HTTPS uploader. The main observer database contained 17,804 acknowledged
+events and no pending events at that check. The independent observer remained active
+while the rover service was stopped for a Fusion HAT I2C probe failure.
+
+A private backup of the Pi SQLite journals and kernel/rover/Bluetooth diagnostic
+history was saved before preparing a replacement image. It contains no copied
+Wi-Fi passwords or SSH credentials.
+
+The intended replacement base is the published `terra-image-v0.1.0-rc3` release
+from `Super-Yojan/terra-image-gen`. Both compressed and uncompressed published
+hashes matched. Its Linux image checks passed, including bundle execution and
+Fusion HAT modules built for both `6.12.109+rpt-rpi-v8` and `6.12.109+rpt-rpi-2712`.
+The user approved hotspot mode at every boot plus independent Pi 4 USB SSH.
+Connectivity changes are being prepared in that repository; this record does
+not yet assert a successful physical boot of the customized image.
+
+The observer unit now starts after journald without waiting for network-online.
+It persists early events and retries uploads whether hotspot mode has internet
+or not. This avoids delaying independent logging while waiting for an uplink.
+
+The replacement image now includes the instrumented rover, independent observer,
+existing rover layout/phone bond, and the privately supplied hotspot configuration.
+Image connectivity source is committed as `terra-image-gen` commit `3b0764d`.
+All 13 observability/queue tests passed on the Pi; Linux network and image-check
+fixtures passed. The logger also captures kernel, hotspot, network and systemd
+unit-failure diagnostics with secret redaction. The current Pi observer was updated
+and is active. The customized image has not yet been flashed or physically booted;
+SSH authentication provisioning and post-flash USB/hotspot/HAT verification remain.

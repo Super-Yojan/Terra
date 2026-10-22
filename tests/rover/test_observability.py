@@ -49,3 +49,25 @@ class JournalProjectionTests(unittest.TestCase):
 class ObservationAdmissionTests(unittest.TestCase):
  def test_invalid_frame_stays_rejected_without_observer_exception(self):
   self.assertFalse(SafetyController().accept(object(),1,1))
+
+class DeviceDiagnosticsTests(unittest.TestCase):
+ def test_kernel_hat_failure_is_recorded(self):
+  from terra_rover.log_forwarder import project_journal
+  entry={'_TRANSPORT':'kernel','__CURSOR':'kernel-cursor','__REALTIME_TIMESTAMP':'123','__MONOTONIC_TIMESTAMP':'50','MESSAGE':'fusion_hat 1-0017: probe failed with error -5'}
+  event=project_journal(entry)
+  self.assertIsNotNone(event);self.assertEqual(event['component'],'kernel')
+  self.assertIn('probe failed',event['attributes']['message'])
+ def test_systemd_unit_failure_is_not_hidden_by_init_scope(self):
+  from terra_rover.log_forwarder import project_journal
+  entry={'_SYSTEMD_UNIT':'init.scope','UNIT':'terra-rover.service','__CURSOR':'unit-cursor','MESSAGE':'Main process exited, status=1/FAILURE'}
+  self.assertIsNotNone(project_journal(entry))
+ def test_hotspot_disconnect_and_secret_redaction(self):
+  from terra_rover.log_forwarder import project_journal
+  entry={'_SYSTEMD_UNIT':'hostapd.service','__CURSOR':'ap-cursor','MESSAGE':'wlan0: AP-STA-DISCONNECTED'}
+  self.assertIn('DISCONNECTED',project_journal(entry)['attributes']['message'])
+  entry['MESSAGE']='WPA: 4-Way Handshake failed - pre-shared key may be incorrect (PSK mismatch)'
+  self.assertIn('PSK mismatch',project_journal(entry)['attributes']['message'])
+  entry['MESSAGE']='psk=private-fixture-value'
+  self.assertEqual(project_journal(entry)['attributes']['message'],'[sensitive journal message omitted]')
+  entry['MESSAGE']='wpa_psk=private-fixture-value'
+  self.assertEqual(project_journal(entry)['attributes']['message'],'[sensitive journal message omitted]')

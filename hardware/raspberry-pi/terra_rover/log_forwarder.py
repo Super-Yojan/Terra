@@ -1,13 +1,16 @@
 """Independent journal reader/uploader. No imports of actuator or Bluetooth control."""
-import hashlib,json,os,pathlib,subprocess,time
+import hashlib,json,os,pathlib,re,subprocess,time
 from .observability import ObservationJournal,ObservationUploader
 
-UNITS=('terra-rover.service','bluetooth.service')
+UNITS=('terra-rover.service','bluetooth.service','terra-network-setup.service',
+       'hostapd.service','systemd-networkd.service','wpa_supplicant@wlan0.service',
+       'NetworkManager.service','systemd-timesyncd.service')
 
 def project_journal(entry):
-    unit=entry.get('_SYSTEMD_UNIT')
+    unit=next((entry.get(field) for field in ('_SYSTEMD_UNIT','UNIT','OBJECT_SYSTEMD_UNIT') if entry.get(field) in UNITS),None)
+    if entry.get('_TRANSPORT')=='kernel':unit='kernel'
     cursor=entry.get('__CURSOR')
-    if unit not in UNITS or not cursor:return None
+    if unit is None or not cursor:return None
     text=entry.get('MESSAGE','')
     if not isinstance(text,str):text='[non-text journal message]'
     try:
@@ -15,7 +18,8 @@ def project_journal(entry):
         if isinstance(envelope,dict) and envelope.get('schema_version')==1 and isinstance(envelope.get('id'),dict):
             return {'envelope':envelope,'source_cursor':cursor}
     except (ValueError,TypeError):pass
-    if any(word in text.lower() for word in ('password','bearer ','private key','credential')):
+    if (any(word in text.lower() for word in ('password','passphrase','bearer ','private key','credential','authorization:'))
+            or re.search(r"(?i)\b(?:wpa[_-])?psk\b['\"]?\s*(?:[=:]|value\b)",text)):
         text='[sensitive journal message omitted]'
     try:
         wall=int(entry.get('__REALTIME_TIMESTAMP',0))*1000
@@ -33,7 +37,12 @@ def main():
     ObservationUploader(journal,os.environ['TERRA_OBSERVABILITY_ENDPOINT'],token)
     cursor_file=root/'journal.cursor'
     while True:
-        command=['journalctl','--follow','--output=json','--no-pager',*[f'--unit={u}' for u in UNITS]]
+        command=['journalctl','--follow','--output=json','--no-pager']
+        for unit in UNITS:
+            for field in ('_SYSTEMD_UNIT','UNIT','OBJECT_SYSTEMD_UNIT'):
+                if len(command)>4:command.append('+')
+                command.append(f'{field}={unit}')
+        command+=['+','_TRANSPORT=kernel']
         if cursor_file.exists():command+=['--after-cursor='+cursor_file.read_text().strip()]
         else:command+=['--since=-24h','--lines=5000']
         process=subprocess.Popen(command,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL)

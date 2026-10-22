@@ -1,7 +1,6 @@
 [Unit]
 Description=Terra independent operational journal forwarding
-After=network-online.target systemd-journald.service
-Wants=network-online.target
+After=systemd-journald.service
 [Service]
 User=terra-observability
 Group=terra-observability
