@@ -198,3 +198,33 @@ fn upload_failure_identifies_the_failing_stage() {
     assert!(error.to_string().starts_with("send_events:"), "{error}");
     assert_eq!(r.pending_count().unwrap(), 1);
 }
+#[test]
+fn repeated_upload_once_calls_retain_cloud_acceptance_during_local_failure() {
+    let d = tempfile::tempdir().unwrap();
+    let path = d.path().join("db");
+    let j = Journal::open(JournalConfig {
+        path: path.clone(),
+        ..Default::default()
+    })
+    .unwrap();
+    j.try_record(EventInput::new("0", "control", "state", json!({})));
+    j.flush(Duration::from_secs(2)).unwrap();
+    let reader = JournalReader::open(&path).unwrap();
+    let lock = rusqlite::Connection::open(&path).unwrap();
+    lock.execute_batch("BEGIN IMMEDIATE").unwrap();
+    let mut t = LostReply {
+        lost: true,
+        ids: vec![],
+    };
+    assert!(upload_once(&reader, &mut t, None).is_err());
+    assert!(upload_once(&reader, &mut t, None).is_err());
+    lock.execute_batch("ROLLBACK").unwrap();
+    assert_eq!(
+        t.ids.len(),
+        1,
+        "public retries must not resend an already accepted batch"
+    );
+    assert_eq!(upload_once(&reader, &mut t, None).unwrap(), 1);
+    assert_eq!(reader.pending_count().unwrap(), 0);
+    assert_eq!(t.ids.len(), 1);
+}

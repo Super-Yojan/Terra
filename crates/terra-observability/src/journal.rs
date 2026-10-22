@@ -1,12 +1,12 @@
+use crate::storage::{StorageHandle, Work, read_connection};
 use crate::{EventEnvelope, EventId, EventInput, JournalConfig, wall_time_ns};
-use rusqlite::{Connection, params};
 use serde::Serialize;
 use std::{
     path::{Path, PathBuf},
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
-        mpsc::{self, SyncSender, TrySendError},
+        mpsc::{self, TrySendError},
     },
     thread,
     time::{Duration, Instant},
@@ -18,14 +18,33 @@ pub enum RecordOutcome {
     Dropped,
     Invalid,
 }
-#[derive(Default)]
-struct Counters {
-    queued: AtomicU64,
-    dropped: AtomicU64,
-    pending_gap: AtomicU64,
-    persisted: AtomicU64,
-    failures: AtomicU64,
+pub(crate) struct Counters {
+    pub(crate) producer: String,
+    pub(crate) boot: String,
+    pub(crate) queued: AtomicU64,
+    pub(crate) dropped: AtomicU64,
+    pub(crate) pending_gap: AtomicU64,
+    pub(crate) persisted: AtomicU64,
+    pub(crate) failures: AtomicU64,
     sequence: AtomicU64,
+}
+impl Counters {
+    pub(crate) fn gap(&self, lost: u64) -> EventEnvelope {
+        EventEnvelope {
+            schema_version: 1,
+            id: EventId {
+                producer_id: self.producer.clone(),
+                boot_id: self.boot.clone(),
+                sequence: self.sequence.fetch_add(1, Ordering::Relaxed),
+            },
+            input: EventInput::new(
+                "_producer",
+                "observability",
+                "observability.gap",
+                serde_json::json!({"dropped":lost}),
+            ),
+        }
+    }
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct JournalHealth {
@@ -34,15 +53,9 @@ pub struct JournalHealth {
     pub persisted: u64,
     pub failures: u64,
 }
-enum Message {
-    Event(Box<EventEnvelope>, Instant),
-    Flush(mpsc::Sender<()>),
-}
 pub struct Journal {
-    sender: SyncSender<Message>,
+    storage: Arc<StorageHandle>,
     counters: Arc<Counters>,
-    producer: String,
-    boot: String,
 }
 impl Journal {
     pub fn open(config: JournalConfig) -> Result<Self, JournalError> {
@@ -55,85 +68,19 @@ impl Journal {
         {
             return Err("invalid journal configuration".into());
         }
-        let db = open_db(&config.path)?;
-        let (sender, receiver) = mpsc::sync_channel(config.queue_capacity);
-        let counters = Arc::new(Counters::default());
-        let state = counters.clone();
-        let boot = uuid::Uuid::new_v4().to_string();
-        let producer = config.producer_id.clone();
-        let worker_boot = boot.clone();
-        let worker_producer = producer.clone();
-        thread::Builder::new()
-            .name("observation-journal".into())
-            .spawn(move || {
-                let mut diagnostics = crate::diagnostics::Diagnostics::new(&config.path, "journal");
-                diagnostics.record("journal.started", serde_json::json!({"boot_id":worker_boot,"queue_capacity":config.queue_capacity,"max_bytes":config.max_bytes}));
-                let mut next_checkpoint = Instant::now();
-                loop {
-                    let msg = receiver.recv_timeout(Duration::from_millis(250));
-                    let checkpoint = Instant::now() >= next_checkpoint;
-                    if checkpoint {
-                        next_checkpoint = Instant::now() + Duration::from_secs(5);
-                        diagnostics.record("journal.checkpoint", serde_json::json!({"boot_id":worker_boot,"queued":state.queued.load(Ordering::Relaxed),"dropped":state.dropped.load(Ordering::Relaxed),"persisted":state.persisted.load(Ordering::Relaxed),"failures":state.failures.load(Ordering::Relaxed)}));
-                    }
-                    // This counter is outside the bounded queue, so overflow itself remains visible.
-                    let gap = state.pending_gap.swap(0, Ordering::AcqRel);
-                    if gap > 0 {
-                        if checkpoint { diagnostics.record("persist.started", serde_json::json!({"event_kind":"observability.gap","dropped":gap})); }
-                        let envelope = EventEnvelope {
-                            schema_version: 1,
-                            id: EventId {
-                                producer_id: worker_producer.clone(),
-                                boot_id: worker_boot.clone(),
-                                sequence: state.sequence.fetch_add(1, Ordering::Relaxed),
-                            },
-                            input: EventInput::new(
-                                "_producer",
-                                "observability",
-                                "observability.gap",
-                                serde_json::json!({"dropped":gap}),
-                            ),
-                        };
-                        if persist(&db, &envelope, &config).is_err() {
-                            state.pending_gap.fetch_add(gap, Ordering::Relaxed);
-                        }
-                    }
-                    match msg {
-                        Ok(Message::Event(e, enqueued)) => {
-                            state.queued.fetch_sub(1, Ordering::Relaxed);
-                            let queue_wait_ms = enqueued.elapsed().as_millis() as u64;
-                            if checkpoint { diagnostics.record("persist.started", serde_json::json!({"boot_id":worker_boot,"event_kind":e.input.kind,"sequence":e.id.sequence,"queue_wait_ms":queue_wait_ms})); }
-                            let started = Instant::now();
-                            let result = persist(&db, &e, &config);
-                            let mut fields = serde_json::json!({"boot_id":worker_boot,"event_kind":e.input.kind,"sequence":e.id.sequence,"queue_wait_ms":queue_wait_ms,"duration_ms":started.elapsed().as_millis() as u64,"queued":state.queued.load(Ordering::Relaxed),"dropped":state.dropped.load(Ordering::Relaxed),"failures":state.failures.load(Ordering::Relaxed)});
-                            if let Err(error) = &result {
-                                fields.as_object_mut().unwrap().extend(crate::diagnostics::error_fields(error.as_ref()).as_object().unwrap().clone());
-                                diagnostics.record("persist.failed", fields);
-                            } else if checkpoint {
-                                diagnostics.record("journal.progress", fields);
-                            }
-                            if result.is_ok() {
-                                state.persisted.fetch_add(1, Ordering::Relaxed);
-                            } else {
-                                state.failures.fetch_add(1, Ordering::Relaxed);
-                                state.dropped.fetch_add(1, Ordering::Relaxed);
-                                state.pending_gap.fetch_add(1, Ordering::Relaxed);
-                            }
-                        }
-                        Ok(Message::Flush(reply)) => {
-                            let _ = reply.send(());
-                        }
-                        Err(mpsc::RecvTimeoutError::Timeout) => continue,
-                        Err(mpsc::RecvTimeoutError::Disconnected) => break,
-                    }
-                }
-            })?;
-        Ok(Self {
-            sender,
-            counters,
-            producer,
-            boot,
-        })
+        let storage = StorageHandle::open(&config.path, Some(&config))?;
+        let counters = Arc::new(Counters {
+            producer: config.producer_id,
+            boot: uuid::Uuid::new_v4().to_string(),
+            queued: 0.into(),
+            dropped: 0.into(),
+            pending_gap: 0.into(),
+            persisted: 0.into(),
+            failures: 0.into(),
+            sequence: 0.into(),
+        });
+        storage.register(counters.clone())?;
+        Ok(Self { storage, counters })
     }
     /// Bounded in-memory admission only. Never waits on disk, network or a mutex.
     pub fn try_record(&self, mut input: EventInput) -> RecordOutcome {
@@ -144,17 +91,18 @@ impl Journal {
         let event = EventEnvelope {
             schema_version: 1,
             id: EventId {
-                producer_id: self.producer.clone(),
-                boot_id: self.boot.clone(),
+                producer_id: self.counters.producer.clone(),
+                boot_id: self.counters.boot.clone(),
                 sequence: self.counters.sequence.fetch_add(1, Ordering::Relaxed),
             },
             input,
         };
         self.counters.queued.fetch_add(1, Ordering::Relaxed);
-        match self
-            .sender
-            .try_send(Message::Event(Box::new(event), Instant::now()))
-        {
+        match self.storage.events.try_send(Work::Event(
+            Box::new(event),
+            Instant::now(),
+            self.counters.clone(),
+        )) {
             Ok(()) => RecordOutcome::Queued,
             Err(_) => {
                 self.counters.queued.fetch_sub(1, Ordering::Relaxed);
@@ -172,16 +120,16 @@ impl Journal {
             failures: self.counters.failures.load(Ordering::Relaxed),
         }
     }
-    /// Administrative barrier, not called from a control tick. Failures remain in health/gap records.
+    /// Administrative barrier; never called from a control tick. Failures remain visible in health/gaps.
     pub fn flush(&self, timeout: Duration) -> Result<(), JournalError> {
         let deadline = Instant::now() + timeout;
         let (tx, rx) = mpsc::channel();
-        let mut msg = Message::Flush(tx);
+        let mut message = Work::Flush(tx);
         loop {
-            match self.sender.try_send(msg) {
+            match self.storage.events.try_send(message) {
                 Ok(()) => break,
                 Err(TrySendError::Full(m)) => {
-                    msg = m;
+                    message = m;
                     if Instant::now() >= deadline {
                         return Err("flush queue timeout".into());
                     }
@@ -194,98 +142,10 @@ impl Journal {
         Ok(())
     }
 }
-fn open_db(path: &Path) -> Result<Connection, JournalError> {
-    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
-        std::fs::create_dir_all(parent)?;
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        match std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(path)
-        {
-            Ok(_) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
-            Err(e) => return Err(e.into()),
-        }
-    }
-    let db = Connection::open(path)?;
-    db.busy_timeout(Duration::from_secs(2))?;
-    db.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA journal_size_limit=1048576; CREATE TABLE IF NOT EXISTS events (rowid INTEGER PRIMARY KEY, producer TEXT NOT NULL, boot TEXT NOT NULL, seq INTEGER NOT NULL, payload TEXT NOT NULL, bytes INTEGER NOT NULL, stored_ns INTEGER NOT NULL, ack INTEGER NOT NULL DEFAULT 0, UNIQUE(producer,boot,seq)); CREATE INDEX IF NOT EXISTS events_pending ON events(ack,rowid);")?;
-    Ok(db)
-}
-fn persist(
-    db: &Connection,
-    event: &EventEnvelope,
-    config: &JournalConfig,
-) -> Result<(), JournalError> {
-    let payload = serde_json::to_string(event)?;
-    let now = wall_time_ns();
-    let tx = db.unchecked_transaction()?;
-    tx.execute(
-        "INSERT INTO events(producer,boot,seq,payload,bytes,stored_ns) VALUES(?,?,?,?,?,?)",
-        params![
-            event.id.producer_id,
-            event.id.boot_id,
-            event.id.sequence,
-            payload,
-            payload.len(),
-            now
-        ],
-    )?;
-    let cutoff = now.saturating_sub(config.retention_seconds.saturating_mul(1_000_000_000));
-    // Retention and pressure always remove acknowledged rows before pending rows.
-    tx.execute("DELETE FROM events WHERE ack=1 AND stored_ns<?", [cutoff])?;
-    let mut total: u64 = tx.query_row("SELECT COALESCE(SUM(bytes),0) FROM events", [], |r| {
-        r.get(0)
-    })?;
-    let mut lost = 0u64;
-    loop {
-        let expired: bool = tx.query_row(
-            "SELECT EXISTS(SELECT 1 FROM events WHERE stored_ns<?)",
-            [cutoff],
-            |r| r.get(0),
-        )?;
-        if total <= config.max_bytes && !expired {
-            break;
-        }
-        let (row, bytes, ack): (i64, u64, bool) = tx.query_row(
-            "SELECT rowid,bytes,ack FROM events ORDER BY ack DESC,rowid LIMIT 1",
-            [],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-        )?;
-        tx.execute("DELETE FROM events WHERE rowid=?", [row])?;
-        total = total.saturating_sub(bytes);
-        if !ack {
-            lost += 1;
-        }
-    }
-    if lost > 0 {
-        let mut gap = event.clone();
-        gap.input = EventInput::new(
-            &event.input.rover_id,
-            "observability",
-            "observability.gap",
-            serde_json::json!({"evicted_events":lost,"reason":"retention_or_quota"}),
-        );
-        // Keep a loss marker with its own storage identity, never reuse the source event's ID.
-        gap.id.boot_id = uuid::Uuid::new_v4().to_string();
-        gap.id.sequence = 0;
-        let data = serde_json::to_string(&gap)?;
-        tx.execute(
-            "INSERT INTO events(producer,boot,seq,payload,bytes,stored_ns) VALUES(?,?,?,?,?,?)",
-            params![gap.id.producer_id, gap.id.boot_id, 0, data, data.len(), now],
-        )?;
-    }
-    tx.commit()?;
-    Ok(())
-}
 #[derive(Clone)]
 pub struct JournalReader {
     path: PathBuf,
+    storage: Arc<StorageHandle>,
 }
 impl JournalReader {
     pub(crate) fn attachment_gap(
@@ -309,45 +169,42 @@ impl JournalReader {
         event.input.monotonic_ns = 0;
         event.input.attributes =
             serde_json::json!({"reason":reason,"attachment_sha256":hash,"time_basis":"wall_only"});
-        let payload = serde_json::to_string(&event)?;
-        let db = open_db(&self.path)?;
-        db.execute("INSERT OR IGNORE INTO events(producer,boot,seq,payload,bytes,stored_ns) VALUES(?,?,?,?,?,?)",params![event.id.producer_id,event.id.boot_id,0,payload,payload.len(),wall_time_ns()])?;
-        Ok(())
+        self.storage.insert(event)
     }
-
-    pub fn pending_count(&self) -> Result<u64, JournalError> {
-        let db = open_db(&self.path)?;
-        Ok(db.query_row("SELECT COUNT(*) FROM events WHERE ack=0", [], |r| r.get(0))?)
-    }
-
     pub fn open(path: &Path) -> Result<Self, JournalError> {
-        let _ = open_db(path)?;
-        Ok(Self { path: path.into() })
+        let storage = StorageHandle::open(path, None)?;
+        Ok(Self {
+            path: storage.path.clone(),
+            storage,
+        })
+    }
+    pub(crate) fn delivery_session(
+        &self,
+    ) -> Result<std::sync::MutexGuard<'_, crate::uploader::UploadSession>, JournalError> {
+        self.storage
+            .delivery
+            .lock()
+            .map_err(|_| "upload delivery state poisoned".into())
     }
     pub fn path(&self) -> &Path {
         &self.path
     }
+    pub fn pending_count(&self) -> Result<u64, JournalError> {
+        let db = read_connection(&self.path)?;
+        Ok(db.query_row("SELECT COUNT(*) FROM events WHERE ack=0", [], |r| r.get(0))?)
+    }
     pub fn batch(&self, limit: usize) -> Result<Vec<EventEnvelope>, JournalError> {
-        let db = open_db(&self.path)?;
+        let db = read_connection(&self.path)?;
         let mut stmt =
             db.prepare("SELECT payload FROM events WHERE ack=0 ORDER BY rowid LIMIT ?")?;
         let rows = stmt.query_map([limit.min(256)], |r| r.get::<_, String>(0))?;
         rows.map(|r| Ok(serde_json::from_str(&r?)?)).collect()
     }
     pub fn ack(&self, ids: &[EventId]) -> Result<(), JournalError> {
-        let db = open_db(&self.path)?;
-        let tx = db.unchecked_transaction()?;
-        for id in ids {
-            tx.execute(
-                "UPDATE events SET ack=1 WHERE producer=? AND boot=? AND seq=?",
-                params![id.producer_id, id.boot_id, id.sequence],
-            )?;
-        }
-        tx.commit()?;
-        Ok(())
+        self.storage.ack(ids)
     }
     pub fn export(&self) -> Result<Vec<EventEnvelope>, JournalError> {
-        let db = open_db(&self.path)?;
+        let db = read_connection(&self.path)?;
         let mut stmt = db.prepare("SELECT payload FROM events ORDER BY rowid")?;
         let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
         rows.map(|r| Ok(serde_json::from_str(&r?)?)).collect()

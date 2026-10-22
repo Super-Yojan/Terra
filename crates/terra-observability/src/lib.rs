@@ -7,6 +7,7 @@ pub use diagnostics::DiagnosticRecorder;
 mod diagnostics_tests;
 mod event;
 mod journal;
+mod storage;
 pub use config::*;
 pub use event::*;
 pub use journal::*;

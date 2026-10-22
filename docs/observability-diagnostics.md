@@ -51,3 +51,25 @@ change driving authority, timeouts, reconnect policy, or safety decisions.
 The update requires rebuilding and installing Terra on the phone. It adds
 diagnostics and does not repair the underlying database contention or establish
 that contention caused a Zenoh disconnect. Existing journals are preserved.
+
+## Storage reliability update (2026-10-22)
+
+The subsequent storage fix migrates existing databases in place. A single writer
+per canonical database path handles both event batches and acknowledgment updates;
+readers no longer initialize schema on every query. Transactional metadata/triggers
+account for logical bytes, and indexed retention replaces full-history per-event
+scans. Event batches contain at most 64 records. Quota cleanup commits at most 64
+quota evictions per pass and services acknowledgments between passes. A batch and
+its loss marker may temporarily exceed the logical quota; further event batches
+pause until cleanup restores it. An already oversized database is reclaimed in
+bounded passes with explicit loss markers under the configured retention/quota.
+SQLite file size also includes page/index/WAL overhead, as before.
+
+When GCP accepts a batch, its IDs are retained in the shared delivery session
+until local acknowledgment persistence succeeds. Local acknowledgment failures
+retry locally at the existing one-second base interval; they do not resend the
+accepted batch or escalate network backoff. A process crash may still resend the
+same original IDs, which the collector deduplicates. Health now includes
+`local_ack_failures`; upload diagnostics include `retry_scope=local_ack|network`.
+`quota.pass` records bounded cleanup progress. No motion or safety policy changes
+are part of this storage update.

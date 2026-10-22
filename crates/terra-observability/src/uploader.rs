@@ -119,13 +119,50 @@ pub fn upload_once(
     transport: &mut dyn UploadTransport,
     evidence: Option<&Path>,
 ) -> Result<usize, JournalError> {
+    reader
+        .delivery_session()?
+        .upload(reader, transport, evidence)
+}
+#[derive(Default)]
+pub(crate) struct UploadSession {
+    awaiting_local_ack: Option<Vec<EventId>>,
+}
+impl UploadSession {
+    fn upload(
+        &mut self,
+        reader: &JournalReader,
+        transport: &mut dyn UploadTransport,
+        evidence: Option<&Path>,
+    ) -> Result<usize, JournalError> {
+        if self.awaiting_local_ack.is_none() {
+            self.awaiting_local_ack = Some(send_batch(reader, transport, evidence)?);
+        }
+        let ids = self.awaiting_local_ack.as_ref().unwrap();
+        let mut diagnostics = Diagnostics::new(reader.path(), "upload");
+        diagnostics.record(
+            "upload.stage",
+            serde_json::json!({"stage":"save_ack","acknowledged":ids.len()}),
+        );
+        reader
+            .ack(ids)
+            .map_err(|e| StageError::wrap("save_ack", e))?;
+        let count = ids.len();
+        self.awaiting_local_ack = None;
+        Ok(count)
+    }
+}
+fn send_batch(
+    reader: &JournalReader,
+    transport: &mut dyn UploadTransport,
+    evidence: Option<&Path>,
+) -> Result<Vec<EventId>, JournalError> {
     let mut diagnostics = Diagnostics::new(reader.path(), "upload");
     diagnostics.record("upload.stage", serde_json::json!({"stage":"read_queue"}));
     let mut events = reader
         .batch(64)
         .map_err(|e| StageError::wrap("read_queue", e))?;
     if events.is_empty() {
-        return Ok(0);
+        return Ok(Vec::new());
     }
     while serde_json::to_vec(&serde_json::json!({"events":events}))?.len() > 900 * 1024 {
         events.pop();
@@ -204,14 +241,7 @@ pub fn upload_once(
     {
         return Err("invalid acknowledgment".into());
     }
-    diagnostics.record(
-        "upload.stage",
-        serde_json::json!({"stage":"save_ack","acknowledged":acknowledged.len()}),
-    );
-    reader
-        .ack(&acknowledged)
-        .map_err(|e| StageError::wrap("save_ack", e))?;
-    Ok(acknowledged.len())
+    Ok(acknowledged)
 }
 pub fn valid_hash(hash: &str) -> bool {
     hash.len() == 64
@@ -222,6 +252,7 @@ pub fn valid_hash(hash: &str) -> bool {
 #[derive(Serialize, Default)]
 pub struct UploadHealth {
     pub failures: u64,
+    pub local_ack_failures: u64,
     pub acknowledged: u64,
     pub pending_events: Option<u64>,
     pub last_error: Option<String>,
@@ -236,6 +267,7 @@ pub struct UploadConfig {
 struct UploadState {
     stop: AtomicBool,
     failures: AtomicU64,
+    local_ack_failures: AtomicU64,
     acknowledged: AtomicU64,
     pending: AtomicU64,
     last_error: std::sync::Mutex<Option<String>>,
@@ -268,6 +300,7 @@ impl UploadHandle {
         let pending = self.state.pending.load(Ordering::Relaxed);
         UploadHealth {
             failures: self.state.failures.load(Ordering::Relaxed),
+            local_ack_failures: self.state.local_ack_failures.load(Ordering::Relaxed),
             acknowledged: self.state.acknowledged.load(Ordering::Relaxed),
             pending_events: (pending != u64::MAX).then_some(pending),
             last_error: self
@@ -382,10 +415,24 @@ fn upload_worker(
             }
             Err(error) => {
                 state.failures.fetch_add(1, Ordering::Relaxed);
-                delay = (delay * 2).min(60);
-                wait = Duration::from_millis(delay * 1000 + crate::wall_time_ns() % 500);
+                let local_ack_retry = reader
+                    .delivery_session()
+                    .is_ok_and(|s| s.awaiting_local_ack.is_some());
+                if local_ack_retry {
+                    state.local_ack_failures.fetch_add(1, Ordering::Relaxed);
+                    wait = Duration::from_secs(1);
+                } else {
+                    delay = (delay * 2).min(60);
+                    wait = Duration::from_millis(delay * 1000 + crate::wall_time_ns() % 500);
+                }
                 let mut fields = crate::diagnostics::error_fields(error.as_ref());
                 fields["duration_ms"] = (started.elapsed().as_millis() as u64).into();
+                fields["retry_scope"] = if local_ack_retry {
+                    "local_ack"
+                } else {
+                    "network"
+                }
+                .into();
                 fields["retry_after_ms"] = (wait.as_millis() as u64).into();
                 fields["failures"] = state.failures.load(Ordering::Relaxed).into();
                 diagnostics.record("upload.failed", fields);
