@@ -18,6 +18,14 @@ For an existing Bookworm installation with terminal access, install
 (root:root, 0600). Ensure SSH and Avahi are already enabled and preserve their
 existing credentials/settings.
 
+Also install `packaging/rover/90-terra-usb-managed.conf` as
+`/etc/NetworkManager/conf.d/90-terra-usb-managed.conf` (root:root, 0644).
+The distribution's `85-nm-unmanaged.rules` explicitly ignores devices of type
+`gadget`; without this per-device override, NetworkManager discovers `usb0` but
+leaves it unmanaged and the host USB Ethernet link stays inactive. The
+`device*.managed` setting overrides that udev default for `usb0` only.
+See the [NetworkManager reference](https://www.networkmanager.dev/docs/api/1.38.6/NetworkManager.conf.html).
+
 Back up `/boot/firmware/config.txt`, then append once:
 
 ```ini
@@ -38,5 +46,5 @@ It provides local access only; it does not automatically share the Mac's interne
 Pi logs can remain queued offline. Configure an internet path separately if
 continuous GCP uploads are wanted.
 
-To undo this configuration, remove the two installed files, restore the saved
+To undo this configuration, remove the three installed files, restore the saved
 boot configuration, and reboot. Keep the source journals and credentials intact.
