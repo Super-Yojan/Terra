@@ -148,7 +148,12 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
     private var locationHeading: CLHeading?
     private var outdoorFixTime: Date?
     private var outdoorHeadingTime: Date?
-    private var localizationPolicy = PhoneLocalizationPolicy()
+    private static let connectivityPolicy: PhoneConnectivityPolicy = {
+        let decoder = JSONDecoder(); decoder.keyDecodingStrategy = .convertFromSnakeCase
+        // Native defaults are the single source; a broken binding must fail during development.
+        return try! decoder.decode(PhoneConnectivityPolicy.self, from: Data(defaultConnectivityPolicySettings().utf8))
+    }()
+    private var localizationPolicy = PhoneLocalizationPolicy(displayFreshnessSeconds: PhoneController.connectivityPolicy.gpsDisplayFreshnessSeconds)
     private var localizationTracked = false
     private var localizationTrackingReason: String?
     private var phoneHeadingReferenceYaw: Double?

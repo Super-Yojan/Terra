@@ -32,6 +32,12 @@ pub use mapping::*;
 pub use transport::*;
 pub use waypoint::*;
 
+/// Shared presentation and router-loss defaults. Local sensor limits are independent.
+#[uniffi::export]
+pub fn default_connectivity_policy_settings() -> String {
+    serde_json::to_string(&connectivity_policy::ConnectivityPolicySettings::default()).expect("finite policy defaults")
+}
+
 #[derive(Clone, Debug, uniffi::Record)]
 /// Sensor freshness, PI gains, and wheel effort limits used at construction.
 /// All values must be finite. Gains lie in 0..=100; timeouts and limits must

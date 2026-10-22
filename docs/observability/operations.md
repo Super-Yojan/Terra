@@ -314,3 +314,7 @@ exposes `/rerun/viewer/*` for assets and `/rerun/*` for the collector's public U
 shell. Session and artifact API routes still require reader authentication. No
 public SDK ingestion route is added. Restarting the collector invalidates its
 in-memory export job index; recreate an export after a restart.
+
+### Connectivity display defaults
+
+Edit `crates/terra-types/src/connectivity_policy.rs` for GPS display freshness (3 s) and fleet stale presentation (90 s). The phone obtains these defaults through its native binding; ARGOS uses the same crate. Old GPS observations retain their source timestamp and coordinates and are labelled last known. Neither value changes local sensor admission, remote command expiry or navigation GPS quality checks. Fleet membership remains visible without geographic placement.

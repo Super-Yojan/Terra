@@ -3006,6 +3006,10 @@ dependencies = [
 [[package]]
 name = "terra-types"
 version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "terra-vlm-eval"

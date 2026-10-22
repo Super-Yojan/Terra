@@ -4,7 +4,7 @@ import Foundation
   func input(_ now: Double) -> PhoneLocalizationInput {
    PhoneLocalizationInput(now: now, latitude: 38, longitude: -77, fixTime: now, accuracy: 4, heading: nil, headingAccuracy: nil, headingTime: nil, localX: .nan, localY: .nan, headingReferenceYaw: nil, tracked: false)
   }
-  var policy = PhoneLocalizationPolicy()
+  var policy = PhoneLocalizationPolicy(displayFreshnessSeconds: 3)
   var failures = 0
   func expect(_ condition: Bool, _ message: String) {
    if !condition { print("FAIL: " + message); failures += 1 }
@@ -19,7 +19,16 @@ import Foundation
   expect(policy.update(coarse).reason.contains("45"), "display measured GPS accuracy")
   var stale = input(10); stale.fixTime = 6
   let old = policy.update(stale)
-  expect(old.mode == "local" && old.gpsLatitude == nil, "hide stale fixes rather than present them as live GPS")
+  expect(old.mode == "local" && old.gpsLatitude == 38, "retain stale observations without presenting them as live GPS")
+  for age in [0.0, 3, 8.2, 120] {
+   var measured = input(200); measured.fixTime = 200-age
+   let report = policy.update(measured)
+   expect(report.gpsLatitude == 38 && report.gpsLongitude == -77, "retain coordinates at every age")
+   expect(report.gpsObservedAt == 200-age, "retain original observation time")
+   expect(report.gpsFresh == (age <= 3), "freshness is a label only")
+  }
+  var relaxed = PhoneLocalizationPolicy(displayFreshnessSeconds: 10)
+  expect(relaxed.update(stale).gpsFresh, "display policy is injectable")
   expect(old.reason.contains("stale"), "explain stale GPS")
   var denied = input(11); denied.permissionReason = "Location permission denied"
   expect(policy.update(denied).reason.contains("permission denied"), "show location permission errors")
