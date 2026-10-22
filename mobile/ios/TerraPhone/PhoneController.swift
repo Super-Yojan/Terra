@@ -328,25 +328,21 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
                 }
                 return
             }
-            let continuingWaypoint = TerraFleetManualDrive.localWaypointActive(controller.autonomyStatus())
+            let continuingMission = controller.acceptedOnboardMission()
             // Connecting the router preserves the current local drive session.
             // Network setup must not block local AR and control updates.
             self.routerQueue.async {
             do {
-                if continuingWaypoint {
-                    try controller.reconnectDashboardAuthenticated(endpoint: endpoint, prefix: prefix, roverId: id, user: fleetUser, password: fleetPassword)
-                } else {
-                    try controller.connectDashboardAuthenticated(endpoint: endpoint, prefix: prefix, roverId: id, user: fleetUser, password: fleetPassword)
-                }
+                try controller.reconnectDashboardAuthenticated(endpoint: endpoint, prefix: prefix, roverId: id, user: fleetUser, password: fleetPassword)
                 guard self.sensorEpochMatches(epoch), self.dashboardAttemptMatches(attempt) else {
-                    try? controller.disconnectDashboard(); return
+                    try? controller.detachDashboardLink(); return
                 }
                 DispatchQueue.main.async {
                     guard self.sensorEpochMatches(epoch), self.dashboardAttemptMatches(attempt) else { return }
-                    self.observation.record(component: "router", kind: "connection.established", attributes: ["local_waypoint_retained": continuingWaypoint])
+                    self.observation.record(component: "router", kind: "connection.established", attributes: ["onboard_mission_retained": continuingMission])
                     self.connectionPolicy.routerConnected(); self.routerRetryAt = nil
                     self.dashboardConnecting = false; self.dashboardConnected = true
-                    self.dashboardStatus = continuingWaypoint ? "Router restored · local waypoint retained" : "Router connected · rover \(id) · hardware remains disarmed"
+                    self.dashboardStatus = continuingMission ? "Router restored · onboard mission retained" : "Router connected · rover \(id) · hardware remains disarmed"
                     self.fleetTrackingFailed = false
                     self.refreshConnectionPresentation()
                 }
@@ -581,7 +577,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
         }
         if controller.dashboardStatus() != "connected" {
             observation.recordChanged(component: "router", kind: "connection.unavailable", attributes: ["status": controller.dashboardStatus(), "mode": "bluetooth_manual"])
-            if controller.dashboardStatus() == "failed" { try? controller.disconnectDashboard() }
+            if controller.dashboardStatus() == "failed" { try? controller.handleDashboardLinkLoss() }
             DispatchQueue.main.async {
                 guard self.dashboardAttemptMatches(attempt), self.dashboardConnected else { return }
                 self.dashboardConnected = false; self.dashboardConnecting = false
@@ -638,16 +634,14 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
             }
             let output = try controller.step(timestamp: now)
             if tick % 10 == 0 && controller.dashboardStatus() == "failed" {
-                let continuingWaypoint = TerraFleetManualDrive.localWaypointActive(controller.autonomyStatus())
-                observation.record(component: "router", kind: "connection.lost", attributes: ["local_waypoint_retained": continuingWaypoint])
-                if continuingWaypoint { try controller.detachDashboardLink() }
-                else {
-                    self.target = (0, 0); self.pauseHardwareMotion(reason: "dashboard link failed with no active local waypoint")
-                    try controller.disconnectDashboard()
-                }
+                let continuingMission = controller.acceptedOnboardMission()
+                observation.record(component: "router", kind: "connection.lost", attributes: ["onboard_mission_retained": continuingMission])
+                try controller.handleDashboardLinkLoss()
+                // Remote operator intent is cleared natively; no cloud-only disarm.
+                self.target = (0, 0)
                 DispatchQueue.main.async {
                     self.dashboardConnecting = false; self.dashboardConnected = false
-                    self.dashboardStatus = continuingWaypoint ? "Router interrupted · continuing local waypoint" : "Router connection lost · retrying"
+                    self.dashboardStatus = continuingMission ? "Router interrupted · continuing onboard mission" : "Router connection lost · retrying"
                     self.routerRetryAt = self.connectionNow + self.connectionPolicy.nextRouterDelay()
                 }
             }
@@ -660,7 +654,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
             tick += 1
             let autonomy = controller.autonomyStatus()
             let fullyManual = TerraFleetManualDrive.isFullyManual(autonomy)
-            let vioWaypoint = TerraFleetManualDrive.requiresVioControl(autonomy)
+            let vioWaypoint = TerraFleetManualDrive.requiresAutonomousControl(autonomy)
             let vioCompatible = (try? ActuatorDriveProfileSet.decode(json: bleLayout).supportsVioControl) == true
             if bleActive && (bleFeedback || vioWaypoint) {
                 feedbackTrackingHealthy = mode == .phone && TerraFleetManualDrive.vioReady(autonomy)
@@ -1628,8 +1622,8 @@ extension PhoneController {
         refreshConnectionPresentation()
     }
     private func synchronizeFleetTracking(_ facts: TerraConnectionFacts) {
-        let retainingWaypoint = fleetTrackingManaged && TerraFleetManualDrive.localWaypointActive(controller?.autonomyStatus() ?? "{}") && !routerSuppressed
-        if facts.shouldTrackForFleet || retainingWaypoint {
+        let retainingLocalSession = fleetTrackingManaged && facts.canRetainTrackingDuringRouterRetry && !routerSuppressed
+        if facts.shouldTrackForFleet || retainingLocalSession {
             fleetTrackingManaged = true
             let feedback = feedbackCompatible && hardwareReady
             if phoneTrackingActive {
@@ -2029,6 +2023,10 @@ extension PhoneController {
         guard now - lastLocalizationPublish >= 1 else { return }
         lastLocalizationPublish = now
         let poseFresh = previousPoseTime.map { CACurrentMediaTime() - $0 < 1 } == true
+        let decoder = JSONDecoder(); decoder.keyDecodingStrategy = .convertFromSnakeCase
+        if let policy = try? decoder.decode(PhoneConnectivityPolicy.self, from: Data(controller.connectivityPolicySettings().utf8)) {
+            localizationPolicy.setDisplayFreshnessSeconds(policy.gpsDisplayFreshnessSeconds)
+        }
         let report = localizationPolicy.update(PhoneLocalizationInput(now: now,
             latitude: locationFix?.coordinate.latitude, longitude: locationFix?.coordinate.longitude,
             fixTime: locationFix?.timestamp.timeIntervalSince1970, accuracy: locationFix?.horizontalAccuracy,

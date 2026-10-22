@@ -41,12 +41,16 @@ struct PhoneConnectivityPolicy: Decodable {
  var autonomousRouterLoss: String
 }
 struct PhoneLocalizationPolicy {
- private let displayFreshnessSeconds: Double
+ private var displayFreshnessSeconds: Double
  init(displayFreshnessSeconds: Double) {
   precondition(displayFreshnessSeconds.isFinite && displayFreshnessSeconds > 0)
   self.displayFreshnessSeconds = displayFreshnessSeconds
  }
  private var frameID = UUID().uuidString
+ mutating func setDisplayFreshnessSeconds(_ value: Double) {
+  guard value.isFinite && value > 0 else { return }
+  displayFreshnessSeconds = value
+ }
  var identifier: String { frameID }
  mutating func reset() { frameID = UUID().uuidString }
  mutating func update(_ input: PhoneLocalizationInput) -> PhoneLocalizationReport {

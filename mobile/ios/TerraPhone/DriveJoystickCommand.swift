@@ -59,6 +59,17 @@ enum DriveJoystickSafety {
 
 /// Route only the arbiter-selected manual intent, never an unvalidated network payload.
 enum TerraFleetManualDrive {
+    static func retainsOnboardMission(_ json: String) -> Bool {
+        guard let root = (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any],
+              let policy = root["connectivity"] as? [String: Any] else { return false }
+        return policy["accepted_onboard_mission"] as? Bool == true
+    }
+    static func requiresAutonomousControl(_ json: String) -> Bool {
+        guard let root = (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any],
+              let status = root["status"] as? [String: Any] else { return false }
+        return ["waypoint", "waypoint_direct", "supervised", "explore", "target_search"].contains(status["requested_level"] as? String ?? "")
+    }
+
     /// L3 uses phone VIO motion estimates, independently of the actuator routing format.
     static func requiresVioControl(_ json: String) -> Bool {
         guard let root = (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any],
@@ -93,7 +104,6 @@ enum TerraFleetManualDrive {
               let twist = root["twist"] as? [String: Any],
               let linear = twist["linear"] as? Double, let angular = twist["angular"] as? Double,
               linear.isFinite, angular.isFinite, abs(linear) <= 0.5, abs(angular) <= 1 else { return .zero }
-        print("I am here")
         let forward = linear / 0.5
         let managed = ["fleet_teleop", "autonomous"].contains(root["command_origin"] as? String ?? "")
         let navigation = root["navigation"] as? [String: Any]

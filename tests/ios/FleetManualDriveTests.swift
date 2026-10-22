@@ -31,6 +31,13 @@ import Foundation
   precondition(TerraFleetManualDrive.vioReady(vio))
   precondition(!TerraFleetManualDrive.vioReady(vio.replacingOccurrences(of:"0.1",with:"0.4")))
   precondition(!TerraFleetManualDrive.vioReady("{}"))
+  for level in ["waypoint", "waypoint_direct", "supervised", "explore", "target_search"] {
+   precondition(TerraFleetManualDrive.requiresAutonomousControl("{\"status\":{\"requested_level\":\"" + level + "\"}}"))
+  }
+  precondition(!TerraFleetManualDrive.requiresAutonomousControl(idle))
+  precondition(TerraFleetManualDrive.retainsOnboardMission("{\"connectivity\":{\"accepted_onboard_mission\":true}}"))
+  precondition(!TerraFleetManualDrive.retainsOnboardMission("{\"status\":{\"requested_level\":\"explore\"}}"))
+  precondition(!TerraFleetManualDrive.retainsOnboardMission("{}"))
   print("Fleet manual routing: accepted operator twist, stopped authority, autonomy and missing payload passed")
  }
 }

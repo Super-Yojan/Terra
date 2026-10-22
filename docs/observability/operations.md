@@ -318,3 +318,13 @@ in-memory export job index; recreate an export after a restart.
 ### Connectivity display defaults
 
 Edit `crates/terra-types/src/connectivity_policy.rs` for GPS display freshness (3 s) and fleet stale presentation (90 s). The phone obtains these defaults through its native binding; ARGOS uses the same crate. Old GPS observations retain their source timestamp and coordinates and are labelled last known. Neither value changes local sensor admission, remote command expiry or navigation GPS quality checks. Fleet membership remains visible without geographic placement.
+
+### Onboard autonomy during router loss
+
+The default `ConnectivityPolicySettings.autonomous_router_loss` is `continue_accepted_mission`; use `pause` when a deployment requires a policy hold. Set the complete validated JSON object with `MobileController.set_connectivity_policy_settings`. `connectivity_policy_settings` returns the effective values. The controller reports the policy and its revision in control summaries, localization and authority telemetry. The phone refreshes its display policy from the controller; GPUI reads each run's policy. Fleet display overrides never change command admission.
+
+`handle_dashboard_link_loss` handles automatic transport failure. Explicit `disconnect_dashboard`, goal cancel, local hardware loss and emergency stop keep their existing stop semantics. A reconnect preserves mission/run identity and budgets, but does not arm or resume a latched pause. Each execution tick still checks its local inputs.
+
+New remote motion-producing actions, safety resets and approvals must contain the current `run_id` and `authority_revision`. A link failure/replacement retires the old revision without clearing an accepted mission. GPUI and the phone's remote sender attach this binding from observed authority; old unbound clients are rejected with `current_authority_required_upgrade_legacy_client`. Stop/cancel/disarm remain available. Remote operator intent retains its short lease; only logs and evidence are durably queued. The 90-second cached-authority issuance limit lives in `terra-types/src/timing.rs::REMOTE_AUTHORITY_CACHE_SECONDS` and is independent of the similarly valued fleet display default.
+
+For a release check, leave the rover disarmed, open Terra in foreground, verify current phone and Pi events reach the existing collector/Rerun endpoint and pending counts decrease, then inspect a router interruption and recovery. A subsequent low-speed driving test needs an operator with the rover's local stop available. Do not interpret a successful logging fix as proof that every physical Zenoh disconnect cause is resolved.

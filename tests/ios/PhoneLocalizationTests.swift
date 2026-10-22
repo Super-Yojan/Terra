@@ -29,6 +29,8 @@ import Foundation
   }
   var relaxed = PhoneLocalizationPolicy(displayFreshnessSeconds: 10)
   expect(relaxed.update(stale).gpsFresh, "display policy is injectable")
+  relaxed.setDisplayFreshnessSeconds(3)
+  expect(!relaxed.update(stale).gpsFresh, "runtime updates change freshness without clearing observations")
   expect(old.reason.contains("stale"), "explain stale GPS")
   var denied = input(11); denied.permissionReason = "Location permission denied"
   expect(policy.update(denied).reason.contains("permission denied"), "show location permission errors")
