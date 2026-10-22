@@ -10,7 +10,7 @@ cd "$(dirname "$0")/../.."
 getent group terra-observability >/dev/null || groupadd --system terra-observability
 id -u terra-observability >/dev/null 2>&1 || useradd --system --gid terra-observability --home-dir /var/lib/terra-observability-pi --shell /usr/sbin/nologin terra-observability
 install -d -o root -g root -m 755 /opt/terra-observability-pi/terra_rover
-install -o root -g root -m 644 hardware/raspberry-pi/terra_rover/observability.py hardware/raspberry-pi/terra_rover/log_forwarder.py /opt/terra-observability-pi/terra_rover/
+install -o root -g root -m 644 hardware/raspberry-pi/terra_rover/observability.py hardware/raspberry-pi/terra_rover/log_forwarder.py hardware/raspberry-pi/terra_rover/usb_queue.py /opt/terra-observability-pi/terra_rover/
 touch /opt/terra-observability-pi/terra_rover/__init__.py
 chmod 644 /opt/terra-observability-pi/terra_rover/__init__.py
 install -d -o terra-observability -g terra-observability -m 700 /var/lib/terra-observability-pi

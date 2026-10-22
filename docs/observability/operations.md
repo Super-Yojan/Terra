@@ -256,3 +256,39 @@ journal reconnect from the last committed cursor, mission/connection identity
 separation, source/collector loss context in exports, and explicit clearing of
 missing RGB/depth and superseded frames. An empty camera view after an outage is
 intentional: a prior image is never presented as the current depth exposure.
+
+
+## Offline Pi uploads through a Mac USB connection
+
+Install the independent Pi observer first with `packaging/rover/install-observability.sh`.
+It also installs the fixed-path queue helper. Verify a normal SSH login and its
+host key before provisioning the Mac relay. The Pi account must permit the
+restricted command to run as `terra-observability` without an interactive sudo
+prompt (the deployed MasterPi `pi` account already does).
+
+From the Terra checkout on macOS, run:
+
+```sh
+python3 packaging/rover/install-usb-relay.py \
+  --host pi@raspberrypi.local \
+  --endpoint https://argos.34.135.204.210.sslip.io/observability \
+  --token-file /absolute/private/path/pi-rover0.token
+```
+
+The optional `--control-path` accepts an already authenticated SSH master socket.
+The installer creates a protected local key, token and configuration; pins the
+previously verified host key; adds an idempotent forced-command public key on
+the Pi; and starts the `com.terra.usb-log-relay` login LaunchAgent. That key cannot
+open a shell or forward ports. It permits only batches from the observer's fixed
+SQLite database and acknowledgments of event identities. It cannot control the rover.
+
+Read `~/Library/Application Support/Terra/usb-log-relay/status.json` for connection
+status and the last batch count. `connected=true` means the most recent poll
+succeeded; an empty batch does not perform a fresh cloud connectivity check.
+Uploads retain original event identities and source times, so collector delivery
+is deduplicated after a lost acknowledgment. Retention remains bounded by the
+Pi journal's configured storage and age limits.
+
+The Mac must be logged in, awake, connected to the Pi over USB and have internet
+access. When unavailable, the observer keeps queued events locally; reconnecting
+resumes uploading. Do not queue motion commands using this logging mechanism.

@@ -22,40 +22,60 @@ requests, Bluetooth queueing/failure, received hardware safety state, and
 connection lifecycle reasons. A queued command is not a delivery acknowledgement.
 Pi command-acceptance records supply that receiving-side evidence.
 
-## Pi access and USB image
+## Pi access, USB and offline uploading
 
-The rover is a Pi 4 without internet. No SSH/local device connection has been
-established, so direct Pi logging is not yet installed or verified. Scoped
-`pi-rover0` credentials and an offline observer bundle are prepared privately
-under the ignored `observability/device-setup-20261021/pi-offline/` directory.
-That bundle does not contain a rebuilt compiled rover daemon.
+Physical Pi 4 USB networking and SSH are verified at `pi@raspberrypi.local`.
+The MasterPi Bookworm image was flashed after a verified full backup of the old
+rover card. Its USB profile needed a NetworkManager `managed=1` override because
+Debian's gadget udev rule otherwise leaves the interface unmanaged. The fix is
+included in the prepared image and repository packaging.
 
-A separate copy of the existing `MasterPi20250328.img` was prepared at
-`observability/releases/MasterPi20250328-terra-usb.img`, with adjacent instructions
-and checksum. This is a copy of the downloaded MasterPi baseline, not a backup
-of the current rover SD card. Neither the original download nor a physical SD
-card was changed. Use a spare card for the first boot validation.
+`terra-log-forwarder.service` now runs independently from rover control. It
+persists allowed rover and Bluetooth journal events in
+`/var/lib/terra-observability-pi/events.db`, including original structured event
+identities. The Pi clock was corrected from the Mac and saved with fake-hwclock.
+The Pi still has no internet connection.
 
-The Bookworm image enables Pi 4 `dwc2` peripheral mode, loads `g_ether`, and adds
-a USB-only NetworkManager profile with link-local addresses and no default route.
-Existing SSH, Avahi, login credentials, and other network profiles are retained.
-After boot and USB enumeration, the intended connection is
-`ssh pi@raspberrypi.local`. USB networking alone does not supply internet.
-The original image's ext4 journal was recovered in the copy before modification;
-final ext4 and FAT checks passed. Physical boot/USB enumeration is unverified.
+This Mac runs `com.terra.usb-log-relay` as a login LaunchAgent. It connects over
+USB using a dedicated key restricted to queue reads and acknowledgments, uploads
+the original events to GCP over HTTPS, and acknowledges the Pi queue only after
+valid cloud acknowledgment. It retries after USB disconnection or cloud failure.
+The private installation and connection-status file are under
+`~/Library/Application Support/Terra/usb-log-relay/`. The Mac must be awake, logged
+in, online and connected to USB for this route to upload; the Pi continues
+recording independently when it is absent. Existing bounded retention still applies.
+No internet routing or TLS relaxation was added to the Pi.
 
-## Verification and remaining work
+The post-reboot relay automatically reconnected and genuine Pi service events
+reached the cloud collector. Pausing the Mac uploader retained 56 new events locally; resuming delivered all
+56, received cloud acknowledgment, and removed them from the pending batch. These checks issue no
+motion commands and are not a physical driving test.
 
-The iOS build, Swift observation checks, six Pi observation tests and 91 Pi
-regression tests passed. Review found two issues (early events without a sink,
-and stale router failure attribution); both were corrected and the focused
-review passed. No safety timeout, stop policy or arming policy changed.
+## Rover restoration
+
+The saved actuator layout, owner information and Bluetooth state were restored
+from the pre-flash card backup. The current instrumented Python rover source is
+installed under `/opt/terra-rover`, with pinned offline dependencies and the
+backed-up Fusion HAT Python package. This avoids substituting the older compiled
+binary, which lacks the new command-receipt logs.
+
+The backup's matching Pi 4 kernel, modules and Fusion HAT overlay were staged
+under separate boot filenames, preserving the working USB configuration and new
+root partition identity. Previous boot settings are backed up on the Pi under
+`/var/backups/terra-usb-restore/`.
+
+After reboot the relay captured a genuine rover startup failure: the Fusion HAT
+LED sysfs path was absent. Hardware-driver/power verification is still in progress;
+this record does not claim that the rover control service is ready for driving.
+No arming, motion command, safety timeout or stop policy was changed.
+
+## Credentials and verification
 
 All pre-existing collector permission entries were preserved exactly; only the
 two Rover 0 writer credentials were added. Only the logging collector was
 restarted for that change; the Zenoh router retained PID 1752.
 
-Remaining: boot-test USB on the physical Pi or access its current SD installation,
-install the independent forwarder and instrumented source, and confirm genuine
-Pi safety/connection events reach GCP after an offline interval. Do not treat
-dashboard observations or the prepared image as evidence that this is complete.
+The new USB queue tests cover bounded requests, fixed database access, original
+identity preservation, selected acknowledgment, and retaining queued records on
+cloud failure followed by delivery on reconnection. The installer and private
+configuration contain no credentials in version control.
