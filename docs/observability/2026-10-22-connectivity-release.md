@@ -36,7 +36,9 @@ The fresh-context review's four Important findings were accepted: delayed comman
 
 - Native/controller commit: `7c12252`; initial logging commit: `dc1e53d`; phone GPS defaults/report commit: `cec617a`.
 - ARGOS final reviewed commit: `aa1c82a`; first fleet-presence commit: `23dd21c`.
-- GPUI installed in the existing `/private/tmp/Terra Argos.app` bundle. Binary SHA-256: `5c4cae31eff98ace1064f4414bd4b5b73e6586edfc6cef1f24ba67d6ae23e1ea`.
+- GPUI installed in the existing `/private/tmp/Terra Argos.app` bundle. Built binary SHA-256: `5c4cae31eff98ace1064f4414bd4b5b73e6586edfc6cef1f24ba67d6ae23e1ea`. Installed signed binary SHA-256: `f7706c43407f9584a8b67f8b1a0a7a2d82aedaed042efa16479e9a7a5ce0b3be` (ad-hoc bundle signing changes the signature bytes).
 - Phone bundle: `org.terra.robotics.phone`, signed Debug device build, installed successfully without uninstalling the prior app or clearing its data.
 - Defaults: GPS display freshness 3 s; fleet stale presentation 90 s; autonomous router loss continues an accepted mission. Motion sensor and manual intent limits are unchanged.
 - Existing feature branches retained; no merge, shared-branch push, or infrastructure change is part of this release step.
+
+Final live receipt: GPUI journal **70,157 total / 0 pending** after the final installed build; latest 100 uploader records contain 20 completed uploads and no upload failures. GPUI is open and its subscriber is waiting for rover fleet telemetry. Final phone launch again returned iOS `Locked`; phone live delivery and physical driving remain unverified. Phone lifecycle/UI commit: `71892cd`.
