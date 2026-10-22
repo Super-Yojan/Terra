@@ -153,3 +153,88 @@ async fn transient_attachment_storage_failure_is_retryable() {
         StatusCode::NO_CONTENT
     );
 }
+
+#[tokio::test]
+async fn device_event_exports_require_bounded_time_and_reader_scope() {
+    let d = tempfile::tempdir().unwrap();
+    let store = Store::open(StoreConfig {
+        path: d.path().join("db"),
+        ..Default::default()
+    })
+    .unwrap();
+    let credentials = vec![Credential {
+        token_sha256: format!("{:x}", Sha256::digest(b"reader")),
+        scope: Scope {
+            producer_id: "reader".into(),
+            rovers: vec!["0".into()],
+            read: true,
+        },
+    }];
+    let app = router(App::new(store, credentials));
+    for (payload, expected) in [
+        (
+            r#"{"rover_id":"0","session_id":null}"#,
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            r#"{"rover_id":"0","session_id":null,"start_ns":1,"end_ns":86400000000002}"#,
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            r#"{"rover_id":"99","session_id":null,"start_ns":1,"end_ns":100}"#,
+            StatusCode::FORBIDDEN,
+        ),
+        (
+            r#"{"rover_id":"0","session_id":null,"start_ns":1,"end_ns":100}"#,
+            StatusCode::OK,
+        ),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/exports")
+                    .header("authorization", "Bearer reader")
+                    .header("content-type", "application/json")
+                    .body(Body::from(payload))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected, "{payload}");
+    }
+}
+
+#[tokio::test]
+async fn replay_page_contains_no_credentials_and_data_stays_authenticated() {
+    let d = tempfile::tempdir().unwrap();
+    let store = Store::open(StoreConfig {
+        path: d.path().join("db"),
+        ..Default::default()
+    })
+    .unwrap();
+    let app = router(App::new(store, vec![]));
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/viewer/")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(response.headers().contains_key("content-security-policy"));
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/sessions")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}

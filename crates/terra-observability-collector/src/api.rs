@@ -3,6 +3,7 @@ use axum::{
     Json, Router,
     extract::{DefaultBodyLimit, Path, Query, State},
     http::{HeaderMap, StatusCode},
+    response::{Html, IntoResponse},
     routing::{get, post, put},
 };
 use serde::Deserialize;
@@ -28,6 +29,9 @@ impl App {
 }
 pub fn router(app: App) -> Router {
     Router::new()
+        .route("/viewer/", get(replay_page))
+        .route("/viewer/app.js", get(replay_script))
+        .route("/viewer/style.css", get(replay_style))
         .route("/v1/events", post(ingest).get(events))
         .route("/v1/sessions", get(sessions))
         .route("/v1/clock", get(clock))
@@ -167,4 +171,33 @@ async fn clock(
 ) -> Result<Json<serde_json::Value>, StatusCode> {
     let _ = scope(&app, &headers, false)?;
     Ok(Json(serde_json::json!({"server_wall_ns":wall_time_ns()})))
+}
+
+async fn replay_page() -> impl IntoResponse {
+    (
+        [
+            ("cache-control", "no-store"),
+            (
+                "content-security-policy",
+                "default-src 'self'; script-src 'self'; style-src 'self'; frame-src 'self'; connect-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'self'",
+            ),
+            ("referrer-policy", "no-referrer"),
+        ],
+        Html(include_str!("../web/index.html")),
+    )
+}
+async fn replay_script() -> impl IntoResponse {
+    (
+        [
+            ("content-type", "text/javascript; charset=utf-8"),
+            ("cache-control", "no-cache"),
+        ],
+        include_str!("../web/app.js"),
+    )
+}
+async fn replay_style() -> impl IntoResponse {
+    (
+        [("content-type", "text/css; charset=utf-8")],
+        include_str!("../web/style.css"),
+    )
 }

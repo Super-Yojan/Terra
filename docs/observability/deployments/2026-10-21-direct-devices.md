@@ -113,3 +113,42 @@ fixtures passed. The logger also captures kernel, hotspot, network and systemd
 unit-failure diagnostics with secret redaction. The current Pi observer was updated
 and is active. The customized image has not yet been flashed or physically booted;
 SSH authentication provisioning and post-flash USB/hotspot/HAT verification remain.
+
+## Fusion image physical acceptance
+
+The Pi booted the intended Fusion image as `terra-bb75b9`, kernel
+`6.12.109+rpt-rpi-v8`. USB DHCP assigned the Mac `192.168.77.2`; SSH to
+`pi@192.168.77.1` works with the separately approved Mac administration key.
+The WPA2 hotspot is `Terra-bb75b9`, with SSH at `192.168.78.1` after joining it.
+The hotspot was discovered and association tested; the USB path was used for
+subsequent setup and verification.
+
+Offline repair restored root ownership on 45 system paths inherited incorrectly
+from the image overlay, including sudo configuration. A metadata recovery image
+and 6,936 event records were saved first. The ext4 journal recovered and the final
+filesystem check passed. The private pre-repair image must not be reused without
+correcting ownership. This was a targeted SD repair, not a reflash.
+
+The HAT initially failed I2C communication at `0x17`. After the operator connected
+the HAT, its controller answered. A live driver retry produced kernel warnings;
+those logs were saved, the rover was stopped, and the Pi was rebooted. On the next
+boot the driver probed successfully with the hardware interface present. Rover,
+independent observer and hotspot all ran with zero service restarts. Startup
+observations explicitly reported `previous_armed=false`; no arm or drive command
+was sent. Driver version is 1.1.0 and MCU firmware is 1.0.2. This confirms startup,
+not a physical driving test.
+
+The existing restricted Mac relay key was installed with queue-only access and
+pinned to the verified new Pi host identity. Its target is now `pi@192.168.77.1`.
+A labeled synthetic `logging.setup_check` event remained pending while the Mac
+relay was stopped and received GCP acknowledgment after restart. All 6,936 saved
+pre-repair events were also cloud-acknowledged through a paced archive upload,
+with original identities and timestamps preserved. The original archive remains
+unchanged. The Pi's initially unset wall clock is inaccurate for those first-boot
+events; compare monotonic times within each recorded boot.
+
+Local event capture continues without USB or internet. With the Mac awake,
+logged in, online and attached by USB, its LaunchAgent forwards the Pi backlog.
+Hotspot mode alone does not give the Pi an internet uplink. Direct HTTPS upload
+is also configured for when the Pi has an uplink. Existing retention and byte
+limits still apply.

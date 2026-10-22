@@ -10,8 +10,8 @@ See [coverage](coverage.md) and [event schema](event-schema.md) for exact scope.
 The GCP collector was deployed and verified on 2026-10-21. See the
 [deployment record](deployments/2026-10-21-gcp.md) for the host, limits and checks.
 This Mac's ARGOS and Zorvane upload settings are provisioned; relaunch the rebuilt
-apps to enable uploads. Phone and Pi provisioning and physical field acceptance
-remain outstanding. The deployment verification was synthetic, not a field run.
+apps to enable uploads. Phone and Pi direct logging are provisioned; physical driving acceptance
+remains outstanding. See the direct-device deployment record for USB and HAT checks. The deployment verification was synthetic, not a field run.
 The existing router remains on TLS port 7448. The new collector listens only on
 127.0.0.1:7450 behind `/observability/*` on the existing HTTPS host. It has its
 own user, database, limits and credentials. No cloud service-account key is
@@ -292,3 +292,25 @@ Pi journal's configured storage and age limits.
 The Mac must be logged in, awake, connected to the Pi over USB and have internet
 access. When unavailable, the observer keeps queued events locally; reconnecting
 resumes uploading. Do not queue motion commands using this logging mechanism.
+
+## Browser replay
+
+The Argos HTTPS host serves `/rerun/` with rover/run selection and an embedded
+Rerun 0.39.0 viewer. Enter the existing scoped **reader** token; writer tokens do
+not grant viewing access. The token stays in page memory, is never put into URLs
+or browser storage, and is cleared by sign-out/page close. Recordings are fetched
+through authenticated collector exports, then passed to the same-origin viewer
+as a temporary Blob URL. Downloads use the same authorized recording.
+
+Choose a source-clock time range. Device events without a mission ID can be
+exported with `session_id: null` and an explicit window of at most 24 hours.
+Named session exports remain supported. An unset device clock can put source
+events on an earlier date than receipt; do not infer physical timing from those
+wall clocks. Missing sensor evidence is not reconstructed by replay.
+
+The separate `terra-rerun-viewer.service` serves pinned viewer assets only through
+loopback HTTP 9090; its unused SDK listener is bound to loopback 9877. Caddy
+exposes `/rerun/viewer/*` for assets and `/rerun/*` for the collector's public UI
+shell. Session and artifact API routes still require reader authentication. No
+public SDK ingestion route is added. Restarting the collector invalidates its
+in-memory export job index; recreate an export after a restart.

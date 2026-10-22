@@ -20,7 +20,7 @@ pub struct ExportJob {
     pub id: String,
     pub status: String,
     pub rover_id: String,
-    pub session_id: String,
+    pub session_id: Option<String>,
     pub artifacts: Vec<String>,
     pub error: Option<String>,
 }
@@ -44,7 +44,7 @@ impl Default for ExportService {
 #[derive(Deserialize)]
 pub struct ExportRequest {
     rover_id: String,
-    session_id: String,
+    session_id: Option<String>,
     start_ns: Option<u64>,
     end_ns: Option<u64>,
 }
@@ -54,11 +54,20 @@ pub async fn create(
     Json(request): Json<ExportRequest>,
 ) -> Result<Json<ExportJob>, StatusCode> {
     let scope = crate::api::scope(&app, &headers, true)?;
-    if !scope.rovers.contains(&request.rover_id)
-        || request.session_id.len() > 256
-        || request.session_id.is_empty()
-    {
+    if !scope.rovers.contains(&request.rover_id) {
         return Err(StatusCode::FORBIDDEN);
+    }
+    if request
+        .session_id
+        .as_ref()
+        .is_some_and(|s| s.is_empty() || s.len() > 256)
+        || (request.session_id.is_none()
+            && !request
+                .start_ns
+                .zip(request.end_ns)
+                .is_some_and(|(start, end)| start < end && end - start <= 86_400_000_000_000))
+    {
+        return Err(StatusCode::BAD_REQUEST);
     }
     if request
         .start_ns
@@ -201,7 +210,7 @@ fn run_export_inner(
             }
             let events = app
                 .store
-                .events(scope, Some(&request.session_id), cursor, 1000)?;
+                .events(scope, request.session_id.as_deref(), cursor, 1000)?;
             let next = events.iter().map(|e| e.cursor).max().unwrap_or(cursor);
             if cursor == 0 {
                 losses.extend(
@@ -216,9 +225,7 @@ fn run_export_inner(
             }
             for e in events {
                 let input = &e.event.input;
-                if input.rover_id != request.rover_id
-                    || input.session_id.as_deref() != Some(&request.session_id)
-                {
+                if input.rover_id != request.rover_id || input.session_id != request.session_id {
                     continue;
                 }
                 if request.start_ns.is_some_and(|t| input.wall_time_ns < t)
@@ -243,30 +250,32 @@ fn run_export_inner(
         // Pi service events need not carry a phone mission ID. Preserve that fact while
         // including only nearby same-rover context, with explicit association metadata.
         let mut contexts=db.prepare("SELECT cursor,received_ns,payload FROM observations WHERE rover=? AND (session IS NULL OR ((json_extract(payload,'$.input.attributes.payload.run_id')=? OR json_extract(payload,'$.input.attributes.run_id')=?) AND session!=?)) AND json_extract(payload,'$.input.wall_time_ns') BETWEEN ? AND ? ORDER BY cursor LIMIT 100001")?;
-        for row in contexts.query_map(
-            rusqlite::params![
-                request.rover_id,
-                request.session_id,
-                request.session_id,
-                request.session_id,
-                first_wall.saturating_sub(10_000_000_000),
-                last_wall.saturating_add(10_000_000_000)
-            ],
-            decode,
-        )? {
-            let (cursor, received_ns, payload) = row?;
-            let e = crate::StoredEvent {
-                cursor,
-                received_ns,
-                event: serde_json::from_str(&payload)?,
-            };
-            sources.insert((e.event.id.producer_id.clone(), e.event.id.boot_id.clone()));
-            let association = if e.event.input.session_id.is_some() {
-                "explicit_mission_correlation"
-            } else {
-                "nearby_unassociated_context"
-            };
-            append(&e, Some(association))?;
+        if request.session_id.is_some() {
+            for row in contexts.query_map(
+                rusqlite::params![
+                    request.rover_id,
+                    request.session_id,
+                    request.session_id,
+                    request.session_id,
+                    first_wall.saturating_sub(10_000_000_000),
+                    last_wall.saturating_add(10_000_000_000)
+                ],
+                decode,
+            )? {
+                let (cursor, received_ns, payload) = row?;
+                let e = crate::StoredEvent {
+                    cursor,
+                    received_ns,
+                    event: serde_json::from_str(&payload)?,
+                };
+                sources.insert((e.event.id.producer_id.clone(), e.event.id.boot_id.clone()));
+                let association = if e.event.input.session_id.is_some() {
+                    "explicit_mission_correlation"
+                } else {
+                    "nearby_unassociated_context"
+                };
+                append(&e, Some(association))?;
+            }
         }
         if scope.rovers.iter().any(|r| r == "_producer") {
             let mut router_context=db.prepare("SELECT cursor,received_ns,payload FROM observations WHERE producer='gcp-router' AND rover='_producer' AND json_extract(payload,'$.input.wall_time_ns') BETWEEN ? AND ? ORDER BY cursor LIMIT 100001")?;
