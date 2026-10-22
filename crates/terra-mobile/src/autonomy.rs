@@ -2,7 +2,84 @@
 
 use crate::*;
 
+pub(crate) fn accepted_mission(b: &Brain) -> bool {
+    b.connectivity.autonomous_router_loss
+        == connectivity_policy::RouterLossPolicy::ContinueAcceptedMission
+        && if b.outdoor.selected {
+            b.outdoor.active() && b.outdoor.phase() == "planning" && b.autonomy.outdoor_authority()
+        } else {
+            b.autonomy
+                .accepted_onboard_mission(b.pose.unwrap_or_default().0)
+        }
+}
+
+/// Validate network authority before strict request decoding. Local phone APIs
+/// bypass this ingress and continue to use their own admission checks.
+pub(crate) fn remote_action(
+    b: &Brain,
+    kind: &str,
+    bytes: &[u8],
+    age: f64,
+) -> Result<Vec<u8>, &'static str> {
+    if bytes.len() > 4096 {
+        return Err("request_too_large");
+    }
+    let mut v: serde_json::Value = serde_json::from_slice(bytes).map_err(|_| "invalid_json")?;
+    let neutral = (kind == "goal" && v["cancel"] == true)
+        || (kind == "safety" && v["action"] == "stop")
+        || (kind == "hardware" && v["action"] == "disarm")
+        || (kind == "search/action" && matches!(v["action"].as_str(), Some("cancel" | "pause")))
+        || kind == "search/report/ack"
+        || (matches!(kind, "teleop" | "cmd_vel")
+            && v["linear"].as_f64() == Some(0.)
+            && v["angular"].as_f64() == Some(0.));
+    if !neutral {
+        if !age.is_finite() || !(0.0..0.5).contains(&age) {
+            return Err("remote_request_expired");
+        }
+        if v["run_id"] != b.run_id
+            || v["authority_revision"].as_u64() != Some(b.autonomy.authority_revision())
+        {
+            return Err("current_authority_required_upgrade_legacy_client");
+        }
+    }
+    let strip_run = matches!(kind, "autonomy" | "safety")
+        || (kind == "goal" && (!b.outdoor.selected || v["cancel"] == true));
+    if let Some(o) = v.as_object_mut() {
+        if strip_run {
+            o.remove("run_id");
+            o.remove("authority_revision");
+        } else if matches!(
+            kind,
+            "goal/decision" | "search" | "search/action" | "search/report/ack" | "goal"
+        ) {
+            o.remove("authority_revision");
+        }
+    }
+    serde_json::to_vec(&v).map_err(|_| "invalid_json")
+}
+
 impl MobileController {
+    pub(crate) fn apply_dashboard_link_loss(&self, b: &mut Brain, timestamp: f64) {
+        if b.router_loss_handled {
+            return;
+        }
+        let mission = accepted_mission(b);
+        b.autonomy.invalidate_remote_authority();
+        b.hardware_requests.clear();
+        // Keep token replay caches across reconnects; no old action may become new.
+        if b.connectivity.autonomous_router_loss == connectivity_policy::RouterLossPolicy::Pause {
+            b.outdoor.pause("router_loss_paused");
+            b.autonomy.pause_for_router_loss();
+            b.controller.reset();
+        }
+        b.router_loss_handled = true;
+        self.observation.event("router", "connection.loss_decision", serde_json::json!({
+            "policy": b.connectivity, "policy_revision": b.connectivity_revision,
+            "accepted_mission_continues": mission,
+            "mission": serde_json::from_str::<serde_json::Value>(&b.autonomy_json).ok().map(|v| v["goal"].clone()),
+        }), &b.run_id, timestamp);
+    }
     fn install_dashboard(
         &self,
         service: terra_transport::ControlPlane,
@@ -10,7 +87,9 @@ impl MobileController {
         let mut brain = self.brain.lock().map_err(|_| ControllerError::Internal)?;
         brain.map_gate = Default::default();
         brain.cloud_gate = Default::default();
+        brain.autonomy.invalidate_remote_authority();
         brain.dashboard = Some(service);
+        brain.router_loss_handled = false;
         Ok(())
     }
 }
@@ -44,6 +123,64 @@ pub fn supported_autonomy_levels() -> Vec<String> {
 
 #[uniffi::export]
 impl MobileController {
+    /// Whether transport replacement can preserve an accepted onboard mission.
+    /// Local safety admission is evaluated independently on every execution tick.
+    pub fn connectivity_policy_settings(&self) -> String {
+        self.brain
+            .lock()
+            .map(|b| serde_json::to_string(&b.connectivity).expect("validated policy"))
+            .unwrap_or_default()
+    }
+    pub fn accepted_onboard_mission(&self) -> bool {
+        self.brain
+            .lock()
+            .map(|b| accepted_mission(&b))
+            .unwrap_or(false)
+    }
+    pub fn set_connectivity_policy_settings(
+        &self,
+        settings_json: String,
+    ) -> Result<(), ControllerError> {
+        if settings_json.len() > 4096 {
+            return Err(ControllerError::InvalidInput {
+                message: "connectivity policy too large".into(),
+            });
+        }
+        let policy: connectivity_policy::ConnectivityPolicySettings =
+            serde_json::from_str(&settings_json).map_err(|_| ControllerError::InvalidInput {
+                message: "invalid connectivity policy".into(),
+            })?;
+        policy
+            .validate()
+            .map_err(|e| ControllerError::InvalidInput { message: e.into() })?;
+        let mut b = self.brain.lock().map_err(|_| ControllerError::Internal)?;
+        b.connectivity = policy;
+        if b.router_loss_handled
+            && b.connectivity.autonomous_router_loss == connectivity_policy::RouterLossPolicy::Pause
+        {
+            b.outdoor.pause("router_loss_paused");
+            b.autonomy.pause_for_router_loss();
+            b.controller.reset();
+        }
+        b.connectivity_revision = b.connectivity_revision.saturating_add(1);
+        self.observation.event(
+            "router",
+            "connectivity.policy_changed",
+            serde_json::json!({"policy": b.connectivity, "revision": b.connectivity_revision}),
+            &b.run_id,
+            b.imu_time.unwrap_or(0.),
+        );
+        Ok(())
+    }
+    /// Automatic transport failure is distinct from explicit operator disconnect.
+    pub fn handle_dashboard_link_loss(&self) -> Result<(), ControllerError> {
+        {
+            let mut b = self.brain.lock().map_err(|_| ControllerError::Internal)?;
+            let timestamp = b.imu_time.unwrap_or(0.);
+            self.apply_dashboard_link_loss(&mut b, timestamp);
+        }
+        self.detach_dashboard_link()
+    }
     /// Bounded world-space visualization points; never a source of motor authority.
     /// Requires version 1 JSON, at most 4096 points, and at most 262144 bytes.
     /// Full content is coalesced; unchanged newer samples can emit heartbeats.
@@ -111,7 +248,7 @@ impl MobileController {
                 message: "localization payload too large".into(),
             });
         }
-        let value: serde_json::Value =
+        let mut value: serde_json::Value =
             serde_json::from_str(&payload).map_err(|_| ControllerError::InvalidInput {
                 message: "invalid localization JSON".into(),
             })?;
@@ -121,8 +258,10 @@ impl MobileController {
             });
         }
         let brain = self.brain.lock().map_err(|_| ControllerError::Internal)?;
+        value["run_id"] = serde_json::json!(brain.run_id);
+        value["connectivity_policy"] = serde_json::json!(brain.connectivity);
         if let Some(dashboard) = brain.dashboard.as_ref() {
-            dashboard.publish("localization", payload);
+            dashboard.publish("localization", value.to_string());
         }
         Ok(())
     }
@@ -194,10 +333,9 @@ impl MobileController {
     /// Returns `Internal` for a poisoned mutex.
     pub fn detach_dashboard_link(&self) -> Result<(), ControllerError> {
         let mut b = self.brain.lock().map_err(|_| ControllerError::Internal)?;
-        b.outdoor.pause("authority_lost");
+        b.autonomy.clear_remote_intent();
         let service = b.dashboard.take();
         b.hardware_requests.clear();
-        b.hardware_tokens.clear();
         drop(b);
         // Network teardown must not stall the phone control/Bluetooth producer.
         if let Some(service) = service {
@@ -608,3 +746,7 @@ mod dashboard_tests {
         assert_eq!(status["status"]["safety"], "emergency_stop");
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/internal/router_policy.rs"]
+mod router_policy_tests;

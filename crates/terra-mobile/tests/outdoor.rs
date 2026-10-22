@@ -500,3 +500,104 @@ fn temporary_heading_limit_keeps_accuracy_and_freshness_gates() {
         Some("heading_uncertain")
     );
 }
+
+#[test]
+fn geographic_mission_survives_two_minute_cloud_outage_but_hardware_loss_latches() {
+    let mut settings = terra_mobile::default_control_settings();
+    settings.max_forward = 0.1;
+    let c = terra_mobile::MobileController::new(settings).unwrap();
+    c.enable_outdoor_gps().unwrap();
+    local_sensors(&c, 1.);
+    hardware(&c, false);
+    c.step(1.).unwrap();
+    let run = state(&c)["status"]["run_id"].clone();
+    c.autonomy_request("navigation/source".into(),serde_json::json!({"schema_version":1,"source":"outdoor_gps","token":"select","run_id":run,"navigation_revision":0}).to_string(),1.).unwrap();
+    c.autonomy_request(
+        "autonomy".into(),
+        r#"{"level":"waypoint","token":"level"}"#.into(),
+        1.,
+    )
+    .unwrap();
+    local_sensors(&c, 1.01);
+    c.step(1.01).unwrap();
+    assert_eq!(
+        state(&c)["status"]["safety"],
+        "clear",
+        "Selecting outdoor mode must leave idle arming possible"
+    );
+    hardware(&c, true);
+    c.push_gps(
+        GpsFix {
+            timestamp: 1.,
+            latitude: 0.,
+            longitude: 0.,
+            accuracy: 2.,
+        },
+        1.,
+    )
+    .unwrap();
+    c.push_heading(
+        HeadingFix {
+            timestamp: 1.,
+            true_heading: 0.,
+            accuracy: 2.,
+        },
+        1.,
+    )
+    .unwrap();
+    c.autonomy_request("goal".into(),serde_json::json!({"frame":"wgs84","latitude":0.001,"longitude":0,"token":"mission","run_id":run,"navigation_revision":1,"arrival_radius_m":2.}).to_string(),1.01).unwrap();
+    local_sensors(&c, 1.05);
+    let output = c.step(1.05).unwrap();
+    let s = state(&c);
+    assert!(output.target_forward > 0. && output.target_forward <= 0.1);
+    assert_eq!(s["outdoor"]["arrival_radius_m"], 2.);
+    let trace = &s["status"]["planner_trace"];
+    let selected = trace["selected"].as_u64().unwrap() as usize;
+    assert_eq!(trace["candidates"][selected]["velocity"], s["twist"]);
+    assert_eq!(s["goal"]["token"], "mission");
+    assert_eq!(s["goal"]["latitude"], 0.001);
+    assert_eq!(s["goal"]["state"], "active");
+    assert_eq!(
+        s["twist"]["linear"].as_f64().unwrap(),
+        output.target_forward
+    );
+
+    assert!(c.accepted_onboard_mission());
+    c.handle_dashboard_link_loss().unwrap();
+    for tick in 1..=1200 {
+        let t = 1.05 + tick as f64 * 0.1;
+        local_sensors(&c, t);
+        hardware(&c, true);
+        c.push_gps(
+            GpsFix {
+                timestamp: t,
+                latitude: 0.,
+                longitude: 0.,
+                accuracy: 2.,
+            },
+            t,
+        )
+        .unwrap();
+        c.push_heading(
+            HeadingFix {
+                timestamp: t,
+                true_heading: 0.,
+                accuracy: 2.,
+            },
+            t,
+        )
+        .unwrap();
+        c.step(t).unwrap();
+        assert_eq!(state(&c)["outdoor"]["phase"], "planning");
+        assert_eq!(state(&c)["goal"]["token"], "mission");
+    }
+    hardware(&c, false);
+    local_sensors(&c, 121.2);
+    c.step(121.2).unwrap();
+    assert_eq!(state(&c)["outdoor"]["phase"], "paused");
+    hardware(&c, true);
+    local_sensors(&c, 121.3);
+    c.step(121.3).unwrap();
+    assert_eq!(state(&c)["outdoor"]["phase"], "paused");
+    assert!(!c.accepted_onboard_mission());
+}

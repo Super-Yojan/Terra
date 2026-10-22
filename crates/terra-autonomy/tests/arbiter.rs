@@ -491,3 +491,103 @@ fn manual_does_not_need_pose_but_still_stops_for_health_and_expired_input() {
     assert_eq!(a.step(failed_link).status.reason, "sensor_unhealthy");
     assert_eq!(a.step(input(2.)).twist, Twist::default());
 }
+
+#[test]
+fn router_intent_clear_keeps_local_manual_but_removes_fleet_lease() {
+    let mut a = AutonomyArbiter::default();
+    a.accept_operator_from(tele(), 0., CommandOrigin::FleetTeleop);
+    a.clear_remote_intent();
+    assert_eq!(a.step(input(0.1)).twist, Twist::default());
+    a.accept_operator(tele(), 0.2);
+    a.clear_remote_intent();
+    assert!(a.step(input(0.3)).twist.linear > 0.);
+    assert_eq!(a.step(input(1.)).twist, Twist::default());
+}
+
+#[test]
+fn supervised_approved_action_can_finish_offline_without_approving_the_next() {
+    let mut a = AutonomyArbiter::default();
+    a.set_level(LevelRequest {
+        level: Level::Supervised,
+        token: "s".into(),
+        budget_seconds: None,
+        budget_minutes: None,
+    });
+    let mut m = terra_mapping::MapSnapshot {
+        width: 40,
+        height: 40,
+        resolution: 0.25,
+        origin_x: -5.,
+        origin_y: -5.,
+        occupancy: vec![-1; 1600],
+    };
+    for y in 12..28 {
+        for x in 12..28 {
+            m.occupancy[y * 40 + x] = 0;
+        }
+    }
+    let i = ArbiterInput {
+        map: Some(&m),
+        map_time: Some(0.1),
+        ..input(0.1)
+    };
+    let o = a.step(i);
+    assert!(o.proposal.is_some());
+    assert_eq!(o.twist, Twist::default());
+    let p = o.proposal.unwrap();
+    a.decide_proposal(
+        ProposalDecision {
+            run_id: p.run_id.clone(),
+            proposal_id: Some(p.proposal_id),
+            decision: Decision::Approve,
+            token: "yes".into(),
+        },
+        &ArbiterInput {
+            map: Some(&m),
+            map_time: Some(0.2),
+            ..input(0.2)
+        },
+    );
+    assert_eq!(
+        a.step(ArbiterInput {
+            map: Some(&m),
+            map_time: Some(0.3),
+            ..input(0.3)
+        })
+        .status
+        .result
+        .as_deref(),
+        Some("accepted")
+    );
+    a.invalidate_remote_authority();
+    assert!(a.accepted_onboard_mission(Pose::default()));
+    let active = a.step(ArbiterInput {
+        map: Some(&m),
+        map_time: Some(0.31),
+        ..input(0.31)
+    });
+    let at = Pose {
+        x: active.goal.x,
+        y: active.goal.y,
+        yaw: 0.,
+    };
+    let arrived = a.step(ArbiterInput {
+        pose: at,
+        map: Some(&m),
+        map_time: Some(0.4),
+        ..input(0.4)
+    });
+    assert_eq!(arrived.twist, Twist::default());
+    assert!(!a.accepted_onboard_mission(at));
+    let next = a.step(ArbiterInput {
+        pose: at,
+        map: Some(&m),
+        map_time: Some(0.5),
+        ..input(0.5)
+    });
+    assert_eq!(next.twist, Twist::default());
+    assert!(
+        next.proposal.is_some(),
+        "next action still awaits explicit approval"
+    );
+}

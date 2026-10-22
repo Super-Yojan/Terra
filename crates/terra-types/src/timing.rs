@@ -70,3 +70,7 @@ pub const SEARCH_OBSERVATION_FRESHNESS_SECONDS: f64 = 0.5;
 pub const SEARCH_STUCK_SECONDS: f64 = 10.0;
 /// Exclusion period for failed target-search locations.
 pub const SEARCH_BLACKLIST_SECONDS: f64 = 30.0;
+
+/// Maximum cached authority age when issuing a new remote mission request.
+/// This does not extend manual intent leases or any onboard sensor limit.
+pub const REMOTE_AUTHORITY_CACHE_SECONDS: f64 = 90.0;

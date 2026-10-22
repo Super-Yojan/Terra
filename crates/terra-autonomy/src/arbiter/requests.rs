@@ -2,6 +2,61 @@
 use super::*;
 
 impl AutonomyArbiter {
+    pub fn reject_remote_request(&mut self, token: Option<&str>, reason: &str) {
+        self.request_reason = Some(reason.into());
+        if let Some(token) = token.filter(|token| valid_token(token)) {
+            self.receipt = Some((token.into(), false));
+        }
+        self.event("remote_request_rejected", token.map(str::to_owned), reason);
+    }
+    pub fn authority_revision(&self) -> u64 {
+        self.revision
+    }
+    /// Retire previously issued remote commands without changing a local mission.
+    pub fn invalidate_remote_authority(&mut self) {
+        self.clear_remote_intent();
+        self.revision = self.revision.saturating_add(1);
+        self.event(
+            "authority_generation_changed",
+            None,
+            "transport_replaced_or_lost",
+        );
+    }
+
+    /// An already accepted mission, independent of network presence. Tick-time local
+    /// sensor, collision and safety checks still apply to every command.
+    pub fn accepted_onboard_mission(&self, pose: Pose) -> bool {
+        if self.stopped || self.paused {
+            return false;
+        }
+        match self.level {
+            Level::Waypoint | Level::WaypointDirect | Level::Supervised => {
+                self.has_active_goal(pose)
+            }
+            Level::Explore => self.explorer.is_running(),
+            Level::TargetSearch => self.search.as_ref().is_some_and(|s| {
+                matches!(s.phase(), SearchPhase::Searching | SearchPhase::Confirming)
+            }),
+            _ => false,
+        }
+    }
+    /// Remove remote intent while leaving local manual intent and mission identity alone.
+    pub fn clear_remote_intent(&mut self) {
+        if self.operator_origin == CommandOrigin::FleetTeleop {
+            self.operator = None;
+        }
+    }
+    /// Explicit policy pause. Neither a new transport nor a policy edit resumes it.
+    pub fn pause_for_router_loss(&mut self) {
+        self.clear_remote_intent();
+        self.paused = true;
+        self.pause_reason = "router_loss_paused";
+        self.turning.reset();
+        self.maneuver.clear();
+        self.reset = true;
+        self.event("mission_paused", None, "router_loss_paused");
+    }
+
     /// Outdoor guidance is admitted only by the L3 authority path.
     pub fn outdoor_authority(&self) -> bool {
         self.level == Level::Waypoint && !self.stopped && !self.paused
@@ -315,6 +370,7 @@ impl AutonomyArbiter {
                 self.level = Level::Teleop;
             } else if self.level == Level::Supervised {
                 self.paused = true;
+                self.pause_reason = "supervision_paused";
             }
             self.revision += 1;
             self.event("goal_cancel", None, "operator_cancel");

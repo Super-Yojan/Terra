@@ -214,9 +214,6 @@ pub(crate) fn update(b: &mut Brain, now: f64) -> bool {
     if !b.outdoor.selected {
         return true;
     }
-    if b.dashboard.as_ref().is_some_and(|d| d.failed()) {
-        b.outdoor.pause("authority_lost");
-    }
     let e = evidence(b, now);
     if let Some((x, y)) = b.outdoor.tick(now, e) {
         b.autonomy.update_guidance(x, y);

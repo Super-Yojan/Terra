@@ -110,6 +110,7 @@ pub struct AutonomyArbiter {
     pub run_id: String,
     stopped: bool,
     paused: bool,
+    pause_reason: &'static str,
     last_time: Option<f64>,
     revision: u64,
     receipt: Option<(String, bool)>,
@@ -163,6 +164,7 @@ impl Default for AutonomyArbiter {
             run_id: "local".into(),
             stopped: false,
             paused: false,
+            pause_reason: "supervision_paused",
             last_time: None,
             revision: 0,
             receipt: None,
@@ -376,7 +378,7 @@ impl AutonomyArbiter {
             decision.held = true;
             self.note_map_stale(input.now);
         } else if self.paused {
-            decision.reason = "supervision_paused";
+            decision.reason = self.pause_reason;
             decision.held = true;
         }
     }

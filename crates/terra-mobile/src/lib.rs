@@ -35,7 +35,8 @@ pub use waypoint::*;
 /// Shared presentation and router-loss defaults. Local sensor limits are independent.
 #[uniffi::export]
 pub fn default_connectivity_policy_settings() -> String {
-    serde_json::to_string(&connectivity_policy::ConnectivityPolicySettings::default()).expect("finite policy defaults")
+    serde_json::to_string(&connectivity_policy::ConnectivityPolicySettings::default())
+        .expect("finite policy defaults")
 }
 
 #[derive(Clone, Debug, uniffi::Record)]
@@ -260,6 +261,9 @@ impl From<InputError> for ControllerError {
     }
 }
 struct Brain {
+    connectivity: connectivity_policy::ConnectivityPolicySettings,
+    connectivity_revision: u64,
+    router_loss_handled: bool,
     outdoor: outdoor::OutdoorController,
     outdoor_tokens: std::collections::VecDeque<String>,
     outdoor_goal_tokens: std::collections::VecDeque<String>,
@@ -305,6 +309,9 @@ impl MobileController {
         Ok(Arc::new(Self {
             observation: Default::default(),
             brain: Mutex::new(Brain {
+                connectivity: Default::default(),
+                connectivity_revision: 0,
+                router_loss_handled: false,
                 outdoor: Default::default(),
                 outdoor_tokens: Default::default(),
                 outdoor_goal_tokens: Default::default(),
@@ -467,12 +474,34 @@ impl MobileController {
         let estimate = brain.estimator.estimate(timestamp);
         let pose = brain.pose.unwrap_or_default();
         let map = brain.map.clone();
+        if brain.dashboard.as_ref().is_some_and(|d| d.failed()) && !brain.router_loss_handled {
+            self.apply_dashboard_link_loss(&mut brain, timestamp);
+        }
         let incoming = brain
             .dashboard
             .as_ref()
+            .filter(|d| !d.failed())
             .map(|d| d.take_actions())
             .unwrap_or_default();
         for (kind, bytes, age) in incoming {
+            let bytes = match autonomy::remote_action(&brain, &kind, &bytes, age) {
+                Ok(bytes) => bytes,
+                Err(reason) => {
+                    let rejected: serde_json::Value =
+                        serde_json::from_slice(&bytes).unwrap_or_default();
+                    brain
+                        .autonomy
+                        .reject_remote_request(rejected["token"].as_str(), reason);
+                    self.observation.event(
+                        "router",
+                        "command.rejected",
+                        serde_json::json!({"topic":kind,"reason":reason,"age":age}),
+                        &brain.run_id,
+                        timestamp,
+                    );
+                    continue;
+                }
+            };
             self.observation.event("router", "command.received", serde_json::json!({"topic":kind,"queue_age":age,"payload":serde_json::from_slice::<serde_json::Value>(&bytes).ok()}), &brain.run_id, timestamp);
             match kind.as_str() {
                 "navigation/settings" => navigation_settings::apply(&mut brain, &bytes, age),
@@ -565,18 +594,11 @@ impl MobileController {
                 _ => {}
             }
         }
-        let previous: serde_json::Value =
-            serde_json::from_str(&brain.autonomy_json).unwrap_or_default();
-        let local_waypoint = matches!(
-            previous["status"]["requested_level"].as_str(),
-            Some("waypoint" | "waypoint_direct")
-        ) && previous["goal"]["state"] == "active";
         let outdoor_motion = outdoor_bridge::update(&mut brain, timestamp);
         // L0 is routed as direct operator effort on the phone. Its authority
         // must survive camera loss while transport/recording failures still stop it.
         let healthy = (brain.autonomy.is_manual() || pose_quality::ready(&brain, timestamp))
             && outdoor_motion
-            && (local_waypoint || brain.dashboard.as_ref().is_none_or(|d| !d.failed()))
             && brain.recorder.as_ref().is_none_or(|r| !r.failed());
         brain.autonomy.run_id = brain.run_id.clone();
         let limits = brain.control_limits;
@@ -693,6 +715,7 @@ impl MobileController {
                 "recording": brain.recorder.as_ref().is_some_and(|r|!r.failed()),
             }).to_string());
             let mut status = serde_json::to_value(&output.status).unwrap();
+            status["connectivity"] = serde_json::json!({"policy":brain.connectivity,"revision":brain.connectivity_revision});
             status["navigation"] = brain.navigation.status();
             status["navigation"]["outdoor"] = outdoor_status.clone();
             d.publish("navigation/outdoor", outdoor_status.to_string());
@@ -769,6 +792,8 @@ impl MobileController {
             "pose_quality": quality,
             "outdoor": outdoor_status,
             "navigation": brain.navigation.status(),
+            "connectivity": {"policy": brain.connectivity, "revision": brain.connectivity_revision,
+                "accepted_onboard_mission": autonomy::accepted_mission(&brain)},
             "goal": output.goal,
             "proposal": wire_proposal,
             "exploration": output.exploration,
