@@ -4,6 +4,7 @@ use serde::Deserialize;
 use std::{path::PathBuf, sync::RwLock, time::Duration};
 use terra_observability::{EventInput, Journal, JournalConfig, RecordOutcome};
 struct Attached {
+    router_diagnostics: terra_observability::DiagnosticRecorder,
     journal: Arc<Journal>,
     evidence: terra_observability::EvidenceWriter,
     path: PathBuf,
@@ -12,6 +13,7 @@ struct Attached {
 }
 #[derive(Default)]
 pub(super) struct ObservationState {
+    last_router: Mutex<Option<(String, std::time::Instant)>>,
     attached: RwLock<Option<Attached>>,
     rover: RwLock<Option<String>>,
     last: Mutex<(String, f64)>,
@@ -25,6 +27,63 @@ struct Config {
     settings: terra_observability::ObservationSettings,
 }
 impl ObservationState {
+    pub(super) fn router_connect_failed(&self, error: &terra_transport::TransportError) {
+        // Classify diagnostic text locally; never store text that might contain credentials.
+        let category = match error {
+            terra_transport::TransportError::InvalidSettings => "invalid_settings",
+            terra_transport::TransportError::Network(message) => {
+                let text = message.to_lowercase();
+                if text.contains("certificate") {
+                    "tls_certificate"
+                } else if text.contains("auth") {
+                    "authentication"
+                } else if text.contains("timeout") || text.contains("timed out") {
+                    "connect_timeout"
+                } else if text.contains("refused") {
+                    "connection_refused"
+                } else if text.contains("dns") || text.contains("resolve") {
+                    "name_resolution"
+                } else {
+                    "network"
+                }
+            }
+            _ => "transport",
+        };
+        self.router_event(
+            "router.connect.failed",
+            serde_json::json!({"stage":"open_session","error_category":category}),
+        );
+    }
+    pub(super) fn router_event(&self, kind: &str, attributes: serde_json::Value) {
+        if let Ok(attached) = self.attached.try_read()
+            && let Some(a) = attached.as_ref()
+        {
+            a.router_diagnostics.try_record(kind, attributes);
+        }
+    }
+    pub(super) fn router_status(&self, service: Option<&terra_transport::ControlPlane>) {
+        let details = service
+            .map(|s| s.diagnostics())
+            .unwrap_or_else(|| serde_json::json!({"state":"disconnected"}));
+        // A busy telemetry snapshot is not evidence of stale data. Never hide a link failure.
+        if details["telemetry_sample_available"] == false && details["state"] != "failed" {
+            return;
+        }
+        let key = serde_json::json!([
+            details["state"],
+            details["failure_reason"],
+            details["telemetry_fresh"]
+        ])
+        .to_string();
+        if let Ok(mut last) = self.last_router.try_lock() {
+            if last.as_ref().is_none_or(|(previous, at)| {
+                previous != &key || at.elapsed() >= Duration::from_secs(5)
+            }) {
+                self.router_event("router.status", details);
+                *last = Some((key, std::time::Instant::now()));
+            }
+        }
+    }
     pub(super) fn event(
         &self,
         component: &str,
@@ -113,6 +172,9 @@ impl MobileController {
             }
         }
         let evidence_path = config.path.with_extension("evidence");
+        let router_diagnostics =
+            terra_observability::DiagnosticRecorder::open(&config.path, "router")
+                .map_err(|_| ControllerError::Internal)?;
         let journal = Journal::open(JournalConfig {
             path: config.path.clone(),
             producer_id: config.producer_id,
@@ -150,6 +212,7 @@ impl MobileController {
             message: "evidence storage unavailable".into(),
         })?;
         *attached = Some(Attached {
+            router_diagnostics,
             journal,
             evidence,
             path: config.path,
@@ -177,7 +240,16 @@ impl MobileController {
             .ok()
             .and_then(|a| {
                 a.as_ref()
-                    .map(|a| a.journal.try_record(event) == RecordOutcome::Queued)
+                    .map(|a| {
+                        if matches!(event.component.as_str(), "router" | "bluetooth" | "phone") {
+                            // Whitelist metadata; never duplicate payloads, credentials or location.
+                            let attributes: serde_json::Map<String, serde_json::Value> = event.attributes.as_object().into_iter().flatten()
+                                .filter(|(key,_)| matches!(key.as_str(), "reason"|"status"|"generation"|"mode"|"local_waypoint_retained"|"keep_bluetooth"|"error_domain"|"error_code"))
+                                .map(|(key,value)|(key.clone(),value.clone())).collect();
+                            a.router_diagnostics.try_record(&event.kind, serde_json::json!({"component":event.component,"attributes":attributes}));
+                        }
+                        a.journal.try_record(event) == RecordOutcome::Queued
+                    })
             })
             .unwrap_or(false)
     }

@@ -3,6 +3,40 @@ use std::time::Duration;
 use terra_mobile::{MobileController, default_control_settings};
 use terra_observability::{EventInput, JournalReader};
 #[test]
+fn router_and_lifecycle_diagnostics_survive_a_locked_journal() {
+    let d = tempfile::tempdir().unwrap();
+    let path = d.path().join("events.db");
+    let c = MobileController::new(default_control_settings()).unwrap();
+    c.start_observability(json!({"path":path,"producer_id":"phone","rover_id":"4"}).to_string())
+        .unwrap();
+    let db = rusqlite::Connection::open(&path).unwrap();
+    db.execute_batch("BEGIN IMMEDIATE").unwrap();
+    let event = EventInput::new(
+        "4",
+        "phone",
+        "lifecycle.stop",
+        json!({"keep_bluetooth":false,"password":"never-log-me","unrelated_payload":"never-copy-me"}),
+    );
+    c.record_observation(serde_json::to_string(&event).unwrap());
+    assert_eq!(c.dashboard_status(), "disconnected");
+    let start = std::time::Instant::now();
+    loop {
+        let text = std::fs::read_to_string(path.with_extension("router-diagnostics.jsonl"))
+            .unwrap_or_default();
+        if text.contains("lifecycle.stop") && text.contains("disconnected") {
+            assert!(!text.contains("never-log-me"));
+            assert!(!text.contains("never-copy-me"));
+            break;
+        }
+        assert!(
+            start.elapsed() < Duration::from_secs(3),
+            "independent router trace missing"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    db.execute_batch("ROLLBACK").unwrap();
+}
+#[test]
 fn logging_failure_does_not_change_control() {
     let plain = MobileController::new(default_control_settings()).unwrap();
     let observed = MobileController::new(default_control_settings()).unwrap();

@@ -156,8 +156,11 @@ impl MobileController {
     ) -> Result<(), ControllerError> {
         self.disconnect_dashboard()?;
         let service = terra_transport::ControlPlane::connect(&endpoint, &prefix, rover_id)
-            .map_err(|e| ControllerError::InvalidInput {
-                message: e.to_string(),
+            .map_err(|e| {
+                self.observation.router_connect_failed(&e);
+                ControllerError::InvalidInput {
+                    message: e.to_string(),
+                }
             })?;
         self.install_dashboard(service)?;
         Ok(())
@@ -177,8 +180,11 @@ impl MobileController {
         let service = terra_transport::ControlPlane::connect_authenticated(
             &endpoint, &prefix, rover_id, &user, &password,
         )
-        .map_err(|e| ControllerError::InvalidInput {
-            message: e.to_string(),
+        .map_err(|e| {
+            self.observation.router_connect_failed(&e);
+            ControllerError::InvalidInput {
+                message: e.to_string(),
+            }
         })?;
         self.install_dashboard(service)?;
         Ok(())
@@ -210,8 +216,11 @@ impl MobileController {
     ) -> Result<(), ControllerError> {
         self.detach_dashboard_link()?;
         let service = terra_transport::ControlPlane::connect(&endpoint, &prefix, rover_id)
-            .map_err(|e| ControllerError::InvalidInput {
-                message: e.to_string(),
+            .map_err(|e| {
+                self.observation.router_connect_failed(&e);
+                ControllerError::InvalidInput {
+                    message: e.to_string(),
+                }
             })?;
         self.install_dashboard(service)?;
         Ok(())
@@ -231,8 +240,11 @@ impl MobileController {
         let service = terra_transport::ControlPlane::connect_authenticated(
             &endpoint, &prefix, rover_id, &user, &password,
         )
-        .map_err(|e| ControllerError::InvalidInput {
-            message: e.to_string(),
+        .map_err(|e| {
+            self.observation.router_connect_failed(&e);
+            ControllerError::InvalidInput {
+                message: e.to_string(),
+            }
         })?;
         self.install_dashboard(service)?;
         Ok(())
@@ -304,6 +316,7 @@ impl MobileController {
         self.brain
             .lock()
             .map(|brain| {
+                self.observation.router_status(brain.dashboard.as_ref());
                 match brain.dashboard.as_ref() {
                     None => "disconnected",
                     Some(service) if service.failed() => "failed",

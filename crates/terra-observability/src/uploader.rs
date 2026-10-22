@@ -1,3 +1,4 @@
+use crate::diagnostics::{Diagnostics, StageError};
 use crate::{Attachment, EventEnvelope, EventId, JournalError, JournalReader};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -57,7 +58,9 @@ impl UploadTransport for HttpTransport {
             .bearer_auth(&self.token)
             .send()?;
         if !response.status().is_success() {
-            return Err("clock probe failed".into());
+            return Err(Box::new(crate::diagnostics::HttpStatusError(
+                response.status().as_u16(),
+            )));
         }
         let mut bytes = Vec::new();
         std::io::Read::take(response, 4096).read_to_end(&mut bytes)?;
@@ -77,7 +80,9 @@ impl UploadTransport for HttpTransport {
             .json(&serde_json::json!({"events":events}))
             .send()?;
         if !response.status().is_success() {
-            return Err(format!("collector status {}", response.status().as_u16()).into());
+            return Err(Box::new(crate::diagnostics::HttpStatusError(
+                response.status().as_u16(),
+            )));
         }
         let mut bytes = Vec::new();
         std::io::Read::take(response, 1024 * 1024).read_to_end(&mut bytes)?;
@@ -102,7 +107,9 @@ impl UploadTransport for HttpTransport {
         } else if status.is_client_error() && ![401, 403, 408, 429].contains(&status.as_u16()) {
             Err(Box::new(AttachmentRejected))
         } else {
-            Err(format!("attachment status {}", status.as_u16()).into())
+            Err(Box::new(crate::diagnostics::HttpStatusError(
+                status.as_u16(),
+            )))
         }
     }
 }
@@ -112,7 +119,11 @@ pub fn upload_once(
     transport: &mut dyn UploadTransport,
     evidence: Option<&Path>,
 ) -> Result<usize, JournalError> {
-    let mut events = reader.batch(64)?;
+    let mut diagnostics = Diagnostics::new(reader.path(), "upload");
+    diagnostics.record("upload.stage", serde_json::json!({"stage":"read_queue"}));
+    let mut events = reader
+        .batch(64)
+        .map_err(|e| StageError::wrap("read_queue", e))?;
     if events.is_empty() {
         return Ok(0);
     }
@@ -123,6 +134,10 @@ pub fn upload_once(
         }
     }
     if let Some(directory) = evidence {
+        diagnostics.record(
+            "upload.stage",
+            serde_json::json!({"stage":"attachments","batch_size":events.len()}),
+        );
         for e in &events {
             if let Some(items) = e.input.attributes["attachments"].as_array() {
                 for item in items {
@@ -156,7 +171,7 @@ pub fn upload_once(
                                         "attachment_rejected",
                                     )?;
                                 } else {
-                                    return Err(error);
+                                    return Err(StageError::wrap("send_attachment", error));
                                 }
                             }
                         }
@@ -179,14 +194,23 @@ pub fn upload_once(
             }
         }
     }
-    let acknowledged = transport.send(&events)?;
+    diagnostics.record("upload.stage", serde_json::json!({"stage":"send_events","batch_size":events.len(),"oldest_event_age_ms":crate::wall_time_ns().saturating_sub(events[0].input.wall_time_ns)/1_000_000}));
+    let acknowledged = transport
+        .send(&events)
+        .map_err(|e| StageError::wrap("send_events", e))?;
     if acknowledged
         .iter()
         .any(|id| !events.iter().any(|e| &e.id == id))
     {
         return Err("invalid acknowledgment".into());
     }
-    reader.ack(&acknowledged)?;
+    diagnostics.record(
+        "upload.stage",
+        serde_json::json!({"stage":"save_ack","acknowledged":acknowledged.len()}),
+    );
+    reader
+        .ack(&acknowledged)
+        .map_err(|e| StageError::wrap("save_ack", e))?;
     Ok(acknowledged.len())
 }
 pub fn valid_hash(hash: &str) -> bool {
@@ -314,10 +338,13 @@ fn upload_worker(
     config: UploadConfig,
     state: &UploadState,
 ) {
+    let mut diagnostics = Diagnostics::new(reader.path(), "upload");
+    diagnostics.record("upload.started", serde_json::json!({}));
     let mut delay = 1u64;
     let mut next_clock = std::time::Instant::now();
     while !state.stop.load(Ordering::Acquire) {
         if std::time::Instant::now() >= next_clock {
+            diagnostics.record("upload.stage", serde_json::json!({"stage":"clock_probe"}));
             sample_clock(&mut transport, &config);
             worker_event(
                 &config,
@@ -334,6 +361,7 @@ fn upload_worker(
             config.evidence_directory.as_deref(),
         ) {
             Ok(n) => {
+                diagnostics.record("upload.completed", serde_json::json!({"acknowledged":n,"duration_ms":started.elapsed().as_millis() as u64}));
                 state.acknowledged.fetch_add(n as u64, Ordering::Relaxed);
                 delay = 1;
                 if n > 0 {
@@ -356,6 +384,11 @@ fn upload_worker(
                 state.failures.fetch_add(1, Ordering::Relaxed);
                 delay = (delay * 2).min(60);
                 wait = Duration::from_millis(delay * 1000 + crate::wall_time_ns() % 500);
+                let mut fields = crate::diagnostics::error_fields(error.as_ref());
+                fields["duration_ms"] = (started.elapsed().as_millis() as u64).into();
+                fields["retry_after_ms"] = (wait.as_millis() as u64).into();
+                fields["failures"] = state.failures.load(Ordering::Relaxed).into();
+                diagnostics.record("upload.failed", fields);
                 let message = error.to_string().chars().take(256).collect::<String>();
                 if let Ok(mut previous) = state.last_error.lock()
                     && previous.as_ref() != Some(&message)
@@ -369,10 +402,12 @@ fn upload_worker(
                 }
             }
         }
-        state.pending.store(
-            reader.pending_count().unwrap_or(u64::MAX),
-            Ordering::Relaxed,
-        );
+        diagnostics.record("upload.stage", serde_json::json!({"stage":"count_pending"}));
+        let pending = reader.pending_count();
+        diagnostics.record("upload.queue", serde_json::json!({"pending_events":pending.as_ref().ok(),"acknowledged_total":state.acknowledged.load(Ordering::Relaxed),"error":pending.as_ref().err().map(|e|crate::diagnostics::error_fields(e.as_ref()))}));
+        state
+            .pending
+            .store(pending.unwrap_or(u64::MAX), Ordering::Relaxed);
         let deadline = std::time::Instant::now() + wait;
         while !state.stop.load(Ordering::Acquire) {
             let remaining = deadline.saturating_duration_since(std::time::Instant::now());

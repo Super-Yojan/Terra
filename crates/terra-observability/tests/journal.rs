@@ -58,6 +58,39 @@ fn disk_stall_does_not_block_try_record() {
     j.flush(Duration::from_secs(5)).unwrap();
 }
 #[test]
+fn database_lock_is_diagnosable_outside_the_event_database() {
+    let d = tempfile::tempdir().unwrap();
+    let path = d.path().join("events.db");
+    let j = Journal::open(setup(&path)).unwrap();
+    let db = rusqlite::Connection::open(&path).unwrap();
+    db.execute_batch("BEGIN IMMEDIATE").unwrap();
+    j.try_record(event());
+    let diagnostics = path.with_extension("journal-diagnostics.jsonl");
+    let deadline = Instant::now() + Duration::from_secs(6);
+    let rows = loop {
+        let text = std::fs::read_to_string(&diagnostics).unwrap_or_default();
+        let rows: Vec<serde_json::Value> = text
+            .lines()
+            .map(|s| serde_json::from_str(s).unwrap())
+            .collect();
+        if rows.iter().any(|v| v["kind"] == "persist.failed") {
+            break rows;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "no independent database-lock diagnostic: {text}"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    db.execute_batch("ROLLBACK").unwrap();
+    let failure = rows.iter().find(|v| v["kind"] == "persist.failed").unwrap();
+    assert_eq!(failure["attributes"]["error_class"], "sqlite_busy");
+    assert!(failure["attributes"]["duration_ms"].as_u64().unwrap() >= 1000);
+    assert_eq!(failure["attributes"]["event_kind"], "motion.pause");
+    assert!(failure["attributes"].get("queued").is_some());
+    j.flush(Duration::from_secs(6)).unwrap();
+}
+#[test]
 fn overflow_reports_gap() {
     let d = tempfile::tempdir().unwrap();
     let path = d.path().join("events.db");

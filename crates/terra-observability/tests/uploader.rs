@@ -164,4 +164,37 @@ fn queued_burst_drains_without_one_second_per_batch() {
         drained,
         "a healthy connection must drain twenty batches faster than one batch per second: pending={pending}, health={health}"
     );
+    let diagnostics =
+        std::fs::read_to_string(path.with_extension("upload-diagnostics.jsonl")).unwrap();
+    assert!(
+        diagnostics.lines().any(|line| {
+            let row: serde_json::Value = serde_json::from_str(line).unwrap();
+            row["kind"] == "upload.completed"
+                && row["attributes"]["acknowledged"]
+                    .as_u64()
+                    .is_some_and(|n| n > 0)
+        }),
+        "upload progress must be available without reading the event queue"
+    );
+}
+
+#[test]
+fn upload_failure_identifies_the_failing_stage() {
+    let d = tempfile::tempdir().unwrap();
+    let path = d.path().join("db");
+    let j = Journal::open(JournalConfig {
+        path: path.clone(),
+        ..Default::default()
+    })
+    .unwrap();
+    j.try_record(EventInput::new("4", "control", "state", json!({})));
+    j.flush(Duration::from_secs(2)).unwrap();
+    let r = JournalReader::open(&path).unwrap();
+    let mut transport = LostReply {
+        lost: false,
+        ids: vec![],
+    };
+    let error = upload_once(&r, &mut transport, None).unwrap_err();
+    assert!(error.to_string().starts_with("send_events:"), "{error}");
+    assert_eq!(r.pending_count().unwrap(), 1);
 }

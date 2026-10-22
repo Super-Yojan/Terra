@@ -20,6 +20,7 @@ pub enum RecordOutcome {
 }
 #[derive(Default)]
 struct Counters {
+    queued: AtomicU64,
     dropped: AtomicU64,
     pending_gap: AtomicU64,
     persisted: AtomicU64,
@@ -28,12 +29,13 @@ struct Counters {
 }
 #[derive(Clone, Debug, Serialize)]
 pub struct JournalHealth {
+    pub queued: u64,
     pub dropped: u64,
     pub persisted: u64,
     pub failures: u64,
 }
 enum Message {
-    Event(Box<EventEnvelope>),
+    Event(Box<EventEnvelope>, Instant),
     Flush(mpsc::Sender<()>),
 }
 pub struct Journal {
@@ -64,11 +66,20 @@ impl Journal {
         thread::Builder::new()
             .name("observation-journal".into())
             .spawn(move || {
+                let mut diagnostics = crate::diagnostics::Diagnostics::new(&config.path, "journal");
+                diagnostics.record("journal.started", serde_json::json!({"boot_id":worker_boot,"queue_capacity":config.queue_capacity,"max_bytes":config.max_bytes}));
+                let mut next_checkpoint = Instant::now();
                 loop {
                     let msg = receiver.recv_timeout(Duration::from_millis(250));
+                    let checkpoint = Instant::now() >= next_checkpoint;
+                    if checkpoint {
+                        next_checkpoint = Instant::now() + Duration::from_secs(5);
+                        diagnostics.record("journal.checkpoint", serde_json::json!({"boot_id":worker_boot,"queued":state.queued.load(Ordering::Relaxed),"dropped":state.dropped.load(Ordering::Relaxed),"persisted":state.persisted.load(Ordering::Relaxed),"failures":state.failures.load(Ordering::Relaxed)}));
+                    }
                     // This counter is outside the bounded queue, so overflow itself remains visible.
                     let gap = state.pending_gap.swap(0, Ordering::AcqRel);
                     if gap > 0 {
+                        if checkpoint { diagnostics.record("persist.started", serde_json::json!({"event_kind":"observability.gap","dropped":gap})); }
                         let envelope = EventEnvelope {
                             schema_version: 1,
                             id: EventId {
@@ -88,8 +99,20 @@ impl Journal {
                         }
                     }
                     match msg {
-                        Ok(Message::Event(e)) => {
-                            if persist(&db, &e, &config).is_ok() {
+                        Ok(Message::Event(e, enqueued)) => {
+                            state.queued.fetch_sub(1, Ordering::Relaxed);
+                            let queue_wait_ms = enqueued.elapsed().as_millis() as u64;
+                            if checkpoint { diagnostics.record("persist.started", serde_json::json!({"boot_id":worker_boot,"event_kind":e.input.kind,"sequence":e.id.sequence,"queue_wait_ms":queue_wait_ms})); }
+                            let started = Instant::now();
+                            let result = persist(&db, &e, &config);
+                            let mut fields = serde_json::json!({"boot_id":worker_boot,"event_kind":e.input.kind,"sequence":e.id.sequence,"queue_wait_ms":queue_wait_ms,"duration_ms":started.elapsed().as_millis() as u64,"queued":state.queued.load(Ordering::Relaxed),"dropped":state.dropped.load(Ordering::Relaxed),"failures":state.failures.load(Ordering::Relaxed)});
+                            if let Err(error) = &result {
+                                fields.as_object_mut().unwrap().extend(crate::diagnostics::error_fields(error.as_ref()).as_object().unwrap().clone());
+                                diagnostics.record("persist.failed", fields);
+                            } else if checkpoint {
+                                diagnostics.record("journal.progress", fields);
+                            }
+                            if result.is_ok() {
                                 state.persisted.fetch_add(1, Ordering::Relaxed);
                             } else {
                                 state.failures.fetch_add(1, Ordering::Relaxed);
@@ -127,9 +150,14 @@ impl Journal {
             },
             input,
         };
-        match self.sender.try_send(Message::Event(Box::new(event))) {
+        self.counters.queued.fetch_add(1, Ordering::Relaxed);
+        match self
+            .sender
+            .try_send(Message::Event(Box::new(event), Instant::now()))
+        {
             Ok(()) => RecordOutcome::Queued,
             Err(_) => {
+                self.counters.queued.fetch_sub(1, Ordering::Relaxed);
                 self.counters.dropped.fetch_add(1, Ordering::Relaxed);
                 self.counters.pending_gap.fetch_add(1, Ordering::Relaxed);
                 RecordOutcome::Dropped
@@ -138,6 +166,7 @@ impl Journal {
     }
     pub fn health(&self) -> JournalHealth {
         JournalHealth {
+            queued: self.counters.queued.load(Ordering::Relaxed),
             dropped: self.counters.dropped.load(Ordering::Relaxed),
             persisted: self.counters.persisted.load(Ordering::Relaxed),
             failures: self.counters.failures.load(Ordering::Relaxed),
