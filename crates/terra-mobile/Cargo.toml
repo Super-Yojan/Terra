@@ -5,6 +5,7 @@ edition.workspace = true
 [lib]
 crate-type = ["lib", "staticlib", "cdylib"]
 [dependencies]
+terra-observability.workspace = true
 terra-actuators.workspace = true
 serde = { version = "1", features = ["derive"] }
 terra-autonomy.workspace = true
@@ -28,4 +29,6 @@ path = "src/bin/bindgen.rs"
 required-features = ["bindgen"]
 
 [dev-dependencies]
+rusqlite = { version = "0.32.1", features = ["bundled"] }
+tempfile = "3"
 zenoh = { version = "=1.10.1", default-features = false, features = ["transport_tcp"] }

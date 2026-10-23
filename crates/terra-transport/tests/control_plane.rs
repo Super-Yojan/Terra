@@ -53,6 +53,36 @@ fn phone_control_plane_receives_intent_and_publishes_state() {
 fn listener_is_explicitly_loopback_only() {
     assert!(ControlPlane::listen("tcp/0.0.0.0:7447", "terra/rover", 1).is_err());
 }
+
+#[test]
+fn router_loss_has_a_specific_diagnostic_reason() {
+    let socket = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let endpoint = format!("tcp/127.0.0.1:{}", socket.local_addr().unwrap().port());
+    drop(socket);
+    let mut config = zenoh::Config::default();
+    config.insert_json5("mode", "\"router\"").unwrap();
+    config
+        .insert_json5(
+            "listen/endpoints",
+            &serde_json::json!([endpoint]).to_string(),
+        )
+        .unwrap();
+    config
+        .insert_json5("scouting/multicast/enabled", "false")
+        .unwrap();
+    let router = zenoh::open(config).wait().unwrap();
+    let service = ControlPlane::connect(&endpoint, "terra/diagnostics", 7).unwrap();
+    assert_eq!(service.diagnostics()["state"], "connected");
+    router.close().wait().unwrap();
+    let start = std::time::Instant::now();
+    while !service.failed() && start.elapsed() < std::time::Duration::from_secs(5) {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert_eq!(
+        service.diagnostics()["failure_reason"],
+        "router_unavailable"
+    );
+}
 #[test]
 /// Floods a queue with 600 teleop messages and checks the distinct stop survives
 /// within the 256-entry bound and is drained last.

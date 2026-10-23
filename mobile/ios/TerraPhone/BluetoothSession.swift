@@ -1,80 +1,60 @@
 import Foundation
 
-// Confined to BluetoothLink's serial queue. Only remote status authorizes motion.
+// Confined to BluetoothLink's serial queue. Status describes the streamed relay.
 final class BluetoothSession {
-    enum Effect { case send(Data), disarm, state(String) }
     private(set) var generation: UInt64 = 0
-    private(set) var session: UInt32?
+    private(set) var connected = false
     private(set) var revision: UInt32 = 0
-    private(set) var sequence: UInt32 = 0
-    private(set) var armed = false
-    private(set) var arming = false
     private(set) var ready = false
+    private(set) var outputActive = false
     private var layoutAvailable = false
     private var faulted = false
-    private var statusAt: TimeInterval?
-    private var armRequested = false
-    var motionRequested: Bool { armRequested }
+    private var profile: ActuatorDriveProfileSet?
+
     func reset() {
-        generation &+= 1; session = nil; revision = 0; sequence = 0
-        armed = false; arming = false; ready = false; layoutAvailable = false; faulted = false; statusAt = nil; armRequested = false
+        generation &+= 1; connected = false; revision = 0
+        ready = false; outputActive = false; layoutAvailable = false; faulted = false; profile = nil
     }
-    func invalidateLayout() { ready = false; stop() }
-    func synchronized(revision: UInt32) { ready = session != nil && layoutAvailable && !faulted && self.revision == revision }
-    func status(_ value: [String: Any], now: TimeInterval) -> [Effect] {
+    func invalidateLayout() { ready = false; profile = nil }
+    func synchronized(profile: ActuatorDriveProfileSet) {
+        self.profile = profile
+        refreshReady()
+    }
+    private func refreshReady() {
+        ready = connected && layoutAvailable && !faulted && profile?.revision == revision && profile?.actuators.isEmpty == false
+    }
+    func status(_ value: [String: Any]) -> String? {
         guard value["type"] as? String == "status", value["schema_version"] as? Int == 1,
-              let revision = value["active_revision"] as? UInt32 else { return [] }
-        let incoming = value["session"] as? UInt32
-        if incoming != session || revision != self.revision {
-            ready = false; armRequested = false; sequence = 0
+              value["control_mode"] as? String == "streamed_relay",
+              let connected = value["connected"] as? Bool,
+              let revision = value["active_revision"] as? UInt32,
+              let available = value["layout_available"] as? Bool,
+              let active = value["output_active"] as? Bool else { return nil }
+        if revision != self.revision { invalidateLayout() }
+        self.connected = connected; self.revision = revision; layoutAvailable = available
+        faulted = value["fault"] is String; outputActive = active
+        refreshReady()
+        if let fault = value["fault"] as? String { return "Fault: \(fault)" }
+        return connected ? (active ? "Streaming motor commands" : "Connected · neutral output") : "Waiting for relay connection"
+    }
+    func encodeDrive(valuesJSON: String) throws -> Data {
+        struct Value: Decodable { let id: UInt8; let value: Double }
+        guard ready, let profile else { throw BluetoothPolicyError.unavailable }
+        let values = try JSONDecoder().decode([Value].self, from: Data(valuesJSON.utf8))
+        guard values.count == profile.actuators.count, Set(values.map(\.id)).count == values.count else { throw BluetoothPolicyError.malformed }
+        var bytes = Data()
+        for record in values {
+            guard record.value.isFinite, (-1...1).contains(record.value),
+                  let actuator = profile.actuators.first(where: { $0.id == Int(record.id) }),
+                  record.value >= actuator.limits.min, record.value <= actuator.limits.max else { throw BluetoothPolicyError.malformed }
+            var effort = Int((record.value * 100).rounded())
+            let lower = Float(actuator.limits.min), upper = Float(actuator.limits.max)
+            while effort > -100 && Float(Double(effort) / 100) > upper { effort -= 1 }
+            while effort < 100 && Float(Double(effort) / 100) < lower { effort += 1 }
+            guard (-100...100).contains(effort), Float(Double(effort) / 100) >= lower,
+                  Float(Double(effort) / 100) <= upper else { throw BluetoothPolicyError.malformed }
+            bytes.append(record.id); bytes.append(UInt8(bitPattern: Int8(effort)))
         }
-        session = incoming; self.revision = revision; statusAt = now
-        layoutAvailable = value["layout_available"] as? Bool == true
-        faulted = value["fault"] is String || value["emergency_stop"] as? Bool == true
-        if !layoutAvailable || faulted { invalidateLayout() }
-        // An unsolicited status cannot resurrect local motion permission.
-        armed = armRequested && value["armed"] as? Bool == true
-        arming = armRequested && value["arming"] as? Bool == true
-        if let last = value["last_sequence"] as? UInt32 { sequence = max(sequence, last) }
-        if value["fault"] is String || value["emergency_stop"] as? Bool == true {
-            armRequested = false; armed = false; arming = false
-        }
-        if let fault = value["fault"] as? String { return [.state("Fault: \(fault) · disarmed")] }
-        if value["emergency_stop"] as? Bool == true { return [.state("Emergency stop latched · disarmed")] }
-        let disarmed = value["stop_reason"] as? String == "watchdog" ? "Disarmed · command stream stopped" : "Disarmed"
-        return [.state(armed ? "Armed" : arming ? "Arming at safe output" : disarmed)]
-    }
-    func control(_ kind: String) throws -> Data {
-        guard let session = session, sequence < UInt32.max - 1 else { throw BluetoothPolicyError.unavailable }
-        sequence += 1
-        let object: [String: Any] = ["kind": kind, "session": session, "revision": revision, "sequence": sequence, "values": []]
-        let json = String(decoding: try JSONSerialization.data(withJSONObject: object), as: UTF8.self)
-        return try actuatorEncodeFrame(frameJson: json)
-    }
-    func frame(values: Any) throws -> Data {
-        guard ready, let session = session, sequence < UInt32.max - 1 else { throw BluetoothPolicyError.unavailable }
-        let object: [String: Any] = ["kind": "drive", "session": session, "revision": revision, "sequence": sequence + 1, "values": values]
-        let json = String(decoding: try JSONSerialization.data(withJSONObject: object), as: UTF8.self)
-        return try actuatorEncodeFrame(frameJson: json)
-    }
-    func arm(now: TimeInterval) throws -> Data {
-        guard ready, let statusAt = statusAt, now >= statusAt, now - statusAt < 0.3 else { throw BluetoothPolicyError.unavailable }
-        let frame = try control("arm"); armRequested = true; return frame
-    }
-    func stop() { armRequested = false; armed = false; arming = false }
-    func statusAge(now: TimeInterval) -> TimeInterval? {
-        statusAt.map { now - $0 }
-    }
-    func stale(now: TimeInterval) -> Bool {
-        guard let statusAt = statusAt else { return false }
-        return now < statusAt || now - statusAt >= 0.3
-    }
-    func drive(_ frame: Data, producedAt: TimeInterval, now: TimeInterval) -> [Effect] {
-        guard ready, now >= producedAt, now - producedAt < 0.1, !stale(now: now), frame.count >= 16,
-              frame[0] == 84, frame[1] == 65, frame[2] == 1, frame[3] == 1 else { return [] }
-        func word(_ offset: Int) -> UInt32 { (0..<4).reduce(0) { $0 | UInt32(frame[offset + $1]) << (8 * $1) } }
-        guard word(4) == session, word(8) == revision, word(12) > sequence, word(12) < UInt32.max else { return [] }
-        // Before/while arming, allow freshly produced safe frames; the Pi checks safe policy.
-        sequence = word(12); return [.send(frame)]
+        return bytes
     }
 }

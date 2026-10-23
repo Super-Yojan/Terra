@@ -96,6 +96,7 @@ nav:
       - Install on a Pi: hardware/INSTALL.md
       - Bluetooth peripheral: hardware/BLUETOOTH.md
       - Fusion HAT: hardware/FUSION_HAT.md
+      - Function UML: hardware/FUNCTIONS_UML.md
       - Bench procedure: hardware/BENCH.md
       - Evidence:
           - Status: hardware/evidence/README.md

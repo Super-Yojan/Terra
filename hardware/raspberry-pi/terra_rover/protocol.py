@@ -1,102 +1,69 @@
-"""Strict BLE protocol; decoding never arms hardware or refreshes a watchdog."""
+"""Strict BLE framing and validation for the command relay."""
 from dataclasses import dataclass
-from enum import IntEnum
 import json
 import math
 import struct
 
-PROTOCOL_VERSION = 1
-COMMAND_LIMIT = 96
+DRIVE_LIMIT = 32  # Sixteen actuator ID / signed effort pairs.
 JSON_LIMIT = 16 * 1024
 PAGINATED_LIMIT = 4080  # 255 fragments at conservative 20-byte ATT capacity
 PAGINATED_OPERATIONS = frozenset(('layout_index', 'read_actuator', 'read_drive_profile', 'begin_layout_edit', 'stage_actuator', 'remove_actuator', 'validate_layout_edit', 'commit_layout_edit', 'discard_layout_edit'))
-ASSEMBLY_TIMEOUT = 0.100  # monotonic seconds
 
 class ProtocolError(ValueError):
     pass
 
-class CommandKind(IntEnum):
-    DRIVE = 1
-    ARM = 2
-    DISARM = 3
-    EMERGENCY_STOP = 4
-
 @dataclass(frozen=True)
 class ActuatorValue:
     id: int
-    value: float
+    value: int
 
-@dataclass(frozen=True)
-class CommandFrame:
-    kind: CommandKind
-    session: int
-    revision: int
-    sequence: int
-    values: tuple[ActuatorValue, ...] = ()
+    @property
+    def normalized(self):
+        return struct.unpack('<f', struct.pack('<f', self.value / 100))[0]
+
 
 def _uint(value, bits):
     if type(value) is not int or not 0 <= value < 2**bits:
         raise ProtocolError(f"expected u{bits}")
     return value
 
-def encode_frame(frame: CommandFrame) -> bytes:
-    try:
-        kind = CommandKind(frame.kind)
-    except (ValueError, TypeError) as exc:
-        raise ProtocolError("unknown command kind") from exc
-    if len(frame.values) > 16 or (kind != CommandKind.DRIVE and frame.values):
-        raise ProtocolError("invalid record count")
-    result = bytearray(struct.pack('<2sBBIII', b'TA', 1, kind,
-        _uint(frame.session, 32), _uint(frame.revision, 32), _uint(frame.sequence, 32)))
+
+def encode_drive(values) -> bytes:
+    if not 1 <= len(values) <= 16:
+        raise ProtocolError('expected one to sixteen actuator pairs')
+    result = bytearray()
     ids = set()
-    for record in frame.values:
+    for record in values:
         _uint(record.id, 8)
-        if record.id in ids or not math.isfinite(record.value) or not -1 <= record.value <= 1:
-            raise ProtocolError("invalid actuator record")
+        if record.id in ids or type(record.value) is not int or not -100 <= record.value <= 100:
+            raise ProtocolError('invalid actuator ID or effort')
         ids.add(record.id)
-        result.extend(struct.pack('<Bf', record.id, record.value))
+        result.extend(struct.pack('<Bb', record.id, record.value))
     return bytes(result)
 
-def decode_frame(data: bytes) -> CommandFrame:
-    if not 16 <= len(data) <= COMMAND_LIMIT or (len(data)-16) % 5:
-        raise ProtocolError("invalid frame length")
-    magic, version, kind, session, revision, sequence = struct.unpack('<2sBBIII', data[:16])
-    if magic != b'TA' or version != PROTOCOL_VERSION:
-        raise ProtocolError("invalid magic or version")
-    try:
-        frame = CommandFrame(CommandKind(kind), session, revision, sequence,
-            tuple(ActuatorValue(*record) for record in struct.iter_unpack('<Bf', data[16:])))
-    except ValueError as exc:
-        raise ProtocolError("unknown command kind") from exc
-    encode_frame(frame)
-    return frame
 
-def validate_command(frame: CommandFrame, session: int, layout: dict, last_sequence: int | None) -> None:
-    """Caller advances last_sequence only after safety acceptance."""
-    encode_frame(frame)
-    if frame.session != session or frame.revision != layout['revision'] or frame.sequence == 0xffffffff or (last_sequence is not None and frame.sequence <= last_sequence):
-        raise ProtocolError("stale session, revision or sequence")
-    if frame.kind == CommandKind.DRIVE:
-        actuators = {entry['id']: entry for entry in layout['actuators']}
-        if {entry.id for entry in frame.values} != set(actuators):
-            raise ProtocolError("incomplete or unknown actuator coverage")
-        for record in frame.values:
-            limits = actuators[record.id]['limits']
-            # Rust layout limits and wire values both use f32, without tolerance.
-            try:
-                lower = struct.unpack('<f', struct.pack('<f', limits['min']))[0]
-                upper = struct.unpack('<f', struct.pack('<f', limits['max']))[0]
-                value = struct.unpack('<f', struct.pack('<f', record.value))[0]
-            except (OverflowError, ValueError, TypeError, struct.error) as exc:
-                raise ProtocolError('unrepresentable command limit or value') from exc
-            if not math.isfinite(lower) or not math.isfinite(upper) or not lower <= value <= upper:
-                raise ProtocolError("actuator value outside layout limits")
+def decode_drive(data: bytes) -> tuple[ActuatorValue, ...]:
+    if not 2 <= len(data) <= DRIVE_LIMIT or len(data) % 2:
+        raise ProtocolError('expected actuator ID / signed effort pairs')
+    values = tuple(ActuatorValue(identifier, effort) for identifier, effort in struct.iter_unpack('<Bb', data))
+    encode_drive(values)
+    return values
+
+
+def validate_drive(values, layout):
+    actuators = {entry['id']: entry for entry in layout['actuators']}
+    for record in values:
+        if record.id not in actuators:
+            raise ProtocolError('unknown actuator ID')
+        limits = actuators[record.id]['limits']
+        if not limits['min'] <= record.normalized <= limits['max']:
+            raise ProtocolError('actuator effort outside configured limits')
 
 class FragmentAssembler:
-    def __init__(self, limit: int = COMMAND_LIMIT, timeout: float = ASSEMBLY_TIMEOUT):
+    def __init__(self, limit: int = JSON_LIMIT, timeout: float | None = None):
         if type(limit) is not int or not 0 < limit <= JSON_LIMIT:
             raise ProtocolError("invalid logical limit")
-        if type(timeout) not in (int, float) or not math.isfinite(timeout) or timeout <= 0:
+        if timeout is not None and (type(timeout) not in (int, float) or not math.isfinite(timeout) or timeout <= 0):
             raise ProtocolError("invalid assembly timeout")
         self.timeout = timeout
         self.limit = limit
@@ -113,12 +80,13 @@ class FragmentAssembler:
             raise
 
     def _push(self, data, now):
-        if not math.isfinite(now):
-            raise ProtocolError("invalid monotonic time")
-        if self.active is not None and now < self.started:
-            raise ProtocolError("monotonic clock regression")
-        if self.active is not None and now >= self.started + self.timeout:
-            self.clear()
+        if self.timeout is not None:
+            if not math.isfinite(now):
+                raise ProtocolError("invalid monotonic time")
+            if self.active is not None and now < self.started:
+                raise ProtocolError("monotonic clock regression")
+            if self.active is not None and now >= self.started + self.timeout:
+                self.clear()
         if len(data) < 5:
             raise ProtocolError("empty or short fragment")
         message_id, index, count = struct.unpack('<HBB', data[:4])
@@ -141,23 +109,7 @@ class FragmentAssembler:
         self.next += 1
         return None
 
-class CommandAssemblers:
-    def __init__(self):
-        self.drive = FragmentAssembler()
-        self.priority = FragmentAssembler()
-
-    def push_priority(self, data: bytes, now: float) -> CommandFrame | None:
-        assembled = self.priority.push(data, now)
-        if assembled is None:
-            return None
-        frame = decode_frame(assembled)
-        if frame.kind == CommandKind.DRIVE:
-            raise ProtocolError("drive forbidden on priority path")
-        if frame.kind in (CommandKind.DISARM, CommandKind.EMERGENCY_STOP):
-            self.drive.clear()  # fail-safe cancellation, not session acceptance
-        return frame
-
-def fragment_message(data: bytes, message_id: int, write_size: int, limit: int = COMMAND_LIMIT) -> list[bytes]:
+def fragment_message(data: bytes, message_id: int, write_size: int, limit: int = JSON_LIMIT) -> list[bytes]:
     _uint(message_id, 16)
     if not data or type(write_size) is not int or write_size <= 4 or type(limit) is not int or not 0 < limit <= JSON_LIMIT or len(data) > limit:
         raise ProtocolError("invalid message or negotiated write size")
@@ -207,7 +159,7 @@ def decode_control(data: bytes) -> dict:
     operation, payload = envelope['operation'], envelope['payload']
     if type(operation) is not str:
         raise ProtocolError("operation must be string")
-    if operation in ('capabilities', 'read_layout', 'layout_index', 'reset_fault', 'reset_emergency_stop'):
+    if operation in ('capabilities', 'read_layout', 'layout_index', 'reset_fault'):
         _keys(payload, ())
     elif operation in ('read_actuator', 'read_drive_profile'):
         _keys(payload, ('expected_revision', 'actuator_id'))
@@ -227,9 +179,6 @@ def decode_control(data: bytes) -> dict:
         if 'base_revision' in payload: _uint(payload['base_revision'], 32)
         if 'actuator_id' in payload: _uint(payload['actuator_id'], 8)
         if 'actuator' in payload: _validate_layout_shape(dict(schema_version=1, revision=0, actuators=[payload['actuator']]))
-    elif operation == 'set_bench_enabled':
-        _keys(payload, ('enabled',))
-        if type(payload['enabled']) is not bool: raise ProtocolError('enabled must be boolean')
     elif operation == 'commit_layout':
         _keys(payload, ('staged_revision', 'staged_request_id'))
         _uint(payload['staged_revision'], 32)
@@ -250,8 +199,8 @@ def _validate_layout_shape(layout):
         raise ProtocolError("actuators must be array")
     calibration_fields = {
         'dc_motor': ('max_power_fraction',),
-        'bidirectional_esc': ('reverse_us', 'neutral_us', 'forward_us', 'arming_duration_ms'),
-        'unidirectional_esc': ('stop_us', 'full_power_us', 'arming_duration_ms'),
+        'bidirectional_esc': ('reverse_us', 'neutral_us', 'forward_us'),
+        'unidirectional_esc': ('stop_us', 'full_power_us'),
         'positional_servo': ('min_us', 'center_us', 'max_us')}
     for entry in layout['actuators']:
         _keys(entry, ('id', 'name', 'port', 'kind', 'inverted', 'limits', 'calibration', 'route', 'safe'))

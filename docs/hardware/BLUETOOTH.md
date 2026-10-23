@@ -25,8 +25,11 @@ The compiled customer service supports one Fusion HAT USR long press to open a
 connect and accept pairing. The LED blinks slowly while available, quickly while
 enrolling, flashes three times when saved, then stays on. Reconnect in the app;
 the Pi switches to normal operation automatically. No SSH or expected peer address
-is needed. Existing owners cannot be replaced this way, and motor outputs are
-unavailable during enrollment. See [installation and enrollment](INSTALL.md).
+is needed. On an owned rover, the same three-second hold shuts down motor outputs
+and the normal service, removes the saved owner and its Bluetooth bond, and opens
+a replacement-owner window. Rover name and layout are retained. Motor outputs are
+unavailable during enrollment. A timeout leaves the rover unowned until another
+release-and-hold attempt. See [installation and enrollment](INSTALL.md).
 The terminal setup instructions below remain a developer alternative.
 
 # Terra Bluetooth actuator peripheral
@@ -164,3 +167,55 @@ and D-Bus internally; BlueZ still handles bonding through the enrollment agent.
 A version-pinned characteristic adapter retains the requesting device identity
 (which Bless 0.3.0 omits from its public callbacks), encrypted access permissions,
 and owner-only subscriptions. The phone protocol and service UUIDs are unchanged.
+
+### Command interruption recovery
+
+The 200 ms motor-command deadline remains enforced. After an armed command
+stream expires, the Pi clears buffered actuation and reports `armed: true`,
+`motion_paused: true`, and `stop_reason: watchdog_paused`. Outputs use their
+configured safe values. Neither reconnecting the dashboard nor renewed drive
+frames releases this pause. Resume uses the existing authenticated ARM command,
+after a fresh safe frame; it does not repeat the ESC arming interval. A new
+post-resume drive frame is required. Disconnection, hardware-gate loss, faults,
+emergency stop, and explicit Disarm still disarm the controller.
+
+TerraPhone inhibits output on recoverable feedback/router failures and exposes
+this state. ARGOS displays **Resume motion**, with the existing hold gesture.
+Outdoor missions retain their separate explicit mission Resume after required
+feedback recovers. Direct Bluetooth manual driving remains exempt from VIO.
+Deploy the Pi service, TerraPhone, and ARGOS together for this recovery behavior;
+older clients may need Disarm then Arm to recover. These are provisional bring-up
+semantics, not a claim of safety certification. The simulator's always-ready
+hardware publisher does not exercise this Pi/Bluetooth state machine.
+
+## Automatic recovery of stalled owner connections
+
+The Pi checks once per second for its bonded owner remaining connected without
+an authenticated Terra status subscription. After 60 continuous seconds, it
+clears the old Terra session and asks BlueZ to disconnect that owner. The phone's
+existing automatic retry can then establish a fresh session. Recovery attempts
+are limited to once every 120 seconds, including failures; each BlueZ operation
+has a five-second timeout.
+
+This is a Pi-side handshake watchdog, not a count of phone retries: attempts
+that fail before GATT admission are not visible to the rover application.
+Healthy subscribed sessions, including idle sessions, are left connected.
+Actual disconnects restart the grace period. Recovery preserves the Bluetooth
+bond, owner record and actuator configuration, clears queued commands through
+the normal disconnect path, and requires explicit arming afterward.
+It does not reset the Bluetooth adapter or affect unrelated devices.
+## Fault diagnostics
+
+The recurring status document keeps useful prefixes of `fault` and
+`stop_reason` within the 512-byte ATT read limit. A long backend exception must
+not terminate status delivery. The full fault is recorded in the service
+journal when it changes:
+
+```sh
+sudo journalctl -u terra-rover --since "10 minutes ago" --no-pager
+```
+
+An unexpected output-worker exit shuts down the Bluetooth service and surfaces
+the error to systemd instead of leaving a live connection serving stale status.
+Service recovery starts disarmed and still requires explicit arming and fresh
+commands.

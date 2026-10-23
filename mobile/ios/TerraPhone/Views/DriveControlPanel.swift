@@ -3,20 +3,16 @@ import SwiftUI
 struct DriveControlPanel: View {
     @ObservedObject var brain: PhoneController
     @Environment(\.scenePhase) private var scenePhase
-    @State private var locallyArmed = false
     @State private var stopRequested = false
     @State private var command = DriveJoystickCommand.zero
     @State private var gestureID = UUID()
-    private let forest = Color(red: 0.09, green: 0.23, blue: 0.17)
     private var hardware: Bool { brain.hardwareActive || brain.hardwareReady || brain.hardwareConfigurationReady }
     private var ready: Bool { hardware ? brain.hardwareReady : brain.source != "Stopped" }
     private var manual: Bool { brain.autonomyLevel == "teleop" && !brain.waypointActive }
-    private var canArm: Bool {
-        DriveJoystickSafety.canArm(ready: ready, manual: manual, stopped: stopRequested, foreground: scenePhase == .active)
-            && !brain.hardwareArming && (!hardware || !brain.hardwareBenchMode || brain.hardwareBenchEnabled)
+    private var canDrive: Bool {
+        DriveJoystickSafety.canDrive(ready: ready, manual: manual, stopped: stopRequested, foreground: scenePhase == .active)
+            && !brain.dashboardConnected
     }
-    private var canDrive: Bool { canArm && locallyArmed && (!hardware || brain.hardwareArmed) && !brain.dashboardConnected }
-    private var armPending: Bool { hardware && locallyArmed && !brain.hardwareArmed }
     var body: some View {
         VStack(spacing: 18) {
             HStack(spacing: 8) {
@@ -25,17 +21,6 @@ struct DriveControlPanel: View {
                 Spacer()
                 Image(systemName: "gamecontroller.fill").foregroundStyle(.secondary)
             }
-            if hardware && brain.hardwareBenchMode {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Bench Mode").font(.headline)
-                    Text("Software enable only. No physical power cutoff. Keep the rover supervised.").font(.caption).foregroundStyle(.secondary)
-                    Button(brain.hardwareBenchEnabled ? "Disable Bench Control" : "Enable Bench Control") {
-                        locallyArmed = false; neutralize()
-                        brain.setBenchEnabled(!brain.hardwareBenchEnabled)
-                    }.disabled(!ready || brain.hardwareArmed || brain.hardwareArming || stopRequested)
-                    Text(brain.hardwareBenchEnabled ? "Enabled · arm separately to drive" : "Disabled · enable before arming").font(.caption)
-                }.frame(maxWidth: .infinity, alignment: .leading)
-            }
             JoystickPad(enabled: canDrive, onCommand: send)
                 .id(gestureID)
                 .frame(height: 258)
@@ -43,81 +28,44 @@ struct DriveControlPanel: View {
                 readout("Forward", value: command.forward, unit: hardware && !brain.hardwareFeedback ? "effort" : "m/s")
                 readout("Turn", value: command.yaw, unit: hardware && !brain.hardwareFeedback ? "effort" : "rad/s")
             }
-            HStack(spacing: 12) {
-                Button {
-                    neutralize()
-                    if locallyArmed || brain.hardwareArmed || brain.hardwareArming {
-                        locallyArmed = false
-                        brain.disarmHardware()
-                    } else {
-                        locallyArmed = true
-                        if hardware { brain.armHardware() }
-                    }
-                } label: {
-                    Label(locallyArmed || brain.hardwareArmed || brain.hardwareArming ? "Disarm" : "Arm", systemImage: "lock.shield.fill")
-                        .font(.headline).frame(maxWidth: .infinity).padding(.vertical, 15)
-                        .foregroundStyle(.white).background(forest, in: RoundedRectangle(cornerRadius: 14))
-                }
-                .disabled(!canArm && !locallyArmed && !brain.hardwareArmed && !brain.hardwareArming)
-                .opacity(!canArm && !locallyArmed && !brain.hardwareArmed && !brain.hardwareArming ? 0.45 : 1)
-                Button {
-                    locallyArmed = false; stopRequested = true
-                    neutralize()
-                    brain.emergencyStop()
-                } label: {
-                    Label("Stop", systemImage: "stop.fill").font(.headline)
-                        .frame(maxWidth: .infinity).padding(.vertical, 15)
-                        .foregroundStyle(.white).background(Color.red, in: RoundedRectangle(cornerRadius: 14))
-                }
-                .accessibilityLabel("Emergency stop rover")
-            }.buttonStyle(.plain)
+            Button {
+                stopRequested = true; neutralize(); brain.emergencyStop()
+            } label: {
+                Label("Stop", systemImage: "stop.fill").font(.headline)
+                    .frame(maxWidth: .infinity).padding(.vertical, 15)
+                    .foregroundStyle(.white).background(Color.red, in: RoundedRectangle(cornerRadius: 14))
+            }.buttonStyle(.plain).accessibilityLabel("Emergency stop rover")
             if stopRequested {
                 Button("Reset Stop") {
-                    locallyArmed = false; neutralize()
-                    brain.emergencyStop(reset: true)
-                    stopRequested = false
+                    neutralize(); brain.emergencyStop(reset: true); stopRequested = false
                 }
-                .disabled(hardware && !brain.configurationAllowed)
-                Text("Reset leaves the rover disarmed. Arm again when ready.").font(.caption).foregroundStyle(.secondary)
+                Text("Reset keeps the command at zero. Move the joystick to drive.").font(.caption).foregroundStyle(.secondary)
             } else if brain.dashboardConnected {
                 Text("ARGOS controls movement while the fleet session is connected. Disconnect the fleet from Home to use the local debugging joystick.")
                     .font(.caption).foregroundStyle(.secondary)
             } else if !manual {
                 Button("Take Over Manual Control") {
-                    locallyArmed = false; neutralize()
-                    brain.cancelWaypoint(); brain.setAutonomy("teleop"); brain.disarmHardware()
+                    neutralize(); brain.cancelWaypoint(); brain.setAutonomy("teleop"); brain.stopHardware()
                 }
             } else {
-                Text(canDrive ? "Hold and drag to drive. Release to send zero." : ready ? "Arm to enable the joystick." : "Connect or start a rover to enable manual control.")
+                Text(canDrive ? "Hold and drag to drive. Release to send zero." : "Connect or start a rover to enable manual control.")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
         .padding(.vertical, 10)
-        .onAppear { locallyArmed = brain.hardwareArmed }
         .onChange(of: canDrive) { _, enabled in if !enabled { neutralize() } }
-        .task(id: armPending) {
-            guard armPending else { return }
-            do { try await Task.sleep(for: .seconds(3)) } catch { return }
-            if !brain.hardwareArmed && !brain.hardwareArming { locallyArmed = false; neutralize() }
-        }
-        .onChange(of: brain.hardwareArming) { _, arming in
-            if !arming && !brain.hardwareArmed { locallyArmed = false; neutralize() }
-        }
-        .onChange(of: brain.hardwareArmed) { _, armed in if !armed && !brain.hardwareArming { locallyArmed = false; neutralize() } }
-        .onChange(of: brain.source) { _, source in if source == "Stopped" { locallyArmed = false; neutralize() } }
+        .onChange(of: brain.source) { _, source in if source == "Stopped" { neutralize() } }
         .onChange(of: scenePhase) { _, phase in
-            if phase != .active { locallyArmed = false; neutralize(); brain.disarmHardware() }
+            if phase != .active { neutralize(); brain.stopHardware() }
         }
-        .onDisappear { locallyArmed = false; neutralize(); brain.disarmHardware() }
+        .onDisappear { neutralize(); brain.stopHardware() }
     }
     private var statusText: String {
         if stopRequested { return "Stopped · Reset Required" }
-        if brain.hardwareArming { return "Arming at Safe Output…" }
-        if armPending { return "Waiting for Arm Acknowledgement…" }
-        if brain.dashboardConnected { return brain.hardwareArmed ? "ARGOS Control · Hardware Armed" : "ARGOS Control · Disarmed" }
-        if canDrive { return hardware ? "Hardware Armed · Manual Control" : "Manual Control Enabled" }
+        if brain.dashboardConnected { return "ARGOS Control" }
+        if canDrive { return "Manual Control Ready" }
         if !manual { return "Autonomy Active · Joystick Locked" }
-        return ready ? "Connected · Disarmed" : "No Rover Connected"
+        return ready ? "Connected · neutral output" : "No Rover Connected"
     }
     private func send(_ value: DriveJoystickCommand) {
         let safe = canDrive ? value : .zero
@@ -125,8 +73,7 @@ struct DriveControlPanel: View {
         brain.setTarget(forward: safe.forward, yaw: safe.yaw)
     }
     private func neutralize() {
-        gestureID = UUID()
-        command = .zero
+        gestureID = UUID(); command = .zero
         brain.setTarget(forward: 0, yaw: 0)
     }
     private func readout(_ title: String, value: Double, unit: String) -> some View {

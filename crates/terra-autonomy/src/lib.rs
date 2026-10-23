@@ -70,3 +70,6 @@ pub fn occupancy_telemetry(
         "occupancy": map.occupancy,
     })
 }
+
+/// Shared geographic waypoint controller used by phone and simulator.
+pub mod outdoor;

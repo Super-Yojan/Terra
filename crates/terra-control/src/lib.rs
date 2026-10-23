@@ -25,6 +25,8 @@
 //! ```
 
 use terra_types::*;
+mod turning;
+pub use turning::{TurningConfig, TurningLimiter};
 /// PI gains and safety limits for differential wheel control.
 ///
 /// Defaults target a small rover. All numbers must be finite; call [`Self::validate`]
@@ -117,6 +119,7 @@ impl ControllerConfig {
 /// A new controller has no target and produces a stale-target hold until one is set.
 pub struct VelocityController {
     config: ControllerConfig,
+    turning: Option<TurningConfig>,
     target: Option<VelocityTarget>,
     last_step: Option<f64>,
     linear_integral: f64,
@@ -130,6 +133,7 @@ impl VelocityController {
         config.validate()?;
         Ok(Self {
             config,
+            turning: None,
             target: None,
             last_step: None,
             linear_integral: 0.0,
@@ -141,6 +145,13 @@ impl VelocityController {
         self.target = None;
         self.last_step = None;
         self.clear_integrals();
+    }
+    /// Apply a managed output constraint; local manual callers leave it disabled.
+    pub fn set_turning_constraint(&mut self, config: Option<TurningConfig>) {
+        if self.turning != config {
+            self.clear_integrals();
+        }
+        self.turning = config;
     }
     fn clear_integrals(&mut self) {
         self.linear_integral = 0.0;
@@ -236,6 +247,9 @@ impl VelocityController {
         let scale =
             ((linear - yaw).abs().max((linear + yaw).abs()) / self.config.max_effort).max(1.0);
         let (mut left, mut right) = ((linear - yaw) / scale, (linear + yaw) / scale);
+        if let Some(config) = self.turning {
+            (left, right) = config.constrain_wheels(left, right);
+        }
         let achieved_linear = (left + right) * 0.5;
         let achieved_yaw = (right - left) * 0.5;
         // Back-calculation prevents the integrals from growing against saturation.

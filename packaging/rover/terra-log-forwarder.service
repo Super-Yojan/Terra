@@ -1,0 +1,23 @@
+[Unit]
+Description=Terra independent operational journal forwarding
+After=systemd-journald.service
+[Service]
+User=terra-observability
+Group=terra-observability
+SupplementaryGroups=systemd-journal
+UMask=0077
+Environment=PYTHONPATH=/opt/terra-observability-pi
+Environment=TERRA_OBSERVABILITY_STATE=/var/lib/terra-observability-pi
+EnvironmentFile=/etc/terra-observability-pi/uploader.env
+ExecStart=/usr/bin/python3 -m terra_rover.log_forwarder
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ReadWritePaths=/var/lib/terra-observability-pi
+MemoryMax=256M
+[Install]
+WantedBy=multi-user.target

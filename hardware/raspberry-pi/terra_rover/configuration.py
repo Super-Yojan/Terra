@@ -1,4 +1,4 @@
-"""Disarmed configuration transactions; callers serialize this with the output worker."""
+"""Configuration transactions serialized with the actuator output worker."""
 from copy import deepcopy
 import json
 import os
@@ -18,14 +18,14 @@ def _error(code, message):
 
 
 class ConfigurationStore:
-    """No constructor I/O. Call load(now) before exposing the BLE service.
+    """No constructor I/O. Call load() before exposing the BLE service.
 
-    A single service lock must cover every store, safety, and backend operation.
+    A single service lock must cover every store, relay, and backend operation.
     Only authenticated owner connections may invoke begin_connection/handle.
     """
-    def __init__(self, path, safety, backend):
+    def __init__(self, path, relay, backend):
         self.path = Path(path)
-        self.safety = safety
+        self.relay = relay
         self.backend = backend
         self._active = None
         self._revision = 0
@@ -65,18 +65,12 @@ class ConfigurationStore:
             raise ValueError(errors)
         return candidate
 
-    def _gate_errors(self, now):
-        status = self.safety.status(now)
-        if status['armed'] or status['arming']:
-            return [_error('configuration_armed', 'configuration requires disarmed state')]
-        if self.backend.capabilities().get('library') != 'mock':
-            try: self.backend.require_gate_open()
-            except Exception as exc: return [_error('hardware_gate', exc)]
-        if status['fault'] in ('invalid_clock', 'clock_regression'):
-            return [_error('clock', status['fault'])]
+    def _configuration_errors(self):
+        if self.backend.closed:
+            return [_error('backend_closed', 'backend closed')]
         return []
 
-    def load(self, now):
+    def load(self):
         """Load once at startup. Corruption faults without configuring hardware."""
         if self._loaded:
             raise RuntimeError('configuration store already loaded')
@@ -87,70 +81,62 @@ class ConfigurationStore:
             return None
         except Exception as exc:
             self.errors = [_error('persisted_layout', exc)]
-            self.safety.latch_fault('invalid_persisted_layout', now)
+            self.relay.latch_fault('invalid_persisted_layout')
             return None
         self._revision = candidate['revision']
-        errors = self._gate_errors(now)
+        errors = self._configuration_errors()
         if errors:
             self.errors = errors
-            self.safety.latch_fault('boot_configuration_failed', now)
+            self.relay.latch_fault('boot_configuration_failed')
             return None
         try:
             self.backend.configure(candidate)
-            self.safety.configure(candidate, now)
+            self.relay.configure(candidate)
         except Exception as exc:
             self.errors = [_error('backend_configuration', exc)]
-            self.safety.latch_fault('boot_configuration_failed', now)
+            self.relay.latch_fault('boot_configuration_failed')
             return None
         self._active = candidate
         self._revision = candidate['revision']
         self.errors = []
         return self.read()
 
-    def reset_bench(self):
-        gate = getattr(self.backend, 'bench_gate', None)
-        if gate is not None: gate.reset()
-
-    def begin_connection(self, session, now):
-        self.reset_bench()
-        self.safety.connect(session, now)
+    def begin_connection(self):
+        self.relay.connect()
         self._connected = True
         self._stage = None
         self._draft = None
         self._cache.clear()
 
-    def end_connection(self, now):
-        self.reset_bench()
+    def end_connection(self):
         self._connected = False
         self._stage = None
         self._draft = None
         self._cache.clear()
-        self.safety.disconnect(now)
+        self.relay.disconnect()
 
     def _reply(self, request_id, errors=(), payload=None):
         return dict(schema_version=1, request_id=request_id,
                     result='error' if errors else 'ok', active_revision=self.active_revision,
                     errors=deepcopy(list(errors)), payload=deepcopy(payload))
 
-    def stage(self, request_id, layout, expected_revision=None, now=None):
+    def stage(self, request_id, layout, expected_revision=None):
         """Direct convenience wrapper; layout.revision is the expected base revision."""
         if expected_revision is not None and layout.get('revision') != expected_revision:
             raise ProtocolError('expected revision disagrees with layout.revision')
-        if now is None:
-            raise ValueError('monotonic now is required')
         return self.handle(dict(schema_version=1, request_id=request_id, operation='stage_layout',
-                                payload=dict(layout=layout)), now)
+                                payload=dict(layout=layout)))
 
-    def commit(self, request_id, now, *, staged_request_id, staged_revision):
+    def commit(self, request_id, *, staged_request_id, staged_revision):
         return self.handle(dict(schema_version=1, request_id=request_id, operation='commit_layout',
                                 payload=dict(staged_request_id=staged_request_id,
-                                             staged_revision=staged_revision)), now)
+                                             staged_revision=staged_revision)))
 
-    def handle_bytes(self, data, now):
+    def handle_bytes(self, data):
         from .protocol import decode_control
-        return self.handle(decode_control(data), now)
+        return self.handle(decode_control(data))
 
-    def handle(self, envelope, now):
+    def handle(self, envelope):
         # Serialize then decode through strict protocol boundary, including direct callers.
         from .protocol import decode_control
         envelope = decode_control(encode_control(envelope))
@@ -169,7 +155,7 @@ class ConfigurationStore:
             reply = self._reply(request_id, [_error('not_loaded', 'load configuration before accepting requests')])
         else:
             try:
-                reply = self._dispatch(envelope, now)
+                reply = self._dispatch(envelope)
             except (ProtocolError, ValueError, TypeError, OverflowError) as exc:
                 reply = self._reply(request_id, [_error('configuration', exc)])
         if envelope['operation'] in PAGINATED_OPERATIONS:
@@ -180,18 +166,8 @@ class ConfigurationStore:
         self._cache[request_id] = (fingerprint, deepcopy(reply))
         return reply
 
-    def _dispatch(self, envelope, now):
+    def _dispatch(self, envelope):
         request_id, operation, payload = envelope['request_id'], envelope['operation'], envelope['payload']
-        if operation == 'set_bench_enabled':
-            gate = getattr(self.backend, 'bench_gate', None)
-            if gate is None: return self._reply(request_id, [_error('bench_mode', 'rover is not in bench mode')])
-            enabled = payload['enabled']
-            state = self.safety.status(now)
-            if enabled and (state['armed'] or state['arming'] or state['fault'] or state['emergency_stop'] or self._active is None):
-                return self._reply(request_id, [_error('bench_enable', 'valid layout, cleared stop/fault, and disarmed state required')])
-            if not enabled: self.safety.disarm('bench_disabled', now)
-            gate.set_enabled(enabled)
-            return self._reply(request_id, payload=dict(bench_enabled=gate.enabled))
         if operation == 'capabilities':
             caps = self.backend.capabilities()
             caps['features'] = list(dict.fromkeys(caps.get('features', []) + ['actuator_pagination_v1']))
@@ -199,18 +175,15 @@ class ConfigurationStore:
         if operation == 'read_layout':
             return self._reply(request_id, self.errors, self.read())
         if operation in PAGINATED_OPERATIONS:
-            return self._paginate(request_id, operation, payload, now)
-        errors = self._gate_errors(now)
+            return self._paginate(request_id, operation, payload)
+        errors = self._configuration_errors()
         if errors:
             return self._reply(request_id, errors)
         if operation == 'reset_fault':
-            # An unavailable/uncertain hardware layout cannot become armable by reset.
+            # An unavailable/uncertain hardware layout cannot become usable by reset.
             if self.errors:
                 return self._reply(request_id, self.errors)
-            self.safety.reset_fault(now)
-            return self._reply(request_id)
-        if operation == 'reset_emergency_stop':
-            self.safety.reset_emergency_stop(now)
+            self.relay.reset_fault()
             return self._reply(request_id)
         if operation == 'stage_layout':
             candidate, errors = self._validate(payload['layout'])
@@ -233,12 +206,12 @@ class ConfigurationStore:
         candidate['revision'] += 1
         self._stage = None
         self._draft = None  # consumed even on failure; retry requires a new stage
-        return self._commit_candidate(request_id, candidate, now)
+        return self._commit_candidate(request_id, candidate)
 
     def _draft_payload(self):
         return {key: self._draft[key] for key in ('edit_token', 'base_revision', 'edit_version')}
 
-    def _paginate(self, request_id, operation, payload, now):
+    def _paginate(self, request_id, operation, payload):
         def reject(code, message): return self._reply(request_id, [_error(code, message)])
         active = self._active
         if operation == 'layout_index':
@@ -252,7 +225,7 @@ class ConfigurationStore:
             if entry is None: return reject('actuator_not_found', 'actuator does not exist')
             if operation == 'read_drive_profile': entry = {key:entry[key] for key in ('id','kind','limits','route','safe')}
             return self._reply(request_id, payload=dict(revision=self.active_revision, actuator=entry))
-        errors = self._gate_errors(now)
+        errors = self._configuration_errors()
         if errors: return self._reply(request_id, errors)
         if operation == 'begin_layout_edit':
             if self.active_revision == 0xffffffff: return reject('revision_exhausted', 'layout revision cannot increment')
@@ -299,7 +272,7 @@ class ConfigurationStore:
             return self._reply(request_id, payload=self._draft_payload())
         candidate['revision'] += 1
         self._draft = None
-        reply = self._commit_candidate(request_id, candidate, now)
+        reply = self._commit_candidate(request_id, candidate)
         reply['payload'] = dict(revision=self.active_revision) if reply['result'] == 'ok' else None
         return reply
 
@@ -323,9 +296,12 @@ class ConfigurationStore:
             except FileNotFoundError:
                 pass
 
-    def _commit_candidate(self, request_id, candidate, now):
+    def _commit_candidate(self, request_id, candidate):
         previous = self.read()
         try:
+            self.relay.stop('configuration_changed')
+            if self.relay.layout is not None:
+                self.backend.apply(self.relay.output())
             self.backend.configure(candidate)
         except BackendValidationError as exc:
             # Preflight has not touched resources: keep the valid layout and fault state.
@@ -335,8 +311,8 @@ class ConfigurationStore:
             self.errors = [_error('backend_configuration', exc)]
             # Adapter failure can include failed rollback; no matching layout is assured.
             self._active = None
-            self.safety.layout = None
-            self.safety.latch_fault('backend_configuration_failed', now)
+            self.relay.layout = None
+            self.relay.latch_fault('backend_configuration_failed')
             return self._reply(request_id, self.errors)
         try:
             self._persist(candidate)
@@ -354,52 +330,43 @@ class ConfigurationStore:
                 # configure owns safe retirement and rollback; never construct outputs here.
                 reconciled = durable if durable is not None else dict(schema_version=1, revision=0, actuators=[])
                 self.backend.configure(reconciled)
-                self.safety.configure(reconciled, now)
+                self.relay.configure(reconciled)
                 self._active = durable
                 if durable is not None:
                     self._revision = durable['revision']
                 if durable is None:
-                    self.safety.layout = None
+                    self.relay.layout = None
             except Exception as rollback:
                 # Retire this attempted revision when file/backend agreement is unknown.
                 self._revision = max(self._revision, candidate['revision'])
                 errors.append(_error('reconciliation', rollback))
                 self._active = None
-                self.safety.layout = None
-                self.safety.latch_fault('configuration_reconciliation_failed', now)
+                self.relay.layout = None
+                self.relay.latch_fault('configuration_reconciliation_failed')
             else:
                 # Directory fsync failure can leave the new file visible but durability unknown.
-                self.safety.latch_fault('configuration_persistence_failed', now)
+                self.relay.latch_fault('configuration_persistence_failed')
             self.errors = errors
             return self._reply(request_id, errors, self.read())
         try:
-            self.safety.configure(candidate, now)
+            self.relay.configure(candidate)
         except Exception as exc:
             self._revision = candidate['revision']
             self._active = None
-            self.safety.layout = None
+            self.relay.layout = None
             self.errors = [_error('reconciliation', exc)]
-            self.safety.latch_fault('configuration_reconciliation_failed', now)
+            self.relay.latch_fault('configuration_reconciliation_failed')
             return self._reply(request_id, self.errors)
         self._active = candidate
         self._revision = candidate['revision']
         self.errors = []
         return self._reply(request_id, payload=self.read())
 
-    def status(self, now):
-        result = self.safety.status(now)
-        gate = getattr(self.backend, 'bench_gate', None)
-        external_cutoff = getattr(self.backend, 'external_power_cutoff', False)
-        result['gate_mode'] = 'external_power_cutoff' if external_cutoff else 'bench' if gate is not None else 'physical'
-        result['bench_enabled'] = gate.enabled if gate is not None else False
+    def status(self):
+        result = self.relay.status()
         result['active_revision'] = self.active_revision
-        result['layout_available'] = self._active is not None and self.safety.layout is not None
-        try:
-            self.backend.require_gate_open()
-            result['hardware_gate_open_confirmed'] = not external_cutoff
-        except Exception:
-            result['hardware_gate_open_confirmed'] = False
-        result['configuration_allowed'] = not bool(self._gate_errors(now))
-        result.update(service_state='fault' if result['fault'] else 'armed' if result['armed'] else 'arming' if result['arming'] else 'disarmed',
+        result['layout_available'] = self._active is not None and self.relay.layout is not None
+        result['configuration_allowed'] = not bool(self._configuration_errors())
+        result.update(service_state='fault' if result['fault'] else 'relay' if result['output_active'] else 'stopped',
                       configuration_errors=deepcopy(self.errors), battery=None, battery_reason='unsupported')
         return result

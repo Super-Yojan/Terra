@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+[project]
+name = "terra-replay"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = ["rerun-sdk==0.39.0", "numpy>=2,<3", "pillow>=11,<13", "pyarrow>=20,<24"]
+[project.scripts]
+terra-replay = "terra_replay.export:main"
+[dependency-groups]
+dev = ["pytest>=8,<10"]
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["terra_replay*"]

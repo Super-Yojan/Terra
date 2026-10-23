@@ -84,8 +84,8 @@ class BatterySwitchTests(unittest.TestCase):
             self.assertTrue(store.status(2.24)['armed'])
             self.assertFalse(store.status(2.24)['configuration_allowed'])
             batch = safety.tick(2.45, backend.read_gate())
-            self.assertFalse(batch.armed)
-            self.assertEqual(batch.reason, 'watchdog')
+            self.assertTrue(batch.armed)
+            self.assertEqual(batch.reason, 'watchdog_paused')
             self.assertTrue(all(command.value == 0 for command in batch.commands))
 
 

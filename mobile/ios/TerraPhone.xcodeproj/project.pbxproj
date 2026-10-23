@@ -7,14 +7,18 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		A10B0B5E0000000000000003 /* PhoneObservationCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10B0B5E0000000000000004 /* PhoneObservationCapture.swift */; };
+		A10B0B5E0000000000000001 /* TerraObservation.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10B0B5E0000000000000002 /* TerraObservation.swift */; };
 		014E5986C12CC878354BE533 /* View+TerraPairingConsent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B42D733D17017ED54DF9E3E /* View+TerraPairingConsent.swift */; };
 		06793BBE2D9E7876A63D0C2A /* ActuatorPagination.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C11A546598F9DA3655EF0C0 /* ActuatorPagination.swift */; };
 		08906BAF4104CBE47B269B2D /* PhoneController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C2FA04187CC39D929F3A531 /* PhoneController.swift */; };
 		137DAA3A5D1B6CB13A6C5CC6 /* RoverModelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 72D31377D574D8AFFB9FBB0D /* RoverModelView.swift */; };
 		1DEE8F75CDA61D4F9594BCB6 /* FleetConnectionSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 48EBDF0CFE543A6304242A8B /* FleetConnectionSettings.swift */; };
 		24894F900F7490AA19DE55B3 /* PersonDepthGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = DB887F7AD412C1F04EDC079D /* PersonDepthGeometry.swift */; };
+		2A76E570455AA88AE9F27D16 /* PhoneFrameOrder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 948E9284D4E99774F72ADCB8 /* PhoneFrameOrder.swift */; };
 		37C8F681B8564FABEA922179 /* PersonSearchDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50BE71F885C99967A195ECC8 /* PersonSearchDetector.swift */; };
 		3DF9E05C49FEB1A06432E1A7 /* TerraLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 25948E386E416BE1611442F7 /* TerraLog.swift */; };
+		4114E38BEE246A763559F11E /* MountCalibration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D2EB8FAB5C424C195564DB7 /* MountCalibration.swift */; };
 		5103B205700BE25C836BE434 /* DriveControlPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C4723336D834BA5A0020B66 /* DriveControlPanel.swift */; };
 		520A05493B4DC9DE9FBB5234 /* RoverSetupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B8DD4D4F392C6D381299A69B /* RoverSetupView.swift */; };
 		5275EB91F7E2093DB3D7EB09 /* TerraHomeSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F8B011E9994CB657937B755 /* TerraHomeSheet.swift */; };
@@ -48,6 +52,7 @@
 		CE80D456BD3FE9D7E192C1B0 /* ActuatorEntryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 281C7F6A31FF9B6E38095ED2 /* ActuatorEntryView.swift */; };
 		D118D59BD96910D69621094B /* PhoneLocalization.swift in Sources */ = {isa = PBXBuildFile; fileRef = DB0300971377E45AC7666F16 /* PhoneLocalization.swift */; };
 		D4D6286AE77051472C8C0C79 /* SwiftUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 8E15CDF054403F8D93571D51 /* SwiftUI.framework */; };
+		D637CFC5BD62A44FA1709F52 /* RotationOffsetFit.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2AC19B9778E4A6CD3D5E1BA /* RotationOffsetFit.swift */; };
 		DA0000000000000000000003 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = DA0000000000000000000004 /* Assets.xcassets */; };
 		DA0000000000000000000007 /* Models in Resources */ = {isa = PBXBuildFile; fileRef = DA0000000000000000000008 /* Models */; };
 		DA0000000000000000000009 /* TerraAutoConnectionPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = DA0000000000000000000010 /* TerraAutoConnectionPolicy.swift */; };
@@ -57,8 +62,6 @@
 		E3E5AAF1C047AFF6D4C9789B /* FleetConnectionDetails.swift in Sources */ = {isa = PBXBuildFile; fileRef = 05345BECCAB64836C1C5C910 /* FleetConnectionDetails.swift */; };
 		E72EDE257A3ACC038FC8CA9E /* ConnectionPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15314EB9500C69B32E097620 /* ConnectionPresentation.swift */; };
 		F0EA40F2756462AED7DD4EE2 /* BluetoothFragmentAssembler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58BEF209DEE2945A7D96965A /* BluetoothFragmentAssembler.swift */; };
-		4114E38BEE246A763559F11E /* MountCalibration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D2EB8FAB5C424C195564DB7 /* MountCalibration.swift */; };
-		D637CFC5BD62A44FA1709F52 /* RotationOffsetFit.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2AC19B9778E4A6CD3D5E1BA /* RotationOffsetFit.swift */; };
 		A11F0E510000000000000004 /* FpvIceSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = A11F0E510000000000000003 /* FpvIceSettings.swift */; };
 		A11F0E510000000000000006 /* FpvIceStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A11F0E510000000000000005 /* FpvIceStore.swift */; };
 		A11F0E510000000000000008 /* FpvVideoCall.swift in Sources */ = {isa = PBXBuildFile; fileRef = A11F0E510000000000000007 /* FpvVideoCall.swift */; };
@@ -67,7 +70,10 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		A10B0B5E0000000000000004 /* PhoneObservationCapture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhoneObservationCapture.swift; sourceTree = "<group>"; };
+		A10B0B5E0000000000000002 /* TerraObservation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerraObservation.swift; sourceTree = "<group>"; };
 		05345BECCAB64836C1C5C910 /* FleetConnectionDetails.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = FleetConnectionDetails.swift; sourceTree = "<group>"; };
+		0D2EB8FAB5C424C195564DB7 /* MountCalibration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MountCalibration.swift; sourceTree = "<group>"; };
 		15314EB9500C69B32E097620 /* ConnectionPresentation.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ConnectionPresentation.swift; sourceTree = "<group>"; };
 		1DE1232754CCF24E578129F5 /* MapLayout.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = MapLayout.swift; sourceTree = "<group>"; };
 		1FE42CD4C297A5554D72BC92 /* ActuatorLayoutView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ActuatorLayoutView.swift; sourceTree = "<group>"; };
@@ -95,6 +101,7 @@
 		8E15CDF054403F8D93571D51 /* SwiftUI.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SwiftUI.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS18.0.sdk/System/Library/Frameworks/SwiftUI.framework; sourceTree = DEVELOPER_DIR; };
 		9269BB859EF5B3B6A578B3D6 /* OccupancyMapView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = OccupancyMapView.swift; sourceTree = "<group>"; };
 		93A5245F123BA9089B07AC8D /* CoreMotion.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreMotion.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS18.0.sdk/System/Library/Frameworks/CoreMotion.framework; sourceTree = DEVELOPER_DIR; };
+		948E9284D4E99774F72ADCB8 /* PhoneFrameOrder.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = PhoneFrameOrder.swift; sourceTree = "<group>"; };
 		9BC2EE52CB19C0C8A6F9709C /* TerraDebugTools.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TerraDebugTools.swift; sourceTree = "<group>"; };
 		9C2FA04187CC39D929F3A531 /* PhoneController.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = PhoneController.swift; sourceTree = "<group>"; };
 		9DE1936CC09E26932C0F66FE /* TerraDestination.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TerraDestination.swift; sourceTree = "<group>"; };
@@ -105,6 +112,7 @@
 		B100000000000000000000002 /* BluetoothLink.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BluetoothLink.swift; sourceTree = "<group>"; };
 		B100000000000000000000003 /* CoreBluetooth.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreBluetooth.framework; path = System/Library/Frameworks/CoreBluetooth.framework; sourceTree = SDKROOT; };
 		B8DD4D4F392C6D381299A69B /* RoverSetupView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = RoverSetupView.swift; sourceTree = "<group>"; };
+		C2AC19B9778E4A6CD3D5E1BA /* RotationOffsetFit.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RotationOffsetFit.swift; sourceTree = "<group>"; };
 		C39B748CBDE909384D42F851 /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS18.0.sdk/System/Library/Frameworks/Foundation.framework; sourceTree = DEVELOPER_DIR; };
 		C4D93BE22AB9B98C9B52E714 /* TerraStyle.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TerraStyle.swift; sourceTree = "<group>"; };
 		D04DB8926762D65151B5C411 /* ActuatorDriveProfile.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ActuatorDriveProfile.swift; sourceTree = "<group>"; };
@@ -119,8 +127,6 @@
 		F236F546C5E50DEBDBC44862 /* JoystickSurface.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = JoystickSurface.swift; sourceTree = "<group>"; };
 		F9F7CE3FE9E7E9C9734B9A85 /* PhoneMountGeometry.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = PhoneMountGeometry.swift; sourceTree = "<group>"; };
 		FD7D52E4241E3416851D20EB /* TerraCore.xcframework */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = wrapper.xcframework; path = TerraCore.xcframework; sourceTree = "<group>"; };
-		0D2EB8FAB5C424C195564DB7 /* MountCalibration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MountCalibration.swift; sourceTree = "<group>"; };
-		C2AC19B9778E4A6CD3D5E1BA /* RotationOffsetFit.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RotationOffsetFit.swift; sourceTree = "<group>"; };
 		A11F0E510000000000000003 /* FpvIceSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FpvIceSettings.swift; sourceTree = "<group>"; };
 		A11F0E510000000000000005 /* FpvIceStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FpvIceStore.swift; sourceTree = "<group>"; };
 		A11F0E510000000000000007 /* FpvVideoCall.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FpvVideoCall.swift; sourceTree = "<group>"; };
@@ -236,6 +242,8 @@
 				2F8B011E9994CB657937B755 /* TerraHomeSheet.swift */,
 				C4D93BE22AB9B98C9B52E714 /* TerraStyle.swift */,
 				25948E386E416BE1611442F7 /* TerraLog.swift */,
+				A10B0B5E0000000000000004 /* PhoneObservationCapture.swift */,
+				A10B0B5E0000000000000002 /* TerraObservation.swift */,
 				D04DB8926762D65151B5C411 /* ActuatorDriveProfile.swift */,
 				5C11A546598F9DA3655EF0C0 /* ActuatorPagination.swift */,
 				58BEF209DEE2945A7D96965A /* BluetoothFragmentAssembler.swift */,
@@ -247,6 +255,7 @@
 				A11F0E510000000000000003 /* FpvIceSettings.swift */,
 				A11F0E510000000000000005 /* FpvIceStore.swift */,
 				A11F0E510000000000000007 /* FpvVideoCall.swift */,
+				948E9284D4E99774F72ADCB8 /* PhoneFrameOrder.swift */,
 			);
 			path = TerraPhone;
 			sourceTree = "<group>";
@@ -364,6 +373,8 @@
 				5275EB91F7E2093DB3D7EB09 /* TerraHomeSheet.swift in Sources */,
 				558521300E8F01C5ADFC1428 /* TerraStyle.swift in Sources */,
 				3DF9E05C49FEB1A06432E1A7 /* TerraLog.swift in Sources */,
+				A10B0B5E0000000000000003 /* PhoneObservationCapture.swift in Sources */,
+				A10B0B5E0000000000000001 /* TerraObservation.swift in Sources */,
 				A58122FA6F3E1A8414B6B6C3 /* ActuatorDriveProfile.swift in Sources */,
 				06793BBE2D9E7876A63D0C2A /* ActuatorPagination.swift in Sources */,
 				F0EA40F2756462AED7DD4EE2 /* BluetoothFragmentAssembler.swift in Sources */,
@@ -376,6 +387,7 @@
 				A11F0E510000000000000006 /* FpvIceStore.swift in Sources */,
 				A11F0E510000000000000008 /* FpvVideoCall.swift in Sources */,
 				A11F0E51000000000000000A /* FpvStatusRow.swift in Sources */,
+				2A76E570455AA88AE9F27D16 /* PhoneFrameOrder.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

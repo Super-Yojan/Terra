@@ -1,0 +1,17 @@
+[connection]
+id=Terra USB local
+uuid=470b8aaf-6028-4f67-a3f1-6e91ed708d20
+type=ethernet
+interface-name=usb0
+autoconnect=true
+autoconnect-priority=100
+
+[ethernet]
+
+[ipv4]
+method=link-local
+never-default=true
+
+[ipv6]
+method=link-local
+never-default=true

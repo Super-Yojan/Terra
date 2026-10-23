@@ -18,6 +18,12 @@ enum PhoneMountGeometry {
     // Unlike the portrait top edge, it stays horizontal in the upright mount.
     static let headingOrientation: CLDeviceOrientation = .landscapeLeft
 
+    /// Convert the configured compass reference axis to calibrated rover forward.
+    static func roverTrueHeading(compass: Double, roverYaw: Double, referenceYaw: Double) -> Double {
+        guard compass.isFinite, compass >= 0, compass < 360, roverYaw.isFinite, referenceYaw.isFinite else { return -1 }
+        let corrected = (compass - (roverYaw - referenceYaw) * 180 / .pi).truncatingRemainder(dividingBy: 360)
+        return (corrected + 360).truncatingRemainder(dividingBy: 360)
+    }
     static func headingReferenceYaw(worldFromCamera: simd_float3x3) -> Double? {
         // AR camera +Y is phone +X: pair exactly with headingOrientation above.
         let reference = worldFromCamera.columns.1

@@ -6,3 +6,4 @@ edition.workspace = true
 [dependencies]
 terra-types.workspace = true
 terra-state.workspace = true
+serde = { version = "1", features = ["derive"] }

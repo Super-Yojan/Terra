@@ -4,7 +4,7 @@ use std::{
     collections::{BTreeMap, VecDeque},
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU8, Ordering},
     },
     thread::{self, JoinHandle},
     time::{Duration, Instant},
@@ -14,6 +14,9 @@ type Inbox = Arc<Mutex<VecDeque<(String, Vec<u8>, Instant)>>>;
 type SignalingInbox = Arc<Mutex<VecDeque<(String, Vec<u8>)>>>;
 type States = Arc<Mutex<BTreeMap<String, (Option<String>, Instant)>>>;
 const TELEMETRY_TTL: Duration = Duration::from_millis(500);
+#[cfg(test)]
+#[path = "../tests/internal/control_plane_diagnostics.rs"]
+mod diagnostic_tests;
 
 fn visualization_topic(kind: &str) -> bool {
     matches!(
@@ -61,6 +64,7 @@ pub struct ControlPlane {
     batches: Arc<Mutex<BTreeMap<String, (Vec<String>, Instant)>>>,
     stop: Arc<AtomicBool>,
     failed: Arc<AtomicBool>,
+    failure_reason: Arc<AtomicU8>,
     worker: Option<JoinHandle<()>>,
     /// Rover identity used in topic paths and fleet advertisements.
     pub rover_id: u64,
@@ -149,6 +153,7 @@ impl ControlPlane {
         let states: States = Arc::new(Mutex::new(BTreeMap::new()));
         let stop = Arc::new(AtomicBool::new(false));
         let failed = Arc::new(AtomicBool::new(false));
+        let failure_reason = Arc::new(AtomicU8::new(0));
         let base = format!("{prefix}/{id}");
         let queue = inbox.clone();
         let signaling_queue = signaling.clone();
@@ -198,6 +203,7 @@ impl ControlPlane {
         let state = states.clone();
         let stopped = stop.clone();
         let fault = failed.clone();
+        let reason = failure_reason.clone();
         let fleet = format!("{prefix}/fleet/state");
         let publication = session.clone();
         let key_base = base.clone();
@@ -205,6 +211,9 @@ impl ControlPlane {
             let mut last_batch = Instant::now() - Duration::from_secs(1);
             while !stopped.load(Ordering::Acquire) {
                 if outbound && session.info().routers_zid().wait().next().is_none() {
+                    reason
+                        .compare_exchange(0, 1, Ordering::Release, Ordering::Relaxed)
+                        .ok();
                     fault.store(true, Ordering::Release);
                     break;
                 }
@@ -222,11 +231,17 @@ impl ControlPlane {
                     .wait()
                     .is_err()
                 {
+                    reason
+                        .compare_exchange(0, 2, Ordering::Release, Ordering::Relaxed)
+                        .ok();
                     fault.store(true, Ordering::Release);
                     break;
                 }
                 for (kind, value) in snapshots {
                     if session.put(format!("{base}/{kind}"), value).wait().is_err() {
+                        reason
+                            .compare_exchange(0, 3, Ordering::Release, Ordering::Relaxed)
+                            .ok();
                         fault.store(true, Ordering::Release);
                     }
                 }
@@ -237,6 +252,14 @@ impl ControlPlane {
                         if at.elapsed() < TELEMETRY_TTL {
                             for value in values {
                                 if session.put(format!("{base}/{kind}"), value).wait().is_err() {
+                                    reason
+                                        .compare_exchange(
+                                            0,
+                                            4,
+                                            Ordering::Release,
+                                            Ordering::Relaxed,
+                                        )
+                                        .ok();
                                     fault.store(true, Ordering::Release);
                                 }
                             }
@@ -257,6 +280,7 @@ impl ControlPlane {
             batches,
             stop,
             failed,
+            failure_reason,
             worker: Some(worker),
             rover_id: id,
         })
@@ -357,6 +381,21 @@ impl ControlPlane {
     /// Once set, intent draining discards queued commands; this service does not reconnect.
     pub fn failed(&self) -> bool {
         self.failed.load(Ordering::Acquire)
+    }
+    /// Safe diagnostic metadata only; contains no topic payloads, credentials or endpoints.
+    /// A stale producer can stop fleet advertisements without a transport failure.
+    pub fn diagnostics(&self) -> serde_json::Value {
+        let failure = self.failure_reason.load(Ordering::Acquire);
+        let states = self.states.try_lock().ok();
+        let age = states
+            .as_ref()
+            .and_then(|states| states.values().map(|(_, at)| at.elapsed()).min());
+        let fresh = states
+            .as_ref()
+            .map(|_| age.is_some_and(|age| age < TELEMETRY_TTL));
+        serde_json::json!({"state":if self.failed(){"failed"}else{"connected"},"failure_reason":match failure {
+            1=>Some("router_unavailable"),2=>Some("fleet_publish_failed"),3=>Some("telemetry_publish_failed"),4=>Some("batch_publish_failed"),_=>None
+        },"freshest_telemetry_age_ms":age.map(|age|age.as_millis() as u64),"telemetry_fresh":fresh,"telemetry_sample_available":states.is_some(),"telemetry_ttl_ms":TELEMETRY_TTL.as_millis() as u64})
     }
 }
 impl Drop for ControlPlane {

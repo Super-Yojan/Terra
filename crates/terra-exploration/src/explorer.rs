@@ -101,15 +101,15 @@ impl Default for ExplorationConfig {
     fn default() -> Self {
         Self {
             footprint_radius: 0.65,
-            stuck_timeout: 5.,
-            blacklist_seconds: 30.,
+            stuck_timeout: terra_types::timing::EXPLORATION_STUCK_SECONDS,
+            blacklist_seconds: terra_types::timing::EXPLORATION_BLACKLIST_SECONDS,
             max_attempts: 3,
             exclude_radius: 1.,
             progress_epsilon: 0.2,
-            approach_horizon: 1.,
-            progress_period: 1.,
-            map_stale_timeout: 0.,
-            safety_hold_timeout: 0.,
+            approach_horizon: terra_types::timing::EXPLORATION_APPROACH_HORIZON_SECONDS,
+            progress_period: terra_types::timing::EXPLORATION_PROGRESS_PERIOD_SECONDS,
+            map_stale_timeout: terra_types::timing::EXPLORATION_MAP_STALE_GRACE_SECONDS,
+            safety_hold_timeout: terra_types::timing::EXPLORATION_SAFETY_HOLD_GRACE_SECONDS,
         }
     }
 }

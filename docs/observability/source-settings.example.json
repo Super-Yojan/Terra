@@ -1,0 +1,8 @@
+{
+  "journal_max_bytes": 268435456,
+  "attachment_max_bytes": 536870912,
+  "retention_seconds": 604800,
+  "control_sample_seconds": 0.1,
+  "map_sample_seconds": 0.5,
+  "evidence_sample_seconds": 1.0
+}
