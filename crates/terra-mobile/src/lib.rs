@@ -13,7 +13,7 @@ uniffi::setup_scaffolding!();
 mod actuators;
 pub use actuators::*;
 mod autonomy;
-pub use autonomy::WebrtcSignal;
+pub use autonomy::{FpvEffect, WebrtcSignal};
 mod navigation_settings;
 mod publication;
 mod search;
@@ -275,6 +275,8 @@ struct Brain {
 /// Returned efforts still require an independently armed hardware adapter.
 pub struct MobileController {
     brain: Mutex<Brain>,
+    /// Video signaling only. It cannot arm the rover or change the velocity target.
+    fpv: Mutex<fpv_signaling::SignalingSession>,
 }
 #[uniffi::export]
 impl MobileController {
@@ -286,6 +288,7 @@ impl MobileController {
     /// freshness settings. No network or hardware connection is opened.
     pub fn new(settings: ControlSettings) -> Result<Arc<Self>, ControllerError> {
         Ok(Arc::new(Self {
+            fpv: Mutex::new(fpv_signaling::SignalingSession::phone()),
             brain: Mutex::new(Brain {
                 estimator: VelocityEstimator::new(settings.estimator())?,
                 controller: VelocityController::new(settings.controller())?,

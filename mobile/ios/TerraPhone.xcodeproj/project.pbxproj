@@ -59,7 +59,6 @@
 		F0EA40F2756462AED7DD4EE2 /* BluetoothFragmentAssembler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58BEF209DEE2945A7D96965A /* BluetoothFragmentAssembler.swift */; };
 		4114E38BEE246A763559F11E /* MountCalibration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D2EB8FAB5C424C195564DB7 /* MountCalibration.swift */; };
 		D637CFC5BD62A44FA1709F52 /* RotationOffsetFit.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2AC19B9778E4A6CD3D5E1BA /* RotationOffsetFit.swift */; };
-		A11F0E510000000000000002 /* FpvSignaling.swift in Sources */ = {isa = PBXBuildFile; fileRef = A11F0E510000000000000001 /* FpvSignaling.swift */; };
 		A11F0E510000000000000004 /* FpvIceSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = A11F0E510000000000000003 /* FpvIceSettings.swift */; };
 		A11F0E510000000000000006 /* FpvIceStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A11F0E510000000000000005 /* FpvIceStore.swift */; };
 		A11F0E510000000000000008 /* FpvVideoCall.swift in Sources */ = {isa = PBXBuildFile; fileRef = A11F0E510000000000000007 /* FpvVideoCall.swift */; };
@@ -122,7 +121,6 @@
 		FD7D52E4241E3416851D20EB /* TerraCore.xcframework */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = wrapper.xcframework; path = TerraCore.xcframework; sourceTree = "<group>"; };
 		0D2EB8FAB5C424C195564DB7 /* MountCalibration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MountCalibration.swift; sourceTree = "<group>"; };
 		C2AC19B9778E4A6CD3D5E1BA /* RotationOffsetFit.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RotationOffsetFit.swift; sourceTree = "<group>"; };
-		A11F0E510000000000000001 /* FpvSignaling.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FpvSignaling.swift; sourceTree = "<group>"; };
 		A11F0E510000000000000003 /* FpvIceSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FpvIceSettings.swift; sourceTree = "<group>"; };
 		A11F0E510000000000000005 /* FpvIceStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FpvIceStore.swift; sourceTree = "<group>"; };
 		A11F0E510000000000000007 /* FpvVideoCall.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FpvVideoCall.swift; sourceTree = "<group>"; };
@@ -246,7 +244,6 @@
 				F9F7CE3FE9E7E9C9734B9A85 /* PhoneMountGeometry.swift */,
 				C2AC19B9778E4A6CD3D5E1BA /* RotationOffsetFit.swift */,
 				0D2EB8FAB5C424C195564DB7 /* MountCalibration.swift */,
-				A11F0E510000000000000001 /* FpvSignaling.swift */,
 				A11F0E510000000000000003 /* FpvIceSettings.swift */,
 				A11F0E510000000000000005 /* FpvIceStore.swift */,
 				A11F0E510000000000000007 /* FpvVideoCall.swift */,
@@ -375,7 +372,6 @@
 				CD7A9A2C8F638D6DB8443AE7 /* PhoneMountGeometry.swift in Sources */,
 				D637CFC5BD62A44FA1709F52 /* RotationOffsetFit.swift in Sources */,
 				4114E38BEE246A763559F11E /* MountCalibration.swift in Sources */,
-				A11F0E510000000000000002 /* FpvSignaling.swift in Sources */,
 				A11F0E510000000000000004 /* FpvIceSettings.swift in Sources */,
 				A11F0E510000000000000006 /* FpvIceStore.swift in Sources */,
 				A11F0E510000000000000008 /* FpvVideoCall.swift in Sources */,

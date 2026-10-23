@@ -15,8 +15,28 @@ fn webrtc_signaling_without_a_dashboard_does_not_arm_or_drive() {
         .unwrap_err();
     let _ = motion;
     assert!(controller.take_hardware_request().is_empty());
+    let effects = controller.fpv_receive(
+        "webrtc/request".into(),
+        r#"{"v":1,"action":"start","session":"11111111-1111-4111-8111-111111111111","note":"optional"}"#
+            .into(),
+        0,
+    );
+    assert!(effects.iter().any(|effect| effect.kind == "create_offer"));
+    assert!(effects.iter().all(|effect| {
+        effect.topic != "teleop" && effect.topic != "hardware" && effect.topic != "cmd_vel"
+    }));
+    assert!(
+        controller
+            .fpv_receive(
+                "teleop".into(),
+                r#"{"v":1,"linear":1,"angular":0}"#.into(),
+                1,
+            )
+            .is_empty()
+    );
     let output = controller.step(1.0).unwrap();
     assert_eq!(output.target_forward, 0.0);
     assert_eq!(output.target_yaw_rate, 0.0);
     assert!(controller.take_hardware_request().is_empty());
+    assert!(controller.fpv_has_session());
 }

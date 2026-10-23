@@ -2,6 +2,105 @@
 
 use crate::*;
 
+/// One video-signaling effect for the phone UI. `kind` is `publish`, `create_offer`,
+/// `apply_answer`, `add_ice`, `end_of_candidates`, `stop_media`, or `show`.
+/// Unused strings are empty. This record cannot arm or move the rover.
+#[derive(uniffi::Record)]
+pub struct FpvEffect {
+    pub kind: String,
+    pub session: String,
+    pub topic: String,
+    pub payload: String,
+    pub sdp: String,
+    pub candidate: String,
+    pub sdp_mid: String,
+    pub sdp_m_line_index: i32,
+    pub state: String,
+    pub detail: String,
+}
+
+fn fpv_effects(
+    controller: &MobileController,
+    step: impl FnOnce(&mut fpv_signaling::SignalingSession) -> Vec<fpv_signaling::Effect>,
+) -> Vec<FpvEffect> {
+    let Ok(mut session) = controller.fpv.lock() else {
+        return Vec::new();
+    };
+    step(&mut session)
+        .into_iter()
+        .map(FpvEffect::from)
+        .collect()
+}
+
+impl From<fpv_signaling::Effect> for FpvEffect {
+    fn from(effect: fpv_signaling::Effect) -> Self {
+        let mut out = Self {
+            kind: String::new(),
+            session: String::new(),
+            topic: String::new(),
+            payload: String::new(),
+            sdp: String::new(),
+            candidate: String::new(),
+            sdp_mid: String::new(),
+            sdp_m_line_index: 0,
+            state: String::new(),
+            detail: String::new(),
+        };
+        match effect {
+            fpv_signaling::Effect::Publish { topic, payload } => {
+                out.kind = "publish".into();
+                out.topic = topic.suffix().into();
+                out.payload = payload;
+            }
+            fpv_signaling::Effect::CreateOffer { session } => {
+                out.kind = "create_offer".into();
+                out.session = session;
+            }
+            fpv_signaling::Effect::AcceptOffer { session, sdp } => {
+                out.kind = "accept_offer".into();
+                out.session = session;
+                out.sdp = sdp;
+            }
+            fpv_signaling::Effect::ApplyAnswer { session, sdp } => {
+                out.kind = "apply_answer".into();
+                out.session = session;
+                out.sdp = sdp;
+            }
+            fpv_signaling::Effect::AddIce {
+                session,
+                candidate,
+                sdp_mid,
+                sdp_m_line_index,
+            } => {
+                out.kind = "add_ice".into();
+                out.session = session;
+                out.candidate = candidate;
+                out.sdp_mid = sdp_mid;
+                out.sdp_m_line_index = sdp_m_line_index;
+            }
+            fpv_signaling::Effect::EndOfCandidates { session } => {
+                out.kind = "end_of_candidates".into();
+                out.session = session;
+            }
+            fpv_signaling::Effect::StopMedia { session } => {
+                out.kind = "stop_media".into();
+                out.session = session;
+            }
+            fpv_signaling::Effect::Show {
+                session,
+                state,
+                detail,
+            } => {
+                out.kind = "show".into();
+                out.session = session;
+                out.state = state.as_str().into();
+                out.detail = detail.into();
+            }
+        }
+        out
+    }
+}
+
 /// One WebRTC signaling sample drained from the fleet session.
 /// `kind` is the topic suffix. `payload` is the raw JSON text.
 /// The sample is video signaling, not a drive or arm command.
@@ -340,8 +439,8 @@ impl MobileController {
         kind: String,
         payload: String,
     ) -> Result<(), ControllerError> {
-        if payload.len() > terra_transport::WEBRTC_SIGNALING_MAX_BYTES
-            || serde_json::from_str::<serde_json::Value>(&payload).is_err()
+        if fpv_signaling::decode(&kind, &payload)
+            .is_none_or(|message| !message.topic.is_phone_outbound())
         {
             return Err(ControllerError::InvalidInput {
                 message: "rejected webrtc signaling".into(),
@@ -359,6 +458,50 @@ impl MobileController {
             });
         }
         Ok(())
+    }
+    /// Advance the phone FPV session from one dashboard signaling sample.
+    /// Effects are video cues and signaling publishes. They are not drive commands.
+    /// `now_ms` is a monotonic millisecond clock. A poisoned lock returns nothing.
+    pub fn fpv_receive(&self, kind: String, payload: String, now_ms: u64) -> Vec<FpvEffect> {
+        fpv_effects(self, |session| session.receive(&kind, &payload, now_ms))
+    }
+    /// Fail the call when the offer, answer, or connection has exceeded its timeout.
+    pub fn fpv_tick(&self, now_ms: u64) -> Vec<FpvEffect> {
+        fpv_effects(self, |session| session.tick(now_ms))
+    }
+    /// Record the local SDP offer. The returned publish effect carries `webrtc/offer`.
+    pub fn fpv_note_offer(&self, session: String, sdp: String, now_ms: u64) -> Vec<FpvEffect> {
+        fpv_effects(self, |machine| {
+            machine.note_local_description(&session, &sdp, now_ms)
+        })
+    }
+    /// Record one local ICE candidate. An empty candidate ends gathering.
+    pub fn fpv_note_ice(
+        &self,
+        session: String,
+        candidate: String,
+        sdp_mid: String,
+        sdp_m_line_index: i32,
+        now_ms: u64,
+    ) -> Vec<FpvEffect> {
+        fpv_effects(self, |machine| {
+            machine.note_local_ice(&session, &candidate, &sdp_mid, sdp_m_line_index, now_ms)
+        })
+    }
+    /// Record a local peer-connection state: `connecting`, `connected`, `failed`, or `closed`.
+    pub fn fpv_note_media(&self, session: String, state: String, now_ms: u64) -> Vec<FpvEffect> {
+        let Some(state) = fpv_signaling::CallState::parse(&state) else {
+            return Vec::new();
+        };
+        fpv_effects(self, |machine| machine.note_media(&session, state, now_ms))
+    }
+    /// End the phone's call. When `publish` is set, the effect list includes `webrtc/state` `closed`.
+    pub fn fpv_stop(&self, publish: bool) -> Vec<FpvEffect> {
+        fpv_effects(self, |machine| machine.stop(publish))
+    }
+    /// Whether a signaling session is active, including a failed one waiting for stop or restart.
+    pub fn fpv_has_session(&self) -> bool {
+        self.fpv.lock().is_ok_and(|session| session.has_session())
     }
     /// Transport connectivity only, not acknowledgement by an ARGOS operator.
     /// Returns `connected`, `disconnected`, or `failed`; lock failure also yields `failed`.

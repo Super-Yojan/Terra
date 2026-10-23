@@ -73,6 +73,7 @@ nav:
       - terra-control: crates/terra-control.md
       - terra-waypoint: crates/terra-waypoint.md
       - terra-transport: crates/terra-transport.md
+      - fpv-signaling: crates/fpv-signaling.md
       - terra-mapping: crates/terra-mapping.md
       - terra-navigation: crates/terra-navigation.md
       - terra-exploration: crates/terra-exploration.md

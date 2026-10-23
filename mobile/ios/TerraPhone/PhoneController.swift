@@ -137,9 +137,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
     private var phoneStartedAt = 0.0
     private let controlQueue = DispatchQueue(label: "terra.control", qos: .userInteractive)
     private let fpvVideo = FpvVideoCall()
-    private var fpvSignaling = FpvSignaling()
     private var fpvRunning = false
-    private var fpvPublishedState: String?
     private var fpvFailure: String?
     private let fpvCameraLock = NSLock()
     private var sharedCameraForFpv = false
@@ -1897,130 +1895,124 @@ extension PhoneController {
         }
     }
 
+    private func fpvNow() -> UInt64 {
+        UInt64(ProcessInfo.processInfo.systemUptime * 1000)
+    }
+
     private func drainFpvSignaling() {
         guard let controller else { return }
+        let now = fpvNow()
         if controller.dashboardStatus() != "connected" {
-            if fpvSignaling.hasSession || fpvRunning {
+            if controller.fpvHasSession() || fpvRunning {
                 fpvFailure = nil
                 closeFpv(publish: false)
             }
             return
         }
         for signal in controller.takeWebrtcSignaling() {
-            guard let inbound = FpvSignaling.decode(kind: signal.kind, payload: signal.payload) else { continue }
-            applyFpv(fpvSignaling.receive(inbound))
+            applyFpv(controller.fpvReceive(kind: signal.kind, payload: signal.payload, nowMs: now))
         }
+        applyFpv(controller.fpvTick(nowMs: now))
     }
 
-    private func applyFpv(_ decision: FpvDecision) {
-        switch decision {
-        case .ignore, .endOfCandidates:
-            break
-        case .start(let previous, let session):
-            fpvFailure = nil
-            beginFpv(previous: previous, session: session)
-        case .stop(let session):
-            fpvFailure = nil
-            fpvRunning = false
-            fpvVideo.stopMedia()
-            publishFpvState("closed", session: session)
-            fpvPublishedState = nil
-            showFpvIdle()
-        case .answer(let session, let sdp):
-            fpvVideo.applyAnswer(session: session, sdp: sdp)
-        case .ice(let session, let candidate, let sdpMid, let sdpMLineIndex):
-            fpvVideo.addIce(session: session, candidate: candidate, sdpMid: sdpMid, sdpMLineIndex: sdpMLineIndex)
-        }
-    }
-
-    private func beginFpv(previous: String?, session: String) {
-        if let previous, previous != session {
-            publishFpvState("closed", session: previous)
-        }
-        fpvRunning = true
-        fpvPublishedState = nil
-        publishFpvState("connecting", session: session)
-        let settings = FpvIceStore.load()
-        TerraLog.fpv.notice("FPV connecting; \(settings.redactedSummary(), privacy: .public)")
-        DispatchQueue.main.async {
-            self.fpvStatus = "Connecting"
-            self.fpvLive = false
-            self.fpvActive = true
-        }
-        fpvVideo.start(session: session, settings: settings, sharedCamera: readSharedCamera())
-    }
-
-    private func handleFpvEvent(_ event: FpvVideoEvent) {
-        switch event {
-        case .offer(let session, let sdp):
-            guard fpvSignaling.isCurrent(session), fpvFailure == nil else { return }
-            guard let payload = FpvSignaling.offerJSON(session: session, sdp: sdp) else {
-                failFpv("The video offer is too large to send")
-                return
-            }
-            publishFpv("webrtc/offer", payload)
-        case .ice(let session, let candidate, let sdpMid, let sdpMLineIndex):
-            guard fpvSignaling.isCurrent(session), fpvFailure == nil else { return }
-            guard let payload = FpvSignaling.iceJSON(session: session, candidate: candidate, sdpMid: sdpMid, sdpMLineIndex: sdpMLineIndex) else { return }
-            publishFpv("webrtc/ice/phone", payload)
-        case .gatheringComplete(let session):
-            guard fpvSignaling.isCurrent(session), fpvFailure == nil else { return }
-            guard let payload = FpvSignaling.iceJSON(session: session, candidate: "", sdpMid: "", sdpMLineIndex: 0) else { return }
-            publishFpv("webrtc/ice/phone", payload)
-        case .state(let session, let state):
-            guard fpvSignaling.isCurrent(session) else { return }
-            switch state {
-            case "connected":
-                publishFpvState("connected", session: session)
-                DispatchQueue.main.async {
-                    self.fpvStatus = "Live · streaming"
-                    self.fpvLive = true
-                    self.fpvActive = true
-                }
-            case "connecting":
-                publishFpvState("connecting", session: session)
-                DispatchQueue.main.async {
-                    guard !self.fpvLive else { return }
-                    self.fpvStatus = "Connecting"
-                    self.fpvLive = false
-                    self.fpvActive = true
-                }
-            case "failed":
-                failFpv("The video connection failed")
-            case "closed":
-                closeFpv(publish: true, clearFailure: false)
+    /// Apply video-signaling effects from `fpv-signaling`. None of these arm or drive.
+    private func applyFpv(_ effects: [FpvEffect]) {
+        for effect in effects {
+            switch effect.kind {
+            case "publish":
+                publishFpv(effect.topic, effect.payload)
+            case "create_offer":
+                fpvFailure = nil
+                fpvRunning = true
+                let settings = FpvIceStore.load()
+                TerraLog.fpv.notice("FPV connecting; \(settings.redactedSummary(), privacy: .public)")
+                fpvVideo.start(session: effect.session, settings: settings, sharedCamera: readSharedCamera())
+            case "apply_answer":
+                fpvVideo.applyAnswer(session: effect.session, sdp: effect.sdp)
+            case "add_ice":
+                fpvVideo.addIce(session: effect.session, candidate: effect.candidate, sdpMid: effect.sdpMid, sdpMLineIndex: Int(effect.sdpMLineIndex))
+            case "end_of_candidates":
+                break
+            case "stop_media":
+                fpvRunning = false
+                fpvVideo.stopMedia()
+            case "show":
+                showFpv(effect.state, detail: effect.detail)
             default:
                 break
             }
-        case .cameraUnavailable(_, let reason):
-            failFpv(reason)
         }
     }
 
-    private func failFpv(_ reason: String) {
-        guard let session = fpvSignaling.noteFailed() else { return }
-        fpvRunning = false
-        fpvFailure = reason
-        fpvVideo.stopMedia()
-        publishFpvState("failed", session: session)
-        TerraLog.fpv.error("FPV failed: \(reason, privacy: .public)")
-        DispatchQueue.main.async {
-            self.fpvStatus = "Failed · \(reason)"
-            self.fpvLive = false
-            self.fpvActive = true
+    private func handleFpvEvent(_ event: FpvVideoEvent) {
+        guard let controller else { return }
+        let now = fpvNow()
+        switch event {
+        case .offer(let session, let sdp):
+            applyFpv(controller.fpvNoteOffer(session: session, sdp: sdp, nowMs: now))
+        case .ice(let session, let candidate, let sdpMid, let sdpMLineIndex):
+            applyFpv(controller.fpvNoteIce(session: session, candidate: candidate, sdpMid: sdpMid, sdpMLineIndex: Int32(sdpMLineIndex), nowMs: now))
+        case .gatheringComplete(let session):
+            applyFpv(controller.fpvNoteIce(session: session, candidate: "", sdpMid: "", sdpMLineIndex: 0, nowMs: now))
+        case .state(let session, let state):
+            if state == "failed" { fpvFailure = fpvFailure ?? "The video connection failed" }
+            applyFpv(controller.fpvNoteMedia(session: session, state: state, nowMs: now))
+        case .cameraUnavailable(let session, let reason):
+            fpvFailure = reason
+            applyFpv(controller.fpvNoteMedia(session: session, state: "failed", nowMs: now))
         }
     }
 
     private func closeFpv(publish: Bool, clearFailure: Bool = true) {
         if clearFailure { fpvFailure = nil }
-        let session = fpvSignaling.stopLocal()
-        fpvRunning = false
-        fpvVideo.stopMedia()
-        if publish, let session {
-            publishFpvState("closed", session: session)
+        if let controller {
+            applyFpv(controller.fpvStop(publish: publish))
+        } else {
+            fpvRunning = false
+            fpvVideo.stopMedia()
+            if fpvFailure == nil { showFpvIdle() }
         }
-        fpvPublishedState = nil
-        if fpvFailure == nil { showFpvIdle() }
+    }
+
+    private func showFpv(_ state: String, detail: String) {
+        switch state {
+        case "connecting":
+            DispatchQueue.main.async {
+                guard !self.fpvLive else { return }
+                self.fpvStatus = "Connecting"
+                self.fpvLive = false
+                self.fpvActive = true
+            }
+        case "connected":
+            DispatchQueue.main.async {
+                self.fpvStatus = "Live · streaming"
+                self.fpvLive = true
+                self.fpvActive = true
+            }
+        case "failed":
+            let reason = fpvFailure ?? Self.fpvFailureText(detail)
+            fpvFailure = reason
+            TerraLog.fpv.error("FPV failed: \(reason, privacy: .public)")
+            DispatchQueue.main.async {
+                self.fpvStatus = "Failed · \(reason)"
+                self.fpvLive = false
+                self.fpvActive = true
+            }
+        case "closed":
+            if fpvFailure == nil { showFpvIdle() }
+        default:
+            break
+        }
+    }
+
+    private static func fpvFailureText(_ detail: String) -> String {
+        switch detail {
+        case "timed_out": return "The video timed out"
+        case "offer_too_large": return "The video offer is too large to send"
+        case "answer_too_large": return "The video answer is too large to send"
+        case "empty_sdp": return "The video description was empty"
+        default: return "The video connection failed"
+        }
     }
 
     private func showFpvIdle() {
@@ -2029,12 +2021,6 @@ extension PhoneController {
             self.fpvLive = false
             self.fpvActive = false
         }
-    }
-
-    private func publishFpvState(_ state: String, session: String) {
-        guard fpvPublishedState != state, let payload = FpvSignaling.stateJSON(session: session, state: state) else { return }
-        fpvPublishedState = state
-        publishFpv("webrtc/state", payload)
     }
 
     private func publishFpv(_ kind: String, _ payload: String) {

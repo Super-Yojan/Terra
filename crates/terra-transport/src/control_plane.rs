@@ -296,16 +296,13 @@ impl ControlPlane {
             .collect()
     }
     /// Put one phone-to-dashboard signaling sample immediately.
-    /// Accepts only `webrtc/offer`, `webrtc/ice/phone`, and `webrtc/state`,
-    /// and only valid JSON of at most [`crate::WEBRTC_SIGNALING_MAX_BYTES`].
+    /// Accepts only a valid `webrtc/offer`, `webrtc/ice/phone`, or `webrtc/state`
+    /// sample of at most [`crate::WEBRTC_SIGNALING_MAX_BYTES`].
     /// The sample is not stored for telemetry replay. Returns false when the
     /// kind, JSON, size, or link is rejected. Delivery is still best effort.
+    /// This does not publish teleop or hardware.
     pub fn publish_signaling(&self, kind: &str, value: &str) -> bool {
-        if self.failed()
-            || !crate::signaling::webrtc_outbound(kind)
-            || value.len() > crate::WEBRTC_SIGNALING_MAX_BYTES
-            || serde_json::from_str::<serde_json::Value>(value).is_err()
-        {
+        if self.failed() || !crate::signaling::accept_phone_outbound(kind, value) {
             return false;
         }
         self.session

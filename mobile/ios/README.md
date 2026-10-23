@@ -85,13 +85,13 @@ Emergency Stop and Reset Stop also reach that retained link while output is stop
 
 FPV video is a send-only rear-camera WebRTC call requested by the ARGOS dashboard. Signaling uses the fleet Zenoh session. Stopping or failing the call does not arm, disarm, or drive. Settings for STUN and optional TURN are under Fleet connection. See [FPV video](../../docs/phone/fpv.md).
 
-Run the FPV signaling checks:
+The signaling session lives in the `fpv-signaling` crate and reaches the app through `MobileController`. This check covers ICE settings only:
 
 ```sh
-swiftc mobile/ios/TerraPhone/FpvSignaling.swift \
-  mobile/ios/TerraPhone/FpvIceSettings.swift \
+swiftc mobile/ios/TerraPhone/FpvIceSettings.swift \
   tests/ios/FpvSignalingTests.swift -o /tmp/terra-fpv-tests
 /tmp/terra-fpv-tests
+cargo test -p fpv-signaling
 ```
 
 Run the joystick checks:

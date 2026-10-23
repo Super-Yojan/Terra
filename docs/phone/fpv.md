@@ -24,6 +24,8 @@ The phone and the dashboard are often on different networks. WebRTC uses ICE, wi
 
 The phone creates the offer after `start`. One call is active at a time. A `start` with a new session id replaces the current call. A repeated `start` for the live session is ignored. After a failure, the same session id can start again. Messages for any other session id are ignored.
 
+The offer must appear within **15 seconds** of `start`, the answer within **20 seconds** of the offer, and the connection within **30 seconds** of the answer. A timeout fails the call. The dashboard's timeout also sends `request` `stop`, so the phone does not keep a live session that would ignore the next `start`. A phone timeout publishes `state` `failed` and keeps the session until `stop` or a new `start`. Connected calls do not time out from signaling; a later ICE failure is a media state.
+
 Unknown JSON fields on these six topics are ignored. The required fields above are still required. Control topics are unchanged and still drop unknown fields.
 
 Session ids are UUIDs. Comparison ignores letter case, and the phone echoes the spelling from the `start` that created the call. `v` must be the JSON number `1`. A JSON boolean is rejected. `sdpMLineIndex` must be an integer from 0 through 2147483647.
@@ -61,6 +63,26 @@ Do not commit TURN credentials.
 
 The home screen shows **FPV** with Idle, Connecting, Live · streaming, or Failed. **Stop FPV** ends the call. The dashboard's `stop` does the same. Neither changes arming. Disconnecting the fleet, or leaving the app, also ends the call.
 
+## Shared crate
+
+Protocol types, JSON rules, topic keys, and the session machine live in [`fpv-signaling`](../crates/fpv-signaling.md) (`crates/fpv-signaling`). The iPhone uses that crate through the existing `MobileController` FFI (`fpvReceive`, `fpvNoteOffer`, `fpvNoteIce`, `fpvNoteMedia`, `fpvTick`, `fpvStop`). Google's native WebRTC stays in the app and only carries media. ARGOS should use the same crate for the dashboard role (`SignalingSession::dashboard`) and its own player for display.
+
+The crate depends on `serde_json` only. It does not depend on Zenoh or WebRTC. Zenoh ingress and egress stay in `terra-transport`: the signaling queue, the 65536-byte cap, and the refusal to latch these topics as telemetry.
+
+ARGOS `main` does not link Terra. The GPUI dashboard branch is the precedent: CI checks Terra out as a sibling of the ARGOS repo, and a crate manifest points at that checkout. `fpv-signaling` is not on crates.io. From `crates/argos-gpui/Cargo.toml` or `crates/argos-zenoh/Cargo.toml`:
+
+```toml
+fpv-signaling = { path = "../../../Terra/crates/fpv-signaling" }
+```
+
+Pin the sibling checkout to this branch until it is on `main`, the same way `.github/scripts/checkout-observability.sh` pins a Terra revision. A git dependency also resolves the crate, because it is a workspace member:
+
+```toml
+fpv-signaling = { git = "https://github.com/Super-Yojan/Terra.git", branch = "cursor/webrtc-fpv-ios-c3c2" }
+```
+
+Use the path line. It matches the sibling checkout ARGOS already uses.
+
 ## Try it with the ARGOS dashboard
 
 1. On a Mac, regenerate bindings and open the project. This VM cannot compile the iOS app.
@@ -82,10 +104,10 @@ The home screen shows **FPV** with Idle, Connecting, Live · streaming, or Faile
 Signaling checks on a desktop:
 
 ```sh
-swiftc mobile/ios/TerraPhone/FpvSignaling.swift \
-  mobile/ios/TerraPhone/FpvIceSettings.swift \
+swiftc mobile/ios/TerraPhone/FpvIceSettings.swift \
   tests/ios/FpvSignalingTests.swift -o /tmp/terra-fpv-tests
 /tmp/terra-fpv-tests
+cargo test -p fpv-signaling
 cargo test -p terra-transport --test signaling
 cargo test -p terra-mobile --test webrtc_signaling
 ```
