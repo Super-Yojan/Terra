@@ -5,7 +5,6 @@ import json
 import logging
 import os
 from pathlib import Path
-import secrets
 import signal
 import threading
 import time
@@ -15,9 +14,9 @@ from .bless_transport import BlessTransport
 
 
 from .configuration import ConfigurationStore
-from .safety import SafetyController
-from .protocol import (FragmentAssembler, CommandKind, ProtocolError, decode_frame,
-                       decode_control, encode_reply, fragment_message, JSON_LIMIT)
+from .drive_relay import DriveRelay
+from .protocol import (FragmentAssembler, ProtocolError, decode_drive,
+                       decode_control, fragment_message, JSON_LIMIT)
 
 SERVICE_UUID = '7e5a0010-4c2b-4f91-9e3a-1d8c6b2a0f10'
 DRIVE_UUID = '7e5a0011-4c2b-4f91-9e3a-1d8c6b2a0f10'
@@ -26,16 +25,17 @@ STATUS_UUID = '7e5a0012-4c2b-4f91-9e3a-1d8c6b2a0f10'
 REPLY_UUID = '7e5a0014-4c2b-4f91-9e3a-1d8c6b2a0f10'
 ROOT = '/com/terra/rover'
 SERVICE = ROOT + '/service0'
+OUTPUT_LOOP_SECONDS = .050
 
 def denied(message):
     return DBusError('org.bluez.Error.NotAuthorized', message)
 
 def status_read_document(payload):
-    # Keep admission and recurring motion status compact. Bulk configuration
-    # diagnostics are returned by control replies rather than every 100 ms.
-    keys = ('schema_version', 'type', 'session', 'active_revision', 'armed', 'arming',
-            'layout_available', 'fault', 'emergency_stop', 'gate_mode', 'bench_enabled',
-            'hardware_gate_open_confirmed', 'configuration_allowed', 'last_sequence', 'stop_reason')
+    # Keep admission and event-driven status compact. Bulk configuration
+    # diagnostics are returned by control replies.
+    keys = ('schema_version', 'type', 'connected', 'active_revision', 'control_mode', 'output_active',
+            'layout_available', 'fault',
+            'configuration_allowed', 'stop_reason')
     compact = {key: payload[key] for key in keys if key in payload}
     raw = json.dumps(compact, separators=(',', ':'), allow_nan=False).encode()
     if len(raw) > 512 and compact.get('fault') and compact.get('stop_reason') == compact['fault']:
@@ -67,12 +67,9 @@ class BlePeripheral:
         self.lock = threading.Lock()
         self.events = deque(maxlen=32)
         self.drive = None
-        self.priority = None
         self.invalid_drive = None
         self.configuring = False
-        self.assemblers = {name: FragmentAssembler(limit, timeout=2.0 if name == 'json' else .1) for name, limit in
-                           [('drive', 96), ('priority', 96), ('json', JSON_LIMIT)]}
-        self.routes = {}
+        self.assemblers = {'json': FragmentAssembler(JSON_LIMIT, timeout=2.0)}
         self.stop = threading.Event()
         self.worker_error = None
         self.status_bytes = b'{}'
@@ -120,14 +117,13 @@ class BlePeripheral:
                 logging.getLogger(__name__).warning('Owner connection recovery failed: %s', exc)
             return
 
-    async def _connection_watchdog(self):
+    async def _recover_owner_connections(self):
         while not self.stop.is_set():
             await self.recover_stalled_connection(time.monotonic())
             await asyncio.sleep(1)
 
     def clear(self):
         for assembler in self.assemblers.values(): assembler.clear()
-        self.routes.clear()
     def require_single_owner(self):
         connected = [path for path, p in self.devices.items() if p.get('Connected')]
         if self.peer is None or connected != [self.peer]: raise denied('read owner status before subscribing; only owner may be connected')
@@ -150,7 +146,7 @@ class BlePeripheral:
             raise denied('disconnect other centrals before admission')
         if self.peer is None:
             self.peer = peer; self.generation += 1; self.clear()
-            self.enqueue('connect', secrets.randbelow(0xfffffffe) + 1)
+            self.enqueue('connect', None)
         return peer
     def enqueue(self, kind, value):
         with self.lock:
@@ -162,7 +158,7 @@ class BlePeripheral:
         self.peer = None; self.generation += 1; self.clear()
         for char in self.chars.values(): char.notifying = False
         with self.lock:
-            self.drive = self.priority = None
+            self.drive = None
             self.invalid_drive = None
             self.events.clear()
             self.events.append((self.generation, 'disconnect', None, now))
@@ -172,7 +168,6 @@ class BlePeripheral:
         with self.lock:
             self.invalid_drive = self.generation
             self.drive = None
-        self.assemblers['drive'].clear()
 
     def handle_write(self, peer, characteristic, value, now):
         if peer != self.peer: raise denied('owner is not admitted')
@@ -183,44 +178,19 @@ class BlePeripheral:
             raise
 
     def _handle_write(self, characteristic, value, now):
-        if len(value) < 5: raise ProtocolError('fragment too short')
-        message = int.from_bytes(value[:2], 'little')
-        if characteristic == 'drive': route = 'drive'
-        elif characteristic == 'control':
-            if value[2] == 0:
-                route = 'priority' if value[4:6] == b'TA' else 'json'
-                self.routes[message] = (route, now)
-                # Bound route table even for intentionally abandoned first fragments.
-                self.routes = {k: v for k, v in self.routes.items() if 0 <= now-v[1] < self.assemblers[v[0]].timeout}
-                if len(self.routes) > 3: self.routes.clear(); raise ProtocolError('too many active messages')
-            else:
-                entry = self.routes.get(message)
-                if entry is None or not 0 <= now-entry[1] < self.assemblers[entry[0]].timeout:
-                    self.routes.pop(message, None)
-                    if entry is not None:
-                        self.assemblers[entry[0]].clear()
-                        logging.getLogger(__name__).warning('control assembly expired message_id=%s route=%s elapsed=%.3f', message, entry[0], now-entry[1])
-                    raise ProtocolError('unknown or expired control message')
-                route = entry[0]
-        else: raise ProtocolError('unknown characteristic')
-        try: data = self.assemblers[route].push(value, now)
-        except ProtocolError:
-            self.routes.pop(message, None); raise
-        if data is None: return
-        self.routes.pop(message, None)
-        if route == 'json': self.enqueue('json', decode_control(data)); return
-        frame = decode_frame(data)
-        if (route == 'drive') != (frame.kind == CommandKind.DRIVE): raise ProtocolError('wrong characteristic for command')
+        if characteristic == 'control':
+            data = self.assemblers['json'].push(value, now)
+            if data is not None: self.enqueue('json', decode_control(data))
+            return
+        if characteristic != 'drive': raise ProtocolError('unknown characteristic')
+        values = decode_drive(value)
         with self.lock:
-            if self.configuring: raise DBusError('org.bluez.Error.InProgress', 'disarmed configuration in progress')
-            item = (self.generation, frame, now)
-            if frame.kind in (CommandKind.DISARM, CommandKind.EMERGENCY_STOP):
-                self.drive = None; self.assemblers['drive'].clear()
-                if self.priority is None or self.priority[1].kind != CommandKind.EMERGENCY_STOP:
-                    self.priority = item
-            elif route == 'drive': self.drive = item
-            elif self.priority is None: self.priority = item
-            else: raise DBusError('org.bluez.Error.InProgress', 'priority command pending')
+            if self.configuring: raise DBusError('org.bluez.Error.InProgress', 'configuration in progress')
+            pending = {v.id: v for v in self.drive[1]} if self.drive is not None and self.drive[0] == self.generation else {}
+            pending.update((v.id, v) for v in values)
+            if len(pending) > 16: raise ProtocolError('too many actuator IDs in output loop')
+            self.drive = (self.generation, tuple(pending.values()))
+
     def _emit(self, characteristic, payload, generation):
         if generation != self.generation or self.peer is None: return
         try: self.require_single_owner()
@@ -253,85 +223,74 @@ class BlePeripheral:
             logging.getLogger(__name__).exception('Output worker failed; stopping Bluetooth service')
         finally:
             try:
-                self.store.end_connection(time.monotonic())
-                if self.safety.layout is not None:
-                    self.backend.apply(self.safety.tick(time.monotonic(), False))
+                self.store.end_connection()
+                if self.relay.layout is not None:
+                    self.backend.apply(self.relay.output())
             except BaseException as exc:
                 self.worker_error = self.worker_error or exc
             finally:
                 try: self.backend.close()
                 except BaseException as exc: self.worker_error = self.worker_error or exc
 
+    def _apply_output(self):
+        try:
+            self.backend.apply(self.relay.output())
+        except Exception as exc:
+            self.relay.latch_fault('backend: '+str(exc))
+            try: self.backend.apply(self.relay.output())
+            except Exception: logging.getLogger(__name__).exception('Unable to send neutral output')
+
     def _output_loop(self):
         while not self.stop.is_set():
             started = time.monotonic()
             with self.lock:
                 events = list(self.events); self.events.clear()
-                priority, drive = self.priority, self.drive
-                invalid_drive = self.invalid_drive
-                self.invalid_drive = None
-                self.priority = self.drive = None
-            # Apply lifecycle in queue order before command admission.
+                drive, self.drive = self.drive, None
+                invalid_drive, self.invalid_drive = self.invalid_drive, None
             for generation, kind, value, received in events:
                 if generation != self.generation: continue
-                if kind == 'connect': self.store.begin_connection(value, time.monotonic())
-                elif kind == 'disconnect': self.store.end_connection(time.monotonic())
-                elif kind == 'subscribe': self.safety.set_status_subscribed(value, time.monotonic())
+                if kind == 'connect': self.store.begin_connection()
+                elif kind == 'disconnect': self.store.end_connection()
+                elif kind == 'subscribe': self.relay.set_status_subscribed(value)
             if invalid_drive == self.generation:
-                self.safety.disarm('malformed_drive', time.monotonic())
+                self.relay.stop('malformed_drive')
                 drive = None
-            # Priority is processed before disk/backend configuration.
-            if priority is not None and priority[0] == self.generation:
-                generation, frame, received = priority
-                accepted = self.safety.accept(frame, received, time.monotonic())
-                if frame.kind in (CommandKind.DISARM, CommandKind.EMERGENCY_STOP): self.store.reset_bench()
-                self.loop.call_soon_threadsafe(self._emit, 'status', dict(schema_version=1, type='command_acceptance', session=frame.session, sequence=frame.sequence, accepted=accepted), generation)
-                priority = None
             for generation, kind, value, received in events:
-                if generation != self.generation: continue
-                if kind == 'json':
-                    with self.lock: self.configuring = True
-                    try:
-                        if not self.safety.status(time.monotonic())['armed'] and not self.safety.status(time.monotonic())['arming'] and self.safety.layout is not None:
-                            self.backend.apply(self.safety.tick(time.monotonic(), self.backend.read_gate()))
-                        operation_started = time.monotonic()
-                        reply = self.store.handle(value, operation_started)
-                        logging.getLogger(__name__).debug('configuration operation=%s request_id=%s queue_seconds=%.3f elapsed_seconds=%.3f result=%s', value['operation'], value['request_id'], operation_started-received, time.monotonic()-operation_started, reply['result'])
-                        self.loop.call_soon_threadsafe(self._emit, 'reply', reply, generation)
-                    except Exception as exc: self.safety.latch_fault('control_worker: '+str(exc), time.monotonic())
-                    finally:
-                        with self.lock: self.configuring = False
-            for item in (priority, drive):
-                if item is None or item[0] != self.generation: continue
-                generation, frame, received = item
-                accepted = self.safety.accept(frame, received, time.monotonic())
-                if frame.kind == CommandKind.DRIVE and not accepted:
-                    self.safety.disarm('rejected_drive', time.monotonic())
-                acknowledgement = dict(schema_version=1, type='command_acceptance', session=frame.session,
-                                       sequence=frame.sequence, accepted=accepted)
-                self.loop.call_soon_threadsafe(self._emit, 'status', acknowledgement, generation)
-            now = time.monotonic()
-            try:
-                batch = self.safety.tick(now, self.backend.read_gate())
-                if self.safety.layout is not None: self.backend.apply(batch)
-            except Exception as exc:
-                self.safety.latch_fault('backend: '+str(exc), time.monotonic())
-                try: self.backend.apply(self.safety.tick(time.monotonic(), False))
-                except Exception: pass
-            if now-self.last_status >= .1:
-                status = self.store.status(time.monotonic())
-                status.update(type='status', generation=self.generation)
-                self.status_bytes = status_read_document(status)
-                self.loop.call_soon_threadsafe(self._emit, 'status', json.loads(self.status_bytes), self.generation)
-                self.last_status = now
-            self.stop.wait(max(0, .010-(time.monotonic()-started)))
+                if generation != self.generation or kind != 'json': continue
+                with self.lock:
+                    self.configuring = True
+                    self.drive = None
+                # Configuration never carries an old effort into replacement outputs.
+                drive = None
+                self.relay.stop('configuration')
+                if self.relay.layout is not None: self._apply_output()
+                try:
+                    operation_started = time.monotonic()
+                    reply = self.store.handle(value)
+                    logging.getLogger(__name__).debug('configuration operation=%s request_id=%s queue_seconds=%.3f elapsed_seconds=%.3f result=%s', value['operation'], value['request_id'], operation_started-received, time.monotonic()-operation_started, reply['result'])
+                    self.loop.call_soon_threadsafe(self._emit, 'reply', reply, generation)
+                except Exception as exc: self.relay.latch_fault('control_worker: '+str(exc))
+                finally:
+                    with self.lock: self.configuring = False
+            if drive is not None and drive[0] == self.generation:
+                self.relay.accept(drive[1])
+            # output() consumes this loop's efforts. Without new input it returns neutral.
+            if self.relay.layout is not None: self._apply_output()
+            status = self.store.status()
+            status.update(type='status', generation=self.generation)
+            raw = status_read_document(status)
+            if raw != self.status_bytes:
+                self.status_bytes = raw
+                self.loop.call_soon_threadsafe(self._emit, 'status', json.loads(raw), self.generation)
+            self.stop.wait(max(0., OUTPUT_LOOP_SECONDS - (time.monotonic() - started)))
+
     async def run(self, backend, store_path: Path, owner_store: Path, *, manage_signals=True):
         self.owner = json.loads(Path(owner_store).read_text())
         if os.stat(owner_store).st_mode & 0o077: raise RuntimeError('owner file must have mode 0600')
-        self.backend = backend; self.safety = SafetyController(backend.capabilities())
-        self.store = ConfigurationStore(store_path, self.safety, backend)
-        self.store.load(time.monotonic())
-        self.loop = asyncio.get_running_loop(); self.last_status = 0
+        self.backend = backend; self.relay = DriveRelay(backend.capabilities())
+        self.store = ConfigurationStore(store_path, self.relay, backend)
+        self.store.load()
+        self.loop = asyncio.get_running_loop()
         self.notification_size = 20
         transport = BlessTransport(self.name, SERVICE_UUID, self.adapter)
         worker = None
@@ -401,7 +360,7 @@ class BlePeripheral:
             worker = threading.Thread(target=self._worker, name='terra-output', daemon=False); worker.start()
             worker_task = asyncio.create_task(self.monitor_worker(worker))
             await transport.start()
-            recovery_task = asyncio.create_task(self._connection_watchdog())
+            recovery_task = asyncio.create_task(self._recover_owner_connections())
             disconnect_task = asyncio.create_task(self.bus.wait_for_disconnect())
             done_task = asyncio.create_task(done.wait())
             completed, _ = await asyncio.wait([disconnect_task, done_task, worker_task], return_when=asyncio.FIRST_COMPLETED)

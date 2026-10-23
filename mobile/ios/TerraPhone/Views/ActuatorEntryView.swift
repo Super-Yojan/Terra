@@ -25,14 +25,13 @@ struct ActuatorEntryView: View {
             pulse("Maximum pulse µs", value: $actuator.calibration.max_us)
             Picker("Safe output", selection: Binding(get: { actuator.safe.type }, set: { actuator.safe = ActuatorSafe(type: $0, value: $0 == "position" ? 0 : nil) })) { Text("Configured position").tag("position"); Text("Disable PWM").tag("disabled") }
             if actuator.safe.type == "position" { optionalNumber("Safe position", value: $actuator.safe.value) }
-            Text("Disabled PWM releases the servo while disarmed. Its control starts at center bounded by command limits on rearm.").font(.footnote)
+            Text("Disabled PWM releases the servo when no command is received. Servo positions follow the configured limits.").font(.footnote)
         } else {
             Picker("Route", selection: Binding(get: { actuator.route.type }, set: { actuator.route = $0 == "manual" ? ActuatorRoute(type: $0, forward_coefficient: 1, turn_coefficient: 0) : ActuatorRoute(type: $0) })) { Text("Left effort").tag("left_effort"); Text("Right effort").tag("right_effort"); Text("Manual coefficients").tag("manual") }
             if actuator.route.type == "manual" { optionalNumber("Forward coefficient", value: $actuator.route.forward_coefficient); optionalNumber("Turn coefficient", value: $actuator.route.turn_coefficient) }
             if actuator.kind == "dc_motor" { optionalNumber("Maximum power fraction", value: $actuator.calibration.max_power_fraction) }
             if actuator.kind == "bidirectional_esc" { pulse("Reverse pulse µs", value: $actuator.calibration.reverse_us); pulse("Neutral pulse µs", value: $actuator.calibration.neutral_us); pulse("Forward pulse µs", value: $actuator.calibration.forward_us) }
             if actuator.kind == "unidirectional_esc" { pulse("Stop pulse µs", value: $actuator.calibration.stop_us); pulse("Full power pulse µs", value: $actuator.calibration.full_power_us) }
-            if actuator.kind.contains("esc") { pulse("Arming duration ms", value: $actuator.calibration.arming_duration_ms) }
             Text("Safe propulsion is zero effort; ESCs maintain their neutral or stop pulse.").font(.footnote)
         }
     }

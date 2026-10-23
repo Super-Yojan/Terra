@@ -99,7 +99,7 @@ class ButtonSetupStatus(ServiceInterface):
         if device is None:
             raise DBusError('org.bluez.Error.NotAuthorized', 'device required')
         self.session.check(device.value)
-        data = b'{"schema_version":1,"type":"setup","armed":false,"pairing_confirmed":true}'
+        data = b'{"schema_version":1,"type":"setup","pairing_confirmed":true}'
         offset = options.get('offset', Variant('q', 0)).value
         if offset > len(data):
             raise DBusError('org.bluez.Error.InvalidOffset', 'offset')
@@ -182,7 +182,7 @@ async def pair_owner(args, indicators, name):
         async def read(options):
             # Bless handles offset slicing once, after the enrollment transaction.
             await ButtonSetupStatus.ReadValue.__wrapped__(status, options)
-            return b'{"schema_version":1,"type":"setup","armed":false,"pairing_confirmed":true}'
+            return b'{"schema_version":1,"type":"setup","pairing_confirmed":true}'
         await transport.add(STATUS_UUID, read=read)
         await agents.call_register_agent(path, 'NoInputNoOutput'); registered = True
         await agents.call_request_default_agent(path)

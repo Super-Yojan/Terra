@@ -9,7 +9,7 @@ struct RoverConnectionDetails: View {
             Section {
                 LabeledContent("Rover", value: brain.roverDisplayName)
                 Text(brain.hardwareStatus).font(.subheadline)
-                LabeledContent("Output", value: brain.hardwareArmed ? "Armed" : "Disarmed")
+                LabeledContent("Output", value: brain.hardwareOutputActive ? "Output active" : "Neutral")
             }
             Section {
                 NavigationLink("Choose rover or add rover") { RoverSelectionView(brain: brain) }
@@ -17,7 +17,7 @@ struct RoverConnectionDetails: View {
                 Button("Forget rover", role: .destructive) { confirmForget = true }
             }
             if brain.lastStopDiagnostic.message != nil {
-                Section("Last disarm reason") { TerraStopReasonView(brain: brain) }
+                Section("Last stop reason") { TerraStopReasonView(brain: brain) }
             }
         }.navigationTitle("Rover connection").navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
@@ -55,7 +55,7 @@ struct RoverSelectionView: View {
                     }
                 }
             } header: { Text("Saved rovers") }
-            footer: { Text("Selecting a rover disconnects and disarms the current rover. Connection keeps motors disarmed.") }
+            footer: { Text("Selecting a rover stops the current output and reconnects with a zero command.") }
             Section {
                 Button("Add rover") { brain.addHardwareRover(); dismiss() }
                     .foregroundStyle(.primary).frame(minHeight: 44)

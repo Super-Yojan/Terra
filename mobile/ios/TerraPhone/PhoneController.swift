@@ -89,11 +89,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
     private var dashboardGeneration: UInt64 = 0
     private var configurationGeneration: UInt64 = 0
     private var resetFaultRequest: UInt32?
-    @Published private(set) var hardwareMotionPaused = false
-    @Published private(set) var hardwareArmed = false
-    @Published private(set) var hardwareArming = false
-    @Published private(set) var hardwareBenchMode = false
-    @Published private(set) var hardwareBenchEnabled = false
+    @Published private(set) var hardwareOutputActive = false
     @Published private(set) var hardwareStatus = "Disconnected"
     @Published private(set) var lastStopDiagnostic = TerraStopDiagnostic()
     @Published private(set) var capabilitiesJSON = "{}"
@@ -108,8 +104,6 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
     private var feedbackConnectionSawUnready = false
     private var subscriptions = Set<AnyCancellable>()
     private let routerQueue = DispatchQueue(label: "terra.router.connection")
-    private var dashboardHardwareToken = ""
-    private var dashboardHardwareResult = ""
     private var bleActive = false
     private var bleFeedback = false
     private var bleLayout = "{}"
@@ -127,9 +121,6 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
     private var sensorEpoch = 0
     private let sensorEpochLock = NSLock()
     private var dashboardEmergencyStop = false
-    private var emergencyResetRequest: UInt32?
-    private var hardwarePauseRequested = false
-    private var hardwareMotionRevoked = true
     private let personDetector = PersonSearchDetector()
     private var detectorHealth = "not started"
     private var feedbackTrackingHealthy = false
@@ -342,7 +333,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
                     self.observation.record(component: "router", kind: "connection.established", attributes: ["onboard_mission_retained": continuingMission])
                     self.connectionPolicy.routerConnected(); self.routerRetryAt = nil
                     self.dashboardConnecting = false; self.dashboardConnected = true
-                    self.dashboardStatus = continuingMission ? "Router restored · onboard mission retained" : "Router connected · rover \(id) · hardware remains disarmed"
+                    self.dashboardStatus = continuingMission ? "Router restored · onboard mission retained" : "Router connected · rover \(id) · hardware remains stopped"
                     self.fleetTrackingFailed = false
                     self.refreshConnectionPresentation()
                 }
@@ -475,7 +466,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
         dashboardConnecting = false
         bluetooth.cancelAutomaticConnection()
         sensorEpochLock.lock(); sensorEpoch += 1; sensorEpochLock.unlock()
-        bluetooth.disarm()
+        bluetooth.stopOutput()
         if !keepBluetooth { bluetooth.disconnect() }
         hardwareActive = false; requestedHardwareFeedback = nil
         phoneTrackingActive = false; hardwareFeedback = false
@@ -491,7 +482,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
             self.isCollectingOffsetFit = false; self.offsetFitSamples.removeAll(); self.firstTurnFit = nil
             DispatchQueue.main.async { self.offsetFitInProgress = false }
             self.dashboardEmergencyStop = false
-            self.bleActive = false; self.bleReady = false; self.bleFeedback = false; self.hardwareMotionRevoked = true; self.feedbackTrackingHealthy = false; self.target = (0, 0); self.servoTargets = [:]
+            self.bleActive = false; self.bleReady = false; self.bleFeedback = false; self.feedbackTrackingHealthy = false; self.target = (0, 0); self.servoTargets = [:]
             self.zenoh?.disconnect(); self.zenoh = nil
             self.goalLatched = false
             self.remotePose = nil; self.phonePose = nil
@@ -572,7 +563,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
         if TerraManualRouterSafety.emergencyStopped(statusJSON: controller.autonomyStatus()), !dashboardEmergencyStop {
             observation.recordSafetyRequest(reset: false, source: "router_authority", route: "bluetooth")
             dashboardEmergencyStop = true; target = (0, 0); resetServoTargets()
-            bluetooth.emergencyStop(); hardwareMotionRevoked = true
+            bluetooth.stopOutput()
             DispatchQueue.main.async { self.autonomyReason = "Router emergency stop · reset explicitly" }
         }
         if controller.dashboardStatus() != "connected" {
@@ -637,7 +628,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
                 let continuingMission = controller.acceptedOnboardMission()
                 observation.record(component: "router", kind: "connection.lost", attributes: ["onboard_mission_retained": continuingMission])
                 try controller.handleDashboardLinkLoss()
-                // Remote operator intent is cleared natively; no cloud-only disarm.
+                // Remote operator intent is cleared natively; no cloud-only output latch.
                 self.target = (0, 0)
                 DispatchQueue.main.async {
                     self.dashboardConnecting = false; self.dashboardConnected = false
@@ -762,7 +753,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
             if bleActive {
                 feedbackTrackingHealthy = false
                 let fullyManual = TerraFleetManualDrive.isFullyManual(controller.autonomyStatus())
-                if DriveJoystickSafety.trackingLossRequiresDisarm(feedback: bleFeedback || TerraFleetManualDrive.requiresVioControl(controller.autonomyStatus()), fullyManual: fullyManual) {
+                if DriveJoystickSafety.trackingLossRequiresStop(feedback: bleFeedback || TerraFleetManualDrive.requiresVioControl(controller.autonomyStatus()), fullyManual: fullyManual) {
                     pauseHardwareMotion(reason: localizationTrackingReason ?? "Camera tracking lost in tracking-dependent mode")
                 }
             }
@@ -1135,17 +1126,15 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
         }
     }
     func emergencyStop(reset:Bool=false) {
-        // Stop/reset must also reach a connected rover after navigation has
-        // stopped the motion timer while retaining its synchronized BLE link.
-        let hardwareConnected = hardwareReady || hardwareConfigurationReady || bluetooth.connectedIdentifier != nil
         controlQueue.async {
-            self.observation.recordSafetyRequest(reset: reset, source: "operator", route: (self.bleActive || hardwareConnected) ? "bluetooth" : self.mode == .remote ? "zenoh" : "local_authority")
-            if self.bleActive || hardwareConnected {
-                self.target = (0, 0); self.resetServoTargets()
-                if reset { DispatchQueue.main.async { self.emergencyResetRequest = self.sendConfiguration("reset_emergency_stop", payload: [:]) } } else { self.bluetooth.emergencyStop() }
-                return
-            }
-            self.target=(0,0);let payload="{\"action\":\"\(reset ? "reset":"stop")\",\"token\":\"\(UUID().uuidString)\"}";if self.mode == .remote {try? self.zenoh?.sendAction(kind:"safety",payload:payload)}else{try? self.controller?.autonomyRequest(kind:"safety",payload:payload,timestamp:self.mode == .simulation ? self.simulatedTime:CACurrentMediaTime())}}
+            self.observation.recordSafetyRequest(reset: reset, source: "operator", route: self.bleActive ? "bluetooth" : self.mode == .remote ? "zenoh" : "local_authority")
+            self.target = (0, 0); self.resetServoTargets()
+            self.dashboardEmergencyStop = !reset
+            if self.bleActive || self.bluetooth.connectedIdentifier != nil { self.bluetooth.stopOutput() }
+            let payload = "{\"action\":\"\(reset ? "reset" : "stop")\",\"token\":\"\(UUID().uuidString)\"}"
+            if self.mode == .remote { try? self.zenoh?.sendAction(kind: "safety", payload: payload) }
+            else { try? self.controller?.autonomyRequest(kind: "safety", payload: payload, timestamp: self.mode == .simulation ? self.simulatedTime : CACurrentMediaTime()) }
+        }
     }
     func exportRun() {
         controlQueue.async {do {try self.controller?.endRecording()}catch{DispatchQueue.main.async{self.autonomyReason=error.localizedDescription}}}
@@ -1160,35 +1149,14 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
         }
         observation.recordChanged(component: "router", kind: "connection.state", attributes: ["status": controller?.dashboardStatus() ?? "unavailable"])
         if let controller {
-            let request = controller.takeHardwareRequest()
-            if let r = (try? JSONSerialization.jsonObject(with: Data(request.utf8))) as? [String: Any],
-               let action = r["action"] as? String, let token = r["token"] as? String {
-                let expiry = ProcessInfo.processInfo.systemUptime + (r["valid_for"] as? Double ?? 0)
-                let run = r["run_id"] as? String
-                let revision = (r["authority_revision"] as? NSNumber)?.uint64Value
-                DispatchQueue.main.async {
-                    self.dashboardHardwareToken = token
-                    if action == "disarm" {
-                        self.dashboardHardwareResult = "disarming"
-                        self.disarmHardware()
-                    } else if !self.hardwareReady || self.hardwareFault != nil || self.dashboardEmergencyStop {
-                        self.dashboardHardwareResult = "rejected: rover not ready"
-                    } else {
-                        self.dashboardHardwareResult = "requested"
-                        self.armHardware(expectedRun: run, expectedRevision: revision, expiresAt: expiry)
-                    }
-                }
-            }
             let vioReady = mode == .phone && TerraFleetManualDrive.vioReady(controller.autonomyStatus())
             DispatchQueue.main.async {
                 let remote = (try? JSONSerialization.jsonObject(with: Data(self.bluetooth.statusJSON.utf8))) as? [String: Any] ?? [:]
                 var state: [String: Any] = ["schema_version": 1, "ready": self.hardwareReady,
-                    "armed": self.hardwareArmed, "arming": self.hardwareArming, "motion_feedback_source": "phone_vio", "motion_feedback_ready": vioReady,
-                    "token": self.dashboardHardwareToken, "result": self.dashboardHardwareResult,
+                    "connected": self.bluetooth.connectedIdentifier != nil, "control_mode": "streamed_relay", "output_active": self.hardwareOutputActive, "motion_feedback_source": "phone_vio", "motion_feedback_ready": vioReady,
                     "reason": self.hardwareStatus]
                 state["stop_diagnostic"] = self.lastStopDiagnostic.message
                 state["stop_reason"] = remote["stop_reason"]
-                state["motion_paused"] = self.hardwareMotionPaused
                 if let fault = self.hardwareFault { state["fault"] = fault }
                 if let payload = try? JSONSerialization.data(withJSONObject: state) {
                     try? controller.publishHardwareStatus(payload: String(decoding: payload, as: UTF8.self))
@@ -1286,7 +1254,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
             try? data.write(to: destination, options: .atomic)
         }
         #endif
-        bluetooth.disarm(); bluetooth.disconnect(); bleActive = false
+        bluetooth.stopOutput(); bluetooth.disconnect(); bleActive = false
         mode = .stopped; timer?.cancel(); timer = nil; try? controller?.reset()
         zenoh?.disconnect(); zenoh = nil
         goalLatched = false
@@ -1319,24 +1287,12 @@ extension PhoneController {
     }
     private func pauseHardwareMotion(reason: String) {
         target = (0, 0); resetServoTargets()
-        guard !hardwareMotionRevoked else { return }
-        observation.record(component: "control", kind: "motion.pause", attributes: ["reason": reason])
+        observation.recordChanged(component: "control", kind: "motion.stop", attributes: ["reason": reason])
         retainStopReason(reason)
-        bluetooth.pauseMotion()
-        hardwarePauseRequested = true
-        hardwareMotionRevoked = true
+        bluetooth.stopOutput()
     }
     private func revokeHardwareMotion(reason: String = #function) {
-        target = (0, 0); resetServoTargets()
-        if !hardwareMotionRevoked || hardwarePauseRequested {
-            observation.record(component: "control", kind: "motion.disarm", attributes: ["reason": reason, "paused": hardwarePauseRequested])
-            hardwarePauseRequested = false
-            retainStopReason(reason)
-            TerraLog.control.notice("Revoking motion; caller=\(reason, privacy: .public) mode=\(String(describing: self.mode), privacy: .public) feedback=\(self.bleFeedback)")
-            let autonomy = controller?.autonomyStatus() ?? "unavailable"
-            TerraLog.control.notice("Disarm context; bleActive=\(self.bleActive) compatible=\(self.bleCompatible) trackingHealthy=\(self.feedbackTrackingHealthy) emergencyStop=\(self.dashboardEmergencyStop) router=\(self.controller?.dashboardStatus() ?? "unavailable", privacy: .public) autonomy=\(autonomy, privacy: .public)")
-            bluetooth.disarm(); hardwareMotionRevoked = true
-        }
+        pauseHardwareMotion(reason: reason)
     }
     private func observeBluetooth() {
         bluetooth.onDiscovery = { [weak self] rover, generation in self?.discovered(rover, generation: generation) }
@@ -1354,19 +1310,18 @@ extension PhoneController {
         defer { refreshConnectionPresentation() }
         if configurationGeneration != bluetooth.connectionGeneration {
             configurationGeneration = bluetooth.connectionGeneration
-            actuatorEditor.invalidate(generation: configurationGeneration); editorRequest = nil; retryableEditorRequest = nil; hasRetryableActuatorRequest = false; presetUpload = nil; removeAfterBegin = nil; resetFaultRequest = nil; emergencyResetRequest = nil
+            controlQueue.async { self.target = (0, 0); self.resetServoTargets(); self.bluetooth.stopOutput() }
+            actuatorEditor.invalidate(generation: configurationGeneration); editorRequest = nil; retryableEditorRequest = nil; hasRetryableActuatorRequest = false; presetUpload = nil; removeAfterBegin = nil; resetFaultRequest = nil
             acknowledgedCommitRevision = nil
             configurationStatus = "Connection changed · stage draft again"
         }
-        observation.recordChanged(component: "bluetooth", kind: "hardware.state", attributes: ["status": bluetooth.status, "ready": bluetooth.isReady, "armed": bluetooth.armed, "arming": bluetooth.arming])
+        observation.recordChanged(component: "bluetooth", kind: "hardware.state", attributes: ["status": bluetooth.status, "ready": bluetooth.isReady, "output_active": bluetooth.outputActive])
         hardwareStatus = bluetooth.status; hardwareReady = bluetooth.isReady
         if let identifier = bluetooth.connectedIdentifier {
             UserDefaults.standard.set(identifier.uuidString, forKey: "preferredHardwareRover")
         }
         hardwareConfigurationReady = bluetooth.configurationReady
         let remoteStatus = (try? JSONSerialization.jsonObject(with: Data(bluetooth.statusJSON.utf8))) as? [String: Any]
-        hardwareBenchMode = remoteStatus?["gate_mode"] as? String == "bench"
-        hardwareBenchEnabled = remoteStatus?["bench_enabled"] as? Bool == true
         activeLayoutRevision = remoteStatus?["active_revision"] as? UInt32 ?? 0
         hardwareFault = remoteStatus?["fault"] as? String
         if let index = try? JSONDecoder().decode(ActuatorLayoutIndex.self, from: Data(bluetooth.layoutIndexJSON.utf8)) {
@@ -1375,15 +1330,8 @@ extension PhoneController {
             if invalidated { editorRequest = nil; retryableEditorRequest = nil; hasRetryableActuatorRequest = false; presetUpload = nil; removeAfterBegin = nil; actuatorPageLoading = false }
         }
 
-        if let reason = TerraStopDiagnostic.piDisarmReason(wasArmed: hardwareArmed, isArmed: bluetooth.armed, status: remoteStatus) {
-            retainStopReason(reason)
-        }
-        let paused = remoteStatus?["motion_paused"] as? Bool == true || remoteStatus?["stop_reason"] as? String == "watchdog_paused"
-        if paused && !hardwareMotionPaused {
-            controlQueue.async { self.target = (0, 0); self.resetServoTargets() }
-        }
-        hardwareMotionPaused = paused
-        hardwareArmed = bluetooth.armed; hardwareArming = bluetooth.arming
+        hardwareOutputActive = bluetooth.outputActive
+        if let fault = hardwareFault { retainStopReason("Pi output fault: \(fault)") }
         capabilitiesJSON = bluetooth.capabilitiesJSON; committedLayoutJSON = bluetooth.driveProfileJSON
         discoveredRovers = (try? JSONDecoder().decode([RoverPeripheral].self, from: Data(bluetooth.peripheralsJSON.utf8))) ?? []
         feedbackCompatible = (try? ActuatorDriveProfileSet.decode(json: committedLayoutJSON).supportsFeedback) ?? false
@@ -1400,7 +1348,7 @@ extension PhoneController {
                 controlQueue.async { self.bleFeedback = true; self.target = (0, 0); self.resetServoTargets() }
             } else {
                 configurationStatus = "Feedback requires a compatible fresh rover layout and available phone tracking"
-                disarmHardware()
+                stopHardware()
             }
         }
         controlQueue.async {
@@ -1628,7 +1576,7 @@ extension PhoneController {
             let feedback = feedbackCompatible && hardwareReady
             if phoneTrackingActive {
                 if hardwareFeedback != feedback {
-                    disarmHardware(); hardwareFeedback = feedback
+                    stopHardware(); hardwareFeedback = feedback
                     controlQueue.async {
                         self.bleFeedback = feedback; self.target = (0, 0); self.resetServoTargets()
                     }
@@ -1645,7 +1593,7 @@ extension PhoneController {
                 phoneTrackingStatus = "Phone tracking is unavailable on this device"
                 return
             }
-            disarmHardware()
+            stopHardware()
             startPhoneSensors()
             hardwareFeedback = feedback
             phoneTrackingStatus = "Tracking starting · managed by ARGOS in every mode"
@@ -1666,12 +1614,12 @@ extension PhoneController {
                   motion.isDeviceMotionAvailable else {
                 configurationStatus = "Feedback requires a compatible layout and available phone tracking"; return
             }
-            disarmHardware(); startPhoneSensors(); hardwareFeedback = true
+            stopHardware(); startPhoneSensors(); hardwareFeedback = true
             controlQueue.async { self.bleActive = true; self.bleFeedback = true; self.target = (0, 0); self.resetServoTargets() }
         } else {
             invalidateDashboardAttempt(); dashboardConnecting = false
             sensorEpochLock.lock(); sensorEpoch += 1; sensorEpochLock.unlock()
-            motion.stopDeviceMotionUpdates(); session.pause(); disarmHardware()
+            motion.stopDeviceMotionUpdates(); session.pause(); stopHardware()
             locationManager.stopUpdatingLocation(); locationManager.stopUpdatingHeading()
             phoneTrackingActive = false
             hardwareFeedback = false
@@ -1691,59 +1639,18 @@ extension PhoneController {
         hardwareActive = true; hardwareFeedback = false
         controlQueue.async {
             guard self.sensorEpochMatches(epoch) else { return }
-            self.bleActive = true; self.bleFeedback = false; self.hardwareMotionRevoked = true
+            self.bleActive = true; self.bleFeedback = false
             self.target = (0, 0); self.resetServoTargets()
             self.mode = .bluetoothManual; self.tick = 0; self.startTimer()
             self.bluetooth.connect(identifier: identifier, generation: connectionGeneration)
             DispatchQueue.main.async { self.source = feedback ? "Bluetooth · waiting for fresh feedback-compatible layout" : "Bluetooth · normalized manual effort" }
         }
     }
-    func armHardware(expectedRun: String? = nil, expectedRevision: UInt64? = nil, expiresAt: TimeInterval? = nil) {
-        guard requestedHardwareFeedback == nil, hardwareReady, (!hardwareArmed || hardwareMotionPaused), !hardwareArming else { return }
-        sensorEpochLock.lock(); let epoch = sensorEpoch; sensorEpochLock.unlock()
-        controlQueue.async {
-            guard self.sensorEpochMatches(epoch), !self.dashboardEmergencyStop else { return }
-            if let expiresAt {
-                let current = (try? JSONSerialization.jsonObject(with: Data((self.controller?.autonomyStatus() ?? "{}").utf8))) as? [String: Any]
-                let authority = current?["status"] as? [String: Any]
-                guard ProcessInfo.processInfo.systemUptime < expiresAt, authority?["run_id"] as? String == expectedRun,
-                      (authority?["revision"] as? NSNumber)?.uint64Value == expectedRevision,
-                      authority?["safety"] as? String == "clear" else {
-                    DispatchQueue.main.async { self.dashboardHardwareResult = "rejected: arm authority expired or changed" }
-                    return
-                }
-            }
-            // Navigation stops output while retaining the BLE link. An explicit
-            // Arm can resume manual output on that already synchronized connection.
-            if !self.bleActive {
-                guard self.mode == .stopped else { return }
-                self.bleActive = true; self.bleFeedback = false; self.mode = .bluetoothManual
-                self.tick = 0; self.startTimer()
-                DispatchQueue.main.async {
-                    guard self.sensorEpochMatches(epoch), !self.dashboardEmergencyStop else { return }
-                    self.hardwareActive = true; self.hardwareFeedback = false
-                    self.source = "Bluetooth · normalized manual effort"
-                }
-            }
-            let fullyManual = TerraFleetManualDrive.isFullyManual(self.controller?.autonomyStatus() ?? "{}")
-            let vioWaypoint = TerraFleetManualDrive.requiresVioControl(self.controller?.autonomyStatus() ?? "{}")
-            let vioCompatible = (try? ActuatorDriveProfileSet.decode(json: self.bleLayout).supportsVioControl) == true
-            let freshVio = self.mode == .phone && TerraFleetManualDrive.vioReady(self.controller?.autonomyStatus() ?? "{}") && self.previousPoseTime.map { (0...0.35).contains(CACurrentMediaTime() - $0) } == true
-            guard DriveJoystickSafety.hardwareArmAllowed(feedback: self.bleFeedback || vioWaypoint, fullyManual: fullyManual, trackingHealthy: freshVio, compatible: vioWaypoint ? vioCompatible : self.bleCompatible) else {
-                DispatchQueue.main.async { self.configurationStatus = "Feedback tracking is not ready to arm"; self.dashboardHardwareResult = "rejected: feedback tracking not ready" }
-                return
-            }
-            self.target = (0, 0); self.resetServoTargets(); self.hardwareMotionRevoked = false; self.hardwarePauseRequested = false
-            DispatchQueue.main.async { self.lastStopDiagnostic.clear() }
-            TerraLog.control.notice("Arm accepted by phone; fullyManual=\(fullyManual) feedback=\(self.bleFeedback)")
-            self.bluetooth.arm()
-        }
-    }
-    func disarmHardware() {
-        controlQueue.async { self.revokeHardwareMotion(reason: "explicit hardware disarm requested") }
+    func stopHardware() {
+        controlQueue.async { self.revokeHardwareMotion(reason: "output stop requested") }
     }
     func setServoTarget(id: UInt8, position: Double) {
-        guard position.isFinite, hardwareArmed else { return }
+        guard position.isFinite, hardwareReady else { return }
         controlQueue.async {
             guard let layout = try? ActuatorDriveProfileSet.decode(json: self.bleLayout),
                   let actuator = layout.actuators.first(where: { $0.id == Int(id) && $0.kind == "positional_servo" }) else { return }
@@ -1763,7 +1670,7 @@ extension PhoneController {
         DispatchQueue.main.async { self.servoPositions = values }
     }
     private func routeHardware(left: Double, right: Double, now: TimeInterval, manualTarget: DriveJoystickCommand? = nil, closedLoop: Bool = false) {
-        guard bleActive, bleReady, !hardwareMotionRevoked, !dashboardEmergencyStop, !bleFeedback || bleCompatible else { return }
+        guard bleActive, bleReady, !dashboardEmergencyStop, !bleFeedback || bleCompatible else { return }
         do {
             // Resolve numeric values before erasing their types into Any. Otherwise
             // Swift can infer feedback's neutral literal as Int inside this dictionary.
@@ -1795,15 +1702,10 @@ extension PhoneController {
         guard let data = try? JSONSerialization.data(withJSONObject: ["schema_version": 1, "request_id": nextRequest, "operation": operation, "payload": payload]) else { return nil }
         bluetooth.request(envelope: data, generation: bluetooth.connectionGeneration); return nextRequest
     }
-    func setBenchEnabled(_ enabled: Bool) {
-        guard hardwareBenchMode, hardwareConfigurationReady else { return }
-        if !enabled { setTarget(forward: 0, yaw: 0); disarmHardware() }
-        sendConfiguration("set_bench_enabled", payload: ["enabled": enabled])
-    }
     func resetHardwareFault() {
         guard configurationAllowed else { configurationStatus = configurationBlockingReason ?? "Configuration unavailable"; return }
         resetFaultRequest = sendConfiguration("reset_fault", payload: [:])
-        configurationStatus = "Waiting for fault reset acknowledgement · remains disarmed"
+        configurationStatus = "Waiting for fault reset acknowledgement"
     }
     var hasStagedLayout: Bool { actuatorEditor.canCommit }
     var configurationBusy: Bool { editorRequest != nil || retryableEditorRequest != nil }
@@ -1887,29 +1789,9 @@ extension PhoneController {
     private func receiveConfiguration(_ text: String) {
         guard let object = (try? JSONSerialization.jsonObject(with: Data(text.utf8))) as? [String: Any], let id = object["request_id"] as? UInt32 else { return }
         TerraLog.configuration.info("Reply request=\(id) result=\(String(describing: object["result"]), privacy: .public)")
-        if id == emergencyResetRequest {
-            emergencyResetRequest = nil
-            guard object["result"] as? String == "ok" else {
-                configurationStatus = "Emergency stop reset rejected"; return
-            }
-            configurationStatus = "Emergency stop reset acknowledged · remains disarmed"
-            sensorEpochLock.lock(); let epoch = sensorEpoch; sensorEpochLock.unlock()
-            controlQueue.async {
-                guard self.sensorEpochMatches(epoch), self.mode == .bluetoothManual, self.dashboardEmergencyStop else { return }
-                // Explicit rover acknowledgement permits clearing this manual runtime's remote stop.
-                try? self.controller?.reset(); self.dashboardEmergencyStop = false
-                self.target = (0, 0); self.resetServoTargets()
-                DispatchQueue.main.async {
-                    guard self.sensorEpochMatches(epoch) else { return }
-                    self.invalidateDashboardAttempt(); self.dashboardConnected = false; self.dashboardConnecting = false
-                    self.routerRetryAt = nil; self.autonomyReason = "Disarmed"
-                }
-            }
-            return
-        }
         if id == resetFaultRequest {
             resetFaultRequest = nil
-            configurationStatus = object["result"] as? String == "ok" ? "Fault reset acknowledged · arm explicitly when ready" : "Fault reset rejected: \(object["errors"] ?? [])"
+            configurationStatus = object["result"] as? String == "ok" ? "Fault reset acknowledged · output is neutral" : "Fault reset rejected: \(object["errors"] ?? [])"
             return
         }
         guard let request = editorRequest, request.id == id, request.generation == configurationGeneration else { return }
@@ -1960,7 +1842,7 @@ extension PhoneController {
         case "commit_layout_edit":
             guard let revision = payload["revision"] as? UInt32 else { return }
             acknowledgedCommitRevision = revision; actuatorEditor = ActuatorPaginationState()
-            disarmHardware(); bluetooth.refreshConfigurationIndex()
+            stopHardware(); bluetooth.refreshConfigurationIndex()
         case "discard_layout_edit":
             presetUpload = nil
             actuatorEditor = ActuatorPaginationState(); bluetooth.refreshConfigurationIndex()

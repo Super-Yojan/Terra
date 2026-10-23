@@ -9,7 +9,7 @@ struct TerraStopReasonView: View {
                     Text(Date(timeIntervalSince1970: time), style: .time).font(.caption).foregroundStyle(.secondary)
                 }
                 Text(reason).font(.subheadline).textSelection(.enabled)
-                Text("Retained through reconnects. Clears when you arm again or clear it here.").font(.caption).foregroundStyle(.secondary)
+                Text("Retained through reconnects. Clear it here after reviewing the cause.").font(.caption).foregroundStyle(.secondary)
                 Button("Clear reason") { brain.clearStopReason() }
             }
         }
@@ -43,7 +43,7 @@ struct ControllerDetailView: View {
     var body: some View {
         Form {
                 if brain.lastStopDiagnostic.message != nil {
-                    Section("Last disarm reason") { TerraStopReasonView(brain: brain) }
+                    Section("Last stop reason") { TerraStopReasonView(brain: brain) }
                 }
                 if destination == .drive {
                     Section("Manual Control") { DriveControlPanel(brain: brain) }
@@ -205,7 +205,7 @@ struct ControllerDetailView: View {
                     LabeledContent("Measured turn", value: String(format: "%.2f rad/s", brain.measuredYaw))
                     LabeledContent("Left motor", value: String(format: "%+.3f", brain.leftEffort))
                     LabeledContent("Right motor", value: String(format: "%+.3f", brain.rightEffort))
-                    Text("Motor effort is normalized from −1 to +1 (unidirectional ESCs use 0 to 1). Bluetooth hardware requires explicit arming and an independent enable gate. Zero effort is not a brake.")
+                    Text("Motor effort is normalized from −1 to +1 (unidirectional ESCs use 0 to 1). Bluetooth sends signed integer efforts from −100 to +100 every 50 ms. Zero effort is not a brake.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }.id(TerraDestination.telemetry)
                 Section("Connection details") {
@@ -259,13 +259,13 @@ struct ControllerDetailView: View {
                 }
         }
         .navigationTitle(destination.title)
-        .onChange(of: brain.hardwareArmed) { _, _ in forward = 0; yaw = 0 }
+        .onChange(of: brain.hardwareReady) { _, _ in forward = 0; yaw = 0 }
         .onChange(of: brain.hardwareActive) { _, _ in forward = 0; yaw = 0 }
         .onChange(of: forward) { _, _ in brain.setTarget(forward: forward, yaw: yaw) }
         .onChange(of: yaw) { _, _ in brain.setTarget(forward: forward, yaw: yaw) }
         .onDisappear {
             if destination == .drive || destination == .settings {
-                forward = 0; yaw = 0; brain.setTarget(forward: 0, yaw: 0); brain.disarmHardware()
+                forward = 0; yaw = 0; brain.setTarget(forward: 0, yaw: 0); brain.stopHardware()
             }
         }
     }

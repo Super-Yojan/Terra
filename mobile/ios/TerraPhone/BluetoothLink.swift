@@ -8,8 +8,7 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
     @Published private(set) var isReady = false
     @Published private(set) var configurationReady = false
     @Published private(set) var connectionGeneration: UInt64 = 0
-    @Published private(set) var armed = false
-    @Published private(set) var arming = false
+    @Published private(set) var outputActive = false
     @Published private(set) var status = "Disconnected"
     @Published private(set) var peripheralsJSON = "[]"
     @Published private(set) var statusJSON = "{}"
@@ -65,13 +64,10 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
     private var synchronizationStarted = false
     private var capabilityObject: [String: Any] = [:]
     private var safeValues: [[String: Any]] = []
-    private var supportsPagination = false
     private var profileSync = ActuatorProfileSynchronization()
     private var synchronizationRound: UInt64 = 0
     private var synchronizationRequests: [UInt32: UInt64] = [:]
     private var lastObservedRevision: UInt32?
-    private var awaitingSafeSequence: UInt32?
-    private var awaitingSafeAt: TimeInterval?
     private var usedRequests: Set<UInt32> = []
     private let policy = BluetoothSession()
     private var callbackGeneration: UInt64 = 0
@@ -89,10 +85,10 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
     private var configuration: [Packet] = []
     private var waitingRequest: UInt32?
     private var waitingRequestAt: TimeInterval?
-    private var armSafe: Packet?
     private var priority: Packet?
     private var pendingDrive: Packet?
     private var active: Packet?
+    private var lastNeutralAt: TimeInterval = 0
     private var writeAt: TimeInterval?
     private struct Packet { var chunks: [Data]; let characteristic: CBUUID; let id: UInt16; let request: UInt32?; let producedAt: TimeInterval? }
     private static func uuid(_ suffix: String) -> CBUUID { CBUUID(string: "7e5a00\(suffix)-4c2b-4f91-9e3a-1d8c6b2a0f10") }
@@ -191,96 +187,49 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
     } }
     private func clear() {
         synchronizationRound &+= 1; synchronizationRequests.removeAll(); profileSync.clear()
-        supportsPagination = false; lastObservedRevision = nil
-        policy.reset(); usedRequests.removeAll(); awaitingSafeAt = nil; safeValues = []; awaitingSafeSequence = nil; synchronizedRevision = nil; hasCapabilities = false; synchronizationStarted = false; capabilityObject = [:]; characteristics.removeAll(); statusAssembly.clear(); replyAssembly.clear()
-        active = nil; armSafe = nil; waitingRequest = nil; waitingRequestAt = nil; pendingDrive = nil; priority = nil; configuration.removeAll(); requests.removeAll(); retryEnvelopes.removeAll(); failedRequests.removeAll()
-        writeAt = nil; admitting = false; setup = false
+        lastObservedRevision = nil
+        policy.reset(); usedRequests.removeAll(); safeValues = []; synchronizedRevision = nil; hasCapabilities = false; synchronizationStarted = false; capabilityObject = [:]; characteristics.removeAll(); statusAssembly.clear(); replyAssembly.clear()
+        active = nil; waitingRequest = nil; waitingRequestAt = nil; pendingDrive = nil; priority = nil; configuration.removeAll(); requests.removeAll(); retryEnvelopes.removeAll(); failedRequests.removeAll()
+        writeAt = nil; lastNeutralAt = now; admitting = false; setup = false
         lastStatusCallbackAt = nil; acceptedStatusCount = 0; attemptStarted = nil
         let generation = policy.generation
-        DispatchQueue.main.async { self.connectionGeneration = generation; self.configurationReady = false; self.isReady = false; self.armed = false; self.arming = false; self.connectedIdentifier = nil; self.capabilitiesJSON = "{}"; self.layoutIndexJSON = "{}"; self.driveProfileJSON = "{}"; self.statusJSON = "{}" }
+        DispatchQueue.main.async { self.connectionGeneration = generation; self.configurationReady = false; self.isReady = false; self.outputActive = false; self.connectedIdentifier = nil; self.capabilitiesJSON = "{}"; self.layoutIndexJSON = "{}"; self.driveProfileJSON = "{}"; self.statusJSON = "{}" }
     }
     private func close(_ reason: String) {
-        observation?.record(component: "bluetooth", kind: "connection.closed", attributes: ["reason": reason, "generation": policy.generation, "sequence": policy.sequence])
+        observation?.record(component: "bluetooth", kind: "connection.closed", attributes: ["reason": reason, "generation": policy.generation])
         if peripheral != nil && !suppressCloseEvent {
             emit(.closed(retryable: TerraBluetoothFailurePolicy.retryable(reason)))
         }
         log.error("Closing link: \(reason, privacy: .public)"); let old = peripheral; peripheral = nil; clear(); if let old = old { retiring = old; central.cancelPeripheralConnection(old) }; publish(reason) }
     private func terminal(_ reason: String) { emit(.closed(retryable: true)); peripheral?.delegate = nil; peripheral = nil; retiring = nil; clear(); publish(reason) }
     private func current(_ p: CBPeripheral) -> Bool { peripheral === p && callbackGeneration == policy.generation }
-    private var motionInhibited = false
-    func send(frame: Data, producedAt: TimeInterval) { queue.async {
-        guard !self.motionInhibited, self.awaitingSafeSequence == nil else { return }
-        for effect in self.policy.drive(frame, producedAt: producedAt, now: self.now) {
-            if case .send(let bytes) = effect { do { self.pendingDrive = try self.packet(bytes, characteristic: self.driveID, producedAt: producedAt); self.pump() } catch { self.close("Invalid drive frame") } }
-        }
-    } }
     func drive(valuesJSON: String, producedAt: TimeInterval) { queue.async {
-        // Expected motion inhibition must not preempt fragmented repair/reset requests.
-        guard !self.motionInhibited, self.policy.ready, self.policy.motionRequested else { return }
+        guard self.policy.ready, !self.setup, self.waitingRequest == nil, self.configuration.isEmpty,
+              producedAt > self.lastNeutralAt, self.now >= producedAt, self.now - producedAt < 0.05 else { return }
         do {
-            guard self.awaitingSafeSequence == nil, self.now >= producedAt, self.now - producedAt < 0.1 else { return }
-            let values = try JSONSerialization.jsonObject(with: Data(valuesJSON.utf8))
-            // Safe output remains freshly produced throughout the ESC arming interval.
-            let selected: Any = (self.policy.armed && !self.policy.motionPaused && self.awaitingSafeSequence == nil) ? values : self.safeValues
-            let frame = try self.policy.frame(values: selected)
-            for effect in self.policy.drive(frame, producedAt: producedAt, now: self.now) {
-                if case .send(let bytes) = effect { self.pendingDrive = try self.packet(bytes, characteristic: self.driveID, producedAt: producedAt) }
-            }; self.pump()
-        } catch { self.stop() }
-    } }
-    /// Send neutral once, then let the Pi latch its command-timeout pause.
-    /// Status notifications remain active; only explicit arm/resume releases it.
-    func pauseMotion() { queue.async {
-        self.motionInhibited = true
-        self.pendingDrive = nil
-        do {
-            let produced = self.now
-            let safe = try self.policy.frame(values: self.safeValues)
-            for effect in self.policy.drive(safe, producedAt: produced, now: self.now) {
-                if case .send(let bytes) = effect {
-                    self.pendingDrive = try self.packet(bytes, characteristic: self.driveID, producedAt: produced)
-                }
-            }
+            let bytes = try self.policy.encodeDrive(valuesJSON: valuesJSON)
+            if self.active?.characteristic == self.driveID { self.active?.chunks.removeAll() }
+            self.pendingDrive = try self.packet(bytes, characteristic: self.driveID, producedAt: producedAt)
             self.pump()
-        } catch { self.stop() }
+        } catch { self.stopOutput() }
     } }
-    func arm() { queue.async {
-        self.log.notice("Arm requested; ready=\(self.policy.ready)")
+    func stopOutput() { queue.async { self.queueNeutral() } }
+    private func queueNeutral() {
+        lastNeutralAt = now
+        pendingDrive = nil
+        if active?.characteristic == driveID { active?.chunks.removeAll() }
+        guard policy.ready, !safeValues.isEmpty,
+              let data = try? JSONSerialization.data(withJSONObject: safeValues),
+              let bytes = try? policy.encodeDrive(valuesJSON: String(decoding: data, as: UTF8.self)) else { return }
         do {
-            guard self.policy.ready, self.awaitingSafeSequence == nil else { throw BluetoothPolicyError.unavailable }
-            self.motionInhibited = false
-            let produced = self.now
-            let safe = try self.policy.frame(values: self.safeValues)
-            for effect in self.policy.drive(safe, producedAt: produced, now: self.now) {
-                if case .send(let bytes) = effect { self.awaitingSafeSequence = self.policy.sequence; self.awaitingSafeAt = produced; self.pendingDrive = nil; self.armSafe = try self.packet(bytes, characteristic: self.driveID, producedAt: produced) }
-            }; self.pump()
-        } catch { self.publish("Synchronize layout and safe output before arming") }
-    } }
-    func emergencyStop() { queue.async {
-        self.observation?.record(component: "bluetooth", kind: "command.requested", attributes: ["command_kind": "emergency_stop", "session": self.policy.session.map { $0 as Any } ?? NSNull(), "revision": self.policy.revision, "previous_sequence": self.policy.sequence])
-        self.log.notice("Emergency stop requested")
-        self.policy.stop(); self.awaitingSafeSequence = nil; self.awaitingSafeAt = nil; self.armSafe = nil; self.pendingDrive = nil
-        do {
-            self.priority = try self.packet(self.policy.control("emergency_stop"), characteristic: self.controlID)
-            self.observation?.record(component: "bluetooth", kind: "command.queued", attributes: ["command_kind": "emergency_stop", "sequence": self.policy.sequence, "revision": self.policy.revision])
-            self.pump()
-        }
-        catch {
-            self.observation?.record(component: "bluetooth", kind: "command.queue_failed", attributes: ["command_kind": "emergency_stop"])
-            self.close("Emergency stop; reconnect required")
-        }
-    } }
-    func disarm() { queue.async { self.stop() } }
-    private func stop() {
-        // Cleanup after a closed link must preserve the original disconnect reason.
-        guard peripheral != nil, characteristics[controlID] != nil, policy.session != nil else { policy.stop(); return }
-        log.notice("Sending disarm command")
-        policy.stop(); awaitingSafeSequence = nil; awaitingSafeAt = nil; armSafe = nil; pendingDrive = nil
-        do { priority = try packet(policy.control("disarm"), characteristic: controlID); pump() }
-        catch { close("Disarmed; reconnect required") }
+            priority = try packet(bytes, characteristic: driveID, producedAt: now)
+            observation?.record(component: "bluetooth", kind: "command.stop", attributes: ["revision": policy.revision])
+            pump()
+        } catch { close("Unable to send neutral output") }
     }
     func request(envelope: Data, generation: UInt64) { queue.async {
         guard generation == self.policy.generation else { return }
+        self.queueNeutral()
         do {
             guard self.configuration.count < 16, let object = try JSONSerialization.jsonObject(with: envelope) as? [String: Any],
                   object["schema_version"] as? Int == 1, let id = object["request_id"] as? UInt32,
@@ -323,6 +272,8 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
     func refreshConfigurationIndex() { queue.async { self.restartProfiles() } }
 
     private func invalidateProfiles() {
+        lastNeutralAt = now; pendingDrive = nil; priority = nil
+        if active?.characteristic == driveID { active?.chunks.removeAll() }
         synchronizedRevision = nil; safeValues = []; profileSync.clear(); policy.invalidateLayout()
         DispatchQueue.main.async { self.isReady = false; self.driveProfileJSON = "{}" }
     }
@@ -332,8 +283,7 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
         synchronizationRound &+= 1
         invalidateProfiles()
         DispatchQueue.main.async { self.configurationReady = false; self.layoutIndexJSON = "{}" }
-        if supportsPagination { queueSynchronization("layout_index") }
-        else { queueSynchronization("capabilities") }
+        queueSynchronization("layout_index")
     }
 
     private func queueSynchronization(_ operation: String, payload: [String: Any] = [:]) {
@@ -355,7 +305,7 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
         let json = String(decoding: try JSONEncoder().encode(profile), as: UTF8.self)
         _ = try ActuatorDriveProfileSet.decode(json: json)
         safeValues = profile.safeValues; synchronizedRevision = profile.revision
-        policy.synchronized(revision: profile.revision)
+        policy.synchronized(profile: profile)
         let ready = policy.ready
         DispatchQueue.main.async { self.driveProfileJSON = json; self.isReady = ready }
         log.info("Drive profiles synchronized; revision=\(profile.revision) count=\(profile.actuators.count)")
@@ -388,26 +338,33 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
 
     private func packet(_ bytes: Data, characteristic: CBUUID, producedAt: TimeInterval? = nil, request: UInt32? = nil) throws -> Packet {
         guard let p = peripheral, characteristics[characteristic] != nil else { throw BluetoothPolicyError.unavailable }
-        let occupied = Set(([active, pendingDrive, priority, armSafe].compactMap { $0?.id }) + configuration.map { $0.id })
+        let occupied = Set(([active, pendingDrive, priority].compactMap { $0?.id }) + configuration.map { $0.id })
         repeat { messageID &+= 1 } while occupied.contains(messageID)
-        let chunks = try actuatorFragment(messageId: messageID, payload: bytes, maximumWriteLength: UInt32(p.maximumWriteValueLength(for: .withResponse)))
+        let chunks: [Data]
+        if characteristic == driveID {
+            let capacity = p.maximumWriteValueLength(for: .withResponse) / 2 * 2
+            guard capacity >= 2, !bytes.isEmpty, bytes.count % 2 == 0 else { throw BluetoothPolicyError.malformed }
+            chunks = stride(from: 0, to: bytes.count, by: capacity).map { Data(bytes[$0..<min($0 + capacity, bytes.count)]) }
+        } else {
+            chunks = try actuatorFragment(messageId: messageID, payload: bytes, maximumWriteLength: UInt32(p.maximumWriteValueLength(for: .withResponse)))
+        }
         return Packet(chunks: chunks, characteristic: characteristic, id: messageID, request: request, producedAt: producedAt)
     }
     private func pump() {
         guard writeAt == nil, let p = peripheral else { return }
-        // Disarm cancels remaining drive fragments at the next ATT boundary.
-        if priority != nil { active = priority; priority = nil }
+        if active?.chunks.isEmpty == true { active = nil }
         if active == nil {
-            if let safe = armSafe { active = safe; armSafe = nil }
-            else if awaitingSafeSequence != nil { return }
-            else if let drive = pendingDrive { active = drive; pendingDrive = nil }
+            if let neutral = priority { active = neutral; priority = nil }
             else if waitingRequest == nil, !configuration.isEmpty {
                 let request = configuration.removeFirst(); active = request
                 waitingRequest = request.request; waitingRequestAt = now
-            }
+            } else if let drive = pendingDrive { active = drive; pendingDrive = nil }
         }
         guard var packet = active else { return }
-        if let produced = packet.producedAt, now < produced || now - produced >= 0.1 { active = nil; motionInhibited = true; pauseMotion(); return }
+        // A delayed ATT callback must not replay an old motor command.
+        if let produced = packet.producedAt, now < produced || now - produced >= 0.05 {
+            active = nil; pump(); return
+        }
         guard let characteristic = characteristics[packet.characteristic], !packet.chunks.isEmpty else { active = nil; return }
         let bytes = packet.chunks.removeFirst(); active = packet; writeAt = now
         p.writeValue(bytes, for: characteristic, type: .withResponse)
@@ -416,20 +373,7 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
         guard peripheral != nil else { return }
         if let started = attemptStarted, now - started >= 15 { close("Connection timed out"); return }
         guard !setup else { return }
-        if let started = awaitingSafeAt, now - started >= 0.3 { stop(); return }
-        // ATT acknowledgement is transport liveness, not motion freshness.
-        // Packet age remains limited to 100 ms; the rover watchdog remains 200 ms.
-        let writeDeadline: TimeInterval = 2.0
-        if let started = writeAt, now - started >= writeDeadline { close("Bluetooth write stalled; reconnect required"); return }
-        // Motion paths already require fresh status (policy.stale, 0.3 s). This
-        // watchdog is link liveness only: the rover blocks its worker loop while
-        // fsyncing staged/committed layouts, so brief gaps must not disconnect.
-        if let age = policy.statusAge(now: now), age >= 2.0 {
-            let callbackAge = lastStatusCallbackAt.map { String(format: "%.2fs", now - $0) } ?? "none"
-            let detail = "last status callback: \(callbackAge), accepted: \(acceptedStatusCount)"
-            log.error("Status timeout: \(detail, privacy: .public)")
-            close("Bluetooth status stalled; reconnect required (\(detail))"); return
-        }
+        if let started = writeAt, now - started >= 2 { close("Bluetooth write stalled; reconnect required"); return }
         if let started = waitingRequestAt, now - started >= 5 {
             configurationFailed("Configuration transfer timed out", code: "configuration_timeout"); return
         }
@@ -480,8 +424,8 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
         if retiring === p { p.delegate = nil; retiring = nil; connectDeferredIfPossible(); return }
         guard current(p) else { return }
         let failure = error as NSError?
-        observation?.record(component: "bluetooth", kind: "connection.disconnected", attributes: ["error_domain": failure?.domain ?? "none", "error_code": failure?.code ?? 0, "generation": policy.generation, "sequence": policy.sequence])
-        terminal("Disconnected; explicit reconnect and arm required")
+        observation?.record(component: "bluetooth", kind: "connection.disconnected", attributes: ["error_domain": failure?.domain ?? "none", "error_code": failure?.code ?? 0, "generation": policy.generation])
+        terminal("Disconnected; reconnecting")
     }
     func peripheral(_ p: CBPeripheral, didDiscoverServices error: Error?) {
         guard current(p) else { return }
@@ -512,7 +456,7 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
             close("Bluetooth write failed; reconnect required"); return
         }
         if active?.chunks.isEmpty == true { active = nil }
-        // ATT acknowledgement does not update armed/applied/accepted state.
+        // ATT acknowledgement confirms transport delivery; relay status reports output.
         pump()
     }
     func peripheral(_ p: CBPeripheral, didUpdateValueFor c: CBCharacteristic, error: Error?) {
@@ -540,7 +484,7 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
             if c.uuid == statusID {
                 if object["type"] as? String == "status" {
                     observation?.recordHardwareStatus(object)
-                    let safetySummary = "armed=\(object["armed"] ?? "missing") arming=\(object["arming"] ?? "missing") stop_reason=\(object["stop_reason"] ?? "missing") fault=\(object["fault"] ?? "none") gate=\(object["gate_mode"] ?? "missing") configuration_allowed=\(object["configuration_allowed"] ?? "missing")"
+                    let safetySummary = "output_active=\(object["output_active"] ?? "missing") stop_reason=\(object["stop_reason"] ?? "missing") fault=\(object["fault"] ?? "none")"
                     if safetySummary != lastLoggedSafety {
                         lastLoggedSafety = safetySummary
                         log.notice("Rover safety: \(safetySummary, privacy: .public)")
@@ -548,19 +492,15 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
                     let incomingRevision = object["active_revision"] as? UInt32
                     let revisionChanged = lastObservedRevision != nil && lastObservedRevision != incomingRevision
                     lastObservedRevision = incomingRevision
-                    let effects = policy.status(object, now: now)
+                    guard let stateText = policy.status(object) else { throw BluetoothPolicyError.malformed }
                     if revisionChanged, synchronizationStarted { restartProfiles() }
-                    if effects.isEmpty {
-                        log.error("Status rejected: revision=\(String(describing: object["active_revision"]), privacy: .public), bytes=\(bytes.count)")
-                    } else { acceptedStatusCount += 1 }
-                    for effect in effects { if case .state(let text) = effect { publish(text) } }
-                    if hasCapabilities, let revision = synchronizedRevision { policy.synchronized(revision: revision) }
-                    let configReady = hasCapabilities && supportsPagination && policy.session != nil && profileSync.revision == policy.revision
-                    let ready = policy.ready, armed = policy.armed, arming = policy.arming
-                    DispatchQueue.main.async { self.configurationReady = configReady; self.isReady = ready; self.armed = armed; self.arming = arming }
+                    acceptedStatusCount += 1
+                    publish(stateText)
+                    let configReady = hasCapabilities && policy.connected && profileSync.revision == policy.revision
+                    let ready = policy.ready, outputActive = policy.outputActive
+                    DispatchQueue.main.async { self.configurationReady = configReady; self.isReady = ready; self.outputActive = outputActive }
                     DispatchQueue.main.async { self.statusJSON = text; self.connectedIdentifier = p.identifier }
                     if admitting {
-                        guard !effects.isEmpty else { throw BluetoothPolicyError.malformed }
                         attemptStarted = nil
                         emit(.authenticated(p.identifier))
                         admitting = false
@@ -570,14 +510,6 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
                         // omit a notification-state callback for an already active subscription.
                         synchronize()
                     }
-                } else if object["type"] as? String == "command_acceptance" {
-                    if object["session"] as? UInt32 == policy.session, object["sequence"] as? UInt32 == awaitingSafeSequence, awaitingSafeSequence != nil {
-                        awaitingSafeSequence = nil; awaitingSafeAt = nil
-                        guard object["accepted"] as? Bool == true else { stop(); return }
-                        priority = try packet(policy.arm(now: now), characteristic: controlID); pump()
-                    }
-                    // Kept distinct from periodic state; UI may inspect this event.
-                    DispatchQueue.main.async { self.replyJSON = text }
                 }
             } else if c.uuid == repliesID {
                 guard let id = object["request_id"] as? UInt32, id == waitingRequest, let operation = requests.removeValue(forKey: id) else { return }
@@ -601,15 +533,10 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
                     switch operation {
                     case "capabilities":
                         capabilityObject = payload; hasCapabilities = true
-                        supportsPagination = (payload["features"] as? [String])?.contains("actuator_pagination_v1") == true
+                        guard (payload["features"] as? [String])?.contains("actuator_pagination_v1") == true else { throw BluetoothPolicyError.malformed }
                         let data = try JSONSerialization.data(withJSONObject: payload)
                         DispatchQueue.main.async { self.capabilitiesJSON = String(decoding: data, as: UTF8.self) }
-                        if supportsPagination { queueSynchronization("layout_index") }
-                        else {
-                            invalidateProfiles()
-                            DispatchQueue.main.async { self.configurationReady = false }
-                            publish("Update rover service for actuator pagination")
-                        }
+                        queueSynchronization("layout_index")
                     case "layout_index":
                         guard let revision = payload["revision"] as? UInt32, revision == policy.revision,
                               let entries = payload["actuators"] as? [[String: Any]],
@@ -623,7 +550,7 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
                         try profileSync.begin(revision: revision, ids: ids)
                         DispatchQueue.main.async { self.layoutIndexJSON = String(decoding: data, as: UTF8.self); self.configurationReady = true }
                         if available { try nextProfile() }
-                        else { publish("No active layout · add actuators while disarmed") }
+                        else { publish("No active layout · add actuators in configuration") }
                     case "read_drive_profile":
                         guard let revision = payload["revision"] as? UInt32, revision == policy.revision,
                               let entry = payload["actuator"] as? [String: Any] else { throw ActuatorProfileError.staleRevision }

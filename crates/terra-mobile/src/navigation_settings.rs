@@ -152,19 +152,14 @@ pub(crate) fn apply(b: &mut super::Brain, bytes: &[u8], age: f64) {
     } else if !b.hardware_observation.as_ref().is_some_and(|(h, at)| {
         at.elapsed().as_secs_f64() < 0.5
             && h["ready"] == true
-            && h["armed"] == false
-            && h["arming"] == false
+            && h["output_active"] == false
     }) {
-        Some("fresh ready and disarmed hardware required")
+        Some("fresh ready hardware with neutral output required")
     } else if !matches!(
         status["goal"]["state"].as_str(),
         Some("idle" | "arrived" | "cancelled")
     ) {
         Some("cancel the active goal before changing settings")
-    } else if b.hardware_requests.iter().any(|(raw, _)| {
-        serde_json::from_str::<serde_json::Value>(raw).is_ok_and(|r| r["action"] == "arm")
-    }) {
-        Some("an arming request is pending")
     } else if b.navigation.revision == u64::MAX {
         Some("configuration revision exhausted")
     } else {

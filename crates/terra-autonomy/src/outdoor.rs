@@ -20,7 +20,6 @@ pub struct Evidence {
     pub pose_ready: bool,
     pub map_ready: bool,
     pub hardware_ready: bool,
-    pub armed: bool,
     pub authority: bool,
 }
 #[derive(Clone)]
@@ -103,7 +102,7 @@ impl OutdoorController {
     pub fn active(&self) -> bool {
         self.mission.is_some() && self.phase != "arrived"
     }
-    /// Sensor recovery permits rearming, but never releases the explicit resume latch.
+    /// Sensor recovery restores readiness, but never releases the explicit resume latch.
     pub fn recovery_ready(&self, now: f64, e: Evidence) -> bool {
         e.authority
             && self
@@ -192,9 +191,6 @@ impl OutdoorController {
         if !e.authority {
             return Err("authority_lost");
         }
-        if !e.armed {
-            return Err("disarmed");
-        }
         let g = self.gps.unwrap();
         if distance_bearing(g.latitude, g.longitude, lat, lon).0 > 500. {
             return Err("goal_too_far");
@@ -234,9 +230,6 @@ impl OutdoorController {
         if !e.authority {
             return Err("authority_lost");
         }
-        if !e.armed {
-            return Err("disarmed");
-        }
         self.phase = "planning";
         self.hold = None;
         self.last_guidance = None;
@@ -261,10 +254,6 @@ impl OutdoorController {
         }
         if !e.authority {
             self.pause("authority_lost");
-            return None;
-        }
-        if !e.armed {
-            self.pause("disarmed");
             return None;
         }
         if self.phase == "paused" {

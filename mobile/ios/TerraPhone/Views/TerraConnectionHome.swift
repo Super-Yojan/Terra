@@ -19,12 +19,12 @@ struct TerraConnectionHome: View {
                 fleetSection
                 if brain.lastStopDiagnostic.message != nil {
                     Divider()
-                    Text("Last disarm reason").font(.headline)
+                    Text("Last stop reason").font(.headline)
                     TerraStopReasonView(brain: brain)
                 }
                 if facts.authenticated {
-                    Label(brain.hardwareArmed ? "Motors armed" : "Motors disarmed", systemImage: brain.hardwareArmed ? "exclamationmark.shield" : "shield.checkered")
-                        .font(.footnote).foregroundStyle(brain.hardwareArmed ? Color.red : .secondary)
+                    Label(brain.hardwareOutputActive ? "Motor output active" : "Motors neutral", systemImage: brain.hardwareOutputActive ? "exclamationmark.shield" : "shield.checkered")
+                        .font(.footnote).foregroundStyle(brain.hardwareOutputActive ? Color.red : .secondary)
                     Text(brain.phoneTrackingStatus).font(.footnote).foregroundStyle(.secondary)
                     PhoneLocalizationStatusView(report: brain.localizationReport, trackingActive: brain.phoneTrackingActive)
                 }
@@ -138,7 +138,7 @@ struct TerraConnectionHome: View {
         case .searching: return "Keep the selected rover nearby. To pair a new phone, hold the rover’s USR button for 3 seconds until the LED blinks. This clears its previous owner. Accept the pairing popup within 60 seconds."
         case .pairing: return "Choose Connect in the pairing popup to connect this rover."
         case .connecting: return "Establishing your authenticated Bluetooth connection."
-        case .configuring: return "Reading the rover’s saved configuration. Motors remain disarmed."
+        case .configuring: return "Reading the rover’s saved configuration. Motor output stays neutral."
         case .connected: return "The fleet connection is handled automatically."
         case .needsSetup: return "Review the actuator setup or clear the reported fault before operating."
         case .paused: return automaticConnection ? "Automatic connection is paused. Retry when you are ready." : "Automatic connection is off. Enable it to discover and reconnect your rover."

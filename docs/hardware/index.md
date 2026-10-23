@@ -18,6 +18,7 @@
 | [Install](INSTALL.md) | Build, `install.sh`, USR enrollment. |
 | [Bluetooth](BLUETOOTH.md) | GATT, frames, owner admission. |
 | [Fusion HAT](FUSION_HAT.md) | Pins, timers, library 1.14.0. |
+| [Function UML](FUNCTIONS_UML.md) | All Pi runtime functions, module dependencies, and the drive command path. |
 | [Bench](BENCH.md) | Wheels-up outline. Not performed. |
 | [Evidence](evidence/README.md) | What was checked, and what was not. |
 

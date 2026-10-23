@@ -12,23 +12,23 @@ from importlib import metadata
 from dbus_next import BusType, DBusError, Variant, PropertyAccess
 from dbus_next.aio import MessageBus
 from dbus_next.service import ServiceInterface, method, dbus_property
-from .backend import MockBackend, FusionHatBackend, file_gate_reader, BenchGate
+from .backend import FusionHatBackend
 from .ble import (BlePeripheral, ROOT, SERVICE, SERVICE_UUID, STATUS_UUID,
                   )
 from .bless_transport import BlessTransport
 from .onboarding import pairing_name
 
 class SetupAgent(ServiceInterface):
-    def __init__(self, expected, deadline):
-        super().__init__('org.bluez.Agent1'); self.expected = expected; self.deadline = deadline
+    def __init__(self, deadline):
+        super().__init__('org.bluez.Agent1'); self.deadline = deadline
         self.confirmed = set()
     def check(self, device):
-        if time.monotonic() >= self.deadline or not device.endswith('/dev_'+self.expected.replace(':', '_')):
-            raise DBusError('org.bluez.Error.Rejected', 'outside expected owner setup')
+        if time.monotonic() >= self.deadline:
+            raise DBusError('org.bluez.Error.Rejected', 'owner setup expired')
     @method()
     async def RequestConfirmation(self, device: 'o', passkey: 'u'):
         self.check(device)
-        print(f'Confirm {self.expected} displays {passkey:06d} (type yes): ', end='', flush=True)
+        print(f'Confirm {device} displays {passkey:06d} (type yes): ', end='', flush=True)
         loop = asyncio.get_running_loop()
         response = loop.create_future()
         def ready():
@@ -56,9 +56,9 @@ class SetupAgent(ServiceInterface):
 
 class SetupStatus(ServiceInterface):
     """Encrypted read initiates pairing; no output backend or write API exists."""
-    def __init__(self, agent, gate_file):
+    def __init__(self, agent):
         super().__init__('org.bluez.GattCharacteristic1')
-        self.agent, self.gate_file = agent, gate_file
+        self.agent = agent
     @dbus_property(access=PropertyAccess.READ)
     def UUID(self) -> 's': return STATUS_UUID
     @dbus_property(access=PropertyAccess.READ)
@@ -72,19 +72,13 @@ class SetupStatus(ServiceInterface):
         self.agent.check(device.value)
         if device.value not in self.agent.confirmed:
             raise DBusError('org.bluez.Error.NotAuthorized', 'local numeric confirmation required')
-        if self.gate_file.read_text().strip() != '0':
-            raise DBusError('org.bluez.Error.NotAuthorized', 'physical gate must be open')
-        data = b'{"schema_version":1,"type":"setup","armed":false,"pairing_confirmed":true}'
+        data = b'{"schema_version":1,"type":"setup","pairing_confirmed":true}'
         offset = options.get('offset', Variant('q', 0)).value
         if offset > len(data): raise DBusError('org.bluez.Error.InvalidOffset', 'offset')
         return data[offset:]
 
 async def setup(args):
     if args.owner.exists(): raise RuntimeError('owner already provisioned; remove owner explicitly to replace')
-    if not args.expected_peer: raise RuntimeError('--expected-peer Bluetooth address is required')
-    if args.gate_file is None or file_gate_reader(args.gate_file)():
-        raise RuntimeError('setup requires a readable physical gate file showing 0')
-    if args.gate_file.read_text().strip() != '0': raise RuntimeError('gate must explicitly show 0')
     transport = BlessTransport(pairing_name(args.name), SERVICE_UUID, args.adapter)
     await transport.prepare()
     bus = transport.bus
@@ -99,16 +93,16 @@ async def setup(args):
         properties = proxy.get_interface('org.freedesktop.DBus.Properties')
         agents = bus.get_proxy_object('org.bluez', '/org/bluez', await bus.introspect('org.bluez', '/org/bluez')).get_interface('org.bluez.AgentManager1')
         deadline = time.monotonic()+args.setup_seconds
-        agent = SetupAgent(args.expected_peer.upper(), deadline)
+        agent = SetupAgent(deadline)
         path = ROOT+'/agent'; bus.export(path, agent)
         registered = gatt_registered = advertised = False
         gatt = proxy.get_interface('org.bluez.GattManager1')
         advertising = proxy.get_interface('org.bluez.LEAdvertisingManager1')
         status_path = SERVICE+'/status'
-        status = SetupStatus(agent, args.gate_file)
+        status = SetupStatus(agent)
         def read(options):
             SetupStatus.ReadValue.__wrapped__(status, options)
-            return b'{"schema_version":1,"type":"setup","armed":false,"pairing_confirmed":true}'
+            return b'{"schema_version":1,"type":"setup","pairing_confirmed":true}'
         await transport.add(STATUS_UUID, read=read)
         await agents.call_register_agent(path, 'DisplayYesNo'); registered = True
         await agents.call_request_default_agent(path)
@@ -118,9 +112,8 @@ async def setup(args):
         await properties.call_set('org.bluez.Adapter1', 'Pairable', Variant('b', True))
         await properties.call_set('org.bluez.Adapter1', 'Discoverable', Variant('b', True))
         await transport.start()
-        print('Pair the expected phone now; compare the numeric code locally.', flush=True)
+        print('Pair the phone now; compare the numeric code locally.', flush=True)
         while time.monotonic() < deadline:
-            if args.gate_file.read_text().strip() != '0': raise RuntimeError('gate changed during setup')
             objects = await manager.call_get_managed_objects()
             for device in agent.confirmed:
                 fields = objects.get(device, {}).get('org.bluez.Device1', {})
@@ -154,24 +147,18 @@ def main():
     configure_from_environment()
     parser = argparse.ArgumentParser(description='Terra owner-only actuator peripheral')
     parser.add_argument('--check-bundle', action='store_true', help='verify bundled driver and D-Bus libraries without accessing hardware')
-    parser.add_argument('--mock', action='store_true')
-    parser.add_argument('--mock-gate-closed', action='store_true', help='explicit simulated motion interlock')
     parser.add_argument('--name', default='Terra Rover')
     parser.add_argument('--config', type=Path, default=Path('/var/lib/terra-rover/layout.json'))
     parser.add_argument('--owner', type=Path, default=Path('/var/lib/terra-rover/owner.json'))
     parser.add_argument('--pwm-ports', default=','.join(f'P{i}' for i in range(12)), help='comma-separated PWM ports (default: P0-P11; empty disables PWM ports)')
-    parser.add_argument('--gate-file', type=Path, help='optional Pi-connected interlock; omitted for an external battery cutoff')
-    parser.add_argument('--bench-mode', action='store_true', help='supervised real-hardware bench mode with session-only software enable; no physical cutoff')
     parser.add_argument('--adapter')
     parser.add_argument('--button-pairing', action='store_true', help='Fusion HAT USR enrollment and ownership reset; then normal operation')
     parser.add_argument('--button-file', type=Path, default=Path('/sys/class/fusion_hat/fusion_hat/button'))
     parser.add_argument('--led-file', type=Path, default=Path('/sys/class/fusion_hat/fusion_hat/led'))
     parser.add_argument('--device-name-file', type=Path, default=Path('/var/lib/terra-rover/device-name.json'))
     parser.add_argument('--setup-owner', action='store_true')
-    parser.add_argument('--expected-peer')
     parser.add_argument('--setup-seconds', type=int, default=60)
     args = parser.parse_args()
-    if args.bench_mode and (args.mock or args.gate_file is not None or args.setup_owner): parser.error('bench mode cannot be combined with mock, physical gate, or terminal enrollment')
     if args.check_bundle:
         # Only imports and API checks: no PWM objects, radio connection or outputs.
         backend = FusionHatBackend()
@@ -200,18 +187,7 @@ def main():
 
 async def run_normal(args, name):
     ports = tuple(p.strip() for p in args.pwm_ports.split(',') if p.strip())
-    if args.mock:
-        backend = MockBackend(ports); backend.gate = args.mock_gate_closed
-    else:
-        if getattr(args, 'bench_mode', False):
-            gate = BenchGate()
-            backend = FusionHatBackend(ports, gate)
-            backend.bench_gate = gate
-            print('BENCH MODE: software enable only; no physical power cutoff. Starts disabled.', flush=True)
-        else:
-            backend = FusionHatBackend(ports,
-                file_gate_reader(args.gate_file) if args.gate_file is not None else None,
-                external_power_cutoff=args.gate_file is None)
+    backend = FusionHatBackend(ports)
     await BlePeripheral(name, args.adapter).run(backend, args.config, args.owner,
         manage_signals=not getattr(args, 'button_pairing', False))
 

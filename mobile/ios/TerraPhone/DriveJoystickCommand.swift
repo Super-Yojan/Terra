@@ -1,6 +1,6 @@
 import Foundation
 
-/// Keep the first cause through subsequent disarm acknowledgements and reconnects.
+/// Keep the first cause through subsequent stop events and reconnects.
 struct TerraStopDiagnostic {
     private(set) var message: String?
     private(set) var timestamp: TimeInterval?
@@ -14,12 +14,7 @@ struct TerraStopDiagnostic {
         let root = (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any]
         return (root?["status"] as? [String: Any])?["reason"] as? String ?? "unavailable"
     }
-    static func piDisarmReason(wasArmed: Bool, isArmed: Bool, status: [String: Any]?) -> String? {
-        guard wasArmed, !isArmed, let status, status["armed"] as? Bool == false else { return nil }
-        let reason = status["stop_reason"] as? String ?? "unspecified"
-        let fault = status["fault"] as? String
-        return "Pi disarmed: \(reason)\(fault.map { " · fault: " + $0 } ?? "")"
-    }
+
 }
 
 /// Screen up is forward; screen left is positive yaw in the rover body frame.
@@ -46,13 +41,10 @@ struct DriveJoystickCommand: Equatable {
 }
 
 enum DriveJoystickSafety {
-    static func trackingLossRequiresDisarm(feedback: Bool, fullyManual: Bool) -> Bool {
+    static func trackingLossRequiresStop(feedback: Bool, fullyManual: Bool) -> Bool {
         feedback && !fullyManual
     }
-    static func hardwareArmAllowed(feedback: Bool, fullyManual: Bool, trackingHealthy: Bool, compatible: Bool) -> Bool {
-        !feedback || fullyManual || (trackingHealthy && compatible)
-    }
-    static func canArm(ready: Bool, manual: Bool, stopped: Bool, foreground: Bool) -> Bool {
+    static func canDrive(ready: Bool, manual: Bool, stopped: Bool, foreground: Bool) -> Bool {
         ready && manual && !stopped && foreground
     }
 }

@@ -36,14 +36,14 @@ final class TerraObservation: @unchecked Sendable {
     }
     func recordSafetyRequest(reset: Bool, source: String, route: String) {
         record(component: "control", kind: "safety.requested", attributes: [
-            "action": reset ? "reset_emergency_stop" : "emergency_stop",
+            "action": reset ? "reset_stop" : "emergency_stop",
             "source": source, "route": route])
     }
     func recordHardwareStatus(_ status: [String: Any]) {
         // Only diagnostic state; never copy ownership material or arbitrary payloads.
-        let fields = ["session", "active_revision", "armed", "arming", "motion_paused",
-            "emergency_stop", "stop_reason", "fault", "hardware_gate", "status_subscribed",
-            "layout_available", "last_sequence"]
+        let fields = ["connected", "active_revision", "control_mode", "output_active",
+            "stop_reason", "fault", "status_subscribed",
+            "layout_available"]
         var attributes: [String: Any] = [:]
         for field in fields { attributes[field] = status[field] }
         recordChanged(component: "bluetooth", kind: "hardware.status", attributes: attributes)

@@ -17,12 +17,7 @@ pub(crate) fn evidence(b: &Brain, now: f64) -> Evidence {
             .map
             .as_ref()
             .is_some_and(|(_, t, _)| now.is_finite() && (0.0..=0.5).contains(&(now - t))),
-        hardware_ready: h.is_some_and(|h| {
-            h["ready"] == true
-                && h["motion_paused"] != true
-                && h["stop_reason"] != "watchdog_paused"
-        }),
-        armed: h.is_some_and(|h| h["armed"] == true && h["arming"] == false),
+        hardware_ready: h.is_some_and(|h| h["ready"] == true && h["fault"].is_null()),
         authority: b.autonomy.outdoor_authority(),
     }
 }
@@ -123,15 +118,15 @@ pub(crate) fn request(
         if !matches!(source, "local" | "outdoor_gps") {
             return Err(invalid("invalid source"));
         }
-        let disarmed = b.hardware_observation.as_ref().is_some_and(|(h, t)| {
-            t.elapsed().as_secs_f64() <= 0.5 && h["armed"] == false && h["arming"] == false
+        let output_idle = b.hardware_observation.as_ref().is_some_and(|(h, t)| {
+            t.elapsed().as_secs_f64() <= 0.5 && h["ready"] == true && h["output_active"] == false
         });
-        if !disarmed
+        if !output_idle
             || b.outdoor.active()
             || b.autonomy.has_active_goal(e.pose)
             || !b.hardware_requests.is_empty()
         {
-            return Err(invalid("disarm and cancel mission before changing source"));
+            return Err(invalid("stop output and cancel mission before changing source"));
         }
         let radius = v
             .get("arrival_radius_m")
@@ -220,8 +215,7 @@ pub(crate) fn update(b: &mut Brain, now: f64) -> bool {
     }
     if b.outdoor.phase() != "planning" {
         // Never retain a moving local target through a pause or arrival confirmation.
-        // With recovered sensors, an idle follower allows rearming while the
-        // geographic mission remains latched until an explicit armed resume.
+        // With recovered sensors, an idle follower permits an explicit mission resume.
         b.autonomy.clear_guidance();
     }
     !b.outdoor.active() || b.outdoor.phase() == "planning" || b.outdoor.recovery_ready(now, e)

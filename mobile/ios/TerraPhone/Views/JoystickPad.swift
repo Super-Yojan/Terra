@@ -29,7 +29,7 @@ struct JoystickPad: View {
             }
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("Drive joystick")
-            .accessibilityValue(enabled ? "Armed. Centered when released." : "Disarmed")
+            .accessibilityValue(enabled ? "Ready. Centered when released." : "Unavailable")
             .accessibilityHint("Hold and drag up to move forward, down to reverse, left or right to turn. Release to send zero.")
         }
     }
