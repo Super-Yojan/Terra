@@ -18,8 +18,8 @@ fn navigation_dimensions_validate_and_derive_a_conservative_footprint() {
 }
 #[test]
 /// Exercises absent hardware, replayed tokens, a successful geometry update,
-/// stale authority in a batch, and armed-hardware rejection.
-fn navigation_update_requires_fresh_disarmed_idle_hardware_and_current_revisions() {
+/// stale authority in a batch, and active-output rejection.
+fn navigation_update_requires_fresh_neutral_idle_hardware_and_current_revisions() {
     let c = MobileController::new(default_control_settings()).unwrap();
     let mut b = c.brain.lock().unwrap();
     b.autonomy.run_id = b.run_id.clone();
@@ -28,10 +28,7 @@ fn navigation_update_requires_fresh_disarmed_idle_hardware_and_current_revisions
     let bytes = serde_json::to_vec(&payload).unwrap();
     navigation_settings::apply(&mut b, &bytes, 0.1);
     assert_eq!(b.navigation.revision, 0);
-    b.hardware_observation = Some((
-        serde_json::json!({"ready":true,"armed":false,"arming":false}),
-        std::time::Instant::now(),
-    ));
+    b.hardware_observation = Some((serde_json::json!({"ready":true,"output_active":false}), 0.0));
     navigation_settings::apply(&mut b, &bytes, 0.1); // rejected tokens cannot be replayed
     assert_eq!(b.navigation.revision, 0);
     let mut p = payload.clone();
@@ -57,7 +54,7 @@ fn navigation_update_requires_fresh_disarmed_idle_hardware_and_current_revisions
     p["token"] = "settings-three".into();
     p["settings_revision"] = 1.into();
     p["authority_revision"] = 1.into();
-    b.hardware_observation.as_mut().unwrap().0["armed"] = true.into();
+    b.hardware_observation.as_mut().unwrap().0["output_active"] = true.into();
     navigation_settings::apply(&mut b, &serde_json::to_vec(&p).unwrap(), 0.1);
     assert_eq!(b.navigation.revision, 1);
     assert!(
@@ -82,10 +79,8 @@ fn preceding_goal_or_mode_change_cannot_use_an_old_status_snapshot() {
                 .unwrap(),
         );
         b.autonomy_json=serde_json::json!({"status":{"run_id":run,"revision":1,"safety":"clear"},"goal":{"state":"idle"}}).to_string();
-        b.hardware_observation = Some((
-            serde_json::json!({"ready":true,"armed":false,"arming":false}),
-            std::time::Instant::now(),
-        ));
+        b.hardware_observation =
+            Some((serde_json::json!({"ready":true,"output_active":false}), 0.0));
         if change == "goal" {
             assert!(b.autonomy.accept_goal(
                 &terra_waypoint::decode_goal(br#"{"frame":"local","x":5,"y":0}"#).unwrap(),

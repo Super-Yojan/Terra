@@ -10,7 +10,6 @@ fn evidence() -> Evidence {
         pose_ready: true,
         map_ready: true,
         hardware_ready: true,
-        armed: true,
         authority: true,
     }
 }
@@ -201,9 +200,9 @@ fn local_sensors(c: &terra_mobile::MobileController, t: f64) {
 fn state(c: &terra_mobile::MobileController) -> serde_json::Value {
     serde_json::from_str(&c.autonomy_status()).unwrap()
 }
-fn hardware(c: &terra_mobile::MobileController, armed: bool) {
+fn hardware(c: &terra_mobile::MobileController, output_active: bool) {
     c.publish_hardware_status(
-        serde_json::json!({"ready":true,"armed":armed,"arming":false,"wheel_feedback":false})
+        serde_json::json!({"schema_version":1,"control_mode":"streamed_relay","connected":true,"ready":true,"output_active":output_active,"fault":null})
             .to_string(),
     )
     .unwrap();
@@ -230,7 +229,7 @@ fn mobile_outdoor_runs_checked_l3_and_preserves_mission_on_pause() {
     assert_eq!(
         state(&c)["status"]["safety"],
         "clear",
-        "Selecting outdoor mode must leave idle arming possible"
+        "Selecting outdoor mode must permit idle ready hardware"
     );
     hardware(&c, true);
     c.push_gps(
@@ -290,7 +289,7 @@ fn mobile_outdoor_runs_checked_l3_and_preserves_mission_on_pause() {
         5.,
     )
     .unwrap();
-    hardware(&c, false); // The phone disarms on the sensor hold.
+    hardware(&c, false); // Neutral output does not resume the paused mission.
     local_sensors(&c, 5.05);
     let held = c.step(5.05).unwrap();
     assert_eq!(held.target_forward, 0.);
@@ -298,16 +297,9 @@ fn mobile_outdoor_runs_checked_l3_and_preserves_mission_on_pause() {
     assert_eq!(
         state(&c)["status"]["safety"],
         "clear",
-        "Recovered sensors must allow rearming without resuming motion"
+        "Recovered sensors must not resume motion automatically"
     );
     assert_eq!(state(&c)["outdoor"]["phase"], "paused");
-    assert!(c.autonomy_request("navigation/resume".into(),serde_json::json!({"schema_version":1,"token":"unarmed-resume","run_id":run,"navigation_revision":1}).to_string(),5.05).is_err());
-    hardware(&c, true);
-    assert_eq!(
-        c.step(5.05).unwrap().target_forward,
-        0.,
-        "Arming alone must not resume the mission"
-    );
     c.autonomy_request("navigation/resume".into(),serde_json::json!({"schema_version":1,"token":"resume","run_id":run,"navigation_revision":1}).to_string(),5.05).unwrap();
     local_sensors(&c, 5.1);
     assert!(c.step(5.1).unwrap().target_forward > 0.);
@@ -523,7 +515,7 @@ fn geographic_mission_survives_two_minute_cloud_outage_but_hardware_loss_latches
     assert_eq!(
         state(&c)["status"]["safety"],
         "clear",
-        "Selecting outdoor mode must leave idle arming possible"
+        "Selecting outdoor mode must permit idle ready hardware"
     );
     hardware(&c, true);
     c.push_gps(
@@ -591,7 +583,7 @@ fn geographic_mission_survives_two_minute_cloud_outage_but_hardware_loss_latches
         assert_eq!(state(&c)["outdoor"]["phase"], "planning");
         assert_eq!(state(&c)["goal"]["token"], "mission");
     }
-    hardware(&c, false);
+    c.publish_hardware_status(serde_json::json!({"schema_version":1,"control_mode":"streamed_relay","connected":false,"ready":false,"output_active":false,"fault":"disconnected"}).to_string()).unwrap();
     local_sensors(&c, 121.2);
     c.step(121.2).unwrap();
     assert_eq!(state(&c)["outdoor"]["phase"], "paused");

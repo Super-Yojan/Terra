@@ -9,6 +9,12 @@ impl AutonomyArbiter {
         }
         self.event("remote_request_rejected", token.map(str::to_owned), reason);
     }
+    /// Latest token-correlated result, including idempotent duplicate requests.
+    pub fn request_receipt(&self) -> Option<(&str, bool)> {
+        self.receipt
+            .as_ref()
+            .map(|(token, accepted)| (token.as_str(), *accepted))
+    }
     pub fn authority_revision(&self) -> u64 {
         self.revision
     }
@@ -45,6 +51,13 @@ impl AutonomyArbiter {
         if self.operator_origin == CommandOrigin::FleetTeleop {
             self.operator = None;
         }
+    }
+    /// Discard operator input when the actuation profile changes, without replacing an onboard mission.
+    pub fn clear_operator_intent(&mut self) {
+        self.operator = None;
+        self.turning.reset();
+        self.turning_identity = None;
+        self.reset = true;
     }
     /// Explicit policy pause. Neither a new transport nor a policy edit resumes it.
     pub fn pause_for_router_loss(&mut self) {

@@ -15,48 +15,14 @@ pub(crate) fn accepted_mission(b: &Brain) -> bool {
 
 /// Validate network authority before strict request decoding. Local phone APIs
 /// bypass this ingress and continue to use their own admission checks.
+#[cfg(test)]
 pub(crate) fn remote_action(
     b: &Brain,
     kind: &str,
     bytes: &[u8],
     age: f64,
 ) -> Result<Vec<u8>, &'static str> {
-    if bytes.len() > 4096 {
-        return Err("request_too_large");
-    }
-    let mut v: serde_json::Value = serde_json::from_slice(bytes).map_err(|_| "invalid_json")?;
-    let neutral = (kind == "goal" && v["cancel"] == true)
-        || (kind == "safety" && v["action"] == "stop")
-        || (kind == "hardware" && v["action"] == "disarm")
-        || (kind == "search/action" && matches!(v["action"].as_str(), Some("cancel" | "pause")))
-        || kind == "search/report/ack"
-        || (matches!(kind, "teleop" | "cmd_vel")
-            && v["linear"].as_f64() == Some(0.)
-            && v["angular"].as_f64() == Some(0.));
-    if !neutral {
-        if !age.is_finite() || !(0.0..0.5).contains(&age) {
-            return Err("remote_request_expired");
-        }
-        if v["run_id"] != b.run_id
-            || v["authority_revision"].as_u64() != Some(b.autonomy.authority_revision())
-        {
-            return Err("current_authority_required_upgrade_legacy_client");
-        }
-    }
-    let strip_run = matches!(kind, "autonomy" | "safety")
-        || (kind == "goal" && (!b.outdoor.selected || v["cancel"] == true));
-    if let Some(o) = v.as_object_mut() {
-        if strip_run {
-            o.remove("run_id");
-            o.remove("authority_revision");
-        } else if matches!(
-            kind,
-            "goal/decision" | "search" | "search/action" | "search/report/ack" | "goal"
-        ) {
-            o.remove("authority_revision");
-        }
-    }
-    serde_json::to_vec(&v).map_err(|_| "invalid_json")
+    b.runtime.remote_action(kind, bytes, age)
 }
 
 impl MobileController {
@@ -65,15 +31,7 @@ impl MobileController {
             return;
         }
         let mission = accepted_mission(b);
-        b.autonomy.invalidate_remote_authority();
-        b.hardware_requests.clear();
-        // Keep token replay caches across reconnects; no old action may become new.
-        if b.connectivity.autonomous_router_loss == connectivity_policy::RouterLossPolicy::Pause {
-            b.outdoor.pause("router_loss_paused");
-            b.autonomy.pause_for_router_loss();
-            b.controller.reset();
-        }
-        b.router_loss_handled = true;
+        b.runtime.link(false);
         self.observation.event("router", "connection.loss_decision", serde_json::json!({
             "policy": b.connectivity, "policy_revision": b.connectivity_revision,
             "accepted_mission_continues": mission,
@@ -87,9 +45,8 @@ impl MobileController {
         let mut brain = self.brain.lock().map_err(|_| ControllerError::Internal)?;
         brain.map_gate = Default::default();
         brain.cloud_gate = Default::default();
-        brain.autonomy.invalidate_remote_authority();
+        brain.runtime.link(true);
         brain.dashboard = Some(service);
-        brain.router_loss_handled = false;
         Ok(())
     }
 }
@@ -154,15 +111,7 @@ impl MobileController {
             .validate()
             .map_err(|e| ControllerError::InvalidInput { message: e.into() })?;
         let mut b = self.brain.lock().map_err(|_| ControllerError::Internal)?;
-        b.connectivity = policy;
-        if b.router_loss_handled
-            && b.connectivity.autonomous_router_loss == connectivity_policy::RouterLossPolicy::Pause
-        {
-            b.outdoor.pause("router_loss_paused");
-            b.autonomy.pause_for_router_loss();
-            b.controller.reset();
-        }
-        b.connectivity_revision = b.connectivity_revision.saturating_add(1);
+        b.runtime.set_connectivity_policy(policy)?;
         self.observation.event(
             "router",
             "connectivity.policy_changed",
@@ -335,7 +284,6 @@ impl MobileController {
         let mut b = self.brain.lock().map_err(|_| ControllerError::Internal)?;
         b.autonomy.clear_remote_intent();
         let service = b.dashboard.take();
-        b.hardware_requests.clear();
         drop(b);
         // Network teardown must not stall the phone control/Bluetooth producer.
         if let Some(service) = service {
@@ -394,8 +342,6 @@ impl MobileController {
         let mut brain = self.brain.lock().map_err(|_| ControllerError::Internal)?;
         brain.outdoor.pause("authority_lost");
         let service = brain.dashboard.take();
-        brain.hardware_requests.clear();
-        brain.hardware_tokens.clear();
         brain.sequence += 1;
         let token = format!("dashboard-detach-{}", brain.sequence);
         brain.autonomy.set_level(terra_autonomy::LevelRequest {
@@ -409,26 +355,6 @@ impl MobileController {
         drop(service);
         Ok(())
     }
-    /// Consume the next currently admissible hardware request as JSON.
-    /// Revalidates queued arm requests against run, authority revision, safety, and
-    /// a 0.5 s receipt lease; adds remaining `valid_for` seconds. Returns an empty
-    /// string when none survives validation or the controller lock is poisoned.
-    pub fn take_hardware_request(&self) -> String {
-        let Ok(mut b) = self.brain.lock() else {
-            return String::new();
-        };
-        let authority = serde_json::from_str(&b.autonomy_json).unwrap_or_default();
-        while let Some((raw, received)) = b.hardware_requests.pop_front() {
-            let age = received.elapsed().as_secs_f64();
-            if let Some(mut request) =
-                super::admit_hardware_request(raw.as_bytes(), age, &authority)
-            {
-                request["valid_for"] = serde_json::json!((0.5 - age).max(0.));
-                return request.to_string();
-            }
-        }
-        String::new()
-    }
     /// Store fresh hardware observation JSON and publish it to a connected dashboard.
     /// Used when validating configuration changes. Returns `InvalidInput` for
     /// malformed JSON or more than 4096 bytes, and `Internal` for lock failure.
@@ -441,7 +367,7 @@ impl MobileController {
         let mut b = self.brain.lock().map_err(|_| ControllerError::Internal)?;
         b.hardware_observation = Some((
             serde_json::from_str(&payload).unwrap(),
-            std::time::Instant::now(),
+            b.imu_time.unwrap_or(b.last_tick).max(b.last_tick),
         ));
         if let Some(d) = b.dashboard.as_ref() {
             d.publish("hardware/status", payload);
@@ -476,57 +402,9 @@ impl MobileController {
     ) -> Result<(), ControllerError> {
         let outcome = (|| {
             let mut b = self.brain.lock().map_err(|_| ControllerError::Internal)?;
-            let invalid = || ControllerError::InvalidInput {
-                message: "invalid autonomy request".into(),
-            };
-            match kind.as_str() {
-                "navigation/source" | "navigation/resume" => {
-                    outdoor_bridge::request(&mut b, &kind, payload.as_bytes(), timestamp, 0.)?
-                }
-                "autonomy" => b.autonomy.set_level(
-                    terra_autonomy::decode_level(payload.as_bytes()).ok_or_else(invalid)?,
-                ),
-                "safety" => {
-                    let healthy = b.autonomy.is_manual()
-                        || b.estimator.estimate(timestamp).health == Health::Ready;
-                    b.autonomy.set_safety(
-                        terra_autonomy::decode_safety(payload.as_bytes()).ok_or_else(invalid)?,
-                        healthy,
-                    );
-                }
-                "goal" => {
-                    if !outdoor_bridge::dispatch_goal(&mut b, payload.as_bytes(), timestamp, 0.) {
-                        return Err(invalid());
-                    }
-                }
-                "goal/decision" => {
-                    let pose = b.pose.unwrap_or_default();
-                    let map = b.map.clone();
-                    let e = b.estimator.estimate(timestamp);
-                    let ready = pose_quality::ready(&b, timestamp);
-                    b.autonomy.decide_proposal(
-                        terra_autonomy::decode_decision(payload.as_bytes()).ok_or_else(invalid)?,
-                        &terra_autonomy::ArbiterInput {
-                            now: timestamp,
-                            pose: pose.0,
-                            pose_time: pose.1,
-                            map: map.as_ref().map(|m| &m.0),
-                            map_time: map.as_ref().map(|m| m.1),
-                            map_revision: map.as_ref().map(|m| m.2).unwrap_or(0),
-                            measured: terra_navigation::Twist {
-                                linear: e.forward,
-                                angular: e.yaw_rate,
-                            },
-                            healthy: ready,
-                        },
-                    );
-                }
-                "search" | "search/action" | "search/report/ack" => {
-                    search::dispatch_search(&mut b, &kind, payload.as_bytes(), timestamp)?
-                }
-                _ => return Err(invalid()),
-            }
-            Ok(())
+            b.runtime
+                .local_action(&kind, payload.as_bytes(), timestamp)
+                .map_err(ControllerError::from)
         })();
         let run = self.observation_run_id();
         self.observation.event("operator", if outcome.is_ok() { "command.dispatched" } else { "command.rejected" }, serde_json::json!({"topic":kind,"payload":serde_json::from_str::<serde_json::Value>(&payload).ok(),"error":outcome.as_ref().err().map(|e: &ControllerError|e.to_string())}), &run, timestamp);
@@ -603,12 +481,14 @@ impl MobileController {
                 message: "invalid run identity".into(),
             });
         }
+        let mut brain = self.brain.lock().map_err(|_| ControllerError::Internal)?;
         let recorder = terra_experiment::RunRecorder::create(
             std::path::Path::new(&path),
             serde_json::json!({
                 "run_id": run_id,
                 "platform": "phone",
-                "planner": terra_navigation::PlannerConfig::default(),
+                "runtime": brain.runtime.metadata(),
+                "planner": brain.navigation.parameters.planner(),
                 "collision_observation": "unavailable",
             }),
             8192,
@@ -616,7 +496,6 @@ impl MobileController {
         .map_err(|e| ControllerError::InvalidInput {
             message: e.to_string(),
         })?;
-        let mut brain = self.brain.lock().map_err(|_| ControllerError::Internal)?;
         if let Some(mut old) = brain.recorder.take() {
             old.close().map_err(|e| ControllerError::InvalidInput {
                 message: e.to_string(),
@@ -624,17 +503,7 @@ impl MobileController {
         }
         brain.recorder = Some(recorder);
 
-        brain.outdoor.cancel();
-        brain.outdoor.selected = false;
-        brain.outdoor.revision = brain.outdoor.revision.saturating_add(1);
-        brain.autonomy = terra_autonomy::AutonomyArbiter::default();
-        let planner = brain.navigation.parameters.planner();
-        brain.autonomy.configure_planner(planner);
-        let turning = brain.navigation.parameters.turning;
-        brain.autonomy.configure_turning(turning)?;
-        brain.autonomy.run_id = run_id.clone();
-        brain.controller.reset();
-        brain.run_id = run_id;
+        brain.runtime.begin_run(run_id)?;
         brain.run_start = None;
         brain.sequence = 0;
         Ok(())

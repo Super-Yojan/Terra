@@ -95,39 +95,15 @@ struct PhoneGroundPlane {
 /// Keep the world offset fixed, but follow terrain elevation and rover pitch/roll
 /// with a local supporting plane. Never move world points to flatten the terrain.
 struct PhoneGroundPolicy {
- private(set) var offset: Double?
- private(set) var clearance: Double?
- private var candidate: Double?
- private var since: Double?
- mutating func reset() { offset = nil; clearance = nil; candidate = nil; since = nil }
+ private let core = MobileGroundPolicy()
+ var offset: Double? { core.offset() }
+ var clearance: Double? { core.clearance() }
+ mutating func reset() { core.reset() }
  mutating func observe(height: Double?, cameraHeight: Double, area: Double, now: Double, upZ: Double = 1) -> Double? {
-  if let offset { return offset }
-  guard let height, height.isFinite, cameraHeight.isFinite, now.isFinite,
-        upZ.isFinite, upZ >= 0.5, upZ <= 1.000001,
-        area.isFinite, area >= 0.4, cameraHeight-height >= 0.1, cameraHeight-height <= 3 else {
-   candidate = nil; since = nil; return nil
-  }
-  if candidate.map({ abs($0-height) <= 0.03 }) != true { candidate = height; since = now }
-  if let since, now-since >= 1 {
-   offset = -height
-   clearance = (cameraHeight-height) * upZ
-  }
-  return offset
+  core.observe(height: height, cameraHeight: cameraHeight, area: area, now: now, upZ: upZ)
  }
-
- /// Use the calibrated rigid camera-to-ground distance and the current body up
- /// axis. Translation up/down a ramp changes this plane, not the world origin.
- /// The rover must remain supported on the terrain; this is not a depth plane fitter.
  func groundPlane(cameraPosition: SIMD3<Double>, bodyUp: SIMD3<Double>) -> PhoneGroundPlane? {
-  guard let offset, let clearance,
-        cameraPosition.x.isFinite, cameraPosition.y.isFinite, cameraPosition.z.isFinite,
-        bodyUp.x.isFinite, bodyUp.y.isFinite, bodyUp.z.isFinite else { return nil }
-  let length = hypot(hypot(bodyUp.x, bodyUp.y), bodyUp.z)
-  guard length.isFinite, length >= 1e-12 else { return nil }
-  let normal = bodyUp / length
-  guard normal.z >= 0.5 else { return nil }
-  let camera = cameraPosition + SIMD3(0, 0, offset)
-  return PhoneGroundPlane(normal: normal,
-   offset: normal.x * camera.x + normal.y * camera.y + normal.z * camera.z - clearance)
+  guard let value = core.plane(x: cameraPosition.x, y: cameraPosition.y, z: cameraPosition.z, upX: bodyUp.x, upY: bodyUp.y, upZ: bodyUp.z) else { return nil }
+  return PhoneGroundPlane(normal: SIMD3(value.normalX, value.normalY, value.normalZ), offset: value.offset)
  }
 }

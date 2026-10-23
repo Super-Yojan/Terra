@@ -40,18 +40,18 @@ No force-pushes or merges. Push existing branches Terra, then Zorvane, ARGOS.
 - [ ] A: deterministic baseline fixtures for manual/assisted/waypoint/turn/stop,
   settings/link/sensor failure; update obsolete fixtures; pin the complete Terra
   checkout in Zorvane terra-source.json and CI, eliminating mixed Git sources.
-- [ ] B: extract orchestration from terra-mobile into terra-runtime, retaining
+- [x] B: extract orchestration from terra-mobile into terra-runtime, retaining
   underlying crate algorithms; leave UniFFI/publication/recording in adapters.
-- [ ] C: unify remote admission, configuration revisions/receipts, execution-time
+- [x] C: unify remote admission, configuration revisions/receipts, execution-time
   expiry, stop/neutral behavior, sequence/replay handling; remove legacy hardware
   arm/disarm ingress and unbound cmd_vel; move Swift effort mixing into Rust.
-- [ ] D: one runtime per simulated rover; synthetic IMU/VIO samples feed shared
+- [x] D: one runtime per simulated rover; synthetic IMU/VIO samples feed shared
   estimation and autonomy; returned efforts drive existing physics; mode switches
   clear controller accumulation; no parallel fallback autonomy implementation.
-- [ ] E: share depth/ground validation, recentering, map integration, GPS/heading,
+- [x] E: share depth/ground validation, recentering, map integration, GPS/heading,
   source selection/resume, geographic missions, search/detection/reports and
   exploration. Coordinate conversion stays in platform adapters.
-- [ ] F: shared reconnect policy, invalidate remote authority/no replay, continue
+- [x] F: shared reconnect policy, invalidate remote authority/no replay, continue
   accepted missions with fresh onboard evidence; recording health separate from
   router health; common event/reason codes and runtime/config/mode provenance.
   Do not restart hosted Rerun.
@@ -74,3 +74,11 @@ binding generation and iPhone build. Roll out isolated simulation, phone/Pi
 neutral/config check, controlled manual/waypoint runs, controlled fault injection,
 then compare recordings/provenance. Never deploy unintentional baseline changes.
 Keep checkpoint builds available. Report every remaining verification failure.
+
+## Implementation and release record
+
+B–F software integration is implemented; evidence and review fixes are in the
+execution ledger. A remains partial because no exhaustive pre-extraction golden
+recording was captured; checkpoint code and existing reference tests are retained.
+G software is implemented, with publication/app rebuild receipts reported at
+handoff. Physical neutral/manual/waypoint/fault rollout remains unverified.

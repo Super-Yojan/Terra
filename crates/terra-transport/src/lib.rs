@@ -268,7 +268,7 @@ impl RoverConnection {
             accepted: 0,
         }));
         let inbox = depth.clone();
-        let key = format!("{prefix}/{rover_id}/cmd_vel");
+        let key = format!("{prefix}/{rover_id}/teleop");
         let base = format!("{prefix}/{rover_id}");
         let depth_key = format!("{prefix}/{rover_id}/camera/depth");
         let worker = thread::Builder::new()
@@ -605,7 +605,7 @@ mod tests {
             .unwrap();
         let server = zenoh::open(config).wait().unwrap();
         let subscriber = server
-            .declare_subscriber("terra/rover/*/cmd_vel")
+            .declare_subscriber("terra/rover/*/teleop")
             .wait()
             .unwrap();
         let client = RoverConnection::connect(&endpoint, "terra/rover", 7).unwrap();
@@ -615,7 +615,7 @@ mod tests {
         let mut stopped = false;
         while Instant::now() < deadline {
             if let Ok(Some(sample)) = subscriber.recv_timeout(Duration::from_millis(100)) {
-                assert_eq!(sample.key_expr().as_str(), "terra/rover/7/cmd_vel");
+                assert_eq!(sample.key_expr().as_str(), "terra/rover/7/teleop");
                 let p: serde_json::Value =
                     serde_json::from_slice(&sample.payload().to_bytes()).unwrap();
                 if p["linear"] == 1.0 {
@@ -842,8 +842,6 @@ pub fn is_control_topic(kind: &str) -> bool {
             | "navigation/source"
             | "navigation/resume"
             | "teleop"
-            | "cmd_vel"
-            | "hardware"
             | "navigation/settings"
             | "search"
             | "search/action"

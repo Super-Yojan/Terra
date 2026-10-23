@@ -386,6 +386,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
         controlQueue.async {
             do {
                 self.occupancyMap = try MobileOccupancyMap(settings: self.occupancySettings)
+                if let map = self.occupancyMap { try self.controller?.attachOccupancyMap(map: map) }
                 self.mapGroundOffset = nil; self.groundPolicy.reset()
                 self.lastMapTime = -Double.infinity
                 self.zenoh = try MobileZenohClient(endpoint: endpoint, prefix: "terra/rover", roverId: id)
@@ -526,6 +527,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
         }
         if mode == .phone { try self.controller?.resetOutdoorFrame() }
         self.occupancyMap = try MobileOccupancyMap(settings: self.occupancySettings)
+        if let map = self.occupancyMap { try self.controller?.attachOccupancyMap(map: map) }
         mapGroundOffset = nil; groundPolicy.reset(); lastMapTime = -Double.infinity
         DispatchQueue.main.async { self.occupancy = nil; self.mapPose = .zero; self.mapStatus = mode == .simulation ? "Simulated depth · 10 Hz" : (ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) ? "Waiting for scene depth" : "Scene depth unavailable on this device") }
         self.mode = mode
@@ -551,15 +553,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
         let attempt = dashboardAttemptToken()
         // Preserve the AR/controller clock when switching to manual hardware.
         // Do not repeatedly detach/reset authority once the router is disconnected.
-        if controller.dashboardStatus() == "connected" {
-            do { _ = try controller.step(timestamp: now) }
-            catch {
-                observation.record(component: "router", kind: "connection.lost", attributes: ["reason": "manual_dashboard_update_failed"])
-                target = (0, 0); pauseHardwareMotion(reason: "manual dashboard update failed: \(error)")
-                try? controller.disconnectDashboard()
-                DispatchQueue.main.async { self.status = "Dashboard control update: \(error.localizedDescription)" }
-            }
-        }
+
         if TerraManualRouterSafety.emergencyStopped(statusJSON: controller.autonomyStatus()), !dashboardEmergencyStop {
             observation.recordSafetyRequest(reset: false, source: "router_authority", route: "bluetooth")
             dashboardEmergencyStop = true; target = (0, 0); resetServoTargets()
@@ -579,15 +573,22 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
     }
     private func update() {
         if mode == .bluetoothManual {
-            if tick % 10 == 0 { serviceManualDashboard(now: CACurrentMediaTime()); updateAuthority() }
-            tick += 1
-            if tick % 5 == 0 {
-                let command = controller?.dashboardStatus() == "connected"
-                    ? TerraFleetManualDrive.command(controller?.autonomyStatus() ?? "{}")
-                    : DriveJoystickCommand(forward: target.forward, yaw: target.yaw)
-                let wheels = command.wheelEfforts
-                routeHardware(left: wheels.left, right: wheels.right, now: ProcessInfo.processInfo.systemUptime, manualTarget: command)
-            }
+            let now = CACurrentMediaTime()
+            do {
+                if controller == nil { controller = try MobileController(settings: defaultControlSettings()) }
+                guard let controller else { return }
+                try controller.setActuationMode(feedback: false)
+                if controller.dashboardStatus() != "connected" {
+                    try controller.setManualInput(forward: target.forward, turn: target.yaw, timestamp: now)
+                }
+                let output = try controller.step(timestamp: now)
+                if tick % 10 == 0 { serviceManualDashboard(now: now); updateAuthority() }
+                tick += 1
+                if tick % 5 == 0 {
+                    let command = DriveJoystickCommand(forward: (output.leftEffort + output.rightEffort) / 2, yaw: (output.rightEffort - output.leftEffort) / 2)
+                    routeHardware(left: output.leftEffort, right: output.rightEffort, now: ProcessInfo.processInfo.systemUptime, manualTarget: command)
+                }
+            } catch { fail(error, context: "Shared runtime manual drive") }
             return
         }
         if mode == .remote, let zenoh {
@@ -623,6 +624,8 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
                 lastLocalTarget = target
             }
             }
+            let direct = bleActive && !bleFeedback
+            try controller.setActuationMode(feedback: !direct)
             let output = try controller.step(timestamp: now)
             if tick % 10 == 0 && controller.dashboardStatus() == "failed" {
                 let continuingMission = controller.acceptedOnboardMission()
@@ -654,9 +657,8 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
             if bleActive && fullyManual && tick % 5 == 0 {
                 // L0 has no sensor-driven motor correction. The arbiter still
                 // gates the operator command by authority, freshness and safety.
-                let command = TerraFleetManualDrive.command(autonomy)
-                let wheels = command.wheelEfforts
-                routeHardware(left: wheels.left, right: wheels.right, now: ProcessInfo.processInfo.systemUptime, manualTarget: command)
+                let command = DriveJoystickCommand(forward: (output.leftEffort + output.rightEffort) / 2, yaw: (output.rightEffort - output.leftEffort) / 2)
+                routeHardware(left: output.leftEffort, right: output.rightEffort, now: ProcessInfo.processInfo.systemUptime, manualTarget: command)
             }
             if bleActive && (bleFeedback || vioWaypoint) && !fullyManual {
                 if !feedbackTrackingHealthy || output.safety != .active {
@@ -665,9 +667,8 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
                 if tick % 5 == 0 { routeHardware(left: output.leftEffort, right: output.rightEffort, now: ProcessInfo.processInfo.systemUptime, closedLoop: true) }
             }
             if bleActive && !bleFeedback && !vioWaypoint && !fullyManual && tick % 5 == 0 && controller.dashboardStatus() == "connected" {
-                let command = TerraFleetManualDrive.command(autonomy)
-                let wheels = command.wheelEfforts
-                routeHardware(left: wheels.left, right: wheels.right, now: ProcessInfo.processInfo.systemUptime, manualTarget: command)
+                let command = DriveJoystickCommand(forward: (output.leftEffort + output.rightEffort) / 2, yaw: (output.rightEffort - output.leftEffort) / 2)
+                routeHardware(left: output.leftEffort, right: output.rightEffort, now: ProcessInfo.processInfo.systemUptime, manualTarget: command)
             }
             if tick % 10 == 0 { publish(output);updateAuthority() }
             if mode == .phone { publishLocalization(controller) }

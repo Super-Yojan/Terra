@@ -21,6 +21,14 @@ pub const DETECTOR_FRESHNESS_SECONDS: f64 = 0.5;
 /// Maximum displayed planner-trace age; this is a diagnostic lifetime.
 pub const PLANNER_TRACE_FRESHNESS_SECONDS: f64 = 0.5;
 
+/// Maximum age of relay status used for source/configuration admission.
+pub const HARDWARE_FRESHNESS_SECONDS: f64 = 0.5;
+/// Execution-time admission age for settings and other control requests.
+pub const CONTROL_REQUEST_FRESHNESS_SECONDS: f64 = 0.5;
+/// IMU and VIO estimator defaults, retained from the phone baseline.
+pub const IMU_FRESHNESS_SECONDS: f64 = 0.1;
+pub const VIO_FRESHNESS_SECONDS: f64 = 0.35;
+
 // PLANNING: frequency and prediction, rather than mission expiry.
 /// Maximum reuse age for an admissible cached local plan.
 pub const LOCAL_PLAN_CACHE_SECONDS: f64 = 0.1;

@@ -73,51 +73,9 @@ pub(crate) fn dispatch_search(
     bytes: &[u8],
     timestamp: f64,
 ) -> Result<(), ControllerError> {
-    let pose = b.pose.unwrap_or_default();
-    let map = b.map.clone();
-    let e = b.estimator.estimate(timestamp);
-    b.autonomy.run_id = b.run_id.clone();
-    let input = terra_autonomy::ArbiterInput {
-        now: timestamp,
-        pose: pose.0,
-        pose_time: pose.1,
-        map: map.as_ref().map(|m| &m.0),
-        map_time: map.as_ref().map(|m| m.1),
-        map_revision: map.as_ref().map(|m| m.2).unwrap_or(0),
-        measured: terra_navigation::Twist {
-            linear: e.forward,
-            angular: e.yaw_rate,
-        },
-        healthy: e.health == Health::Ready && b.recorder.as_ref().is_none_or(|r| !r.failed()),
-    };
-    match kind {
-        "search" => b
-            .autonomy
-            .start_search(
-                terra_autonomy::decode_search_request(bytes)
-                    .ok_or_else(|| search_error("invalid search request"))?,
-                &input,
-            )
-            .map_err(search_error),
-        "search/action" => b
-            .autonomy
-            .apply_search_action(
-                terra_autonomy::decode_search_action(bytes)
-                    .ok_or_else(|| search_error("invalid search action"))?,
-                &input,
-            )
-            .map_err(search_error),
-        "search/report/ack" => {
-            let r = terra_autonomy::decode_search_report_ack(bytes)
-                .ok_or_else(|| search_error("invalid report acknowledgement"))?;
-            if b.autonomy.ack_search_report(r) {
-                Ok(())
-            } else {
-                Err(search_error("unknown report"))
-            }
-        }
-        _ => Err(search_error("unsupported search request")),
-    }
+    b.runtime.recording_healthy = b.recorder.as_ref().is_none_or(|r| !r.failed());
+    terra_runtime::search::dispatch_search(&mut b.runtime, kind, bytes, timestamp)
+        .map_err(Into::into)
 }
 #[uniffi::export]
 impl MobileController {
