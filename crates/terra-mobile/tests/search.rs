@@ -128,3 +128,92 @@ fn mobile_search_replays_confirmation_and_exports_report() {
     );
     assert_eq!(v["twist"]["linear"], 0.);
 }
+
+#[test]
+fn offline_search_preserves_identity_and_budget() {
+    let c = MobileController::new(default_control_settings()).unwrap();
+    sensors(&c, 1.);
+    c.step(1.).unwrap();
+    let root: serde_json::Value = serde_json::from_str(&c.autonomy_status()).unwrap();
+    let run = root["status"]["run_id"].as_str().unwrap().to_owned();
+    c.register_search_detector(vec!["survivor".into()], "offline".into(), 1.)
+        .unwrap();
+    c.autonomy_request(
+        "autonomy".into(),
+        r#"{"level":"target_search","token":"mode"}"#.into(),
+        1.,
+    )
+    .unwrap();
+    c.start_target_search(
+        MobileSearchRequest {
+            run_id: run.clone(),
+            search_id: "offline".into(),
+            token: "start".into(),
+            target_class: "survivor".into(),
+            min_x: -4.,
+            min_y: -4.,
+            max_x: 4.,
+            max_y: 4.,
+            time_budget_s: 120.,
+        },
+        1.,
+    )
+    .unwrap();
+    assert!(c.accepted_onboard_mission());
+    c.handle_dashboard_link_loss().unwrap();
+    for tick in 1..=1200 {
+        let t = 1. + tick as f64 * 0.1;
+        sensors(&c, t);
+        c.register_search_detector(vec!["survivor".into()], "offline".into(), t)
+            .unwrap();
+        c.step(t).unwrap();
+        let root: serde_json::Value = serde_json::from_str(&c.autonomy_status()).unwrap();
+        assert_eq!(root["search"]["run_id"], run);
+        assert_ne!(root["search"]["reason"], "sensor_unhealthy");
+    }
+    let root: serde_json::Value = serde_json::from_str(&c.autonomy_status()).unwrap();
+    assert_ne!(
+        root["search"]["phase"], "searching",
+        "budget or natural exhaustion ends the search"
+    );
+    assert!(!c.accepted_onboard_mission());
+}
+
+#[test]
+fn offline_detector_loss_still_requires_attention() {
+    let c = MobileController::new(default_control_settings()).unwrap();
+    sensors(&c, 1.);
+    c.step(1.).unwrap();
+    let root: serde_json::Value = serde_json::from_str(&c.autonomy_status()).unwrap();
+    let run = root["status"]["run_id"].as_str().unwrap().to_owned();
+    c.register_search_detector(vec!["survivor".into()], "offline".into(), 1.)
+        .unwrap();
+    c.autonomy_request(
+        "autonomy".into(),
+        r#"{"level":"target_search","token":"mode"}"#.into(),
+        1.,
+    )
+    .unwrap();
+    c.start_target_search(
+        MobileSearchRequest {
+            run_id: run.clone(),
+            search_id: "offline".into(),
+            token: "start".into(),
+            target_class: "survivor".into(),
+            min_x: -4.,
+            min_y: -4.,
+            max_x: 4.,
+            max_y: 4.,
+            time_budget_s: 120.,
+        },
+        1.,
+    )
+    .unwrap();
+    assert!(c.accepted_onboard_mission());
+    c.handle_dashboard_link_loss().unwrap();
+    sensors(&c, 2.);
+    c.step(2.).unwrap();
+    let root: serde_json::Value = serde_json::from_str(&c.autonomy_status()).unwrap();
+    assert_eq!(root["search"]["phase"], "needs_attention");
+    assert!(!c.accepted_onboard_mission());
+}

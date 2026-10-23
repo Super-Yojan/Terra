@@ -1,5 +1,21 @@
 import SwiftUI
 
+struct TerraStopReasonView: View {
+    @ObservedObject var brain: PhoneController
+    var body: some View {
+        if let reason = brain.lastStopDiagnostic.message {
+            VStack(alignment: .leading, spacing: 8) {
+                if let time = brain.lastStopDiagnostic.timestamp {
+                    Text(Date(timeIntervalSince1970: time), style: .time).font(.caption).foregroundStyle(.secondary)
+                }
+                Text(reason).font(.subheadline).textSelection(.enabled)
+                Text("Retained through reconnects. Clear it here after reviewing the cause.").font(.caption).foregroundStyle(.secondary)
+                Button("Clear reason") { brain.clearStopReason() }
+            }
+        }
+    }
+}
+
 struct ControllerDetailView: View {
     @ObservedObject var brain: PhoneController
     var destination: TerraDestination = .drive
@@ -26,6 +42,9 @@ struct ControllerDetailView: View {
     private let waypointReach = 49.0
     var body: some View {
         Form {
+                if brain.lastStopDiagnostic.message != nil {
+                    Section("Last stop reason") { TerraStopReasonView(brain: brain) }
+                }
                 if destination == .drive {
                     Section("Manual Control") { DriveControlPanel(brain: brain) }
                         .id(TerraDestination.drive)
@@ -95,7 +114,7 @@ struct ControllerDetailView: View {
                         .keyboardType(.decimalPad)
                         .accessibilityLabel("Explore budget seconds")
                     Picker("Requested level",selection:Binding(get:{brain.autonomyLevel},set:{brain.setAutonomy($0, budgetSeconds: Double(exploreSeconds))})) {Text("Teleop").tag("teleop");Text("Assisted teleop").tag("assisted_teleop");Text("L2 · Direct waypoint").tag("waypoint_direct");Text("L3 · Obstacle-aware waypoint").tag("waypoint");Text("Autonomous explore").tag("explore");Text("Supervised search").tag("supervised");if brain.searchAvailable {Text("L4 target search").tag("target_search")}}
-                        .disabled(brain.hardwareActive && !brain.hardwareFeedback)
+                        .disabled(brain.hardwareActive && !brain.hardwareFeedback && !(brain.phoneTrackingActive && brain.vioControlCompatible))
                     Text(brain.autonomyReason)
                     if !brain.explorationSummary.isEmpty { Text(brain.explorationSummary).font(.footnote) }
                     if let proposal=brain.proposedGoal {Text(brain.proposalText);HStack {Button("Approve search target") {brain.decideProposal(proposal,approve:true)};Button("Reject") {brain.decideProposal(proposal,approve:false)}}}
@@ -151,7 +170,7 @@ struct ControllerDetailView: View {
                         LabeledContent("Distance", value: String(format: "%.1f m", brain.waypointDistance))
                     }
                     Button("Go to waypoint") { goToWaypoint() }
-                        .disabled(brain.waypointActive || (brain.hardwareActive && !brain.hardwareFeedback))
+                        .disabled(brain.waypointActive || (brain.hardwareActive && !brain.hardwareFeedback && !(brain.autonomyLevel == "waypoint" && brain.phoneTrackingActive && brain.vioControlCompatible)))
                     Button("Cancel waypoint", role: .destructive) { brain.cancelWaypoint() }
                         .disabled(!brain.waypointActive)
                     if !entryNote.isEmpty {
@@ -186,7 +205,7 @@ struct ControllerDetailView: View {
                     LabeledContent("Measured turn", value: String(format: "%.2f rad/s", brain.measuredYaw))
                     LabeledContent("Left motor", value: String(format: "%+.3f", brain.leftEffort))
                     LabeledContent("Right motor", value: String(format: "%+.3f", brain.rightEffort))
-                    Text("Motor effort is normalized from −1 to +1 (unidirectional ESCs use 0 to 1). Bluetooth hardware requires explicit arming and an independent enable gate. Zero effort is not a brake.")
+                    Text("Motor effort is normalized from −1 to +1 (unidirectional ESCs use 0 to 1). Bluetooth sends signed integer efforts from −100 to +100 every 50 ms. Zero effort is not a brake.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }.id(TerraDestination.telemetry)
                 Section("Connection details") {
@@ -240,13 +259,13 @@ struct ControllerDetailView: View {
                 }
         }
         .navigationTitle(destination.title)
-        .onChange(of: brain.hardwareArmed) { _, _ in forward = 0; yaw = 0 }
+        .onChange(of: brain.hardwareReady) { _, _ in forward = 0; yaw = 0 }
         .onChange(of: brain.hardwareActive) { _, _ in forward = 0; yaw = 0 }
         .onChange(of: forward) { _, _ in brain.setTarget(forward: forward, yaw: yaw) }
         .onChange(of: yaw) { _, _ in brain.setTarget(forward: forward, yaw: yaw) }
         .onDisappear {
             if destination == .drive || destination == .settings {
-                forward = 0; yaw = 0; brain.setTarget(forward: 0, yaw: 0); brain.disarmHardware()
+                forward = 0; yaw = 0; brain.setTarget(forward: 0, yaw: 0); brain.stopHardware()
             }
         }
     }

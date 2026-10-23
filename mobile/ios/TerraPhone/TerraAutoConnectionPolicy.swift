@@ -1,6 +1,55 @@
 import Foundation
 import Security
 
+struct TerraSavedRover: Codable, Identifiable, Equatable {
+    let id: UUID
+    var name: String
+}
+
+/// Save confirmed pairings separately from the rover selected for reconnection.
+struct TerraSavedRovers {
+    private let defaults: UserDefaults
+    private(set) var rovers: [TerraSavedRover]
+    private(set) var selected: UUID?
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        selected = defaults.string(forKey: "preferredHardwareRover").flatMap(UUID.init(uuidString:))
+        if let data = defaults.data(forKey: "savedHardwareRovers"),
+           let saved = try? JSONDecoder().decode([TerraSavedRover].self, from: data) {
+            rovers = saved
+        } else if let selected {
+            rovers = [.init(id: selected, name: defaults.string(forKey: "preferredHardwareRoverName") ?? "Terra rover")]
+        } else { rovers = [] }
+        if !rovers.contains(where: { $0.id == selected }) { selected = nil }
+        persist()
+    }
+    mutating func remember(id: UUID, name: String) {
+        if let index = rovers.firstIndex(where: { $0.id == id }) { rovers[index].name = name }
+        else { rovers.append(.init(id: id, name: name)) }
+        selected = id; persist()
+    }
+    @discardableResult mutating func select(_ id: UUID) -> Bool {
+        guard rovers.contains(where: { $0.id == id }) else { return false }
+        selected = id; persist(); return true
+    }
+    mutating func clearSelection() { selected = nil; persist() }
+    mutating func forget(_ id: UUID) {
+        rovers.removeAll { $0.id == id }
+        if selected == id { selected = nil }
+        persist()
+    }
+    private func persist() {
+        if let data = try? JSONEncoder().encode(rovers) { defaults.set(data, forKey: "savedHardwareRovers") }
+        if let rover = rovers.first(where: { $0.id == selected }) {
+            defaults.set(rover.id.uuidString, forKey: "preferredHardwareRover")
+            defaults.set(rover.name, forKey: "preferredHardwareRoverName")
+        } else {
+            defaults.removeObject(forKey: "preferredHardwareRover")
+            defaults.removeObject(forKey: "preferredHardwareRoverName")
+        }
+    }
+}
+
 /// Discovery never establishes ownership. Only a remembered rover reconnects silently.
 enum TerraAutoConnectionPolicy {
     static func select(candidates: [UUID], preferred: UUID?) -> UUID? {

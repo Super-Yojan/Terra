@@ -53,6 +53,12 @@ import simd
         if PhoneMountGeometry.headingReferenceYaw(worldFromCamera: invalid) != nil {
             print("FAIL: reject invalid reference orientation"); failures += 1
         }
+        for offset in [0.0, 0.4, -.pi / 2, .pi] {
+            let actual = PhoneMountGeometry.roverTrueHeading(compass: 100, roverYaw: 1.2 + offset, referenceYaw: 1.2)
+            let expected = (100 - offset * 180 / .pi + 720).truncatingRemainder(dividingBy: 360)
+            precondition(abs(actual - expected) < 0.000001)
+        }
+        precondition(PhoneMountGeometry.roverTrueHeading(compass: -1, roverYaw: 0, referenceYaw: 0) == -1)
         if failures > 0 { exit(1) }
         print("Phone mount: forward, up, IMU axes and upright compass alignment passed")
     }

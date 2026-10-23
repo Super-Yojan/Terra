@@ -40,3 +40,27 @@ class StatusReadTests(unittest.TestCase):
         self.assertEqual(decoded['last_sequence'], 42)
         self.assertEqual(decoded['stop_reason'], 'watchdog')
         self.assertNotIn('configuration_errors', decoded)
+
+    def test_long_backend_fault_in_stop_reason_does_not_kill_status_stream(self):
+        detail = 'backend: apply on M0: permission denied; safe failures: ' + 'M0/P11 unavailable; ' * 40
+        payload = dict(schema_version=1, type='status', session=4294967295,
+                       active_revision=4294967295, armed=False, arming=False,
+                       layout_available=True, fault=detail, stop_reason=detail,
+                       emergency_stop=False, gate_mode='external_power_cutoff',
+                       bench_enabled=False, hardware_gate_open_confirmed=False,
+                       configuration_allowed=True, last_sequence=65535)
+        raw = status_read_document(payload)
+        self.assertLessEqual(len(raw), 512)
+        decoded = json.loads(raw)
+        self.assertTrue(decoded['fault'].startswith('backend: apply on M0:'))
+        self.assertTrue(decoded['stop_reason'])
+        self.assertEqual(decoded['session'], 4294967295)
+        self.assertFalse(decoded['armed'])
+
+    def test_fault_prefix_is_preserved_when_other_fields_fill_packet(self):
+        detail = 'backend: apply on M0: permission denied; safe failures: ' + 'x' * 2000
+        decoded = json.loads(status_read_document(dict(schema_version=1, type='status',
+            session=1, active_revision=1, armed=False, arming=False, fault=detail,
+            stop_reason='hardware_gate_open', layout_available=True, emergency_stop=False,
+            configuration_allowed=False, gate_mode='external_power_cutoff')))
+        self.assertTrue(decoded['fault'].startswith('backend: apply on M0: permission denied'))

@@ -28,9 +28,9 @@ triangles; the original CAD export is not included in the app.
 ## Automatic hardware connection
 
 On physical iPhones, automatic connection is enabled by default. Terra scans for
-its Bluetooth service while in the foreground and reconnects only to the last
+its Bluetooth service while in the foreground and reconnects only to the selected
 confirmed owner rover. Unknown operational rovers are never selected silently.
-For first setup, hold the rover’s USR button for three seconds until its LED blinks.
+For setup or ownership transfer, hold the rover’s USR button for three seconds until its LED blinks. On an owned rover this stops outputs, disconnects the old phone, and removes its ownership record and Bluetooth bond before pairing opens.
 Its pairing advertisement triggers a **Connect / Not now** popup; iOS may then
 request Bluetooth pairing. After confirmation, Terra remembers the rover and
 waits for its normal service to restart, then reconnects automatically. Not now
@@ -50,8 +50,11 @@ Tracking starts without replacing the router session or accepted autonomy. Feedb
 control additionally requires a compatible layout and healthy tracking. Backgrounding
 disconnects and disarms; foreground return reconnects. Inactive transitions zero
 and disarm without canceling pairing. Stop or explicit Disconnect suppresses
-reconnection until Retry or a new foreground session. Forget rover clears the
-saved rover and starts discovery for another pairing candidate. Disable
+reconnection until Retry or a new foreground session. The home screen’s **Choose rover or add rover** opens all saved pairings. Select a
+rover to disconnect and disarm the current rover, then connect to the chosen one.
+**Add rover** starts pairing discovery while retaining other saved rovers.
+**Forget rover** removes only that rover from this phone. Existing single-rover
+preferences migrate automatically into the saved list. Disable
 **Automatic connection** to stop discovery and automatic retries. Simulator
 builds retain the existing Bevy and local simulation flows.
 

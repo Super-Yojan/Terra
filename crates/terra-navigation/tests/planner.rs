@@ -178,3 +178,117 @@ fn trace_matches_decision_and_records_rejected_candidates() {
     );
     assert!(serde_json::to_vec(&trace).unwrap().len() < 55_000);
 }
+
+#[test]
+fn managed_reverse_checks_unknown_rear_and_marks_trace() {
+    let planner = LocalPlanner::default();
+    let limiter = terra_control::TurningLimiter::new(Default::default()).unwrap();
+    let (out, trace) = planner.plan_with_turning(
+        &map(),
+        Pose::default(),
+        Twist::default(),
+        Twist {
+            linear: -0.2,
+            angular: 0.3,
+        },
+        0.1,
+        &limiter,
+        0.,
+    );
+    assert!(out.twist.linear < 0.);
+    let selected = &trace.candidates[trace.selected.unwrap()];
+    assert_eq!(selected.velocity, out.twist);
+    assert_eq!(selected.direction, "reverse");
+    assert!(out.twist.linear >= -planner.config.max_reverse);
+    let mut rear = map();
+    rear.occupancy[20 * 40 + 17] = -1; // behind, inside rear footprint: no unknown exemption
+    assert!(!planner.admissible(&rear, Pose::default(), out.twist));
+    rear.occupancy[20 * 40 + 17] = 100;
+    assert!(!planner.admissible(&rear, Pose::default(), out.twist));
+}
+#[test]
+fn multipoint_turn_precedes_hold_and_prefers_forward_when_clear() {
+    let planner = LocalPlanner::default();
+    let c = terra_control::TurningConfig::default();
+    let segments = planner
+        .heading_maneuver(&map(), Pose::default(), std::f64::consts::PI, &c)
+        .unwrap();
+    assert!(segments.iter().any(|s| s.direction == "reverse"));
+    assert!(segments.iter().any(|s| s.direction == "forward"));
+    for segment in &segments {
+        assert!(planner.admissible(&map(), segment.start, segment.velocity));
+    }
+    let (out, _) = planner.plan_with_turning(
+        &map(),
+        Pose::default(),
+        Twist::default(),
+        Twist {
+            linear: 0.2,
+            angular: 0.,
+        },
+        0.1,
+        &terra_control::TurningLimiter::new(c).unwrap(),
+        0.,
+    );
+    assert!(out.twist.linear > 0.);
+}
+
+#[test]
+fn forward_heading_arc_remains_available_when_reverse_unknown() {
+    let mut map = terra_mapping::MapSnapshot {
+        width: 80,
+        height: 80,
+        resolution: 0.1,
+        origin_x: -4.,
+        origin_y: -4.,
+        occupancy: vec![0; 6400],
+    };
+    map.occupancy[40 * 80 + 38] = -1;
+    let planner = terra_navigation::LocalPlanner::default();
+    let pose = terra_navigation::Pose::default();
+    assert!(planner.admissible(
+        &map,
+        pose,
+        terra_navigation::Twist {
+            linear: 0.15,
+            angular: 0.3
+        }
+    ));
+    assert!(
+        planner
+            .heading_maneuver(&map, pose, 1.1, &Default::default())
+            .is_some()
+    );
+}
+#[test]
+fn measured_overspeed_does_not_expand_candidate_limits() {
+    let map = terra_mapping::MapSnapshot {
+        width: 100,
+        height: 100,
+        resolution: 0.1,
+        origin_x: -5.,
+        origin_y: -5.,
+        occupancy: vec![0; 10000],
+    };
+    let mut planner = terra_navigation::LocalPlanner::default();
+    planner.config.max_linear = 0.3;
+    planner.config.max_angular = 0.2;
+    let (plan, _) = planner.plan_with_trace(
+        &map,
+        terra_navigation::Pose::default(),
+        terra_navigation::Twist {
+            linear: 1.,
+            angular: 1.,
+        },
+        terra_navigation::Twist {
+            linear: 1.,
+            angular: 1.,
+        },
+        0.1,
+    );
+    assert!(
+        plan.twist.linear <= 0.3 && plan.twist.angular.abs() <= 0.2,
+        "{:?}",
+        plan.twist
+    );
+}

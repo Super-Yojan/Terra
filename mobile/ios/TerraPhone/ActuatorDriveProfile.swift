@@ -56,6 +56,28 @@ struct ActuatorDriveProfileSet: Codable {
             && !actuators.contains { $0.route.type == "manual" }
     }
 
+    /// A differential motor layout can consume VIO controller efforts directly or through its manual mixer.
+    var supportsVioControl: Bool {
+        var left = false, right = false
+        for actuator in actuators where actuator.kind != "positional_servo" {
+            switch actuator.route.type {
+            case "left_effort": left = true
+            case "right_effort": right = true
+            case "manual":
+                guard let f = actuator.route.forward_coefficient, let t = actuator.route.turn_coefficient,
+                      abs(f) > 0, abs(f) == abs(t) else { return false }
+                if f * t < 0 { left = true } else { right = true }
+            default: return false
+            }
+        }
+        return left && right
+    }
+    func routeClosedLoop(left: Double, right: Double, servos: [String: Double]) throws -> [[String: Any]] {
+        guard supportsVioControl else { throw ActuatorProfileError.invalidInput("Differential motor routes required") }
+        return try route(input: ["left_effort": left, "right_effort": right,
+                                 "forward": (left + right) / 2, "turn": (right - left) / 2,
+                                 "servo_positions": servos])
+    }
     func route(input: [String: Any]) throws -> [[String: Any]] {
         let keys = ["left_effort", "right_effort", "forward", "turn"]
         var values: [String: Double] = [:]

@@ -294,3 +294,24 @@ Retry delays cap at
 15 seconds, and reconnection leaves outputs disarmed. Stop/Disconnect suppresses
 automatic attempts until Retry or foreground return. Hardware pairing and radio
 behavior still require an iPhone/rover acceptance check.
+
+### Fleet turning and pose quality
+
+ARGOS commands and autonomous goals use [managed turning and reversing](autonomy/turning-policy.md).
+Direct phone Bluetooth manual input retains its existing behavior without VIO.
+The phone publishes explicit `pose/quality` telemetry and refuses new autonomous
+goals while pose evidence is degraded. Existing WGS84 goal projection does not
+constitute outdoor GPS mission support; that controller remains separate work.
+
+### L0 manual control without tracking
+
+L0 fleet manual authority no longer depends on camera pose or IMU health. The phone
+routes the arbiter's fresh operator command directly to manual actuator effort;
+closed-loop motor output and assisted/autonomous modes retain sensor requirements.
+Command expiry, transport failure, emergency stop, hardware faults, and explicit
+arm/resume remain enforced. Explicit L0 safety reset can clear an emergency stop
+without camera tracking and never replays the old drive command.
+
+Hardware status now includes the optional `stop_diagnostic` string: the phone's
+retained first stop cause, cleared on explicit arm/resume. ARGOS uses it to explain
+motion pauses instead of reporting every block as “Arm to drive.”

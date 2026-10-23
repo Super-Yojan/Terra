@@ -127,7 +127,8 @@ impl SearchNavigator {
             if self.excluded.len() == 256 {
                 self.excluded.remove(0);
             }
-            self.excluded.push((x, y, now + 30.));
+            self.excluded
+                .push((x, y, now + terra_types::timing::SEARCH_BLACKLIST_SECONDS));
         }
         self.route.clear();
         self.anchor = None;
@@ -252,7 +253,11 @@ impl SearchNavigator {
             };
         }
         self.record_progress(pose, now);
-        if self.goal.is_some() && self.anchor.is_some_and(|(_, t)| now - t >= 10.) {
+        if self.goal.is_some()
+            && self
+                .anchor
+                .is_some_and(|(_, t)| now - t >= terra_types::timing::SEARCH_STUCK_SECONDS)
+        {
             self.invalidate_goal(now);
         }
         if self.failures >= 3 {
@@ -273,7 +278,8 @@ impl SearchNavigator {
             return SearchNavigationDecision::Goal { x, y };
         }
         if let Some((x, y)) = self.goal.take() {
-            self.excluded.push((x, y, now + 30.));
+            self.excluded
+                .push((x, y, now + terra_types::timing::SEARCH_BLACKLIST_SECONDS));
         }
         // Choose frontiers globally from memory; validate follower waypoints locally below.
         let memory = self.map.as_ref().unwrap();

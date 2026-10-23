@@ -32,6 +32,7 @@ struct ContentView: View {
             NavigationStack {
                 switch item {
                 case .rover: RoverConnectionDetails(brain: brain)
+                case .rovers: RoverSelectionView(brain: brain)
                 case .fleet: FleetConnectionDetails(brain: brain)
                 case .fleetSettings: FleetConnectionSettings(brain: brain)
                 case .roverSetup: RoverSetupView(brain: brain)
@@ -41,7 +42,7 @@ struct ContentView: View {
         .onChange(of: scenePhase) { _, phase in
             UIApplication.shared.isIdleTimerDisabled = phase == .active
             if phase == .background { brain.stop() }
-            else if phase == .inactive { brain.setTarget(forward: 0, yaw: 0); brain.disarmHardware() }
+            else if phase == .inactive { brain.setTarget(forward: 0, yaw: 0); brain.stopHardware() }
             else if phase == .active { brain.autoConnectHardware() }
         }
     }

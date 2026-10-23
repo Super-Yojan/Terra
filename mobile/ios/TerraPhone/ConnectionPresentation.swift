@@ -20,6 +20,11 @@ struct TerraConnectionFacts {
     var fleetFailed = false
     var simulator = false
 
+    /// Keep an already-running local control/sensor session across cloud retries.
+    /// Explicit fleet pause and local Bluetooth loss retain their stop behavior.
+    var canRetainTrackingDuringRouterRetry: Bool {
+        authenticated && configurationAvailable && fleetConfigured && !fleetPaused && !roverFailed
+    }
     var shouldTrackForFleet: Bool { fleetConnected && authenticated && configurationAvailable }
 
     var roverState: RoverState {

@@ -12,6 +12,12 @@ import Foundation
         precondition(facts.shouldTrackForFleet)
         facts.fleetConnected = false
         precondition(!facts.shouldTrackForFleet)
+        facts.fleetConfigured = true; facts.hardwareReady = true
+        precondition(facts.canRetainTrackingDuringRouterRetry)
+        facts.fleetPaused = true
+        precondition(!facts.canRetainTrackingDuringRouterRetry)
+        facts.fleetPaused = false; facts.authenticated = false
+        precondition(!facts.canRetainTrackingDuringRouterRetry)
         facts = TerraConnectionFacts()
         precondition(facts.roverState == .paused)
         facts.automatic = true

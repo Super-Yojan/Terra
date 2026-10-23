@@ -33,6 +33,7 @@ impl std::error::Error for TransportError {}
 #[derive(Default)]
 struct State {
     target: Option<(f64, f64, Instant)>,
+    target_generation: Option<(String, u64)>,
     actions: std::collections::VecDeque<(String, String)>,
     authority: String,
     authority_received: Option<Instant>,
@@ -340,6 +341,16 @@ impl RoverConnection {
                                     state.search = Some((value, Instant::now()));
                                 }
                             } else {
+                                let previous: serde_json::Value =
+                                    serde_json::from_str(&state.authority).unwrap_or_default();
+                                let current: serde_json::Value =
+                                    serde_json::from_str(&text).unwrap_or_default();
+                                if previous["run_id"] != current["run_id"]
+                                    || previous["revision"] != current["revision"]
+                                {
+                                    state.target = None;
+                                    state.target_generation = None;
+                                }
                                 state.authority = text;
                                 state.authority_received = Some(Instant::now());
                             }
@@ -347,6 +358,14 @@ impl RoverConnection {
                     })
                     .wait()
                     .ok();
+                let operator_session_id = format!(
+                    "phone-ui-{}",
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_nanos()
+                );
+                let mut sequence = 0_u64;
                 loop {
                     let actions = std::mem::take(&mut shared.lock().unwrap().actions);
                     for (kind, payload) in actions {
@@ -355,7 +374,7 @@ impl RoverConnection {
                         }
                     }
 
-                    let (shutdown, linear, angular) = {
+                    let (shutdown, linear, angular, generation) = {
                         let state = shared.lock().unwrap();
                         let target = state.target.filter(|(_, _, t)| t.elapsed() < LEASE);
                         let (linear, angular) = target.map_or((0.0, 0.0), |(v, w, _)| (v, w));
@@ -363,9 +382,20 @@ impl RoverConnection {
                             state.shutdown,
                             if state.shutdown { 0.0 } else { linear },
                             if state.shutdown { 0.0 } else { angular },
+                            state.target_generation.clone(),
                         )
                     };
-                    let bytes = payload(linear, angular).expect("validated target");
+                    let mut bytes = payload(linear, angular).expect("validated target");
+                    if let Some((run, revision)) = generation {
+                        sequence = sequence.saturating_add(1);
+                        let mut value: serde_json::Value =
+                            serde_json::from_str(&bytes).expect("validated target");
+                        value["run_id"] = serde_json::json!(run);
+                        value["authority_revision"] = serde_json::json!(revision);
+                        value["operator_session_id"] = serde_json::json!(operator_session_id);
+                        value["sequence"] = serde_json::json!(sequence);
+                        bytes = value.to_string();
+                    }
                     if let Err(error) = session
                         .put(key.clone(), bytes)
                         .congestion_control(zenoh::qos::CongestionControl::Drop)
@@ -409,6 +439,19 @@ impl RoverConnection {
         if state.shutdown {
             return Err(TransportError::Closed);
         }
+        let authority: serde_json::Value =
+            serde_json::from_str(&state.authority).unwrap_or_default();
+        state.target_generation = if state
+            .authority_received
+            .is_some_and(|at| at.elapsed().as_secs_f64() < 0.5)
+        {
+            authority["run_id"]
+                .as_str()
+                .zip(authority["revision"].as_u64())
+                .map(|(run, revision)| (run.into(), revision))
+        } else {
+            None
+        };
         state.target = Some((linear, angular, Instant::now()));
         Ok(())
     }
@@ -426,6 +469,8 @@ impl RoverConnection {
                 | "safety"
                 | "goal"
                 | "goal/decision"
+                | "navigation/source"
+                | "navigation/resume"
                 | "search"
                 | "search/action"
                 | "search/report/ack"
@@ -441,7 +486,32 @@ impl RoverConnection {
         if state.actions.len() >= 64 {
             return Err(TransportError::Network("action queue full".into()));
         }
-        state.actions.push_back((kind.into(), payload.into()));
+        let mut value: serde_json::Value =
+            serde_json::from_str(payload).map_err(|_| TransportError::InvalidTarget)?;
+        let neutral = (kind == "goal" && value["cancel"] == true)
+            || (kind == "safety" && value["action"] == "stop")
+            || (kind == "search/action"
+                && matches!(value["action"].as_str(), Some("pause" | "cancel")))
+            || kind == "search/report/ack";
+        if !neutral {
+            let authority: serde_json::Value =
+                serde_json::from_str(&state.authority).unwrap_or_default();
+            if !state.authority_received.is_some_and(|at| {
+                at.elapsed().as_secs_f64() < terra_types::timing::REMOTE_AUTHORITY_CACHE_SECONDS
+            }) || !authority["run_id"].is_string()
+                || authority["revision"].as_u64().is_none()
+                || (value.get("run_id").is_some() && value["run_id"] != authority["run_id"])
+                || (value.get("authority_revision").is_some()
+                    && value["authority_revision"] != authority["revision"])
+            {
+                return Err(TransportError::Network(
+                    "current vehicle authority required".into(),
+                ));
+            }
+            value["run_id"] = authority["run_id"].clone();
+            value["authority_revision"] = authority["revision"].clone();
+        }
+        state.actions.push_back((kind.into(), value.to_string()));
         Ok(())
     }
     /// Return cached autonomy JSON augmented with receipt `age` seconds, optional
@@ -769,6 +839,8 @@ pub fn is_control_topic(kind: &str) -> bool {
             | "safety"
             | "goal"
             | "goal/decision"
+            | "navigation/source"
+            | "navigation/resume"
             | "teleop"
             | "cmd_vel"
             | "hardware"

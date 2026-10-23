@@ -133,11 +133,13 @@ See [Fusion HAT deployment requirements](FUSION_HAT.md).
 Edit `/etc/terra-rover/rover.env`:
 
 ```ini
-TERRA_PWM_PORTS=
+TERRA_PWM_PORTS=P0,P1,P2,P3,P4,P5,P6,P7,P8,P9,P10,P11
 ```
 
-Set `TERRA_PWM_PORTS` only to verified exposed connectors, for example `P0,P1`.
-An empty list still permits the board's M0–M3 motor capabilities. The default
+The default advertises P0–P11 alongside M0–M3. Narrow `TERRA_PWM_PORTS` to
+match your wiring if needed, for example `P0,P1`; an empty list advertises only
+M0–M3. Existing installations retain their configured list on upgrade. Shared
+pins and incompatible timer frequencies are still rejected when saving a layout. The default
 service uses the battery's external power cutoff and requires no Pi switch signal.
 Configuration requires disarm, and motion requires explicit arming and fresh
 commands. The Pi cannot measure the battery switch position.
@@ -155,17 +157,22 @@ service installed. No terminal or known phone Bluetooth address is needed:
 1. Turn on the rover and install/open TerraPhone.
 2. Release the Fusion HAT USR button if held during boot, then hold it for three
    seconds. The LED blinks slowly and a 60-second pairing window opens.
-3. Tap **Find rovers**, choose the advertised **terra-XXXXXX**, and connect.
+3. Accept the **Connect / Not now** popup for **terra-XXXXXX**.
    Accept the phone's Bluetooth pairing prompt if shown. The LED blinks quickly
    while the first phone is enrolling.
 4. Three LED flashes confirm the private owner record was saved. The rover
-   automatically switches to its normal service; tap **Find rovers** and reconnect.
+   automatically switches to its normal service and TerraPhone reconnects.
    The LED stays on. Configure the actuator layout and arm explicitly when safe.
 
 Only one initial button hold is needed.
 The generated rover name persists across restarts.
 A timeout requires release and another hold; missing/unreadable HAT controls do not open pairing.
-Already-owned rovers ignore enrollment holds.
+On an already-owned rover, the same three-second hold first shuts down motor
+outputs and the normal Bluetooth service, removes the old phone’s Bluetooth bond
+and owner record, then opens pairing. The rover name and actuator layout remain
+saved. Cleanup failure blocks pairing. A timeout leaves the rover unowned.
+In TerraPhone, **Choose rover or add rover** retains multiple paired rovers and
+lets the phone select one; switching always disconnects and disarms the old rover.
 First-owner enrollment uses Bluetooth Just Works: proximity plus the physical window authorizes the first phone, without numeric-code comparison or protection against an active nearby pairing attacker.
 Keep enrollment physically supervised.
 Pairing never arms or requires a gate file.
