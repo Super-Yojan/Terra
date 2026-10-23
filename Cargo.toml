@@ -1,12 +1,13 @@
 [workspace]
 resolver = "3"
-members = ["crates/terra-observability-collector", "crates/terra-observability", "tools/vlm-eval", "crates/terra-actuators", "crates/terra-autonomy", "crates/terra-navigation", "crates/terra-exploration", "crates/terra-experiment", "crates/terra-types", "crates/terra-state", "crates/terra-control", "crates/terra-mobile", "crates/terra-motors","crates/terra-mapping", "crates/terra-transport", "crates/terra-waypoint", "crates/fpv-signaling"]
+members = ["crates/terra-runtime", "crates/terra-observability-collector", "crates/terra-observability", "tools/vlm-eval", "crates/terra-actuators", "crates/terra-autonomy", "crates/terra-navigation", "crates/terra-exploration", "crates/terra-experiment", "crates/terra-types", "crates/terra-state", "crates/terra-control", "crates/terra-mobile", "crates/terra-motors","crates/terra-mapping", "crates/terra-transport", "crates/terra-waypoint", "crates/fpv-signaling"]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
 
 [workspace.dependencies]
+terra-runtime = { path = "crates/terra-runtime" }
 terra-observability = { path = "crates/terra-observability" }
 terra-actuators = { path = "crates/terra-actuators" }
 terra-autonomy = { path = "crates/terra-autonomy" }

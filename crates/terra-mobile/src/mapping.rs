@@ -1,9 +1,7 @@
 //! UniFFI map facade; depth acquisition and exposure-aligned poses belong to the caller.
-use crate::ControllerError;
+use crate::{ControllerError, MobileController};
 use std::sync::{Arc, Mutex};
-use terra_mapping::{
-    CameraIntrinsics, CameraPose, GroundPlane, LocalOccupancyMap, MapConfig, MapError,
-};
+use terra_mapping::{CameraIntrinsics, CameraPose, GroundPlane, MapConfig, MapError};
 use terra_types::{Quaternion, Vector3};
 #[derive(Clone, uniffi::Record)]
 /// Rolling-map dimensions and depth-integration limits. Distances are metres.
@@ -111,7 +109,7 @@ impl From<MapError> for ControllerError {
 #[derive(uniffi::Object)]
 /// Mutex-protected rolling occupancy mapper exposed through UniFFI.
 pub struct MobileOccupancyMap {
-    map: Mutex<LocalOccupancyMap>,
+    map: Mutex<terra_runtime::mapping::MappingState>,
 }
 #[uniffi::export]
 impl MobileOccupancyMap {
@@ -122,7 +120,7 @@ impl MobileOccupancyMap {
     /// Returns `InvalidInput` for invalid dimensions, resolution, obstacle heights,
     /// range, or stride (at most one million cells; resolution 0.01..=10 m).
     pub fn new(settings: OccupancySettings) -> Result<Arc<Self>, ControllerError> {
-        let map = LocalOccupancyMap::new(MapConfig {
+        let map = terra_runtime::mapping::MappingState::new(MapConfig {
             width: settings.width,
             height: settings.height,
             resolution: settings.resolution,
@@ -244,5 +242,87 @@ impl MobileOccupancyMap {
             .map_err(|_| ControllerError::Internal)?
             .clear();
         Ok(())
+    }
+}
+
+#[uniffi::export]
+impl MobileController {
+    pub fn attach_occupancy_map(
+        &self,
+        map: Arc<MobileOccupancyMap>,
+    ) -> Result<(), ControllerError> {
+        let handle = map
+            .map
+            .lock()
+            .map_err(|_| ControllerError::Internal)?
+            .clone();
+        self.brain
+            .lock()
+            .map_err(|_| ControllerError::Internal)?
+            .runtime
+            .attach_mapping(handle);
+        Ok(())
+    }
+}
+#[derive(uniffi::Object)]
+pub struct MobileGroundPolicy {
+    state: Mutex<terra_runtime::ground::GroundPolicy>,
+}
+#[uniffi::export]
+impl MobileGroundPolicy {
+    #[uniffi::constructor]
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self {
+            state: Mutex::new(Default::default()),
+        })
+    }
+    pub fn reset(&self) {
+        self.state.lock().unwrap().reset();
+    }
+    pub fn offset(&self) -> Option<f64> {
+        self.state.lock().unwrap().offset
+    }
+    pub fn clearance(&self) -> Option<f64> {
+        self.state.lock().unwrap().clearance
+    }
+    pub fn observe(
+        &self,
+        height: Option<f64>,
+        camera_height: f64,
+        area: f64,
+        now: f64,
+        up_z: f64,
+    ) -> Option<f64> {
+        self.state
+            .lock()
+            .unwrap()
+            .observe(height, camera_height, area, now, up_z)
+    }
+    pub fn plane(
+        &self,
+        x: f64,
+        y: f64,
+        z: f64,
+        up_x: f64,
+        up_y: f64,
+        up_z: f64,
+    ) -> Option<MappingGroundPlane> {
+        self.state
+            .lock()
+            .unwrap()
+            .plane(
+                Vector3 { x, y, z },
+                Vector3 {
+                    x: up_x,
+                    y: up_y,
+                    z: up_z,
+                },
+            )
+            .map(|p| MappingGroundPlane {
+                normal_x: p.normal.x,
+                normal_y: p.normal.y,
+                normal_z: p.normal.z,
+                offset: p.offset,
+            })
     }
 }

@@ -5,6 +5,7 @@ edition.workspace = true
 [lib]
 crate-type = ["lib", "staticlib", "cdylib"]
 [dependencies]
+terra-runtime.workspace = true
 terra-observability.workspace = true
 terra-actuators.workspace = true
 serde = { version = "1", features = ["derive"] }

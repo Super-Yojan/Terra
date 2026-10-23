@@ -43,8 +43,8 @@ pub struct EstimatorConfig {
 impl Default for EstimatorConfig {
     fn default() -> Self {
         Self {
-            imu_timeout: 0.1,
-            vio_timeout: 0.35,
+            imu_timeout: timing::IMU_FRESHNESS_SECONDS,
+            vio_timeout: timing::VIO_FRESHNESS_SECONDS,
         }
     }
 }

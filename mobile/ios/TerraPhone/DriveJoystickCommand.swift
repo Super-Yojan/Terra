@@ -21,12 +21,6 @@ struct TerraStopDiagnostic {
 struct DriveJoystickCommand: Equatable {
     let forward: Double
     let yaw: Double
-    var wheelEfforts: (left: Double, right: Double) {
-        guard forward.isFinite, yaw.isFinite else { return (0, 0) }
-        let left = forward - yaw, right = forward + yaw
-        let scale = max(1, max(abs(left), abs(right)))
-        return (left / scale, right / scale)
-    }
     static let zero = DriveJoystickCommand(forward: 0, yaw: 0)
     static func from(x: Double, y: Double, radius: Double, contactActive: Bool, enabled: Bool) -> Self {
         guard contactActive, enabled, x.isFinite, y.isFinite, radius.isFinite, radius > 0 else { return .zero }
@@ -86,27 +80,7 @@ enum TerraFleetManualDrive {
         // the requested level; command() separately enforces live authority.
         return (status["requested_level"] as? String ?? status["effective_level"] as? String) == "teleop"
     }
-    static func command(_ json: String) -> DriveJoystickCommand {
-        guard let root = (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any],
-              let status = root["status"] as? [String: Any],
-              ((status["effective_level"] as? String == "teleop" && status["active_source"] as? String == "operator")
-               || (status["effective_level"] as? String == "assisted_teleop" && status["active_source"] as? String == "assisted_operator")),
-              ["teleop", "assisted_teleop"].contains(status["effective_level"] as? String ?? ""),
-              ["clear", "active"].contains(status["safety"] as? String ?? ""),
-              let twist = root["twist"] as? [String: Any],
-              let linear = twist["linear"] as? Double, let angular = twist["angular"] as? Double,
-              linear.isFinite, angular.isFinite, abs(linear) <= 0.5, abs(angular) <= 1 else { return .zero }
-        let forward = linear / 0.5
-        let managed = ["fleet_teleop", "autonomous"].contains(root["command_origin"] as? String ?? "")
-        let navigation = root["navigation"] as? [String: Any]
-        let parameters = navigation?["parameters"] as? [String: Any]
-        let turning = parameters?["turning"] as? [String: Any]
-        let allowSpin = turning?["allow_in_place"] as? Bool ?? false
-        // Feedback has its own Rust wheel constraint. This path maps fleet
-        // velocity directly to normalized effort; protect that final mix too.
-        let yaw = managed && !allowSpin ? min(abs(forward), max(-abs(forward), angular)) : angular
-        return DriveJoystickCommand(forward: forward, yaw: yaw)
-    }
+
 }
 
 /// Search evidence belongs to the current rover run and has its own telemetry lease.

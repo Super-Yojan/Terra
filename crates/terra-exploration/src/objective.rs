@@ -68,7 +68,7 @@ pub struct ObjectiveContext {
 ///
 /// `should_stop` ends the run. `on_detection` records an external sighting so a
 /// later objective can bias the stop decision. Goal choice uses [`crate::GoalScorer`].
-pub trait MissionObjective: Send {
+pub trait MissionObjective: Send + Sync {
     /// Supply the run budget in seconds; the default hook does nothing.
     fn set_budget(&mut self, _seconds: f64) {}
     /// Reset per-run objective state; the default hook does nothing.
@@ -164,7 +164,7 @@ pub struct FrontierCandidate {
     pub score: f64,
 }
 /// Phase 2 hook. Higher scores are chosen first. Ties keep the earlier cell in BFS order.
-pub trait GoalScorer: Send {
+pub trait GoalScorer: Send + Sync {
     /// Rank a reachable candidate; larger finite values are preferred and ties retain breadth-first order.
     fn score(&self, candidate: &FrontierCandidate) -> f64;
 }
@@ -183,7 +183,7 @@ pub struct FnScorer<F>(
 );
 impl<F> GoalScorer for FnScorer<F>
 where
-    F: Fn(&FrontierCandidate) -> f64 + Send,
+    F: Fn(&FrontierCandidate) -> f64 + Send + Sync,
 {
     fn score(&self, candidate: &FrontierCandidate) -> f64 {
         (self.0)(candidate)

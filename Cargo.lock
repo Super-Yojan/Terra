@@ -2939,6 +2939,7 @@ dependencies = [
  "terra-mapping",
  "terra-navigation",
  "terra-observability",
+ "terra-runtime",
  "terra-state",
  "terra-transport",
  "terra-types",
@@ -2994,6 +2995,21 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tower",
+]
+
+[[package]]
+name = "terra-runtime"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "terra-autonomy",
+ "terra-control",
+ "terra-mapping",
+ "terra-navigation",
+ "terra-state",
+ "terra-types",
+ "terra-waypoint",
 ]
 
 [[package]]
