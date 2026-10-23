@@ -49,13 +49,13 @@ final class FpvVideoCall: NSObject, RTCPeerConnectionDelegate {
             self.sessionID = session
             self.sharedCamera = sharedCamera
             self.lastFrameTime = -Double.infinity
-            guard let peer = self.makePeer(settings: settings) else {
+            guard let peer = self.makePeer(settings: settings), let source = self.videoSource else {
                 self.emit(.cameraUnavailable(session: session, reason: "The video call could not be created"))
                 return
             }
             self.peer = peer
             if sharedCamera {
-                self.frameCapturer = RTCVideoCapturer(delegate: self.videoSource)
+                self.frameCapturer = RTCVideoCapturer(delegate: source)
             } else {
                 self.startDedicatedCapture(session: session)
             }
@@ -65,7 +65,7 @@ final class FpvVideoCall: NSObject, RTCPeerConnectionDelegate {
 
     func setSharedCamera(_ shared: Bool) {
         queue.async {
-            guard self.peer != nil else {
+            guard self.peer != nil, let source = self.videoSource else {
                 self.sharedCamera = shared
                 return
             }
@@ -73,7 +73,7 @@ final class FpvVideoCall: NSObject, RTCPeerConnectionDelegate {
             if shared {
                 self.stopDedicatedCapture()
                 if self.frameCapturer == nil {
-                    self.frameCapturer = RTCVideoCapturer(delegate: self.videoSource)
+                    self.frameCapturer = RTCVideoCapturer(delegate: source)
                 }
             } else if self.dedicatedCapturer == nil {
                 self.startDedicatedCapture(session: self.sessionID)
@@ -113,7 +113,7 @@ final class FpvVideoCall: NSObject, RTCPeerConnectionDelegate {
         queue.async {
             guard session == self.sessionID, let peer = self.peer, !candidate.isEmpty else { return }
             let ice = RTCIceCandidate(sdp: candidate, sdpMLineIndex: Int32(sdpMLineIndex), sdpMid: sdpMid.isEmpty ? nil : sdpMid)
-            peer.addIceCandidate(ice) { _ in }
+            peer.add(ice) { _ in }
         }
     }
 
@@ -151,8 +151,7 @@ final class FpvVideoCall: NSObject, RTCPeerConnectionDelegate {
         let capabilities = Self.factory.rtpSenderCapabilities(forKind: kRTCMediaStreamTrackKindVideo)
         let preferred = capabilities.codecs.filter { codecRank($0) < 9 }.sorted { codecRank($0) < codecRank($1) }
         guard !preferred.isEmpty else { return }
-        var error: NSError?
-        _ = transceiver.setCodecPreferences(preferred, error: &error)
+        _ = try? transceiver.setCodecPreferences(preferred, error: ())
     }
 
     private func codecRank(_ codec: RTCRtpCodecCapability) -> Int {
