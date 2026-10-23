@@ -1,6 +1,6 @@
 # Raspberry Pi hardware: function UML
 
-This is a map of the **current implementation**, not a proposed redesign. It includes every explicitly defined Python function and method under `hardware/raspberry-pi/terra_rover/`, including private helpers, nested callbacks, async functions, and property accessors. `rover.py` is the executable wrapper. Tests, build dependencies, third-party drivers, and implicit/generated methods are excluded. The phone app is outside this scope.
+This is a **historical implementation snapshot** from before the Pi motor relay simplification. Source links are pinned to that revision; the diagrams do not describe the current implementation. It includes every explicitly defined Python function and method under `hardware/raspberry-pi/terra_rover/`, including private helpers, nested callbacks, async functions, and property accessors. `rover.py` is the executable wrapper. Tests, build dependencies, third-party drivers, and implicit/generated methods are excluded. The phone app is outside this scope.
 
 Each module has a Mermaid UML class diagram. `ModuleFunctions` groups free functions; `Callbacks` groups functions defined inside another function. These groups are documentation containers, not runtime classes. Signatures show parameter names without defaults or type annotations; `self`/`cls` are omitted, and variadic parameters use `args_`/`kwargs_` prefixes. `+` means a public name and `-` means a leading-underscore name; Python does not enforce this visibility. Getter/setter definitions may share a name.
 
@@ -57,7 +57,7 @@ The package `__init__.py` has no explicit function definitions. `rover.py` impor
 
 ## Drive command path
 
-Current timing: drive-fragment assembly expires at 100 ms, the output worker targets a 10 ms loop, the motion watchdog expires at 200 ms, and recurring status publication targets 100 ms. The watchdog and arming rules remain present in this diagram because they are present in the source.
+Snapshot timing: drive-fragment assembly expires at 100 ms, the output worker targets a 10 ms loop, the motion watchdog expires at 200 ms, and recurring status publication targets 100 ms. The watchdog and arming rules remain present in this diagram because they are present in the source.
 
 ```mermaid
 sequenceDiagram
@@ -103,22 +103,22 @@ sequenceDiagram
 
 | Module | Explicit functions and methods |
 | --- | ---: |
-| [rover.py](../../hardware/raspberry-pi/rover.py) | 0 |
-| [terra_rover/__init__.py](../../hardware/raspberry-pi/terra_rover/__init__.py) | 0 |
-| [terra_rover/__main__.py](../../hardware/raspberry-pi/terra_rover/__main__.py) | 17 |
-| [terra_rover/backend.py](../../hardware/raspberry-pi/terra_rover/backend.py) | 37 |
-| [terra_rover/ble.py](../../hardware/raspberry-pi/terra_rover/ble.py) | 27 |
-| [terra_rover/bless_transport.py](../../hardware/raspberry-pi/terra_rover/bless_transport.py) | 18 |
-| [terra_rover/configuration.py](../../hardware/raspberry-pi/terra_rover/configuration.py) | 24 |
-| [terra_rover/layout.py](../../hardware/raspberry-pi/terra_rover/layout.py) | 6 |
-| [terra_rover/lifecycle.py](../../hardware/raspberry-pi/terra_rover/lifecycle.py) | 4 |
-| [terra_rover/log_forwarder.py](../../hardware/raspberry-pi/terra_rover/log_forwarder.py) | 2 |
-| [terra_rover/observability.py](../../hardware/raspberry-pi/terra_rover/observability.py) | 18 |
-| [terra_rover/onboarding.py](../../hardware/raspberry-pi/terra_rover/onboarding.py) | 11 |
-| [terra_rover/pairing.py](../../hardware/raspberry-pi/terra_rover/pairing.py) | 23 |
-| [terra_rover/protocol.py](../../hardware/raspberry-pi/terra_rover/protocol.py) | 21 |
-| [terra_rover/safety.py](../../hardware/raspberry-pi/terra_rover/safety.py) | 19 |
-| [terra_rover/usb_queue.py](../../hardware/raspberry-pi/terra_rover/usb_queue.py) | 6 |
+| [rover.py](https://github.com/Super-Yojan/Terra/blob/8695cf67992647c163142cf3f3b6d81aaaba4bd0/hardware/raspberry-pi/rover.py) | 0 |
+| [terra_rover/__init__.py](https://github.com/Super-Yojan/Terra/blob/8695cf67992647c163142cf3f3b6d81aaaba4bd0/hardware/raspberry-pi/terra_rover/__init__.py) | 0 |
+| [terra_rover/__main__.py](https://github.com/Super-Yojan/Terra/blob/8695cf67992647c163142cf3f3b6d81aaaba4bd0/hardware/raspberry-pi/terra_rover/__main__.py) | 17 |
+| [terra_rover/backend.py](https://github.com/Super-Yojan/Terra/blob/8695cf67992647c163142cf3f3b6d81aaaba4bd0/hardware/raspberry-pi/terra_rover/backend.py) | 37 |
+| [terra_rover/ble.py](https://github.com/Super-Yojan/Terra/blob/8695cf67992647c163142cf3f3b6d81aaaba4bd0/hardware/raspberry-pi/terra_rover/ble.py) | 27 |
+| [terra_rover/bless_transport.py](https://github.com/Super-Yojan/Terra/blob/8695cf67992647c163142cf3f3b6d81aaaba4bd0/hardware/raspberry-pi/terra_rover/bless_transport.py) | 18 |
+| [terra_rover/configuration.py](https://github.com/Super-Yojan/Terra/blob/8695cf67992647c163142cf3f3b6d81aaaba4bd0/hardware/raspberry-pi/terra_rover/configuration.py) | 24 |
+| [terra_rover/layout.py](https://github.com/Super-Yojan/Terra/blob/8695cf67992647c163142cf3f3b6d81aaaba4bd0/hardware/raspberry-pi/terra_rover/layout.py) | 6 |
+| [terra_rover/lifecycle.py](https://github.com/Super-Yojan/Terra/blob/8695cf67992647c163142cf3f3b6d81aaaba4bd0/hardware/raspberry-pi/terra_rover/lifecycle.py) | 4 |
+| [terra_rover/log_forwarder.py](https://github.com/Super-Yojan/Terra/blob/8695cf67992647c163142cf3f3b6d81aaaba4bd0/hardware/raspberry-pi/terra_rover/log_forwarder.py) | 2 |
+| [terra_rover/observability.py](https://github.com/Super-Yojan/Terra/blob/8695cf67992647c163142cf3f3b6d81aaaba4bd0/hardware/raspberry-pi/terra_rover/observability.py) | 18 |
+| [terra_rover/onboarding.py](https://github.com/Super-Yojan/Terra/blob/8695cf67992647c163142cf3f3b6d81aaaba4bd0/hardware/raspberry-pi/terra_rover/onboarding.py) | 11 |
+| [terra_rover/pairing.py](https://github.com/Super-Yojan/Terra/blob/8695cf67992647c163142cf3f3b6d81aaaba4bd0/hardware/raspberry-pi/terra_rover/pairing.py) | 23 |
+| [terra_rover/protocol.py](https://github.com/Super-Yojan/Terra/blob/8695cf67992647c163142cf3f3b6d81aaaba4bd0/hardware/raspberry-pi/terra_rover/protocol.py) | 21 |
+| [terra_rover/safety.py](https://github.com/Super-Yojan/Terra/blob/8695cf67992647c163142cf3f3b6d81aaaba4bd0/hardware/raspberry-pi/terra_rover/safety.py) | 19 |
+| [terra_rover/usb_queue.py](https://github.com/Super-Yojan/Terra/blob/8695cf67992647c163142cf3f3b6d81aaaba4bd0/hardware/raspberry-pi/terra_rover/usb_queue.py) | 6 |
 | **Total** | **233** |
 
 ## Entry points
@@ -130,7 +130,7 @@ sequenceDiagram
 
 ## terra_rover/__main__.py
 
-[Source](../../hardware/raspberry-pi/terra_rover/__main__.py) · 17 explicit function/method definitions.
+[Source](https://github.com/Super-Yojan/Terra/blob/8695cf67992647c163142cf3f3b6d81aaaba4bd0/hardware/raspberry-pi/terra_rover/__main__.py) · 17 explicit function/method definitions.
 
 ```mermaid
 classDiagram
@@ -169,7 +169,7 @@ classDiagram
 
 ## terra_rover/backend.py
 
-[Source](../../hardware/raspberry-pi/terra_rover/backend.py) · 37 explicit function/method definitions.
+[Source](https://github.com/Super-Yojan/Terra/blob/8695cf67992647c163142cf3f3b6d81aaaba4bd0/hardware/raspberry-pi/terra_rover/backend.py) · 37 explicit function/method definitions.
 
 ```mermaid
 classDiagram
@@ -240,7 +240,7 @@ classDiagram
 
 ## terra_rover/ble.py
 
-[Source](../../hardware/raspberry-pi/terra_rover/ble.py) · 27 explicit function/method definitions.
+[Source](https://github.com/Super-Yojan/Terra/blob/8695cf67992647c163142cf3f3b6d81aaaba4bd0/hardware/raspberry-pi/terra_rover/ble.py) · 27 explicit function/method definitions.
 
 ```mermaid
 classDiagram
@@ -286,7 +286,7 @@ classDiagram
 
 ## terra_rover/bless_transport.py
 
-[Source](../../hardware/raspberry-pi/terra_rover/bless_transport.py) · 18 explicit function/method definitions.
+[Source](https://github.com/Super-Yojan/Terra/blob/8695cf67992647c163142cf3f3b6d81aaaba4bd0/hardware/raspberry-pi/terra_rover/bless_transport.py) · 18 explicit function/method definitions.
 
 ```mermaid
 classDiagram
@@ -322,7 +322,7 @@ classDiagram
 
 ## terra_rover/configuration.py
 
-[Source](../../hardware/raspberry-pi/terra_rover/configuration.py) · 24 explicit function/method definitions.
+[Source](https://github.com/Super-Yojan/Terra/blob/8695cf67992647c163142cf3f3b6d81aaaba4bd0/hardware/raspberry-pi/terra_rover/configuration.py) · 24 explicit function/method definitions.
 
 ```mermaid
 classDiagram
@@ -363,7 +363,7 @@ classDiagram
 
 ## terra_rover/layout.py
 
-[Source](../../hardware/raspberry-pi/terra_rover/layout.py) · 6 explicit function/method definitions.
+[Source](https://github.com/Super-Yojan/Terra/blob/8695cf67992647c163142cf3f3b6d81aaaba4bd0/hardware/raspberry-pi/terra_rover/layout.py) · 6 explicit function/method definitions.
 
 ```mermaid
 classDiagram
@@ -390,7 +390,7 @@ classDiagram
 
 ## terra_rover/lifecycle.py
 
-[Source](../../hardware/raspberry-pi/terra_rover/lifecycle.py) · 4 explicit function/method definitions.
+[Source](https://github.com/Super-Yojan/Terra/blob/8695cf67992647c163142cf3f3b6d81aaaba4bd0/hardware/raspberry-pi/terra_rover/lifecycle.py) · 4 explicit function/method definitions.
 
 ```mermaid
 classDiagram
@@ -406,7 +406,7 @@ classDiagram
 
 ## terra_rover/log_forwarder.py
 
-[Source](../../hardware/raspberry-pi/terra_rover/log_forwarder.py) · 2 explicit function/method definitions.
+[Source](https://github.com/Super-Yojan/Terra/blob/8695cf67992647c163142cf3f3b6d81aaaba4bd0/hardware/raspberry-pi/terra_rover/log_forwarder.py) · 2 explicit function/method definitions.
 
 ```mermaid
 classDiagram
@@ -420,7 +420,7 @@ classDiagram
 
 ## terra_rover/observability.py
 
-[Source](../../hardware/raspberry-pi/terra_rover/observability.py) · 18 explicit function/method definitions.
+[Source](https://github.com/Super-Yojan/Terra/blob/8695cf67992647c163142cf3f3b6d81aaaba4bd0/hardware/raspberry-pi/terra_rover/observability.py) · 18 explicit function/method definitions.
 
 ```mermaid
 classDiagram
@@ -458,7 +458,7 @@ The journal and uploader run independently of actuator control. Observation fail
 
 ## terra_rover/onboarding.py
 
-[Source](../../hardware/raspberry-pi/terra_rover/onboarding.py) · 11 explicit function/method definitions.
+[Source](https://github.com/Super-Yojan/Terra/blob/8695cf67992647c163142cf3f3b6d81aaaba4bd0/hardware/raspberry-pi/terra_rover/onboarding.py) · 11 explicit function/method definitions.
 
 ```mermaid
 classDiagram
@@ -485,7 +485,7 @@ classDiagram
 
 ## terra_rover/pairing.py
 
-[Source](../../hardware/raspberry-pi/terra_rover/pairing.py) · 23 explicit function/method definitions.
+[Source](https://github.com/Super-Yojan/Terra/blob/8695cf67992647c163142cf3f3b6d81aaaba4bd0/hardware/raspberry-pi/terra_rover/pairing.py) · 23 explicit function/method definitions.
 
 ```mermaid
 classDiagram
@@ -531,7 +531,7 @@ classDiagram
 
 ## terra_rover/protocol.py
 
-[Source](../../hardware/raspberry-pi/terra_rover/protocol.py) · 21 explicit function/method definitions.
+[Source](https://github.com/Super-Yojan/Terra/blob/8695cf67992647c163142cf3f3b6d81aaaba4bd0/hardware/raspberry-pi/terra_rover/protocol.py) · 21 explicit function/method definitions.
 
 ```mermaid
 classDiagram
@@ -583,7 +583,7 @@ classDiagram
 
 ## terra_rover/safety.py
 
-[Source](../../hardware/raspberry-pi/terra_rover/safety.py) · 19 explicit function/method definitions.
+[Source](https://github.com/Super-Yojan/Terra/blob/8695cf67992647c163142cf3f3b6d81aaaba4bd0/hardware/raspberry-pi/terra_rover/safety.py) · 19 explicit function/method definitions.
 
 ```mermaid
 classDiagram
@@ -625,7 +625,7 @@ classDiagram
 
 ## terra_rover/usb_queue.py
 
-[Source](../../hardware/raspberry-pi/terra_rover/usb_queue.py) · 6 explicit function/method definitions.
+[Source](https://github.com/Super-Yojan/Terra/blob/8695cf67992647c163142cf3f3b6d81aaaba4bd0/hardware/raspberry-pi/terra_rover/usb_queue.py) · 6 explicit function/method definitions.
 
 ```mermaid
 classDiagram

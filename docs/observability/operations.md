@@ -216,7 +216,7 @@ even if dashboard state continues to arrive.
 
 ## Replay and outage diagnosis
 
-See [replay commands](../../tools/observability/README.md). During an outage,
+See [replay commands](https://github.com/Super-Yojan/Terra/blob/main/tools/observability/README.md). During an outage,
 leave the original source queue/identity intact. Restore connectivity and
 credentials; retries use the original IDs/timestamps and duplicate delivery is
 idempotent. Camera attachments transfer before their metadata is acknowledged.
