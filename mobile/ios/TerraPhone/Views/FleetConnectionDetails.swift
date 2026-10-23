@@ -10,6 +10,12 @@ struct FleetConnectionDetails: View {
                 LabeledContent("Router", value: TerraFleetDefaults.savedEndpoint)
                 LabeledContent("Rover ID", value: UserDefaults.standard.string(forKey: "dashboardRoverID") ?? "0")
             }
+            Section("FPV") {
+                LabeledContent("Video", value: brain.fpvStatus)
+                if brain.fpvActive {
+                    Button("Stop FPV", role: .destructive) { brain.stopFpv() }
+                }
+            }
             Section {
                 NavigationLink("Edit connection") { FleetConnectionSettings(brain: brain) }
                 Button("Disconnect fleet", role: .destructive) { brain.disconnectDashboard(); dismiss() }

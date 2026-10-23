@@ -13,6 +13,7 @@ uniffi::setup_scaffolding!();
 mod actuators;
 pub use actuators::*;
 mod autonomy;
+pub use autonomy::WebrtcSignal;
 mod navigation_settings;
 mod publication;
 mod search;

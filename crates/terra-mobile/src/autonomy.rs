@@ -2,6 +2,17 @@
 
 use crate::*;
 
+/// One WebRTC signaling sample drained from the fleet session.
+/// `kind` is the topic suffix. `payload` is the raw JSON text.
+/// The sample is video signaling, not a drive or arm command.
+#[derive(uniffi::Record)]
+pub struct WebrtcSignal {
+    /// Topic suffix such as `webrtc/request` or `webrtc/answer`.
+    pub kind: String,
+    /// UTF-8 JSON body. Invalid UTF-8 samples are dropped before this record is built.
+    pub payload: String,
+}
+
 impl MobileController {
     fn install_dashboard(
         &self,
@@ -293,6 +304,59 @@ impl MobileController {
         ));
         if let Some(d) = b.dashboard.as_ref() {
             d.publish("hardware/status", payload);
+        }
+        Ok(())
+    }
+    /// Drain dashboard-to-phone WebRTC signaling since the previous call.
+    /// Returns an empty list when no dashboard is connected or the lock is poisoned.
+    /// Samples are not autonomy, hardware, or teleop commands.
+    pub fn take_webrtc_signaling(&self) -> Vec<WebrtcSignal> {
+        let Ok(brain) = self.brain.lock() else {
+            return Vec::new();
+        };
+        let Some(dashboard) = brain.dashboard.as_ref() else {
+            return Vec::new();
+        };
+        dashboard
+            .take_signaling()
+            .into_iter()
+            .filter_map(|(kind, bytes)| {
+                Some(WebrtcSignal {
+                    kind,
+                    payload: String::from_utf8(bytes).ok()?,
+                })
+            })
+            .collect()
+    }
+    /// Publish one phone-to-dashboard WebRTC signaling sample on the fleet session.
+    /// `kind` must be `webrtc/offer`, `webrtc/ice/phone`, or `webrtc/state`.
+    /// `payload` must be JSON of at most 65536 bytes. This does not arm, disarm,
+    /// change autonomy, or publish a velocity command.
+    ///
+    /// Returns `InvalidInput` when the dashboard is absent or the sample is rejected,
+    /// and `Internal` when the controller lock is poisoned.
+    pub fn publish_webrtc_signaling(
+        &self,
+        kind: String,
+        payload: String,
+    ) -> Result<(), ControllerError> {
+        if payload.len() > terra_transport::WEBRTC_SIGNALING_MAX_BYTES
+            || serde_json::from_str::<serde_json::Value>(&payload).is_err()
+        {
+            return Err(ControllerError::InvalidInput {
+                message: "rejected webrtc signaling".into(),
+            });
+        }
+        let brain = self.brain.lock().map_err(|_| ControllerError::Internal)?;
+        let Some(dashboard) = brain.dashboard.as_ref() else {
+            return Err(ControllerError::InvalidInput {
+                message: "dashboard is not connected".into(),
+            });
+        };
+        if !dashboard.publish_signaling(&kind, &payload) {
+            return Err(ControllerError::InvalidInput {
+                message: "rejected webrtc signaling".into(),
+            });
         }
         Ok(())
     }

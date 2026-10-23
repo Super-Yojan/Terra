@@ -40,6 +40,9 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
     @Published private(set) var dashboardStatus = "Disconnected"
     @Published private(set) var dashboardConnecting = false
     @Published private(set) var dashboardConnected = false
+    @Published private(set) var fpvStatus = "Idle"
+    @Published private(set) var fpvLive = false
+    @Published private(set) var fpvActive = false
     @Published private(set) var waypointActive = false
     @Published private(set) var waypointStatus = "No goal"
     @Published private(set) var waypointDistance = 0.0
@@ -133,6 +136,13 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
     private var bleCompatible = false
     private var phoneStartedAt = 0.0
     private let controlQueue = DispatchQueue(label: "terra.control", qos: .userInteractive)
+    private let fpvVideo = FpvVideoCall()
+    private var fpvSignaling = FpvSignaling()
+    private var fpvRunning = false
+    private var fpvPublishedState: String?
+    private var fpvFailure: String?
+    private let fpvCameraLock = NSLock()
+    private var sharedCameraForFpv = false
     private let motionQueue = OperationQueue()
     private let motion = CMMotionManager()
     private let session = ARSession()
@@ -178,6 +188,9 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
         motionQueue.qualityOfService = .userInteractive
         session.delegate = self
         session.delegateQueue = controlQueue
+        fpvVideo.onEvent = { [weak self] event in
+            self?.controlQueue.async { self?.handleFpvEvent(event) }
+        }
         observeBluetooth()
     }
     func setTarget(forward: Double, yaw: Double) {
@@ -308,6 +321,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
     func disconnectDashboard() {
         routerSuppressed = true; routerRetryAt = nil; invalidateDashboardAttempt()
         controlQueue.async {
+            self.closeFpv(publish: true)
             self.target = (0, 0); self.revokeHardwareMotion(reason: "operator disconnected dashboard")
             try? self.controller?.disconnectDashboard()
             self.goalLatched = false
@@ -408,6 +422,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
             }
         }
         phoneTrackingActive = true
+        updateSharedCamera(true)
         source = "Core Motion + ARKit"
     }
     /// keepBluetooth leaves the rover link up for the actuator layout screen,
@@ -421,7 +436,9 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
         bluetooth.disarm()
         if !keepBluetooth { bluetooth.disconnect() }
         hardwareActive = false; requestedHardwareFeedback = nil
-        phoneTrackingActive = false; hardwareFeedback = false
+        phoneTrackingActive = false
+        setSharedCameraFlag(false)
+        hardwareFeedback = false
         localizationReport = nil
         fleetTrackingManaged = false; fleetTrackingFailed = false
         phoneTrackingStatus = "Tracking starts after ARGOS connects"
@@ -429,6 +446,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
         locationManager.stopUpdatingLocation(); locationManager.stopUpdatingHeading()
         session.pause()
         controlQueue.async {
+            self.closeFpv(publish: true)
             self.timer?.cancel(); self.timer = nil
             self.mode = .stopped
             self.isCollectingOffsetFit = false; self.offsetFitSamples.removeAll(); self.firstTurnFit = nil
@@ -496,6 +514,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
         timer.resume()
     }
     private func serviceManualDashboard(now: TimeInterval) {
+        drainFpvSignaling()
         guard let controller else { return }
         let attempt = dashboardAttemptToken()
         // Preserve the AR/controller clock when switching to manual hardware.
@@ -570,7 +589,9 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
             }
             }
             let output = try controller.step(timestamp: now)
+            if tick % 5 == 0 { drainFpvSignaling() }
             if tick % 10 == 0 && controller.dashboardStatus() == "failed" {
+                self.closeFpv(publish: false)
                 let continuingWaypoint = TerraFleetManualDrive.localWaypointActive(controller.autonomyStatus())
                 if continuingWaypoint { try controller.detachDashboardLink() }
                 else {
@@ -630,6 +651,9 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
         } catch { fail(error, context: "Control update in \(mode) at \(now)") }
     }
     func session(_ session: ARSession, didUpdate frame: ARFrame) {
+        if fpvRunning && readSharedCamera() {
+            fpvVideo.consume(pixelBuffer: frame.capturedImage, timestamp: frame.timestamp)
+        }
         guard mode == .phone, frame.timestamp >= phoneStartedAt, let controller else { return }
         let tracked: Bool
         if case .normal = frame.camera.trackingState { tracked = true } else { tracked = false }
@@ -1454,6 +1478,7 @@ extension PhoneController {
     private func disconnectDashboardForLifecycle() {
         invalidateDashboardAttempt()
         controlQueue.async {
+            self.closeFpv(publish: true)
             try? self.controller?.disconnectDashboard(); self.goalLatched = false
         }
         dashboardConnected = false; dashboardConnecting = false
@@ -1516,6 +1541,7 @@ extension PhoneController {
             motion.stopDeviceMotionUpdates(); session.pause(); disarmHardware()
             locationManager.stopUpdatingLocation(); locationManager.stopUpdatingHeading()
             phoneTrackingActive = false
+            updateSharedCamera(false)
             hardwareFeedback = false
             controlQueue.async {
                 self.bleFeedback = false; self.bleActive = true; self.target = (0, 0)
@@ -1861,6 +1887,179 @@ extension PhoneController {
         if let data = try? JSONEncoder().encode(report), let json = String(data: data, encoding: .utf8) {
             try? controller.publishLocalization(payload: json)
         }
+    }
+
+    /// Stop the live view. The fleet session, arming gate, and velocity commands stay as they are.
+    func stopFpv() {
+        controlQueue.async {
+            self.fpvFailure = nil
+            self.closeFpv(publish: true)
+        }
+    }
+
+    private func drainFpvSignaling() {
+        guard let controller else { return }
+        if controller.dashboardStatus() != "connected" {
+            if fpvSignaling.hasSession || fpvRunning {
+                fpvFailure = nil
+                closeFpv(publish: false)
+            }
+            return
+        }
+        for signal in controller.takeWebrtcSignaling() {
+            guard let inbound = FpvSignaling.decode(kind: signal.kind, payload: signal.payload) else { continue }
+            applyFpv(fpvSignaling.receive(inbound))
+        }
+    }
+
+    private func applyFpv(_ decision: FpvDecision) {
+        switch decision {
+        case .ignore, .endOfCandidates:
+            break
+        case .start(let previous, let session):
+            fpvFailure = nil
+            beginFpv(previous: previous, session: session)
+        case .stop(let session):
+            fpvFailure = nil
+            fpvRunning = false
+            fpvVideo.stopMedia()
+            publishFpvState("closed", session: session)
+            fpvPublishedState = nil
+            showFpvIdle()
+        case .answer(let session, let sdp):
+            fpvVideo.applyAnswer(session: session, sdp: sdp)
+        case .ice(let session, let candidate, let sdpMid, let sdpMLineIndex):
+            fpvVideo.addIce(session: session, candidate: candidate, sdpMid: sdpMid, sdpMLineIndex: sdpMLineIndex)
+        }
+    }
+
+    private func beginFpv(previous: String?, session: String) {
+        if let previous, previous != session {
+            publishFpvState("closed", session: previous)
+        }
+        fpvRunning = true
+        fpvPublishedState = nil
+        publishFpvState("connecting", session: session)
+        let settings = FpvIceStore.load()
+        TerraLog.fpv.notice("FPV connecting; \(settings.redactedSummary(), privacy: .public)")
+        DispatchQueue.main.async {
+            self.fpvStatus = "Connecting"
+            self.fpvLive = false
+            self.fpvActive = true
+        }
+        fpvVideo.start(session: session, settings: settings, sharedCamera: readSharedCamera())
+    }
+
+    private func handleFpvEvent(_ event: FpvVideoEvent) {
+        switch event {
+        case .offer(let session, let sdp):
+            guard fpvSignaling.isCurrent(session), fpvFailure == nil else { return }
+            guard let payload = FpvSignaling.offerJSON(session: session, sdp: sdp) else {
+                failFpv("The video offer is too large to send")
+                return
+            }
+            publishFpv("webrtc/offer", payload)
+        case .ice(let session, let candidate, let sdpMid, let sdpMLineIndex):
+            guard fpvSignaling.isCurrent(session), fpvFailure == nil else { return }
+            guard let payload = FpvSignaling.iceJSON(session: session, candidate: candidate, sdpMid: sdpMid, sdpMLineIndex: sdpMLineIndex) else { return }
+            publishFpv("webrtc/ice/phone", payload)
+        case .gatheringComplete(let session):
+            guard fpvSignaling.isCurrent(session), fpvFailure == nil else { return }
+            guard let payload = FpvSignaling.iceJSON(session: session, candidate: "", sdpMid: "", sdpMLineIndex: 0) else { return }
+            publishFpv("webrtc/ice/phone", payload)
+        case .state(let session, let state):
+            guard fpvSignaling.isCurrent(session) else { return }
+            switch state {
+            case "connected":
+                publishFpvState("connected", session: session)
+                DispatchQueue.main.async {
+                    self.fpvStatus = "Live · streaming"
+                    self.fpvLive = true
+                    self.fpvActive = true
+                }
+            case "connecting":
+                publishFpvState("connecting", session: session)
+                DispatchQueue.main.async {
+                    guard !self.fpvLive else { return }
+                    self.fpvStatus = "Connecting"
+                    self.fpvLive = false
+                    self.fpvActive = true
+                }
+            case "failed":
+                failFpv("The video connection failed")
+            case "closed":
+                closeFpv(publish: true, clearFailure: false)
+            default:
+                break
+            }
+        case .cameraUnavailable(_, let reason):
+            failFpv(reason)
+        }
+    }
+
+    private func failFpv(_ reason: String) {
+        guard let session = fpvSignaling.noteFailed() else { return }
+        fpvRunning = false
+        fpvFailure = reason
+        fpvVideo.stopMedia()
+        publishFpvState("failed", session: session)
+        TerraLog.fpv.error("FPV failed: \(reason, privacy: .public)")
+        DispatchQueue.main.async {
+            self.fpvStatus = "Failed · \(reason)"
+            self.fpvLive = false
+            self.fpvActive = true
+        }
+    }
+
+    private func closeFpv(publish: Bool, clearFailure: Bool = true) {
+        if clearFailure { fpvFailure = nil }
+        let session = fpvSignaling.stopLocal()
+        fpvRunning = false
+        fpvVideo.stopMedia()
+        if publish, let session {
+            publishFpvState("closed", session: session)
+        }
+        fpvPublishedState = nil
+        if fpvFailure == nil { showFpvIdle() }
+    }
+
+    private func showFpvIdle() {
+        DispatchQueue.main.async {
+            self.fpvStatus = "Idle"
+            self.fpvLive = false
+            self.fpvActive = false
+        }
+    }
+
+    private func publishFpvState(_ state: String, session: String) {
+        guard fpvPublishedState != state, let payload = FpvSignaling.stateJSON(session: session, state: state) else { return }
+        fpvPublishedState = state
+        publishFpv("webrtc/state", payload)
+    }
+
+    private func publishFpv(_ kind: String, _ payload: String) {
+        guard let controller else { return }
+        do { try controller.publishWebrtcSignaling(kind: kind, payload: payload) }
+        catch { TerraLog.fpv.error("FPV signaling was not published") }
+    }
+
+    private func updateSharedCamera(_ value: Bool) {
+        setSharedCameraFlag(value)
+        controlQueue.async {
+            if self.fpvRunning { self.fpvVideo.setSharedCamera(value) }
+        }
+    }
+
+    private func setSharedCameraFlag(_ value: Bool) {
+        fpvCameraLock.lock()
+        sharedCameraForFpv = value
+        fpvCameraLock.unlock()
+    }
+
+    private func readSharedCamera() -> Bool {
+        fpvCameraLock.lock()
+        defer { fpvCameraLock.unlock() }
+        return sharedCameraForFpv
     }
 }
 

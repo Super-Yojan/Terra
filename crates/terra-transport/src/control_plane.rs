@@ -11,6 +11,7 @@ use std::{
 };
 use zenoh::Wait;
 type Inbox = Arc<Mutex<VecDeque<(String, Vec<u8>, Instant)>>>;
+type SignalingInbox = Arc<Mutex<VecDeque<(String, Vec<u8>)>>>;
 type States = Arc<Mutex<BTreeMap<String, (Option<String>, Instant)>>>;
 const TELEMETRY_TTL: Duration = Duration::from_millis(500);
 
@@ -51,7 +52,12 @@ fn telemetry_snapshot(
 /// Dropping the service stops and joins its network worker.
 pub struct ControlPlane {
     inbox: Inbox,
+    signaling: SignalingInbox,
     states: States,
+    /// Cloned Zenoh session used for one-shot signaling puts. The worker owns
+    /// the session that publishes latched telemetry and closes the link.
+    session: zenoh::Session,
+    base: String,
     batches: Arc<Mutex<BTreeMap<String, (Vec<String>, Instant)>>>,
     stop: Arc<AtomicBool>,
     failed: Arc<AtomicBool>,
@@ -139,11 +145,13 @@ impl ControlPlane {
             .wait()
             .map_err(|e| TransportError::Network(e.to_string()))?;
         let inbox: Inbox = Arc::new(Mutex::new(VecDeque::new()));
+        let signaling: SignalingInbox = Arc::new(Mutex::new(VecDeque::new()));
         let states: States = Arc::new(Mutex::new(BTreeMap::new()));
         let stop = Arc::new(AtomicBool::new(false));
         let failed = Arc::new(AtomicBool::new(false));
         let base = format!("{prefix}/{id}");
         let queue = inbox.clone();
+        let signaling_queue = signaling.clone();
         let topic = base.clone();
         let subscriber = session
             .declare_subscriber(format!("{base}/**"))
@@ -155,10 +163,23 @@ impl ControlPlane {
                 else {
                     return;
                 };
+                let bytes = sample.payload().to_bytes();
+                // Video signaling never enters the control inbox. A large SDP
+                // cannot evict a stop, and a webrtc payload cannot be decoded
+                // as teleop, hardware, or safety.
+                if crate::signaling::webrtc_inbound(kind) {
+                    if bytes.is_empty()
+                        || bytes.len() > crate::signaling::WEBRTC_SIGNALING_MAX_BYTES
+                    {
+                        return;
+                    }
+                    let mut queue = signaling_queue.lock().unwrap();
+                    crate::signaling::enqueue_signaling(&mut queue, kind.into(), bytes.to_vec());
+                    return;
+                }
                 if !crate::is_control_topic(kind) {
                     return;
                 }
-                let bytes = sample.payload().to_bytes();
                 if bytes.len() > 2048 {
                     return;
                 }
@@ -178,6 +199,8 @@ impl ControlPlane {
         let stopped = stop.clone();
         let fault = failed.clone();
         let fleet = format!("{prefix}/fleet/state");
+        let publication = session.clone();
+        let key_base = base.clone();
         let worker = thread::spawn(move || {
             let mut last_batch = Instant::now() - Duration::from_secs(1);
             while !stopped.load(Ordering::Acquire) {
@@ -227,7 +250,10 @@ impl ControlPlane {
         });
         Ok(Self {
             inbox,
+            signaling,
             states,
+            session: publication,
+            base: key_base,
             batches,
             stop,
             failed,
@@ -252,9 +278,40 @@ impl ControlPlane {
     /// Drops oversized values silently: occupancy is capped at 2,000,000 bytes,
     /// point clouds at 262144 bytes, and other suffixes at 65536 bytes.
     /// Ordinary state can replay at 10 Hz; visualization is taken once per update.
-    /// Does not parse JSON or acknowledge delivery.
+    /// Does not parse JSON or acknowledge delivery. WebRTC signaling suffixes are
+    /// refused here so an offer is not replayed as latched telemetry.
     pub fn publish(&self, kind: &str, value: String) {
         let _ = self.enqueue_state(kind, value);
+    }
+    /// Drain dashboard-to-phone WebRTC signaling. Each item is `(topic suffix, payload)`.
+    /// A failed session clears the queue and returns nothing. These samples are
+    /// not control actions and do not grant motion or hardware authority.
+    pub fn take_signaling(&self) -> Vec<(String, Vec<u8>)> {
+        if self.failed() {
+            self.signaling.lock().unwrap().clear();
+            return Vec::new();
+        }
+        std::mem::take(&mut *self.signaling.lock().unwrap())
+            .into_iter()
+            .collect()
+    }
+    /// Put one phone-to-dashboard signaling sample immediately.
+    /// Accepts only `webrtc/offer`, `webrtc/ice/phone`, and `webrtc/state`,
+    /// and only valid JSON of at most [`crate::WEBRTC_SIGNALING_MAX_BYTES`].
+    /// The sample is not stored for telemetry replay. Returns false when the
+    /// kind, JSON, size, or link is rejected. Delivery is still best effort.
+    pub fn publish_signaling(&self, kind: &str, value: &str) -> bool {
+        if self.failed()
+            || !crate::signaling::webrtc_outbound(kind)
+            || value.len() > crate::WEBRTC_SIGNALING_MAX_BYTES
+            || serde_json::from_str::<serde_json::Value>(value).is_err()
+        {
+            return false;
+        }
+        self.session
+            .put(format!("{}/{kind}", self.base), value)
+            .wait()
+            .is_ok()
     }
     /// Enqueue sample-driven visualization, reporting size/failure rejection.
     /// Acceptance is into the bounded latest-state slot, not network delivery.
@@ -265,6 +322,9 @@ impl ControlPlane {
         visualization_topic(kind) && !self.failed() && self.enqueue_state(kind, value)
     }
     fn enqueue_state(&self, kind: &str, value: String) -> bool {
+        if crate::signaling::is_webrtc_topic(kind) {
+            return false;
+        }
         // Dense visualization snapshots exceed the ordinary state-message budget.
         // Keep action/small telemetry limits unchanged and bound only these two topics higher.
         let limit = match kind {

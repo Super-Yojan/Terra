@@ -79,6 +79,7 @@ struct TerraConnectionHome: View {
             Text("Fleet dashboard").font(.headline).foregroundStyle(.secondary)
             statusRow(name: "ARGOS", status: fleetStatus, symbol: "point.3.connected.trianglepath.dotted", busy: facts.fleetState == .connecting)
             Text(fleetExplanation).font(.subheadline).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            FpvStatusRow(brain: brain)
             switch facts.fleetState {
             case .setupRequired:
                 Button("Set up fleet connection") { sheet = .fleetSettings }.buttonStyle(.borderedProminent)

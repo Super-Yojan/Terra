@@ -42,4 +42,6 @@ Publishes `terra/rover/fleet/state` every 100 ms for that one rover id.
 cargo test -p terra-transport -- --ignored
 ```
 
+WebRTC signaling uses the same session and a separate queue. The cap is 65536 bytes. Control messages stay at 2048. See [FPV video](../phone/fpv.md).
+
 RGB, a client fleet subscription, and reconnect UI are planned.
