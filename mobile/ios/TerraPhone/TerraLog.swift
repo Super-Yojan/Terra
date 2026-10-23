@@ -8,4 +8,5 @@ enum TerraLog {
     static let control = Logger(subsystem: subsystem, category: "Control")
     static let tracking = Logger(subsystem: subsystem, category: "Tracking")
     static let configuration = Logger(subsystem: subsystem, category: "Configuration")
+    static let fpv = Logger(subsystem: subsystem, category: "FPV")
 }

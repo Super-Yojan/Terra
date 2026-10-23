@@ -1,0 +1,9 @@
+[package]
+name = "fpv-signaling"
+version.workspace = true
+edition.workspace = true
+description = "Shared WebRTC FPV signaling for TerraPhone and the ARGOS dashboard. No media and no Zenoh."
+publish = false
+
+[dependencies]
+serde_json = "1"

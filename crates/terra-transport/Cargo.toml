@@ -3,6 +3,7 @@ name = "terra-transport"
 version.workspace = true
 edition.workspace = true
 [dependencies]
+fpv-signaling.workspace = true
 zenoh = { version = "=1.10.1", default-features = false, features = ["transport_tcp", "transport_tls", "auth_usrpwd"] }
 serde_json = "1.0"
 terra-types.workspace = true
