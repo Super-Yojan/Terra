@@ -8,6 +8,11 @@ struct FleetConnectionSettings: View {
     @State private var roverID = UserDefaults.standard.string(forKey: "dashboardRoverID") ?? "0"
     @State private var user = UserDefaults.standard.string(forKey: "dashboardRouterUser") ?? "terra"
     @State private var password = TerraFleetDefaults.password
+    @State private var stunURL = FpvIceStore.load().stunURL
+    @State private var turnURL = FpvIceStore.load().turnURL
+    @State private var turnUsername = FpvIceStore.load().turnUsername
+    @State private var turnCredential = FpvIceStore.load().turnCredential
+    @State private var videoSaved = ""
     @State private var error = ""
     var body: some View {
         Form {
@@ -30,6 +35,24 @@ struct FleetConnectionSettings: View {
                 SecureField("Fleet password", text: $password)
             } header: { Text("Fleet router") } footer: {
                 Text("The default ARGOS router is public and uses encrypted TLS. Enter your fleet credentials; the password is stored in this phone’s Keychain.")
+            }
+            Section {
+                TextField("STUN URL", text: $stunURL).textInputAutocapitalization(.never).autocorrectionDisabled()
+                TextField("TURN URL", text: $turnURL).textInputAutocapitalization(.never).autocorrectionDisabled()
+                TextField("TURN username", text: $turnUsername).textInputAutocapitalization(.never).autocorrectionDisabled()
+                SecureField("TURN credential", text: $turnCredential)
+                Button("Save video servers") {
+                    guard FpvIceStore.save(stunURL: stunURL, turnURL: turnURL, turnUsername: turnUsername, turnCredential: turnCredential) else {
+                        error = "Unable to save the TURN credential in Keychain."
+                        videoSaved = ""
+                        return
+                    }
+                    error = ""
+                    videoSaved = "Video servers saved. The rover stays disarmed."
+                }
+                if !videoSaved.isEmpty { Text(videoSaved).foregroundStyle(.secondary) }
+            } header: { Text("FPV video") } footer: {
+                Text("A public STUN server is used when this field is blank. TURN is optional. The credential stays in the Keychain and is not written into the app. Saving video servers does not connect, arm, or move the rover.")
             }
             Section {
                 Text("Terra connects automatically after your rover is ready. Saving changes replaces the current fleet session without disconnecting Bluetooth.")

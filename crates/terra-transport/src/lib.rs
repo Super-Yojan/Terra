@@ -764,7 +764,9 @@ mod tests {
     }
 }
 mod control_plane;
+mod signaling;
 pub use control_plane::ControlPlane;
+pub use signaling::WEBRTC_SIGNALING_MAX_BYTES;
 /// Bounded intent inbox with protected distinct emergency stops.
 /// Tuple of topic suffix, uninterpreted payload bytes, and local receipt instant.
 /// Consumers validate payloads and calculate age from the instant before acting.
@@ -830,8 +832,9 @@ pub fn drain_control_actions(
 
 /// Operator intents only. Sensor evidence is supplied by the onboard adapter.
 /// Match the explicit autonomy, safety, goal, teleop, hardware, navigation-settings,
-/// and search intent suffixes. Returns false for sensor or telemetry topics;
-/// this allowlist alone does not validate a payload or grant authority.
+/// and search intent suffixes. Returns false for sensor, telemetry, and WebRTC
+/// signaling topics. Signaling has its own queue and size cap. This allowlist
+/// alone does not validate a payload or grant authority.
 pub fn is_control_topic(kind: &str) -> bool {
     matches!(
         kind,

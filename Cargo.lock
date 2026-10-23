@@ -822,6 +822,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "fpv-signaling"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+]
+
+[[package]]
 name = "fs-err"
 version = "2.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2920,6 +2927,7 @@ dependencies = [
 name = "terra-mobile"
 version = "0.1.0"
 dependencies = [
+ "fpv-signaling",
  "rusqlite",
  "serde",
  "serde_json",
@@ -2999,6 +3007,7 @@ dependencies = [
 name = "terra-transport"
 version = "0.1.0"
 dependencies = [
+ "fpv-signaling",
  "serde_json",
  "terra-types",
  "zenoh",

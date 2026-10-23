@@ -33,6 +33,7 @@
 | How do I compile it? | [Xcode](build.md) or [Android](../MOBILE_ANDROID.md) |
 | Simulator or iPhone? | [Split](simulator.md) |
 | How do I pair? | [Bluetooth](bluetooth.md) |
+| How does the live camera reach ARGOS? | [FPV video](fpv.md) |
 | Tap a part to configure? | [Planned](tap-to-configure.md) |
 
 Long-form sensor notes: [Phone controller](../MOBILE_CONTROL.md).

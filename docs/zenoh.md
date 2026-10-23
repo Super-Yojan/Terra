@@ -80,3 +80,7 @@ Default 256×192 is about 1.9 MiB/s before protocol overhead.
 !!! note "Session open"
     That status means TCP is up.
     It does not mean the rover moved.
+
+## FPV signaling
+
+The fleet `ControlPlane` session also carries WebRTC signaling under `terra/phone/<id>/webrtc/…`. Those payloads may be larger than the 2048-byte control cap. They use a separate 65536-byte queue and cannot arm or drive. Video frames are peer-to-peer media, not Zenoh samples. See [FPV video](phone/fpv.md).

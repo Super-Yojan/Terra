@@ -12,3 +12,5 @@ cargo test -p terra-transport -- --ignored
 ```
 
 The ignored test requires local TCP sockets and checks topic selection, wire format, lease expiry and zero on disconnect.
+
+`ControlPlane` also carries WebRTC signaling on the topics defined by `fpv-signaling`. Those samples are capped at 65536 bytes and are not control actions. `publish` will not latch them as telemetry. The session machine is not in this crate.
