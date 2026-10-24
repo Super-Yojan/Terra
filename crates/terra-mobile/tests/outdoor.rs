@@ -758,3 +758,61 @@ fn geographic_mission_survives_two_minute_cloud_outage_but_hardware_loss_latches
     assert_eq!(state(&c)["outdoor"]["phase"], "paused");
     assert!(!c.accepted_onboard_mission());
 }
+#[test]
+fn manual_takeover_drives_while_an_outdoor_mission_is_paused() {
+    let c = terra_mobile::MobileController::new(terra_mobile::default_control_settings()).unwrap();
+    c.enable_outdoor_gps().unwrap();
+    local_sensors(&c, 1.);
+    hardware(&c, false);
+    c.step(1.).unwrap();
+    let run = state(&c)["status"]["run_id"].clone();
+    c.autonomy_request("navigation/source".into(),serde_json::json!({"schema_version":1,"source":"outdoor_gps","token":"select","run_id":run,"navigation_revision":0}).to_string(),1.).unwrap();
+    c.autonomy_request(
+        "autonomy".into(),
+        r#"{"level":"waypoint","token":"level"}"#.into(),
+        1.,
+    )
+    .unwrap();
+    c.push_gps(
+        GpsFix {
+            timestamp: 1.,
+            latitude: 0.,
+            longitude: 0.,
+            accuracy: 2.,
+        },
+        1.,
+    )
+    .unwrap();
+    c.push_heading(
+        HeadingFix {
+            timestamp: 1.,
+            true_heading: 0.,
+            accuracy: 2.,
+        },
+        1.,
+    )
+    .unwrap();
+    c.autonomy_request("goal".into(),serde_json::json!({"frame":"wgs84","latitude":0.001,"longitude":0,"token":"mission","run_id":run,"navigation_revision":1,"arrival_radius_m":2.}).to_string(),1.01).unwrap();
+    local_sensors(&c, 1.05);
+    c.step(1.05).unwrap();
+    // GPS and heading go stale, as with a heading hold in the field.
+    local_sensors(&c, 5.);
+    c.step(5.).unwrap();
+    assert_eq!(state(&c)["outdoor"]["phase"], "paused");
+    c.autonomy_request(
+        "autonomy".into(),
+        r#"{"level":"teleop","token":"takeover"}"#.into(),
+        5.,
+    )
+    .unwrap();
+    local_sensors(&c, 5.05);
+    c.set_manual_input(0.5, 0., 5.05).unwrap();
+    let output = c.step(5.05).unwrap();
+    let s = state(&c);
+    assert_eq!(s["status"]["safety"], "clear", "{s}");
+    assert!(output.left_effort > 0. && output.right_effort > 0., "{s}");
+    assert_eq!(
+        s["outdoor"]["phase"], "paused",
+        "the mission still needs an explicit resume"
+    );
+}
