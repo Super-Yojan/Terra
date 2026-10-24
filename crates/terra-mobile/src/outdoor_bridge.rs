@@ -1,5 +1,5 @@
 use crate::*;
-use outdoor::{GpsFix, HeadingFix};
+use outdoor::{CourseFix, GpsFix, HeadingFix};
 fn invalid(s: &str) -> ControllerError {
     ControllerError::InvalidInput { message: s.into() }
 }
@@ -54,6 +54,14 @@ impl MobileController {
             .map_err(|_| ControllerError::Internal)?
             .outdoor
             .heading(sample, now)
+            .map_err(invalid)
+    }
+    pub fn push_course(&self, sample: CourseFix, now: f64) -> Result<(), ControllerError> {
+        self.brain
+            .lock()
+            .map_err(|_| ControllerError::Internal)?
+            .outdoor
+            .course(sample, now)
             .map_err(invalid)
     }
 }

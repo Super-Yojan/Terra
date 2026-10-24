@@ -18,7 +18,7 @@ mod observability;
 pub use observability::ObservationAttachment;
 pub mod outdoor;
 mod outdoor_bridge;
-pub use outdoor::{GpsFix, HeadingFix};
+pub use outdoor::{CourseFix, GpsFix, HeadingFix};
 #[cfg(test)]
 mod navigation_settings;
 mod pose_quality;

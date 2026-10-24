@@ -1961,6 +1961,10 @@ extension PhoneController {
         if let fix = locationFix, outdoorFixTime != fix.timestamp {
             outdoorFixTime = fix.timestamp
             try? controller.pushGps(sample: GpsFix(timestamp: monotonic - (now - fix.timestamp.timeIntervalSince1970), latitude: fix.coordinate.latitude, longitude: fix.coordinate.longitude, accuracy: fix.horizontalAccuracy), now: monotonic)
+            // Course is travel direction; the core pairs it with AR travel, so no mount rotation here.
+            if fix.course >= 0, fix.courseAccuracy >= 0, fix.speed >= 0 {
+                try? controller.pushCourse(sample: CourseFix(timestamp: monotonic - (now - fix.timestamp.timeIntervalSince1970), course: fix.course, accuracy: fix.courseAccuracy, speed: fix.speed), now: monotonic)
+            }
         }
         if let heading = locationHeading, outdoorHeadingTime != heading.timestamp,
            let reference = phoneHeadingReferenceYaw, let pose = phonePose,

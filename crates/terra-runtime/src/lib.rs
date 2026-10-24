@@ -150,6 +150,10 @@ pub enum RuntimeEvent {
         sample: terra_autonomy::outdoor::HeadingFix,
         received_at: f64,
     },
+    Course {
+        sample: terra_autonomy::outdoor::CourseFix,
+        received_at: f64,
+    },
     Detector {
         classes: Vec<String>,
         version: String,
@@ -329,6 +333,7 @@ impl Runtime {
             | RuntimeEvent::Mode { received_at, .. }
             | RuntimeEvent::Gps { received_at, .. }
             | RuntimeEvent::Heading { received_at, .. }
+            | RuntimeEvent::Course { received_at, .. }
             | RuntimeEvent::Detector { received_at, .. }
             | RuntimeEvent::Target { received_at, .. } => *received_at,
         };
@@ -358,14 +363,13 @@ impl Runtime {
                         y: 0.,
                         z: 0.,
                     });
-                    self.pose = Some((
-                        Pose {
-                            x: sample.position.x,
-                            y: sample.position.y,
-                            yaw: f.y.atan2(f.x),
-                        },
-                        sample.timestamp,
-                    ));
+                    let pose = Pose {
+                        x: sample.position.x,
+                        y: sample.position.y,
+                        yaw: f.y.atan2(f.x),
+                    };
+                    self.pose = Some((pose, sample.timestamp));
+                    self.outdoor.observe_pose(pose, sample.timestamp);
                 }
             }
             RuntimeEvent::Depth {
@@ -483,6 +487,9 @@ impl Runtime {
             }
             RuntimeEvent::Heading { sample, .. } => {
                 self.outdoor.heading(sample, received).map_err(invalid)?
+            }
+            RuntimeEvent::Course { sample, .. } => {
+                self.outdoor.course(sample, received).map_err(invalid)?
             }
             RuntimeEvent::Detector {
                 classes, version, ..
