@@ -93,6 +93,12 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
     private var configurationGeneration: UInt64 = 0
     private var resetFaultRequest: UInt32?
     @Published private(set) var hardwareOutputActive = false
+    /// Operator confirmed the phone is on the rover mount. Resets on launch.
+    @Published private(set) var phoneMounted = false
+    // Control-queue copy of `phoneMounted`, read on every motor command.
+    private var phoneMountConfirmed = false
+    private var mountHoldReported = false
+    static let mountHoldReason = "Phone mount not confirmed · only the debug joystick can drive"
     @Published private(set) var hardwareStatus = "Disconnected"
     @Published private(set) var lastStopDiagnostic = TerraStopDiagnostic()
     @Published private(set) var capabilitiesJSON = "{}"
@@ -222,7 +228,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
         locationManager.desiredAccuracy = kCLLocationAccuracyBest
         locationManager.distanceFilter = kCLDistanceFilterNone
         locationManager.headingFilter = kCLHeadingFilterNone
-        locationManager.headingOrientation = PhoneMountGeometry.headingOrientation
+        locationManager.headingOrientation = PhoneMountGeometry.headingReference(deviceToBody: mountCalibration.deviceToBody).orientation
         motionQueue.maxConcurrentOperationCount = 1
         motionQueue.qualityOfService = .userInteractive
         session.delegate = self
@@ -595,7 +601,9 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
                 if controller == nil { controller = try MobileController(settings: defaultControlSettings()) }
                 guard let controller else { return }
                 try controller.setActuationMode(feedback: false)
-                if controller.dashboardStatus() != "connected" {
+                // Without a fleet session this is the phone's own debug joystick.
+                let localDebug = controller.dashboardStatus() != "connected"
+                if localDebug {
                     try controller.setManualInput(forward: target.forward, turn: target.yaw, timestamp: now)
                 }
                 let output = try controller.step(timestamp: now)
@@ -603,7 +611,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
                 tick += 1
                 if tick % 5 == 0 {
                     let command = DriveJoystickCommand(forward: (output.leftEffort + output.rightEffort) / 2, yaw: (output.rightEffort - output.leftEffort) / 2)
-                    routeHardware(left: output.leftEffort, right: output.rightEffort, now: ProcessInfo.processInfo.systemUptime, manualTarget: command)
+                    routeHardware(left: output.leftEffort, right: output.rightEffort, now: ProcessInfo.processInfo.systemUptime, manualTarget: command, localDebug: localDebug)
                 }
             } catch { fail(error, context: "Shared runtime manual drive") }
             return
@@ -728,7 +736,8 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
         updatePersonSearch(frame: frame, tracked: tracked, epoch: trackingEpoch)
         let transform = frame.camera.transform
         phoneHeadingReferenceYaw = PhoneMountGeometry.headingReferenceYaw(
-            worldFromCamera: worldFromAR * simd_float3x3(simd_quatf(transform)))
+            worldFromCamera: worldFromAR * simd_float3x3(simd_quatf(transform)),
+            using: PhoneMountGeometry.headingReference(deviceToBody: mountCalibration.deviceToBody))
         let arPosition = SIMD3(transform.columns.3.x, transform.columns.3.y, transform.columns.3.z)
         let position = worldFromAR * arPosition
         let orientation = simd_quatf(worldFromAR) * simd_quatf(transform) * mountCalibration.arCameraToBody.inverse
@@ -844,7 +853,9 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
                 guard self.mode == .stopped else { throw CalibrationSaveError.stopFirst }
                 try value.save()
                 self.mountCalibration = value
+                let headingOrientation = PhoneMountGeometry.headingReference(deviceToBody: value.deviceToBody).orientation
                 DispatchQueue.main.async {
+                    self.locationManager.headingOrientation = headingOrientation
                     self.calibrationStatus = value.reviewed ? "Measured calibration saved · reviewed" : "Measured calibration saved · review required"
                 }
             } catch {
@@ -955,7 +966,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
         // The local supporting plane follows body attitude/elevation during integration.
         if mapGroundOffset == nil {
             let floors = frame.anchors.compactMap { $0 as? ARPlaneAnchor }.filter {
-                $0.alignment == .horizontal && ($0.classification == .floor || $0.classification == .none)
+                $0.alignment == .horizontal && ($0.classification == .floor || { if case .none = $0 { return true } else { return false } }($0.classification))
                 && Double(position.z) - Double($0.transform.columns.3.y) >= 0.1
                 && $0.planeExtent.width * $0.planeExtent.height >= 0.4
             }
@@ -964,10 +975,8 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
             let height = floor.map { Double(($0.transform * SIMD4<Float>($0.center.x, $0.center.y, $0.center.z, 1)).y) }
             let area = floor.map { Double($0.planeExtent.width * $0.planeExtent.height) } ?? 0
             mapGroundOffset = groundPolicy.observe(height: height, cameraHeight: Double(position.z), area: area, now: frame.timestamp, upZ: Double(bodyUp.z))
-            guard mapGroundOffset != nil else {
-                DispatchQueue.main.async { self.mapStatus = "Finding floor · point the camera toward the ground" }
-                return
-            }
+            // The level-band map reports its own "finding floor" status meanwhile.
+            guard mapGroundOffset != nil else { return }
             try? occupancyMap?.clear()
         }
     }
@@ -1023,12 +1032,10 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
             return
         }
         let up = bodyOrientation.act(SIMD3<Float>(0, 0, 1))
-        guard let ground = groundPolicy.groundPlane(
+        // Nil until ARKit finds the floor; the level band maps in the meantime.
+        let ground = groundPolicy.groundPlane(
             cameraPosition: SIMD3(Double(position.x), Double(position.y), Double(position.z)),
-            bodyUp: SIMD3(Double(up.x), Double(up.y), Double(up.z))) else {
-            observation.recordChanged(component: "mapping", kind: "mapping.health", attributes: ["reason": "ground_reference_unavailable"])
-            return
-        }
+            bodyUp: SIMD3(Double(up.x), Double(up.y), Double(up.z)))
         let buffer = depth.depthMap
         guard CVPixelBufferGetPixelFormatType(buffer) == kCVPixelFormatType_DepthFloat32,
               CVPixelBufferLockBaseAddress(buffer, .readOnly) == kCVReturnSuccess else {
@@ -1060,8 +1067,8 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
         let sy = Double(height) / Double(frame.camera.imageResolution.height)
         // AR camera axes right/up/back -> optical right/down/forward.
         let q = (simd_quatf(worldFromAR) * simd_quatf(frame.camera.transform) * simd_quatf(angle: .pi, axis: SIMD3(1, 0, 0))).vector
-        guard mapGroundOffset != nil else {
-            observation.recordChanged(component: "mapping", kind: "mapping.health", attributes: ["reason": "ground_offset_unavailable"])
+        guard let ground, mapGroundOffset != nil else {
+            integrateHorizonBand(frame: frame, map: map, values: values, width: width, height: height, sx: sx, sy: sy, q: q, position: position, roverPosition: roverPosition, bodyOrientation: bodyOrientation)
             return
         }
         do {
@@ -1092,6 +1099,25 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
                     "map_revision": occupancyPublicationRevision, "integration_result": "accepted"]
                 observationCapture.capture(frame: frame, depth: values, width: width, height: height, grid: try? map.snapshot(), manifest: metadata, controller: controller)
             }
+        } catch { observation.recordChanged(component: "mapping", kind: "mapping.health", attributes: ["reason": "integration_failed", "error": error.localizedDescription]); DispatchQueue.main.async { self.mapStatus = "Map: " + error.localizedDescription } }
+    }
+    /// Half-height of the level depth band used before the floor is found, degrees.
+    private static let horizonBandHalfAngleDegrees = 10.0
+    /// Map from a level slice of the depth view when no floor reference exists yet.
+    /// Every return in the slice is an obstacle, so returns are cut off where the
+    /// slice's lower edge meets the floor at the measured (or nominal 0.5 m) camera height.
+    private func integrateHorizonBand(frame: ARFrame, map: MobileOccupancyMap, values: [Float], width: Int, height: Int, sx: Double, sy: Double, q: SIMD4<Float>, position: SIMD3<Float>, roverPosition: SIMD3<Float>, bodyOrientation: simd_quatf) {
+        let k = frame.camera.intrinsics
+        let cameraHeight = mountCalibration.cameraHeight > 0 ? mountCalibration.cameraHeight : 0.5
+        let halfAngle = Self.horizonBandHalfAngleDegrees
+        let maxRange = cameraHeight / tan(halfAngle * .pi / 180)
+        do {
+            try map.recenter(x: Double(roverPosition.x), y: Double(roverPosition.y))
+            try map.integrateDepthInHorizonBand(frame: MappingDepthFrame(timestamp: frame.timestamp, width: UInt32(width), height: UInt32(height), fx: Double(k.columns.0.x) * sx, fy: Double(k.columns.1.y) * sy, cx: (Double(k.columns.2.x) + 0.5) * sx - 0.5, cy: (Double(k.columns.2.y) + 0.5) * sy - 0.5, cameraX: Double(position.x), cameraY: Double(position.y), cameraZ: Double(position.z), quaternionX: Double(q.x), quaternionY: Double(q.y), quaternionZ: Double(q.z), quaternionW: Double(q.w), depthMetres: values), halfAngleDegrees: halfAngle, maxRange: maxRange)
+            lastMapTime = frame.timestamp
+            observation.recordChanged(component: "mapping", kind: "mapping.health", attributes: ["reason": "accepted_horizon_band"])
+            let forward = bodyOrientation.act(SIMD3<Float>(1, 0, 0))
+            try publishMap(x: Double(roverPosition.x), y: Double(roverPosition.y), yaw: atan2(Double(forward.y), Double(forward.x)), status: String(format: "ARKit scene depth · level band ±%.0f° to %.1f m · finding floor · 10 Hz", halfAngle, maxRange))
         } catch { observation.recordChanged(component: "mapping", kind: "mapping.health", attributes: ["reason": "integration_failed", "error": error.localizedDescription]); DispatchQueue.main.async { self.mapStatus = "Map: " + error.localizedDescription } }
     }
     private func handleTrackingFailure(_ error: Error) {
@@ -1177,7 +1203,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
                 let remote = (try? JSONSerialization.jsonObject(with: Data(self.bluetooth.statusJSON.utf8))) as? [String: Any] ?? [:]
                 var state: [String: Any] = ["schema_version": 1, "ready": self.hardwareReady,
                     "connected": self.bluetooth.connectedIdentifier != nil, "control_mode": "streamed_relay", "output_active": self.hardwareOutputActive, "motion_feedback_source": "phone_vio", "motion_feedback_ready": vioReady,
-                    "reason": self.hardwareStatus]
+                    "reason": self.hardwareStatus, "phone_mounted": self.phoneMounted]
                 state["stop_diagnostic"] = self.lastStopDiagnostic.message
                 state["stop_reason"] = remote["stop_reason"]
                 if let fault = self.hardwareFault { state["fault"] = fault }
@@ -1694,8 +1720,25 @@ extension PhoneController {
         let values = servoTargets.reduce(into: [UInt8: Double]()) { result, entry in if let id = UInt8(entry.key) { result[id] = entry.value } }
         DispatchQueue.main.async { self.servoPositions = values }
     }
-    private func routeHardware(left: Double, right: Double, now: TimeInterval, manualTarget: DriveJoystickCommand? = nil, closedLoop: Bool = false) {
+    /// Confirm (or withdraw) that the phone is on the rover mount. Until confirmed,
+    /// only the local debug joystick may drive; fleet teleop and autonomy are held.
+    func setPhoneMounted(_ mounted: Bool) {
+        controlQueue.async {
+            self.phoneMountConfirmed = mounted
+            self.mountHoldReported = false
+            DispatchQueue.main.async { self.phoneMounted = mounted }
+        }
+    }
+    private func routeHardware(left: Double, right: Double, now: TimeInterval, manualTarget: DriveJoystickCommand? = nil, closedLoop: Bool = false, localDebug: Bool = false) {
         guard bleActive, bleReady, !dashboardEmergencyStop, !bleFeedback || bleCompatible else { return }
+        guard phoneMountConfirmed || localDebug else {
+            // Report once per hold; neutral output stays latched until the mount is confirmed.
+            if !mountHoldReported {
+                mountHoldReported = true
+                pauseHardwareMotion(reason: Self.mountHoldReason)
+            }
+            return
+        }
         do {
             // Resolve numeric values before erasing their types into Any. Otherwise
             // Swift can infer feedback's neutral literal as Int inside this dictionary.

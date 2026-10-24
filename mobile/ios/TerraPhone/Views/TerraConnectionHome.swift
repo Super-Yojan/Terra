@@ -15,6 +15,7 @@ struct TerraConnectionHome: View {
                         .font(.subheadline).foregroundStyle(.secondary)
                 }
                 roverSection
+                mountSection
                 Divider()
                 fleetSection
                 if brain.lastStopDiagnostic.message != nil {
@@ -45,6 +46,23 @@ struct TerraConnectionHome: View {
         if ProcessInfo.processInfo.environment["TERRA_UI_PREVIEW_STATE"] != nil { return "Simulator preview · sample connection state" }
         #endif
         return "Your rover, connected to the fleet."
+    }
+    /// Fleet teleop and autonomy stay neutral until the operator confirms the mount.
+    private var mountSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if brain.phoneMounted {
+                Label("Phone mounted on rover", systemImage: "checkmark.seal.fill")
+                    .foregroundStyle(TerraStyle.forest)
+                Button("Phone removed from mount") { brain.setPhoneMounted(false) }
+                    .buttonStyle(.bordered).frame(minHeight: 44)
+            } else {
+                Button("Confirm phone is mounted") { brain.setPhoneMounted(true) }
+                    .buttonStyle(.borderedProminent).frame(minHeight: 44)
+                Text("Until confirmed, ARGOS and autonomy cannot drive the motors. The debug joystick still works.")
+                    .font(.footnote).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
     }
     private var roverSection: some View {
         VStack(alignment: .leading, spacing: 10) {

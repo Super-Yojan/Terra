@@ -74,6 +74,8 @@ pub struct ControlSettings {
     pub max_step: f64,
     /// Back-calculation gain for effort saturation, per second.
     pub anti_windup: f64,
+    /// Open-loop wheel effort for a managed in-place spin, in [0, 1]; 0 keeps feedback.
+    pub spin_effort: f64,
 }
 impl ControlSettings {
     fn controller(&self) -> ControllerConfig {
@@ -90,6 +92,7 @@ impl ControlSettings {
             target_timeout: self.target_timeout,
             max_step: self.max_step,
             anti_windup: self.anti_windup,
+            spin_effort: self.spin_effort,
         }
     }
     fn estimator(&self) -> EstimatorConfig {
@@ -126,6 +129,7 @@ pub fn default_control_settings() -> ControlSettings {
         target_timeout: c.target_timeout,
         max_step: c.max_step,
         anti_windup: c.anti_windup,
+        spin_effort: c.spin_effort,
     }
 }
 #[derive(Clone, Debug, uniffi::Record)]

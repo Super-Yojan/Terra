@@ -45,6 +45,42 @@ import simd
                 }
             }
         }
+        if PhoneMountGeometry.headingReference(deviceToBody: mount) != PhoneMountGeometry.uprightHeadingReference {
+            print("FAIL: upright mount must keep the right-edge compass reference"); failures += 1
+        }
+        // Landscape mount, rear camera forward: roll about rover forward moves the
+        // top edge horizontal (-90 deg: toward rover left) and the right edge vertical.
+        for (roll, topEdgeYaw): (Float, Double) in [(-.pi / 2, .pi / 2), (.pi / 2, -.pi / 2)] {
+            let correction = simd_quatf(angle: roll, axis: SIMD3(1, 0, 0))
+            let edge = PhoneMountGeometry.headingReference(deviceToBody: correction * mount)
+            if edge.orientation != .portrait {
+                print("FAIL: landscape mount at roll \(roll) must reference the horizontal top edge"); failures += 1
+            }
+            for yaw: Float in [0, .pi / 2, -.pi / 2, .pi] {
+                for pitch: Float in [0, 0.2, -0.2] {
+                    let worldFromBody = simd_quatf(angle: yaw, axis: SIMD3(0, 0, 1))
+                        * simd_quatf(angle: pitch, axis: SIMD3(0, 1, 0))
+                    let worldFromCamera = simd_float3x3(worldFromBody * correction * cameraMount)
+                    if PhoneMountGeometry.headingReferenceYaw(worldFromCamera: worldFromCamera) != nil {
+                        print("FAIL: the vertical right edge must not serve as a landscape reference"); failures += 1
+                    }
+                    guard let actual = PhoneMountGeometry.headingReferenceYaw(worldFromCamera: worldFromCamera, using: edge) else {
+                        print("FAIL: landscape reference missing at roll \(roll), yaw \(yaw), pitch \(pitch)")
+                        failures += 1; continue
+                    }
+                    let expected = Double(yaw) + topEdgeYaw
+                    if abs(atan2(sin(actual - expected), cos(actual - expected))) > 0.00001 {
+                        print("FAIL: landscape reference yaw does not match the physical top edge"); failures += 1
+                    }
+                    // Compass reads the top edge's true heading; the rover faces 90 deg away.
+                    let compass = (200 - topEdgeYaw * 180 / .pi + 360).truncatingRemainder(dividingBy: 360)
+                    let rover = PhoneMountGeometry.roverTrueHeading(compass: compass, roverYaw: Double(yaw), referenceYaw: actual)
+                    if abs(atan2(sin((rover - 200) * .pi / 180), cos((rover - 200) * .pi / 180))) > 0.0001 {
+                        print("FAIL: landscape compass must convert to rover true heading"); failures += 1
+                    }
+                }
+            }
+        }
         let pointingUp = simd_float3x3(simd_quatf(angle: .pi / 2, axis: SIMD3(1, 0, 0)))
         if PhoneMountGeometry.headingReferenceYaw(worldFromCamera: pointingUp) != nil {
             print("FAIL: reject a vertical compass reference instead of inventing its yaw"); failures += 1
@@ -60,6 +96,6 @@ import simd
         }
         precondition(PhoneMountGeometry.roverTrueHeading(compass: -1, roverYaw: 0, referenceYaw: 0) == -1)
         if failures > 0 { exit(1) }
-        print("Phone mount: forward, up, IMU axes and upright compass alignment passed")
+        print("Phone mount: forward, up, IMU axes, upright and landscape compass alignment passed")
     }
 }

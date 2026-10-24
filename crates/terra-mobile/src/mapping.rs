@@ -1,7 +1,7 @@
 //! UniFFI map facade; depth acquisition and exposure-aligned poses belong to the caller.
 use crate::{ControllerError, MobileController};
 use std::sync::{Arc, Mutex};
-use terra_mapping::{CameraIntrinsics, CameraPose, GroundPlane, MapConfig, MapError};
+use terra_mapping::{CameraIntrinsics, CameraPose, GroundPlane, HorizonBand, MapConfig, MapError};
 use terra_types::{Quaternion, Vector3};
 #[derive(Clone, uniffi::Record)]
 /// Rolling-map dimensions and depth-integration limits. Distances are metres.
@@ -99,6 +99,31 @@ pub struct OccupancyGrid {
     /// Row-major cells, rows increasing in world +Y: -1 unknown, 0..=100 occupancy.
     pub occupancy: Vec<i8>,
 }
+fn frame_intrinsics(frame: &MappingDepthFrame) -> CameraIntrinsics {
+    CameraIntrinsics {
+        width: frame.width,
+        height: frame.height,
+        fx: frame.fx,
+        fy: frame.fy,
+        cx: frame.cx,
+        cy: frame.cy,
+    }
+}
+fn frame_pose(frame: &MappingDepthFrame) -> CameraPose {
+    CameraPose {
+        position: Vector3 {
+            x: frame.camera_x,
+            y: frame.camera_y,
+            z: frame.camera_z,
+        },
+        orientation: Quaternion {
+            x: frame.quaternion_x,
+            y: frame.quaternion_y,
+            z: frame.quaternion_z,
+            w: frame.quaternion_w,
+        },
+    }
+}
 impl From<MapError> for ControllerError {
     fn from(error: MapError) -> Self {
         Self::InvalidInput {
@@ -180,27 +205,8 @@ impl MobileOccupancyMap {
             .map_err(|_| ControllerError::Internal)?
             .integrate_depth_with_ground_plane(
                 frame.timestamp,
-                CameraIntrinsics {
-                    width: frame.width,
-                    height: frame.height,
-                    fx: frame.fx,
-                    fy: frame.fy,
-                    cx: frame.cx,
-                    cy: frame.cy,
-                },
-                CameraPose {
-                    position: Vector3 {
-                        x: frame.camera_x,
-                        y: frame.camera_y,
-                        z: frame.camera_z,
-                    },
-                    orientation: Quaternion {
-                        x: frame.quaternion_x,
-                        y: frame.quaternion_y,
-                        z: frame.quaternion_z,
-                        w: frame.quaternion_w,
-                    },
-                },
+                frame_intrinsics(&frame),
+                frame_pose(&frame),
                 &frame.depth_metres,
                 GroundPlane {
                     normal: Vector3 {
@@ -209,6 +215,34 @@ impl MobileOccupancyMap {
                         z: ground.normal_z,
                     },
                     offset: ground.offset,
+                },
+            )?;
+        Ok(())
+    }
+    /// Integrate depth without a ground estimate: only rays within
+    /// `half_angle_degrees` of world horizontal count, every return among them
+    /// within `max_range` metres is an obstacle, and all other rays are ignored.
+    ///
+    /// # Errors
+    /// Returns the same errors as [`Self::integrate_depth`], and `InvalidInput`
+    /// for a half-angle outside (0, 90) degrees or a nonpositive range.
+    pub fn integrate_depth_in_horizon_band(
+        &self,
+        frame: MappingDepthFrame,
+        half_angle_degrees: f64,
+        max_range: f64,
+    ) -> Result<(), ControllerError> {
+        self.map
+            .lock()
+            .map_err(|_| ControllerError::Internal)?
+            .integrate_depth_in_horizon_band(
+                frame.timestamp,
+                frame_intrinsics(&frame),
+                frame_pose(&frame),
+                &frame.depth_metres,
+                HorizonBand {
+                    half_angle: half_angle_degrees.to_radians(),
+                    max_range,
                 },
             )?;
         Ok(())

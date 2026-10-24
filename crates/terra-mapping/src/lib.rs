@@ -97,6 +97,17 @@ impl Default for GroundPlane {
         }
     }
 }
+/// Horizontal slice of the depth view, used when no ground estimate exists.
+/// Rays within `half_angle` of world horizontal are kept and every return in
+/// the slice is an obstacle, so no floor is needed to classify it.
+#[derive(Clone, Copy, Debug)]
+pub struct HorizonBand {
+    /// Half-height of the slice around world horizontal, in radians, within (0, π/2).
+    pub half_angle: f64,
+    /// Returns farther than this are ignored, in metres. Set it near where the
+    /// slice's lower edge meets the floor so floor returns never become obstacles.
+    pub max_range: f64,
+}
 /// Owned occupancy grid suitable for consumers that do not need mapping internals.
 #[derive(Clone, Debug)]
 pub struct MapSnapshot {
@@ -126,6 +137,8 @@ pub enum MapError {
     InvalidTime,
     /// Ground plane is nonfinite, degenerate, or tilted more than 60 degrees from world up.
     InvalidGroundPlane,
+    /// Horizon band half-angle is outside (0, π/2) or its range is not positive and finite.
+    InvalidBand,
 }
 impl std::fmt::Display for MapError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -302,6 +315,60 @@ impl LocalOccupancyMap {
         }
         let normal = ground.normal.scaled(1.0 / norm);
         let ground_offset = ground.offset / norm;
+        let (min_height, max_height) = (
+            self.config.min_obstacle_height,
+            self.config.max_obstacle_height,
+        );
+        self.integrate_rays(timestamp, intrinsics, pose, depth, |endpoint, _, _| {
+            let height = normal.x * endpoint.x + normal.y * endpoint.y + normal.z * endpoint.z
+                - ground_offset;
+            // High overhead objects provide no ground-level free-space evidence.
+            (height <= max_height).then_some(height >= min_height)
+        })
+    }
+    /// Integrate depth without a ground estimate, keeping only rays within a
+    /// horizontal band around the camera's level line.
+    ///
+    /// Every valid return in the band within `band.max_range` adds occupied
+    /// evidence and clears its approach ray. Rays outside the band, and farther
+    /// returns, are ignored. Obstacles entirely above or below the band are not seen.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same errors as [`Self::integrate_depth`], plus
+    /// [`MapError::InvalidBand`] for an invalid band. Rejection leaves the map unchanged.
+    pub fn integrate_depth_in_horizon_band(
+        &mut self,
+        timestamp: f64,
+        intrinsics: CameraIntrinsics,
+        pose: CameraPose,
+        depth: &[f32],
+        band: HorizonBand,
+    ) -> Result<(), MapError> {
+        if !band.half_angle.is_finite()
+            || band.half_angle <= 0.0
+            || band.half_angle >= std::f64::consts::FRAC_PI_2
+            || !band.max_range.is_finite()
+            || band.max_range <= 0.0
+        {
+            return Err(MapError::InvalidBand);
+        }
+        let max_sin = band.half_angle.sin();
+        self.integrate_rays(timestamp, intrinsics, pose, depth, |_, ray, range| {
+            (range <= band.max_range && (ray.z / range).abs() <= max_sin).then_some(true)
+        })
+    }
+    /// Validate one frame and cast its sampled rays. `classify` receives the
+    /// world endpoint, world ray, and range; it returns `None` to ignore the ray,
+    /// or whether the endpoint is an obstacle.
+    fn integrate_rays(
+        &mut self,
+        timestamp: f64,
+        intrinsics: CameraIntrinsics,
+        pose: CameraPose,
+        depth: &[f32],
+        classify: impl Fn(Vector3, Vector3, f64) -> Option<bool>,
+    ) -> Result<(), MapError> {
         if !timestamp.is_finite()
             || timestamp < 0.0
             || self.last_timestamp.is_some_and(|t| timestamp <= t)
@@ -358,14 +425,11 @@ impl LocalOccupancyMap {
                 if range > self.config.max_range {
                     continue;
                 }
-                let endpoint = pose.position.plus(q.rotate(optical));
-                let height = normal.x * endpoint.x + normal.y * endpoint.y + normal.z * endpoint.z
-                    - ground_offset;
-                // High overhead objects provide no ground-level free-space evidence.
-                if height > self.config.max_obstacle_height {
+                let ray = q.rotate(optical);
+                let endpoint = pose.position.plus(ray);
+                let Some(hit) = classify(endpoint, ray, range) else {
                     continue;
-                }
-                let hit = height >= self.config.min_obstacle_height;
+                };
                 let end = self.cell(endpoint);
                 // Bound traversal by the local grid: never iterate to a distant off-grid endpoint.
                 let (mut x, mut y) = start;
@@ -618,5 +682,105 @@ mod tests {
             assert!(map.snapshot().occupancy.iter().all(|&v| v == -1));
         }
         map.integrate_depth(0.0, intrinsics, pose, &[2.0]).unwrap();
+    }
+
+    const BAND: HorizonBand = HorizonBand {
+        half_angle: 10.0 * std::f64::consts::PI / 180.0,
+        max_range: 3.4,
+    };
+
+    /// Without any ground estimate, a level return is an obstacle at any height
+    /// and clears its approach ray, like a wall seen by a planar scanner.
+    #[test]
+    fn horizon_band_marks_level_return_occupied_without_ground() {
+        let (mut map, intrinsics, pose) = setup();
+        for t in 0..4 {
+            map.integrate_depth_in_horizon_band(t as f64, intrinsics, pose, &[2.0], BAND)
+                .unwrap();
+        }
+        let s = map.snapshot();
+        assert!(s.occupancy[10 * 20 + 12] < 50);
+        assert!(s.occupancy[10 * 20 + 14] > 90);
+        assert_eq!(s.occupancy[10 * 20 + 15], -1);
+    }
+
+    /// Rays steeper than the band (the floor ahead) and returns past the band's
+    /// range add no evidence at all.
+    #[test]
+    fn horizon_band_ignores_steep_rays_and_far_returns() {
+        let (mut map, intrinsics, mut pose) = setup();
+        pose.orientation = Quaternion::from_rotation_vector(Vector3 {
+            y: std::f64::consts::FRAC_PI_2 + 0.5,
+            ..Vector3::ZERO
+        });
+        map.integrate_depth_in_horizon_band(0.0, intrinsics, pose, &[1.0], BAND)
+            .unwrap();
+        assert!(map.snapshot().occupancy.iter().all(|&v| v == -1));
+        let (mut map, intrinsics, pose) = setup();
+        map.integrate_depth_in_horizon_band(0.0, intrinsics, pose, &[4.0], BAND)
+            .unwrap();
+        assert!(map.snapshot().occupancy.iter().all(|&v| v == -1));
+    }
+
+    /// Only the level rows of a tall image contribute; the top and bottom rows
+    /// fall outside the band.
+    #[test]
+    fn horizon_band_keeps_only_rows_near_level() {
+        let (mut map, _, mut pose) = setup();
+        // Upright camera: optical right/down/forward -> world -Y/-Z/+X.
+        pose.orientation = Quaternion {
+            x: -0.5,
+            y: 0.5,
+            z: -0.5,
+            w: 0.5,
+        };
+        // Three rows at about +45, 0 and -45 degrees from level.
+        let intrinsics = CameraIntrinsics {
+            width: 1,
+            height: 3,
+            fx: 1.0,
+            fy: 1.0,
+            cx: 0.0,
+            cy: 1.0,
+        };
+        map.integrate_depth_in_horizon_band(0.0, intrinsics, pose, &[1.0, 2.0, 1.0], BAND)
+            .unwrap();
+        let s = map.snapshot();
+        let observed = s.occupancy.iter().filter(|&&v| v >= 0).count();
+        // Only the level row's ray (cells 10..=14 on row 10) was cast.
+        assert_eq!(observed, 5, "{:?}", s.occupancy);
+        assert!(s.occupancy[10 * 20 + 14] > 50);
+    }
+
+    /// Invalid bands are rejected before they can change the map or consume time.
+    #[test]
+    fn invalid_horizon_bands_do_not_change_the_map() {
+        let (mut map, intrinsics, pose) = setup();
+        for band in [
+            HorizonBand {
+                half_angle: 0.0,
+                ..BAND
+            },
+            HorizonBand {
+                half_angle: std::f64::consts::FRAC_PI_2,
+                ..BAND
+            },
+            HorizonBand {
+                half_angle: f64::NAN,
+                ..BAND
+            },
+            HorizonBand {
+                max_range: 0.0,
+                ..BAND
+            },
+        ] {
+            assert_eq!(
+                map.integrate_depth_in_horizon_band(0.0, intrinsics, pose, &[2.0], band),
+                Err(MapError::InvalidBand)
+            );
+            assert!(map.snapshot().occupancy.iter().all(|&v| v == -1));
+        }
+        map.integrate_depth_in_horizon_band(0.0, intrinsics, pose, &[2.0], BAND)
+            .unwrap();
     }
 }

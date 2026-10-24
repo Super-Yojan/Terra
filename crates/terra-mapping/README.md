@@ -8,6 +8,8 @@ Depth is **axial Z distance**, not ray length. Optical camera axes are X right, 
 
 Rays mark visible cells free and endpoints occupied within the configurable obstacle height band relative to the world ground plane. Ground endpoints mark free space; overhead endpoints are ignored. Evidence accumulates as bounded log odds. Updates are deduplicated per frame, with hits winning conflicts. Rays stop at the grid boundary; cells behind an obstacle remain unknown.
 
+Without a ground estimate, `integrate_depth_in_horizon_band(..., HorizonBand { half_angle, max_range })` keeps only rays within `half_angle` of world horizontal and marks every return among them, up to `max_range`, as an obstacle. It needs no floor, but it only sees obstacles that cross the band. Set `max_range` near where the band's lower edge meets the floor (`camera_height / tan(half_angle)`) so floor returns never become obstacles. TerraPhone uses this mode, ±10°, until ARKit finds the floor.
+
 ```sh
 cargo test -p terra-mapping
 cargo run -p terra-mapping --example wall

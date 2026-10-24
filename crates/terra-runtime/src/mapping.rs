@@ -47,4 +47,17 @@ impl MappingState {
             .map_err(|_| MapError::InvalidFrame)?
             .integrate_depth_with_ground_plane(t, k, c, pixels, ground)
     }
+    pub fn integrate_depth_in_horizon_band(
+        &self,
+        t: f64,
+        k: CameraIntrinsics,
+        c: CameraPose,
+        pixels: &[f32],
+        band: HorizonBand,
+    ) -> Result<(), MapError> {
+        self.0
+            .lock()
+            .map_err(|_| MapError::InvalidFrame)?
+            .integrate_depth_in_horizon_band(t, k, c, pixels, band)
+    }
 }

@@ -57,13 +57,16 @@ pub struct ControllerConfig {
     pub max_step: f64,
     /// Back-calculation rate in inverse seconds, applied to saturation error.
     pub anti_windup: f64,
+    /// Open-loop wheel effort for a managed in-place spin, in `[0, 1]`; 0 keeps
+    /// spins on feedback. See [`VelocityController::step`].
+    pub spin_effort: f64,
 }
 impl Default for ControllerConfig {
     fn default() -> Self {
         Self {
-            linear_kp: 0.8,
+            linear_kp: 0.3,
             linear_ki: 0.6,
-            yaw_kp: 0.4,
+            yaw_kp: 0.1,
             yaw_ki: 0.3,
             linear_feedforward: 1.0 / 3.0,
             yaw_feedforward: 0.2,
@@ -73,6 +76,8 @@ impl Default for ControllerConfig {
             target_timeout: 0.5,
             max_step: 0.1,
             anti_windup: 4.0,
+            // Not measured: enough to break CrabTrapBot's skid-steer scrub. Tune on hardware.
+            spin_effort: 0.35,
         }
     }
 }
@@ -107,6 +112,7 @@ impl ControllerConfig {
             || self.max_forward > 20.0
             || self.max_yaw_rate > 20.0
             || self.max_step > 1.0
+            || !(0.0..=1.0).contains(&self.spin_effort)
         {
             return Err(InputError::InvalidConfiguration);
         }
@@ -198,6 +204,11 @@ impl VelocityController {
     /// Safety holds clear integrals. Successful efforts lie within `max_effort`.
     /// A zero target with measured speed and yaw-rate magnitude both below 0.015
     /// (in their respective units) clears integrals and produces exact zero effort.
+    ///
+    /// A managed pure spin (turning constraint allows in-place turns, zero forward
+    /// target, nonzero yaw target) bypasses feedback: wheels get `∓spin_effort`
+    /// in the target's direction and the integrals stay cleared. Health and target
+    /// checks still apply, and the caller still decides when the spin ends.
     pub fn step(&mut self, estimate: VelocityEstimate) -> MotorOutput {
         let now = estimate.timestamp;
         let dt = self.last_step.map_or(0.01, |last| now - last);
@@ -235,6 +246,26 @@ impl VelocityController {
             return MotorOutput::stopped(reason);
         }
         let target = self.target.unwrap();
+        // VIO yaw-rate feedback lags during rotation and cannot hold a skid-steer
+        // spin through scrub, so a managed spin runs open loop.
+        if self.config.spin_effort > 0.0
+            && self.turning.is_some_and(|turning| turning.allow_in_place)
+            && target.forward.abs() < 1e-6
+            && target.yaw_rate != 0.0
+        {
+            self.clear_integrals();
+            let effort =
+                self.config.spin_effort.min(self.config.max_effort) * target.yaw_rate.signum();
+            return MotorOutput {
+                left: -effort,
+                right: effort,
+                estimated_forward: estimate.forward,
+                estimated_yaw_rate: estimate.yaw_rate,
+                target_forward: target.forward,
+                target_yaw_rate: target.yaw_rate,
+                stop_reason: StopReason::None,
+            };
+        }
         let linear_error = target.forward - estimate.forward;
         let yaw_error = target.yaw_rate - estimate.yaw_rate;
         let linear = self.config.linear_feedforward * target.forward
@@ -345,5 +376,95 @@ mod tests {
         }
         assert!((v - 0.8).abs() < 0.04, "v={v}");
         assert!((w - 0.3).abs() < 0.04, "w={w}");
+    }
+
+    fn spin_controller(turning: Option<TurningConfig>, spin_effort: f64) -> VelocityController {
+        let mut c = VelocityController::new(ControllerConfig {
+            spin_effort,
+            ..Default::default()
+        })
+        .unwrap();
+        c.set_turning_constraint(turning);
+        c
+    }
+    const SPIN_ALLOWED: TurningConfig = TurningConfig {
+        max_yaw_rate: 0.5,
+        angular_acceleration: 0.5,
+        angular_deceleration: 0.8,
+        min_turn_radius: 0.5,
+        allow_in_place: true,
+    };
+    fn spin(c: &mut VelocityController, t: f64, yaw_rate: f64, measured_yaw: f64) -> MotorOutput {
+        c.set_target(VelocityTarget {
+            timestamp: t,
+            forward: 0.0,
+            yaw_rate,
+        })
+        .unwrap();
+        c.step(estimate(t, 0.0, measured_yaw))
+    }
+
+    /// A managed pure spin ignores measured yaw rate: the same fixed effort
+    /// whether VIO reports no rotation or overshoot, in the target's direction.
+    #[test]
+    fn managed_spin_runs_open_loop_at_spin_effort() {
+        let mut c = spin_controller(Some(SPIN_ALLOWED), 0.35);
+        for (t, measured) in [(0.0, 0.0), (0.05, 2.0), (0.1, -1.0)] {
+            let out = spin(&mut c, t, 0.2, measured);
+            assert_eq!((out.left, out.right), (-0.35, 0.35));
+            assert_eq!(out.stop_reason, StopReason::None);
+        }
+        let out = spin(&mut c, 0.15, -0.5, 0.0);
+        assert_eq!((out.left, out.right), (0.35, -0.35));
+        // Open loop leaves nothing to surge when feedback resumes.
+        assert_eq!((c.linear_integral, c.yaw_integral), (0.0, 0.0));
+    }
+
+    /// Spins stay on feedback when in-place turns are not allowed, for local
+    /// manual driving, when disabled, and when the target also moves forward.
+    #[test]
+    fn spin_bypass_applies_only_to_managed_pure_spins() {
+        let open = |out: MotorOutput| (out.left, out.right) == (-0.35, 0.35);
+        let mut not_allowed = spin_controller(Some(TurningConfig::default()), 0.35);
+        assert!(!open(spin(&mut not_allowed, 0.0, 0.5, 0.0)));
+        let mut manual = spin_controller(None, 0.35);
+        assert!(!open(spin(&mut manual, 0.0, 0.5, 0.0)));
+        let mut disabled = spin_controller(Some(SPIN_ALLOWED), 0.0);
+        assert!(!open(spin(&mut disabled, 0.0, 0.5, 0.0)));
+        let mut arc = spin_controller(Some(SPIN_ALLOWED), 0.35);
+        arc.set_target(VelocityTarget {
+            timestamp: 0.0,
+            forward: 0.2,
+            yaw_rate: 0.5,
+        })
+        .unwrap();
+        assert!(!open(arc.step(estimate(0.0, 0.0, 0.0))));
+    }
+
+    /// Tracking loss and stale targets still stop an open-loop spin.
+    #[test]
+    fn open_loop_spin_keeps_safety_holds() {
+        let mut c = spin_controller(Some(SPIN_ALLOWED), 0.35);
+        spin(&mut c, 0.0, 0.5, 0.0);
+        let lost = c.step(VelocityEstimate {
+            timestamp: 0.05,
+            forward: 0.0,
+            yaw_rate: 0.0,
+            health: Health::TrackingLost,
+        });
+        assert_eq!((lost.left, lost.right), (0.0, 0.0));
+        assert_eq!(lost.stop_reason, StopReason::TrackingLost);
+        assert_eq!(
+            c.step(estimate(0.6, 0.0, 0.0)).stop_reason,
+            StopReason::StaleTarget
+        );
+        assert!(
+            ControllerConfig {
+                spin_effort: 1.5,
+                ..Default::default()
+            }
+            .validate()
+            .is_err()
+        );
     }
 }

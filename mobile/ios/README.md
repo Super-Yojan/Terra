@@ -154,6 +154,14 @@ ARGOS hardware arming: the selected rover panel now exposes Arm and Disarm. Terr
 
 The rover phone mount is upright in portrait, top edge up, with its rear camera facing forward and screen facing backward. The phone-to-body transform maps Core Motion phone -Z to rover +X (forward), phone -X to rover +Y (left), and phone +Y to rover +Z (up). ARKit uses fixed landscape camera axes, so a separate camera-to-body transform maps camera -Z to forward, -Y to left, and -X to up. Camera depth remains in its measured optical/world frame. Restart phone tracking after installing a mounting-transform update so the new localization and map session starts together.
 
+Rolled mounts, such as CrabTrapBot's landscape mount with the rear camera forward, use the measured roll in Settings → Phone mounting: −90° when the top edge points to the rover's left, +90° when it points right. The compass reference follows the saved mount and uses whichever phone edge is most horizontal: the right edge when upright, the top edge in landscape. Check it with:
+
+```sh
+swiftc -parse-as-library mobile/ios/TerraPhone/PhoneMountGeometry.swift \
+  tests/ios/PhoneMountGeometryTests.swift -o /tmp/terra-mount-tests
+/tmp/terra-mount-tests
+```
+
 Accepted active L3 waypoints continue locally across an ARGOS router outage (operator-approved). Automatic link recovery retains the mission and existing arming state; connection setup/teardown runs away from the local control loop. Teleop does not get this exemption. Explicit disconnect/stop, backgrounding, Bluetooth loss/watchdog, and unhealthy local tracking/maps still inhibit motion. During an outage, new dashboard orders and remote stop commands cannot be delivered until connectivity returns.
 
 
