@@ -1,6 +1,8 @@
 //! Geographic mission state, independent of the local pose and occupancy frame.
 use serde_json::{Value, json};
 use terra_navigation::Pose;
+mod heading;
+pub use heading::{CourseFix, HeadingFusion, Source as HeadingSource};
 #[derive(Clone, Copy, Debug)]
 pub struct GpsFix {
     pub timestamp: f64,
@@ -41,7 +43,7 @@ pub struct OutdoorController {
     gps: Option<GpsFix>,
     gps_time: Option<f64>,
     heading_time: Option<f64>,
-    heading: Option<HeadingFix>,
+    heading: HeadingFusion,
     mission: Option<Mission>,
     phase: &'static str,
     hold: Option<&'static str>,
@@ -60,7 +62,7 @@ impl Default for OutdoorController {
             gps: None,
             gps_time: None,
             heading_time: None,
-            heading: None,
+            heading: HeadingFusion::default(),
             mission: None,
             phase: "idle",
             hold: None,
@@ -93,7 +95,7 @@ pub fn distance_bearing(lat: f64, lon: f64, to_lat: f64, to_lon: f64) -> (f64, f
 impl OutdoorController {
     pub fn invalidate_sensors(&mut self) {
         self.gps = None;
-        self.heading = None;
+        self.heading.reset();
         self.pause("tracking_lost");
     }
     pub fn phase(&self) -> &str {
@@ -138,13 +140,24 @@ impl OutdoorController {
             || !fresh(now, s.timestamp, 2.)
             || self.heading_time.is_some_and(|t| s.timestamp <= t)
         {
-            self.heading = None;
+            self.heading.reset();
             self.pause("heading_uncertain");
             return Err("invalid heading sample");
         }
         self.heading_time = Some(s.timestamp);
-        self.heading = Some(s);
-        Ok(())
+        self.heading.compass(s.true_heading, s.accuracy, now)
+    }
+    /// GPS course over ground; ignored unless the rover is travelling straight.
+    pub fn course(&mut self, s: impl Into<CourseFix>, now: f64) -> Result<(), &'static str> {
+        self.heading.course(s.into(), now)
+    }
+    /// Fused true heading, one-sigma accuracy and pose age, all in degrees or seconds.
+    pub fn heading_estimate(&self, now: f64) -> Option<(f64, f64, f64)> {
+        self.heading.heading(now)
+    }
+    /// Local VIO pose that carries the fused heading between corrections.
+    pub fn observe_pose(&mut self, pose: Pose, t: f64) {
+        self.heading.observe_pose(pose, t);
     }
     pub fn readiness(&self, now: f64, e: Evidence, radius: f64) -> Option<&'static str> {
         if self.gps.is_none_or(|g| !fresh(now, g.timestamp, 3.)) {
@@ -156,7 +169,8 @@ impl OutdoorController {
             Some("gps_uncertain")
         } else if self
             .heading
-            .is_none_or(|h| !fresh(now, h.timestamp, 2.) || h.accuracy > 35.)
+            .heading(now)
+            .is_none_or(|(_, accuracy, age)| !(0.0..=2.).contains(&age) || accuracy > 35.)
         {
             Some("heading_uncertain")
         } else if !e.pose_ready {
@@ -260,7 +274,6 @@ impl OutdoorController {
             return None;
         }
         let g = self.gps?;
-        let h = self.heading?;
         let m = self.mission.as_mut()?;
         let (distance, bearing) =
             distance_bearing(g.latitude, g.longitude, m.latitude, m.longitude);
@@ -286,7 +299,7 @@ impl OutdoorController {
         }
         self.last_guidance = Some(now);
         // Local yaw is counter-clockwise; true bearing is clockwise.
-        let yaw = e.pose.yaw + (h.true_heading - bearing).to_radians();
+        let yaw = self.heading.local_yaw(bearing)?;
         let lookahead = distance.min(3.);
         Some((
             e.pose.x + lookahead * yaw.cos(),
@@ -296,12 +309,14 @@ impl OutdoorController {
     pub fn status(&self, now: f64, e: Evidence, run: &str) -> Value {
         let radius = self.mission.as_ref().map_or(self.radius, |m| m.radius);
         let reason = self.hold.or_else(|| self.readiness(now, e, radius));
+        let heading = self.heading.heading(now);
         json!({"schema_version":1,"capability":"outdoor_gps","supported":self.supported,"acknowledged":self.selected,
    "source":if self.selected {"outdoor_gps"} else {"local"},"run_id":run,"navigation_revision":self.revision,
    "ready":reason.is_none() && self.phase!="paused", "hold_reason":reason,"phase":self.phase,"arrival_radius_m":radius,
    "gps":self.gps.map(|g|json!({"latitude":g.latitude,"longitude":g.longitude,"accuracy_m":g.accuracy,"age_s":now-g.timestamp})),
    "gps_age_s":self.gps.map(|g|now-g.timestamp),"gps_accuracy_m":self.gps.map(|g|g.accuracy),
-   "heading_age_s":self.heading.map(|h|now-h.timestamp),"heading_accuracy_deg":self.heading.map(|h|h.accuracy),
+   "heading_age_s":heading.map(|h|h.2),"heading_accuracy_deg":heading.map(|h|h.1),"heading_deg":heading.map(|h|h.0),
+   "heading_source":self.heading.source().map(|s|s.name()),"heading_correction_age_s":self.heading.correction_age(now),
    "destination":self.mission.as_ref().map(|m|json!({"latitude":m.latitude,"longitude":m.longitude})),
    "remaining_m":self.remaining,"token":self.token,"result":self.result,
    "mission_token":self.mission.as_ref().map(|m|&m.token)})

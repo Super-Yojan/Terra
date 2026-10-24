@@ -1,4 +1,6 @@
-use terra_mobile::outdoor::{Evidence, GpsFix, HeadingFix, OutdoorController, distance_bearing};
+use terra_mobile::outdoor::{
+    CourseFix, Evidence, GpsFix, HeadingFix, OutdoorController, distance_bearing,
+};
 use terra_navigation::Pose;
 fn evidence() -> Evidence {
     Evidence {
@@ -14,6 +16,10 @@ fn evidence() -> Evidence {
     }
 }
 fn sensors(c: &mut OutdoorController, t: f64, lat: f64) {
+    sensors_at(c, t, lat, 0., evidence().pose);
+}
+fn sensors_at(c: &mut OutdoorController, t: f64, lat: f64, heading: f64, pose: Pose) {
+    c.observe_pose(pose, t);
     c.gps(
         GpsFix {
             timestamp: t,
@@ -27,7 +33,7 @@ fn sensors(c: &mut OutdoorController, t: f64, lat: f64) {
     c.heading(
         HeadingFix {
             timestamp: t,
-            true_heading: 0.,
+            true_heading: heading,
             accuracy: 3.,
         },
         t,
@@ -46,17 +52,7 @@ fn cardinal_guidance_and_no_geographic_transform() {
         assert!((d - 111.195).abs() < 0.1);
         assert!((b - bearing).abs() < 0.001);
         let mut mission = OutdoorController::default();
-        sensors(&mut mission, 1., 0.);
-        mission
-            .heading(
-                HeadingFix {
-                    timestamp: 1.1,
-                    true_heading: 270.,
-                    accuracy: 2.,
-                },
-                1.1,
-            )
-            .unwrap();
+        sensors_at(&mut mission, 1.1, 0., 270., evidence().pose);
         mission
             .start(lat, lon, "cardinal".into(), 5., 1.1, evidence())
             .unwrap();
@@ -137,6 +133,7 @@ fn unsupported_platform_rejects_selection() {
     let c = terra_mobile::MobileController::new(terra_mobile::default_control_settings()).unwrap();
     assert!(c.autonomy_request("navigation/source".into(),r#"{"schema_version":1,"source":"outdoor_gps","token":"pick","run_id":"x","navigation_revision":0}"#.into(),0.).is_err());
     c.enable_outdoor_gps().unwrap();
+    local_sensors(&c, 1.);
     c.push_gps(
         GpsFix {
             timestamp: 1.,
@@ -386,7 +383,7 @@ fn simulated_geographic_mission_confirms_only_after_stopping() {
     let mut c = OutdoorController::default();
     let mut e = evidence();
     e.pose = Pose::default();
-    sensors(&mut c, 0., 0.);
+    sensors_at(&mut c, 0., 0., 0., e.pose);
     c.start(0.000063, 0., "simulation".into(), 2., 0., e)
         .unwrap();
     let mut north = 0.;
@@ -394,7 +391,7 @@ fn simulated_geographic_mission_confirms_only_after_stopping() {
     for tick in 0..2000 {
         let t = tick as f64 * 0.05;
         if tick > 0 && tick % 20 == 0 {
-            sensors(&mut c, t, north / 111_195.);
+            sensors_at(&mut c, t, north / 111_195., 0., e.pose);
         }
         c.tick(t, e);
         if c.phase() == "planning" {
@@ -460,37 +457,205 @@ fn default_radius_accepts_ten_metre_gps_but_not_worse() {
     );
 }
 
+fn gps_only(c: &mut OutdoorController, t: f64) {
+    c.gps(
+        GpsFix {
+            timestamp: t,
+            latitude: 0.,
+            longitude: 0.,
+            accuracy: 2.,
+        },
+        t,
+    )
+    .unwrap();
+}
+fn compass(c: &mut OutdoorController, t: f64, true_heading: f64, accuracy: f64) {
+    c.heading(
+        HeadingFix {
+            timestamp: t,
+            true_heading,
+            accuracy,
+        },
+        t,
+    )
+    .unwrap();
+}
+fn heading_status(c: &OutdoorController, t: f64) -> serde_json::Value {
+    c.status(t, evidence(), "run")
+}
 #[test]
 fn temporary_heading_limit_keeps_accuracy_and_freshness_gates() {
     let mut c = OutdoorController::default();
-    sensors(&mut c, 1., 0.);
-    c.heading(
-        HeadingFix {
-            timestamp: 1.1,
-            true_heading: 0.,
-            accuracy: 35.,
-        },
-        1.1,
-    )
-    .unwrap();
+    gps_only(&mut c, 1.1);
+    c.observe_pose(evidence().pose, 1.1);
+    compass(&mut c, 1.1, 0., 35.);
     assert_eq!(c.readiness(1.1, evidence(), c.radius), None);
+    // Without fresh VIO the fused heading cannot be carried forward.
     assert_eq!(
         c.readiness(3.2, evidence(), c.radius),
         Some("heading_uncertain")
     );
-    c.heading(
-        HeadingFix {
-            timestamp: 3.3,
-            true_heading: 0.,
-            accuracy: 35.1,
-        },
-        3.3,
-    )
-    .unwrap();
+    let mut c = OutdoorController::default();
+    gps_only(&mut c, 3.3);
+    c.observe_pose(evidence().pose, 3.3);
+    compass(&mut c, 3.3, 0., 35.1);
     assert_eq!(
         c.readiness(3.3, evidence(), c.radius),
         Some("heading_uncertain")
     );
+}
+#[test]
+fn compass_alone_never_claims_better_than_its_accuracy() {
+    let mut c = OutdoorController::default();
+    for i in 0..100 {
+        let t = 1. + i as f64 * 0.1;
+        gps_only(&mut c, t);
+        c.observe_pose(evidence().pose, t);
+        compass(&mut c, t, 10., 48.);
+    }
+    let s = heading_status(&c, 10.9);
+    assert!(s["heading_accuracy_deg"].as_f64().unwrap() >= 48.);
+    assert_eq!(s["heading_source"], "compass");
+    assert_eq!(
+        c.readiness(10.9, evidence(), c.radius),
+        Some("heading_uncertain")
+    );
+}
+/// Drive along local direction `travel` (radians) at 1 m/s while facing `yaw`.
+fn drive(c: &mut OutdoorController, from: f64, to: f64, travel: f64, yaw: f64) {
+    let mut t = from;
+    while t <= to + 1e-9 {
+        let d = t - from;
+        c.observe_pose(
+            Pose {
+                x: d * travel.cos(),
+                y: d * travel.sin(),
+                yaw,
+            },
+            t,
+        );
+        t += 0.05;
+    }
+}
+fn course(c: &mut OutdoorController, t: f64, course: f64) {
+    c.course(
+        CourseFix {
+            timestamp: t,
+            course,
+            accuracy: 4.,
+            speed: 1.,
+        },
+        t,
+    )
+    .unwrap();
+}
+#[test]
+fn gps_course_locks_heading_and_vio_carries_it() {
+    let mut c = OutdoorController::default();
+    // Travel 0.3 rad left of local +X while facing that way, heading true east.
+    drive(&mut c, 0., 3., 0.3, 0.3);
+    gps_only(&mut c, 3.);
+    compass(&mut c, 3., 140., 48.);
+    assert_eq!(
+        c.readiness(3., evidence(), c.radius),
+        Some("heading_uncertain")
+    );
+    for _ in 0..12 {
+        course(&mut c, 3., 90.);
+    }
+    let s = heading_status(&c, 3.);
+    assert_eq!(s["heading_source"], "gps_course");
+    assert!((s["heading_deg"].as_f64().unwrap() - 90.).abs() < 1.);
+    assert!(s["heading_accuracy_deg"].as_f64().unwrap() <= 4.);
+    // A biased compass much worse than the estimate does not drag it.
+    compass(&mut c, 3.01, 140., 48.);
+    assert!((heading_status(&c, 3.01)["heading_deg"].as_f64().unwrap() - 90.).abs() < 1.);
+    // VIO yaw carries heading through a turn with no further corrections.
+    for i in 1..=100 {
+        let t = 3. + i as f64 * 0.05;
+        c.observe_pose(
+            Pose {
+                x: 0.,
+                y: 0.,
+                yaw: 0.3 + 0.01 * i as f64,
+            },
+            t,
+        );
+    }
+    gps_only(&mut c, 8.);
+    let s = heading_status(&c, 8.);
+    let expected = 90. - 1_f64.to_degrees();
+    assert!((s["heading_deg"].as_f64().unwrap() - expected).abs() < 1.);
+    assert!(s["heading_accuracy_deg"].as_f64().unwrap() < 5.);
+    assert_eq!(c.readiness(8., evidence(), c.radius), None);
+}
+#[test]
+fn gps_course_handles_reversing() {
+    let mut c = OutdoorController::default();
+    // Facing local -X while backing along +X, travelling true north.
+    drive(&mut c, 0., 2., 0., std::f64::consts::PI);
+    course(&mut c, 2., 0.);
+    let (h, _, _) = c.heading_estimate(2.).unwrap();
+    assert!((h - 180.).abs() < 1.);
+}
+#[test]
+fn course_is_ignored_while_turning_or_stopped() {
+    let mut c = OutdoorController::default();
+    for i in 0..=40 {
+        let t = i as f64 * 0.05;
+        c.observe_pose(
+            Pose {
+                x: t,
+                y: 0.,
+                yaw: 0.2 * t,
+            },
+            t,
+        );
+    }
+    course(&mut c, 2., 0.);
+    assert!(c.heading_estimate(2.).is_none());
+    let mut c = OutdoorController::default();
+    drive(&mut c, 0., 2., 0., 0.);
+    c.course(
+        CourseFix {
+            timestamp: 2.,
+            course: 0.,
+            accuracy: 4.,
+            speed: 0.2,
+        },
+        2.,
+    )
+    .unwrap();
+    assert!(c.heading_estimate(2.).is_none());
+}
+#[test]
+fn local_frame_jump_drops_fused_heading() {
+    let mut c = OutdoorController::default();
+    drive(&mut c, 0., 2., 0., 0.);
+    course(&mut c, 2., 0.);
+    assert!(c.heading_estimate(2.).is_some());
+    c.observe_pose(
+        Pose {
+            x: 2.,
+            y: 0.,
+            yaw: 1.5,
+        },
+        2.05,
+    );
+    assert!(c.heading_estimate(2.05).is_none());
+}
+#[test]
+fn persistent_disagreement_restarts_from_new_corrections() {
+    let mut c = OutdoorController::default();
+    drive(&mut c, 0., 2., 0., 0.);
+    course(&mut c, 2., 0.);
+    drive(&mut c, 2.05, 4., 0., 0.);
+    for _ in 0..9 {
+        course(&mut c, 4., 120.);
+    }
+    assert!(c.heading_estimate(4.).unwrap().0 < 5.);
+    course(&mut c, 4., 120.);
+    assert!((c.heading_estimate(4.).unwrap().0 - 120.).abs() < 1.);
 }
 
 #[test]

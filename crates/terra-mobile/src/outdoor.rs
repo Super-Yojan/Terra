@@ -13,6 +13,14 @@ pub struct HeadingFix {
     pub true_heading: f64,
     pub accuracy: f64,
 }
+/// GPS course over ground; the core pairs it with local travel direction.
+#[derive(Clone, Copy, Debug, uniffi::Record)]
+pub struct CourseFix {
+    pub timestamp: f64,
+    pub course: f64,
+    pub accuracy: f64,
+    pub speed: f64,
+}
 
 impl From<GpsFix> for terra_autonomy::outdoor::GpsFix {
     fn from(sample: GpsFix) -> Self {
@@ -30,6 +38,16 @@ impl From<HeadingFix> for terra_autonomy::outdoor::HeadingFix {
             timestamp: sample.timestamp,
             true_heading: sample.true_heading,
             accuracy: sample.accuracy,
+        }
+    }
+}
+impl From<CourseFix> for terra_autonomy::outdoor::CourseFix {
+    fn from(sample: CourseFix) -> Self {
+        Self {
+            timestamp: sample.timestamp,
+            course: sample.course,
+            accuracy: sample.accuracy,
+            speed: sample.speed,
         }
     }
 }
