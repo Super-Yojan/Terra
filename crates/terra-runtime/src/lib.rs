@@ -553,8 +553,10 @@ impl Runtime {
         self.last_step = Some(now);
         let estimate = self.estimator.estimate(now);
         let outdoor_motion = outdoor::update(self, now);
-        let healthy = (self.autonomy.is_manual() || pose_quality::ready(self, now))
-            && outdoor_motion
+        // A paused outdoor mission holds L3 motion only. L0 takeover drives
+        // while the mission waits for an explicit resume.
+        let manual = self.autonomy.is_manual();
+        let healthy = (manual || (pose_quality::ready(self, now) && outdoor_motion))
             && self.recording_healthy;
         self.autonomy.planner.config.max_linear = self
             .navigation
@@ -593,7 +595,7 @@ impl Runtime {
             if let Some(goal) = self.outdoor.mission_status() {
                 output.goal = goal;
             }
-            if !outdoor_motion && output.status.safety != "emergency_stop" {
+            if !outdoor_motion && !manual && output.status.safety != "emergency_stop" {
                 output.status.reason = outdoor_status["hold_reason"]
                     .as_str()
                     .unwrap_or(self.outdoor.phase())
