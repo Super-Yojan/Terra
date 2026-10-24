@@ -1,7 +1,7 @@
 # Bluetooth pairing
 
 !!! tip "TL;DR"
-    Physical iPhone only.
+    Physical phone only. Android uses the same USR hold.
     Hold the Fusion HAT USR button for 3 seconds.
     Name looks like `terra-XXXXXX`.
     Pairing does not arm the motors.
@@ -38,6 +38,8 @@ that phone’s saved entry; ownership is reset using USR. Turn automatic connect
 in Settings.
 
 Developer numeric pairing is `--setup-owner` with the customer service stopped. Full bytes: [Bluetooth peripheral](../hardware/BLUETOOTH.md).
+
+Android TerraPhone on a physical device shows Scan, Connect, Arm, and Disarm. It hides that section on an emulator. The Android screen can stage and commit the layout it just read; the actuator editor described above is still the iOS app. Leaving the Android app disarms and disconnects. Pairing, radio timing, and a real drive have not been verified on an Android handset. See [TerraPhone for Android](../MOBILE_ANDROID.md).
 
 Bench mode shows **Enable Bench Control** separately from Arm. It says there is no physical cutoff.
 

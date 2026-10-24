@@ -280,6 +280,69 @@ impl CommandAssemblers {
         Ok(Some(frame))
     }
 }
+/// One actuator command and the inclusive normalized limits used to quantize it.
+///
+/// `value` is the normalized command. `min` and `max` are that actuator's limits.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RelaySample {
+    /// Actuator ID from the active layout or drive profile.
+    pub id: u8,
+    /// Normalized command, finite and inside both `[-1, 1]` and `[min, max]`.
+    pub value: f32,
+    /// Inclusive lower limit.
+    pub min: f32,
+    /// Inclusive upper limit.
+    pub max: f32,
+}
+
+fn normalized_percent(effort: i32) -> f32 {
+    // Match the rover: quantize through f64, then the f32 the service compares.
+    ((effort as f64) / 100.0) as f32
+}
+
+/// Encode streamed-relay drive bytes: repeating `(id: u8, effort: i8)` pairs.
+///
+/// Effort is the normalized command in percent, clamped so the f32 the rover
+/// reconstructs stays inside `[min, max]`. This is the drive characteristic
+/// payload for `control_mode = streamed_relay`. It is not a `TA` frame and it
+/// has no fragment header. Returns [`ActuatorError::InvalidInput`] for an empty
+/// or oversized record list, duplicate IDs, or a value that cannot be quantized
+/// inside its limits.
+pub fn encode_relay_drive(samples: &[RelaySample]) -> Result<Vec<u8>, ActuatorError> {
+    if samples.is_empty() || samples.len() > 16 {
+        return Err(error("expected one to sixteen actuator pairs"));
+    }
+    let mut ids = HashSet::new();
+    let mut out = Vec::with_capacity(samples.len() * 2);
+    for sample in samples {
+        if !ids.insert(sample.id)
+            || !sample.value.is_finite()
+            || !sample.min.is_finite()
+            || !sample.max.is_finite()
+            || !(-1.0..=1.0).contains(&sample.value)
+            || sample.value < sample.min
+            || sample.value > sample.max
+            || sample.min > sample.max
+        {
+            return Err(error("invalid actuator record"));
+        }
+        let mut effort = ((sample.value as f64) * 100.0).round() as i32;
+        while effort > -100 && normalized_percent(effort) > sample.max {
+            effort -= 1;
+        }
+        while effort < 100 && normalized_percent(effort) < sample.min {
+            effort += 1;
+        }
+        let normalized = normalized_percent(effort);
+        if !(-100..=100).contains(&effort) || normalized < sample.min || normalized > sample.max {
+            return Err(error("actuator effort outside configured limits"));
+        }
+        out.push(sample.id);
+        out.push(effort as i8 as u8);
+    }
+    Ok(out)
+}
+
 /// Split a nonempty logical message into writes with four-byte fragment headers.
 ///
 /// `write_size` and `limit` are bytes including each write header and logical data
@@ -481,4 +544,46 @@ pub fn encode_reply(reply: &ControlReply) -> Result<Vec<u8>, ActuatorError> {
         return Err(error("JSON reply too large"));
     }
     Ok(bytes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample(id: u8, value: f32) -> RelaySample {
+        RelaySample {
+            id,
+            value,
+            min: -1.0,
+            max: 1.0,
+        }
+    }
+
+    #[test]
+    fn relay_drive_is_id_and_signed_percent() {
+        let bytes = encode_relay_drive(&[sample(2, 0.0), sample(1, -1.0), sample(3, 0.5)]).unwrap();
+        assert_eq!(bytes, vec![2, 0, 1, (-100i8) as u8, 3, 50]);
+    }
+
+    #[test]
+    fn relay_drive_rejects_a_value_outside_its_limit() {
+        let sample = RelaySample {
+            id: 0,
+            value: 0.5,
+            min: -0.4,
+            max: 0.4,
+        };
+        assert!(encode_relay_drive(&[sample]).is_err());
+    }
+
+    #[test]
+    fn narrow_window_that_percent_cannot_represent_is_rejected() {
+        let sample = RelaySample {
+            id: 0,
+            value: 0.004,
+            min: 0.004,
+            max: 0.004,
+        };
+        assert!(encode_relay_drive(&[sample]).is_err());
+    }
 }

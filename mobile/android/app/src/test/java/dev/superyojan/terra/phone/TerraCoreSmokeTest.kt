@@ -1,6 +1,13 @@
 package dev.superyojan.terra.phone
 
+import dev.superyojan.terra.core.ActuatorAssembler
 import dev.superyojan.terra.core.ImuReading
+import dev.superyojan.terra.core.actuatorEncodeControl
+import dev.superyojan.terra.core.actuatorEncodeFrame
+import dev.superyojan.terra.core.actuatorEncodeRelayDrive
+import dev.superyojan.terra.core.actuatorFragment
+import dev.superyojan.terra.core.actuatorRouteProfiles
+import dev.superyojan.terra.core.actuatorRouteStick
 import dev.superyojan.terra.core.MappingDepthFrame
 import dev.superyojan.terra.core.MobileController
 import dev.superyojan.terra.core.MobileOccupancyMap
@@ -84,7 +91,63 @@ class TerraCoreSmokeTest {
             ),
         )
     }
+
+    @Test
+    fun actuatorFramingRoundTrip() {
+        val routed = actuatorRouteStick(DRIVE_LAYOUT, 0.2f, 0.5f)
+        val relay = actuatorEncodeRelayDrive(DRIVE_LAYOUT, routed)
+        assertEquals(4, relay.size)
+        assertEquals(0.toByte(), relay[0])
+        assertEquals((-30).toByte(), relay[1])
+        assertEquals(1.toByte(), relay[2])
+        assertEquals(70.toByte(), relay[3])
+
+        val profiles = actuatorRouteProfiles(DRIVE_PROFILES, 0.2f, 0.5f)
+        val fromProfiles = actuatorEncodeRelayDrive(DRIVE_PROFILES, profiles)
+        assertTrue(fromProfiles.contentEquals(relay))
+
+        val disarm = actuatorEncodeFrame(
+            """{"kind":"disarm","session":7,"revision":1,"sequence":1,"values":[]}""",
+        )
+        assertEquals(16, disarm.size)
+        assertEquals('T'.code.toByte(), disarm[0])
+        assertEquals('A'.code.toByte(), disarm[1])
+        assertEquals(1.toByte(), disarm[2])
+        assertEquals(3.toByte(), disarm[3])
+
+        val payload = "hello".toByteArray()
+        val parts = actuatorFragment(7.toUShort(), payload, 7u)
+        assertEquals(2, parts.size)
+        val assembler = ActuatorAssembler(96u)
+        assertEquals(null, assembler.push(parts[0], 0uL))
+        val done = checkNotNull(assembler.push(parts[1], 1uL))
+        assertTrue(payload.contentEquals(done))
+        assembler.close()
+
+        val control = actuatorEncodeControl(
+            """{"schema_version":1,"request_id":1000,"operation":"capabilities","payload":{}}""",
+        )
+        val text = control.toString(Charsets.UTF_8)
+        assertTrue(text.contains("capabilities"))
+        assertTrue(text.contains("1000"))
+    }
 }
+
+private const val DRIVE_LAYOUT = """{"schema_version":1,"revision":1,"actuators":[
+    {"id":0,"name":"left","port":"M0","kind":"dc_motor","inverted":false,
+     "limits":{"min":-1.0,"max":1.0},
+     "calibration":{"type":"dc_motor","max_power_fraction":1.0},
+     "route":{"type":"left_effort"},"safe":{"type":"zero"}},
+    {"id":1,"name":"right","port":"M1","kind":"dc_motor","inverted":false,
+     "limits":{"min":-1.0,"max":1.0},
+     "calibration":{"type":"dc_motor","max_power_fraction":1.0},
+     "route":{"type":"right_effort"},"safe":{"type":"zero"}}
+]}"""
+
+private const val DRIVE_PROFILES = """{"schema_version":1,"revision":1,"actuators":[
+    {"id":0,"kind":"dc_motor","limits":{"min":-1.0,"max":1.0},"route":{"type":"left_effort"},"safe":{"type":"zero"}},
+    {"id":1,"kind":"dc_motor","limits":{"min":-1.0,"max":1.0},"route":{"type":"right_effort"},"safe":{"type":"zero"}}
+]}"""
 
 private fun driveZenohPeer(endpoint: String) {
     val remote = MobileZenohClient(endpoint, "terra/rover", 9u)
