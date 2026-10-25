@@ -1,8 +1,10 @@
 import Foundation
+import os
 
 /// Exposure-clock sampling resets when localization establishes a new coordinate frame.
+/// The unfair lock donates priority to a lower-QoS holder, so the AR frame thread never inverts on it.
 final class ObservationCapturePolicy {
-    private let lock = NSLock()
+    private let lock = OSAllocatedUnfairLock()
     private var interval: Double
     init(interval: Double = 1) { self.interval = interval }
     func configure(interval: Double) {
@@ -28,7 +30,17 @@ import CoreImage
 final class PhoneObservationCapture: @unchecked Sendable {
     private let policy = ObservationCapturePolicy()
     private let mapPolicy = ObservationCapturePolicy(interval: 0.5)
-    private let capacity = DispatchSemaphore(value: 2)
+    /// In-flight slot count. A semaphore signalled from the utility queue makes the AR frame
+    /// thread's non-blocking wait a priority inversion; an unfair lock carries a priority donation.
+    private let inFlight = OSAllocatedUnfairLock(initialState: 0)
+    private func acquireSlot() -> Bool {
+        inFlight.withLock { count in
+            guard count < 2 else { return false }
+            count += 1
+            return true
+        }
+    }
+    private func releaseSlot() { inFlight.withLock { $0 -= 1 } }
     private let queue = DispatchQueue(label: "terra.observation.capture", qos: .utility)
     private let imageContext = CIContext()
     func configure(evidenceSeconds: Double, mapSeconds: Double) {
@@ -36,10 +48,10 @@ final class PhoneObservationCapture: @unchecked Sendable {
     }
     func captureMap(grid: OccupancyGrid, exposure: Double, frameID: String, revision: UInt64, rover: String, controller: MobileController) {
         guard mapPolicy.shouldCapture(exposure: exposure, frameID: frameID) else { return }
-        guard capacity.wait(timeout: .now()) == .success else { controller.recordObservationGap(reason: "map_capture_queue_full"); return }
+        guard acquireSlot() else { controller.recordObservationGap(reason: "map_capture_queue_full"); return }
         let run = controller.observationRunId()
         queue.async {
-            defer { self.capacity.signal() }
+            defer { self.releaseSlot() }
             let metadata: [String: Any] = ["rover_id": rover, "session_id": run, "exposure_ns": UInt64(exposure * 1e9), "frame_id": frameID, "evidence_type": "occupancy", "map_revision": revision, "occupancy": ["width": grid.width, "height": grid.height, "origin_x": grid.originX, "origin_y": grid.originY, "resolution": grid.resolution]]
             guard let data = try? JSONSerialization.data(withJSONObject: metadata) else { controller.recordObservationGap(reason: "map_manifest_encoding_failed"); return }
             let attachment = ObservationAttachment(name: "occupancy", data: Data(grid.occupancy.map { UInt8(bitPattern: $0) }), encoding: "i8", dimensions: [grid.width, grid.height], units: "occupancy_percent")
@@ -48,9 +60,9 @@ final class PhoneObservationCapture: @unchecked Sendable {
     }
     func capture(frame: ARFrame, depth: [Float], width: Int, height: Int, grid: OccupancyGrid?, manifest: [String: Any], controller: MobileController) {
         guard policy.shouldCapture(exposure: frame.timestamp, frameID: manifest["frame_id"] as? String ?? "") else { return }
-        guard capacity.wait(timeout: .now()) == .success else { controller.recordObservationGap(reason: "camera_capture_queue_full"); return }
+        guard acquireSlot() else { controller.recordObservationGap(reason: "camera_capture_queue_full"); return }
         queue.async {
-            defer { self.capacity.signal() }
+            defer { self.releaseSlot() }
             var metadata = manifest
             let image = CIImage(cvPixelBuffer: frame.capturedImage)
             var attachments = [ObservationAttachment(name: "depth", data: depth.withUnsafeBytes { Data($0) }, encoding: "f32le", dimensions: [UInt32(width), UInt32(height)], units: "metres")]
