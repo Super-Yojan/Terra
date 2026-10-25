@@ -208,6 +208,74 @@ pub fn actuator_route_profiles(
     serde_json::to_string(&values).map_err(invalid)
 }
 
+#[uniffi::export]
+/// Return whether drive profiles can carry closed-loop left/right wheel efforts.
+///
+/// # Errors
+/// Returns `InvalidInput` for oversized, malformed, or unsupported profile JSON.
+pub fn actuator_supports_vio_control(profiles_json: String) -> Result<bool, MobileActuatorError> {
+    Ok(ActiveLayout::parse(&profiles_json)?.supports_vio_control())
+}
+
+/// The rover's synchronized drive profiles plus any servo targets set since.
+pub(crate) struct ActiveLayout {
+    profiles: Vec<DriveProfile>,
+    servos: BTreeMap<u8, f32>,
+}
+
+impl ActiveLayout {
+    pub(crate) fn parse(profiles_json: &str) -> Result<Self, MobileActuatorError> {
+        let set: DriveProfileSet = parse(profiles_json)?;
+        if set.schema_version != 1 {
+            return Err(invalid("unsupported drive profile schema"));
+        }
+        // Validate once here so routing a tick can only fail on its inputs.
+        terra_actuators::route_drive_profiles(&set.actuators, &RoutingInput::default())
+            .map_err(invalid)?;
+        Ok(Self {
+            profiles: set.actuators,
+            servos: BTreeMap::new(),
+        })
+    }
+
+    pub(crate) fn supports_vio_control(&self) -> bool {
+        terra_actuators::supports_differential_drive(&self.profiles)
+    }
+
+    /// Clip a servo target to its limits; unknown or non-servo IDs are rejected.
+    pub(crate) fn set_servo(&mut self, id: u8, value: f64) -> Result<(), MobileActuatorError> {
+        let profile = self
+            .profiles
+            .iter()
+            .find(|p| p.id == id && matches!(p.route, terra_actuators::Route::Servo))
+            .ok_or_else(|| invalid(format!("servo {id} is missing from the current profile")))?;
+        if !value.is_finite() {
+            return Err(invalid("servo target must be finite"));
+        }
+        self.servos.insert(
+            id,
+            (value as f32).clamp(profile.limits.min, profile.limits.max),
+        );
+        Ok(())
+    }
+
+    /// Route wheel efforts the way the phone does: manual mixes see
+    /// `forward = (l + r) / 2` and `turn = (r - l) / 2`.
+    pub(crate) fn frame(&self, left: f64, right: f64) -> Result<String, MobileActuatorError> {
+        let (left, right) = (left as f32, right as f32);
+        let input = RoutingInput {
+            left_effort: left,
+            right_effort: right,
+            forward: (left + right) / 2.,
+            turn: (right - left) / 2.,
+            servo_positions: self.servos.clone(),
+        };
+        let values =
+            terra_actuators::route_drive_profiles(&self.profiles, &input).map_err(invalid)?;
+        serde_json::to_string(&values).map_err(invalid)
+    }
+}
+
 #[derive(Deserialize)]
 struct LimitCarrier {
     actuators: Vec<LimitActuator>,
@@ -376,6 +444,48 @@ mod tests {
             std::str::from_utf8(&control)
                 .unwrap()
                 .contains("capabilities")
+        );
+    }
+    const PROFILES: &str = r#"{"schema_version":1,"revision":3,"actuators":[
+        {"id":0,"kind":"dc_motor","limits":{"min":-1.0,"max":1.0},
+         "route":{"type":"manual","forward_coefficient":1.0,"turn_coefficient":-1.0},"safe":{"type":"zero"}},
+        {"id":1,"kind":"dc_motor","limits":{"min":-0.5,"max":0.5},
+         "route":{"type":"right_effort"},"safe":{"type":"zero"}},
+        {"id":2,"kind":"positional_servo","limits":{"min":-0.8,"max":0.8},
+         "route":{"type":"servo"},"safe":{"type":"position","value":0.1}}
+    ]}"#;
+
+    #[test]
+    fn active_layout_mixes_efforts_like_the_phone() {
+        let mut layout = ActiveLayout::parse(PROFILES).unwrap();
+        assert!(layout.supports_vio_control());
+        let frame: Vec<ActuatorValue> =
+            serde_json::from_str(&layout.frame(0.2, 0.6).unwrap()).unwrap();
+        // Manual left mix: (l + r) / 2 - (r - l) / 2 = l.
+        assert!((frame[0].value - 0.2).abs() < 1e-6);
+        assert_eq!(frame[1].value, 0.5);
+        assert_eq!(frame[2].value, 0.1);
+        layout.set_servo(2, 2.0).unwrap();
+        assert!(layout.set_servo(1, 0.0).is_err());
+        let frame: Vec<ActuatorValue> =
+            serde_json::from_str(&layout.frame(0.0, 0.0).unwrap()).unwrap();
+        assert_eq!(frame[2].value, 0.8);
+        assert!(layout.frame(1.5, 0.0).is_err());
+    }
+
+    #[test]
+    fn active_layout_rejects_invalid_profiles() {
+        assert!(ActiveLayout::parse("{}").is_err());
+        let servo_on_motor = PROFILES.replace(
+            r#""route":{"type":"right_effort"}"#,
+            r#""route":{"type":"servo"}"#,
+        );
+        assert!(ActiveLayout::parse(&servo_on_motor).is_err());
+        assert!(
+            !actuator_supports_vio_control(
+                PROFILES.replace(r#""turn_coefficient":-1.0"#, r#""turn_coefficient":-0.5"#)
+            )
+            .unwrap()
         );
     }
 }

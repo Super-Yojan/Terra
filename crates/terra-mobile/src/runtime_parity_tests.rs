@@ -98,6 +98,30 @@ fn phone_direct_effort_uses_shared_mixer_and_needs_no_camera() {
 }
 
 #[test]
+fn actuator_frame_routes_the_tick_efforts_through_the_layout() {
+    let phone = MobileController::new(default_control_settings()).unwrap();
+    phone.set_actuation_mode(false).unwrap();
+    phone.set_manual_input(0.4, 0.1, 0.).unwrap();
+    assert_eq!(phone.step(0.).unwrap().actuator_frame, None);
+    phone
+        .set_actuator_layout(
+            r#"{"schema_version":1,"revision":1,"actuators":[
+            {"id":0,"kind":"dc_motor","limits":{"min":-1.0,"max":1.0},"route":{"type":"left_effort"},"safe":{"type":"zero"}},
+            {"id":1,"kind":"dc_motor","limits":{"min":-1.0,"max":1.0},"route":{"type":"right_effort"},"safe":{"type":"zero"}}]}"#
+                .into(),
+        )
+        .unwrap();
+    phone.set_manual_input(0.4, 0.1, 0.01).unwrap();
+    let out = phone.step(0.01).unwrap();
+    let frame: serde_json::Value =
+        serde_json::from_str(out.actuator_frame.as_deref().unwrap()).unwrap();
+    assert!((frame[0]["value"].as_f64().unwrap() - out.left_effort).abs() < 1e-6);
+    assert!((frame[1]["value"].as_f64().unwrap() - out.right_effort).abs() < 1e-6);
+    assert!(phone.set_actuator_layout("{}".into()).is_err());
+    assert_eq!(phone.step(0.02).unwrap().actuator_frame, None);
+}
+
+#[test]
 fn reset_starts_a_new_clock_and_discards_queued_remote_commands() {
     let phone = MobileController::new(default_control_settings()).unwrap();
     phone.set_actuation_mode(false).unwrap();
