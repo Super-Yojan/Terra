@@ -1,7 +1,8 @@
 use terra_autonomy::*;
-use terra_exploration::Detection;
+use terra_exploration::{Detection, ExplorePhase};
 use terra_mapping::MapSnapshot;
 use terra_navigation::{Pose, Twist};
+use terra_types::timing::EXPLORATION_MAP_STALE_GRACE_SECONDS;
 /// Build fresh healthy evidence for the supplied world pose and map at `now` seconds, with zero measured motion.
 fn input_at(now: f64, pose: Pose, map: &MapSnapshot) -> ArbiterInput<'_> {
     ArbiterInput {
@@ -194,8 +195,33 @@ fn no_frontiers_and_map_stale_stop_cleanly() {
     });
     assert_eq!(stale.status.reason, "map_stale");
     assert_eq!(stale.twist, Twist::default());
+    // A short gap holds motion but keeps the run alive.
     assert_eq!(
-        stale
+        stale.exploration.as_ref().map(|status| status.phase),
+        Some(ExplorePhase::Running)
+    );
+    let recovered = arbiter.step(input_at(0.4, Pose::default(), &map));
+    assert_ne!(recovered.status.reason, "map_stale");
+    assert!(arbiter.explorer.is_running());
+    let gap = |now: f64| ArbiterInput {
+        now,
+        pose: Pose::default(),
+        pose_time: now,
+        map: None,
+        map_time: None,
+        map_revision: 0,
+        measured: Twist::default(),
+        healthy: true,
+    };
+    // The grace restarts after recovery and ends the run once it is used up.
+    let _ = arbiter.step(gap(0.5));
+    let held = arbiter.step(gap(0.5 + EXPLORATION_MAP_STALE_GRACE_SECONDS - 0.1));
+    assert_eq!(held.twist, Twist::default());
+    assert!(arbiter.explorer.is_running());
+    let ended = arbiter.step(gap(0.5 + EXPLORATION_MAP_STALE_GRACE_SECONDS));
+    assert_eq!(ended.twist, Twist::default());
+    assert_eq!(
+        ended
             .exploration
             .as_ref()
             .and_then(|status| status.end_reason),
