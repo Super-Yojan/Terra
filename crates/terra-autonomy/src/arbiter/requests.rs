@@ -314,7 +314,11 @@ impl AutonomyArbiter {
     ) -> bool {
         if !now.is_finite()
             || now < 0.
-            || self.last_time.is_some_and(|t| now < t)
+            // `now` is the receipt time, which can precede the last tick when the
+            // control loop runs late; only commands already past freshness are refused.
+            || self
+                .last_time
+                .is_some_and(|t| now < t - timing::OPERATOR_COMMAND_FRESHNESS_SECONDS)
             || self.latest_operator_time.is_some_and(|t| now < t)
             || !r.linear.is_finite()
             || !r.angular.is_finite()
