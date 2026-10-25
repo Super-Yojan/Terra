@@ -120,3 +120,31 @@ fn direct_effort_does_not_keep_an_expired_local_command() {
     assert_eq!(out.motor.left, 0.0);
     assert_eq!(out.motor.right, 0.0);
 }
+#[test]
+fn teleop_received_before_a_late_tick_still_drives() {
+    let mut r = Runtime::new(
+        RuntimeConfig {
+            mode: ActuationMode::DirectEffort,
+            ..Default::default()
+        },
+        "late".into(),
+    )
+    .unwrap();
+    // One second of driving outlasts the 0.5 s lease of any single command.
+    for n in 1..=100 {
+        let t = 1. + n as f64 * 0.01;
+        let payload = serde_json::json!({"linear":0.2,"angular":0.0,"run_id":"late","authority_revision":r.autonomy.authority_revision(),"operator_session_id":"operator","sequence":n});
+        // Each command waited 30 ms in the inbox, three 10 ms ticks.
+        r.ingest(RuntimeEvent::Remote {
+            kind: "teleop".into(),
+            payload: serde_json::to_vec(&payload).unwrap(),
+            received_at: t - 0.03,
+        })
+        .unwrap();
+        let output = r.step(t).unwrap();
+        assert!(
+            output.motor.left > 0. && output.motor.right > 0.,
+            "tick {n}"
+        );
+    }
+}
