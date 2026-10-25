@@ -256,3 +256,128 @@ fn coverage_counts_observed_free_cells() {
     assert!(ratio > 0. && ratio < 1.);
     assert!(map_coverage(&map(0)).unwrap().1 == 1.);
 }
+/// Free cells a forward depth camera sees at the start of a run: a 60° wedge
+/// from 0.35 m to 8 m ahead, with the chassis and its sides still unknown.
+fn front_camera_wedge() -> MapSnapshot {
+    let (width, resolution) = (200usize, 0.1);
+    let mut occupancy = vec![-1i8; width * width];
+    for row in 0..width {
+        for column in 0..width {
+            let x = -10. + (column as f64 + 0.5) * resolution;
+            let y = -10. + (row as f64 + 0.5) * resolution;
+            if x > 0.35 && x < 8. && y.abs() < x * 30f64.to_radians().tan() {
+                occupancy[row * width + column] = 0;
+            }
+        }
+    }
+    MapSnapshot {
+        width: width as u32,
+        height: width as u32,
+        resolution,
+        origin_x: -10.,
+        origin_y: -10.,
+        occupancy,
+    }
+}
+/// Known ring around the rover after a full look-around: everything from 0.35 m out.
+fn after_look_around() -> MapSnapshot {
+    let mut grid = front_camera_wedge();
+    for row in 0..200 {
+        for column in 0..200 {
+            let x = -10. + (column as f64 + 0.5) * 0.1;
+            let y = -10. + (row as f64 + 0.5) * 0.1;
+            let d = x.hypot(y);
+            if d > 0.35 && d < 6. {
+                grid.occupancy[row * 200 + column] = 0;
+            }
+        }
+    }
+    grid
+}
+fn at(now: f64, yaw: f64, map: &MapSnapshot) -> ExploreTick<'_> {
+    ExploreTick {
+        now,
+        pose: Pose { x: 0., y: 0., yaw },
+        map: Some(map),
+        planner_blocked: false,
+        goal_active: false,
+        goal_arrived: false,
+        goal_x: 0.,
+        goal_y: 0.,
+        goal_distance: 0.,
+    }
+}
+/// A rover in its own blind zone turns in place instead of ending, then explores.
+#[test]
+fn a_rover_in_its_blind_zone_looks_around_before_choosing() {
+    let wedge = front_camera_wedge();
+    assert!(
+        select_frontier(
+            &wedge,
+            Pose::default(),
+            0.65,
+            &[],
+            1.,
+            &InformationGainScorer
+        )
+        .is_none()
+    );
+    let mut explorer = Explorer::default();
+    assert!(explorer.start(60., "wedge"));
+    let rate = explorer.config().scan_yaw_rate;
+    assert_eq!(
+        explorer.step(at(0., 0., &wedge)),
+        ExploreAction::Scan { yaw_rate: rate }
+    );
+    assert!(explorer.status(0.).scanning);
+    assert_eq!(
+        explorer.step(at(1., rate, &wedge)),
+        ExploreAction::Scan { yaw_rate: rate }
+    );
+    // The camera has now mapped around the rover: a frontier wins mid-turn.
+    let known = after_look_around();
+    let ExploreAction::Seek { x, y } = explorer.step(at(2., 2. * rate, &known)) else {
+        panic!("expected a frontier after the look-around");
+    };
+    assert!(x.hypot(y) > 0.8);
+    assert!(!explorer.status(2.).scanning);
+    assert_eq!(explorer.status(2.).phase, ExplorePhase::Running);
+}
+/// A full turn that reveals nothing reachable ends the run; it does not spin forever.
+#[test]
+fn a_fruitless_look_around_ends_with_no_frontiers() {
+    let wedge = front_camera_wedge();
+    let mut explorer = Explorer::default();
+    assert!(explorer.start(600., "wedge"));
+    let mut yaw: f64 = 0.;
+    let mut now = 0.;
+    let mut action = explorer.step(at(now, yaw, &wedge));
+    let mut ticks = 0;
+    while matches!(action, ExploreAction::Scan { .. }) {
+        ticks += 1;
+        assert!(ticks < 1000, "look-around never finished");
+        now += 0.1;
+        yaw = (yaw + 0.035 + std::f64::consts::PI).rem_euclid(std::f64::consts::TAU)
+            - std::f64::consts::PI;
+        action = explorer.step(at(now, yaw, &wedge));
+    }
+    assert_eq!(action, ExploreAction::Finished(EndReason::NoFrontiersLeft));
+    // About one full turn at 0.35 rad/s.
+    assert!((17.0..19.5).contains(&now), "{now}");
+    // A rover that cannot turn gives up after the timeout instead.
+    let mut stuck = Explorer::default();
+    assert!(stuck.start(600., "stuck"));
+    let timeout = stuck.config().scan_timeout;
+    assert!(matches!(
+        stuck.step(at(0., 0., &wedge)),
+        ExploreAction::Scan { .. }
+    ));
+    assert!(matches!(
+        stuck.step(at(timeout - 0.1, 0., &wedge)),
+        ExploreAction::Scan { .. }
+    ));
+    assert_eq!(
+        stuck.step(at(timeout, 0., &wedge)),
+        ExploreAction::Finished(EndReason::NoFrontiersLeft)
+    );
+}

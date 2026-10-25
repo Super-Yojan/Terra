@@ -70,6 +70,9 @@ pub const EXPLORATION_PROGRESS_PERIOD_SECONDS: f64 = 1.0;
 /// A rendered or phone depth map can arrive later than the 0.5 s freshness limit
 /// for a frame or two, which used to end a run within its first second.
 pub const EXPLORATION_MAP_STALE_GRACE_SECONDS: f64 = 3.0;
+/// Longest in-place look-around before exploration gives up on it (a full turn
+/// at the default 0.35 rad/s takes about 18 s).
+pub const EXPLORATION_SCAN_TIMEOUT_SECONDS: f64 = 40.0;
 /// Continuous unhealthy-sensor hold before ending exploration. Zero means immediate.
 pub const EXPLORATION_SAFETY_HOLD_GRACE_SECONDS: f64 = 0.0;
 

@@ -52,6 +52,9 @@ impl AutonomyArbiter {
             decision.reason = why;
             decision.held = true;
             self.explore_blocked = false;
+        } else if let Some(yaw_rate) = self.explore_scan {
+            self.explore_blocked = false;
+            self.scan_motion(input, planning_map, yaw_rate, decision);
         } else {
             self.update_search_goal(input, decision);
             let (mut intent, guidance_heading) = self.choose_intent(input, planning_map, decision);
@@ -107,6 +110,11 @@ impl AutonomyArbiter {
         decision: &mut TickDecision,
     ) {
         let managed = command_origin != CommandOrigin::LocalManual;
+        if decision.reason == "exploration_scan" && !decision.held {
+            // The look-around has its own limiter in `scan_motion`.
+            self.turning.reset();
+            return;
+        }
         if managed && !decision.held {
             if decision.source == "none" || decision.twist == Twist::default() {
                 self.turning.reset();

@@ -327,3 +327,55 @@ fn simulated_rover_explores_until_the_budget_expires() {
     );
     assert!(pose.x.hypot(pose.y) > 0.2, "pose {pose:?} did not move");
 }
+/// In its blind zone the rover turns in place slowly, flagged so the vehicle allows it.
+#[test]
+fn blind_zone_look_around_turns_in_place() {
+    let (width, resolution) = (200usize, 0.1);
+    let mut occupancy = vec![-1i8; width * width];
+    for row in 0..width {
+        for column in 0..width {
+            let x = -10. + (column as f64 + 0.5) * resolution;
+            let y = -10. + (row as f64 + 0.5) * resolution;
+            if x > 0.35 && x < 8. && y.abs() < x * 30f64.to_radians().tan() {
+                occupancy[row * width + column] = 0;
+            }
+        }
+    }
+    let map = MapSnapshot {
+        width: width as u32,
+        height: width as u32,
+        resolution,
+        origin_x: -10.,
+        origin_y: -10.,
+        occupancy,
+    };
+    let mut arbiter = AutonomyArbiter::default();
+    arbiter.set_level(explore("scan", 60.));
+    let mut last = None;
+    for tick in 0..20 {
+        let out = arbiter.step(input_at(0.1 * (tick + 1) as f64, Pose::default(), &map));
+        assert_eq!(out.status.reason, "exploration_scan");
+        assert!(out.in_place_turn);
+        assert_eq!(out.twist.linear, 0.);
+        assert!(out.twist.angular >= 0. && out.twist.angular <= 0.35 + 1e-9);
+        assert!(
+            out.exploration
+                .as_ref()
+                .is_some_and(|status| status.scanning)
+        );
+        last = Some(out.twist.angular);
+    }
+    // The turn ramps up to the look-around rate within the turning limits.
+    assert!((last.unwrap() - 0.35).abs() < 1e-9);
+    // An emergency stop still wins over the look-around.
+    arbiter.set_safety(
+        SafetyRequest {
+            action: SafetyAction::Stop,
+            token: "stop".into(),
+        },
+        true,
+    );
+    let stopped = arbiter.step(input_at(2.5, Pose::default(), &map));
+    assert_eq!(stopped.twist, Twist::default());
+    assert!(!stopped.in_place_turn);
+}

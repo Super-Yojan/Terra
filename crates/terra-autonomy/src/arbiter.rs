@@ -87,6 +87,9 @@ pub struct ArbiterOutput {
     pub search: Option<SearchStatus>,
     /// Confirmed reports awaiting delivery acknowledgement.
     pub pending_reports: Vec<SearchReport>,
+    /// True when `twist` is an exploration look-around: a slow turn in place that
+    /// the vehicle may run even where in-place turns are otherwise disabled.
+    pub in_place_turn: bool,
 }
 /// Stateful authority arbiter, waypoint follower, exploration runner, and target-search coordinator.
 pub struct AutonomyArbiter {
@@ -143,6 +146,10 @@ pub struct AutonomyArbiter {
     explore_blocked: bool,
     explore_stale_since: Option<f64>,
     explore_unhealthy_since: Option<f64>,
+    /// Yaw rate requested by the explorer's look-around on this tick.
+    explore_scan: Option<f64>,
+    /// Turning limits for the look-around, with in-place turns allowed.
+    scan_turning: Option<TurningLimiter>,
 }
 impl Default for AutonomyArbiter {
     fn default() -> Self {
@@ -196,6 +203,8 @@ impl Default for AutonomyArbiter {
             explore_blocked: false,
             explore_stale_since: None,
             explore_unhealthy_since: None,
+            explore_scan: None,
+            scan_turning: None,
         }
     }
 }
@@ -304,7 +313,9 @@ impl AutonomyArbiter {
         }
         let exploration = status.exploration.clone();
         self.drain_explore_events();
+        let in_place_turn = !decision.held && decision.reason == "exploration_scan";
         ArbiterOutput {
+            in_place_turn,
             command_origin,
             intent: decision.intent_command,
             twist: decision.twist,
@@ -392,6 +403,7 @@ impl AutonomyArbiter {
     ) -> Option<SearchStatus> {
         if decision.held {
             self.turning.reset();
+            self.scan_turning = None;
             self.maneuver.clear();
         }
         if (!input.healthy
