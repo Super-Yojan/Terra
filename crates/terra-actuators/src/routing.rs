@@ -222,6 +222,36 @@ pub fn route_drive_profiles(
         .collect())
 }
 
+/// Return whether propulsion profiles can turn left and right wheel efforts into motion.
+///
+/// Left/right effort routes count directly. A manual route counts when its
+/// coefficients have equal nonzero magnitude: opposite signs drive the left side
+/// and equal signs the right. Servos are ignored.
+pub fn supports_differential_drive(profiles: &[DriveProfile]) -> bool {
+    let (mut left, mut right) = (false, false);
+    for profile in profiles.iter().filter(|p| !matches!(p.route, Route::Servo)) {
+        match profile.route {
+            Route::LeftEffort => left = true,
+            Route::RightEffort => right = true,
+            Route::Manual {
+                forward_coefficient: f,
+                turn_coefficient: t,
+            } => {
+                if f.abs() == 0.0 || f.abs() != t.abs() {
+                    return false;
+                }
+                if f * t < 0.0 {
+                    left = true;
+                } else {
+                    right = true;
+                }
+            }
+            Route::Servo => {}
+        }
+    }
+    left && right
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -273,5 +303,30 @@ mod tests {
         }];
         let values = route_drive_profiles(&profiles, &RoutingInput::default()).unwrap();
         assert_eq!(values[0].value, 0.25);
+    }
+    #[test]
+    fn differential_drive_accepts_effort_or_balanced_manual_routes() {
+        let manual = |id, f, t| {
+            motor(
+                id,
+                Route::Manual {
+                    forward_coefficient: f,
+                    turn_coefficient: t,
+                },
+            )
+        };
+        assert!(supports_differential_drive(&[
+            motor(0, Route::LeftEffort),
+            motor(1, Route::RightEffort)
+        ]));
+        assert!(supports_differential_drive(&[
+            manual(0, 1.0, -1.0),
+            manual(1, 1.0, 1.0)
+        ]));
+        assert!(!supports_differential_drive(&[motor(0, Route::LeftEffort)]));
+        assert!(!supports_differential_drive(&[
+            manual(0, 1.0, -0.5),
+            manual(1, 1.0, 1.0)
+        ]));
     }
 }

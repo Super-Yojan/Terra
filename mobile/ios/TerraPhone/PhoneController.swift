@@ -117,6 +117,9 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
     private var bleFeedback = false
     private var bleLayout = "{}"
     private var servoTargets: [String: Double] = [:]
+    /// Controller and layout last handed to Rust's actuator routing (shadow mode).
+    private var rustLayoutSync: (controller: ObjectIdentifier, layout: String)?
+    private var lastShadowMismatchLog: TimeInterval = 0
     @Published private(set) var actuatorEditor = ActuatorPaginationState()
     @Published private(set) var actuatorPageLoading = false
     private typealias EditorRequest = (id: UInt32, operation: String, generation: UInt64, actuator: ActuatorDraft?, actuatorID: Int?)
@@ -606,12 +609,13 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
                 if localDebug {
                     try controller.setManualInput(forward: target.forward, turn: target.yaw, timestamp: now)
                 }
+                syncRustLayout(controller)
                 let output = try controller.step(timestamp: now)
                 if tick % 10 == 0 { serviceManualDashboard(now: now); updateAuthority() }
                 tick += 1
                 if tick % 5 == 0 {
                     let command = DriveJoystickCommand(forward: (output.leftEffort + output.rightEffort) / 2, yaw: (output.rightEffort - output.leftEffort) / 2)
-                    routeHardware(left: output.leftEffort, right: output.rightEffort, now: ProcessInfo.processInfo.systemUptime, manualTarget: command, localDebug: localDebug)
+                    routeHardware(left: output.leftEffort, right: output.rightEffort, now: ProcessInfo.processInfo.systemUptime, manualTarget: command, localDebug: localDebug, rustFrame: output.actuatorFrame)
                 }
             } catch { fail(error, context: "Shared runtime manual drive") }
             return
@@ -651,6 +655,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
             }
             let direct = bleActive && !bleFeedback
             try controller.setActuationMode(feedback: !direct)
+            syncRustLayout(controller)
             let output = try controller.step(timestamp: now)
             if tick % 5 == 0 { drainFpvSignaling() }
             if tick % 10 == 0 && controller.dashboardStatus() == "failed" {
@@ -685,17 +690,17 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
                 // L0 has no sensor-driven motor correction. The arbiter still
                 // gates the operator command by authority, freshness and safety.
                 let command = DriveJoystickCommand(forward: (output.leftEffort + output.rightEffort) / 2, yaw: (output.rightEffort - output.leftEffort) / 2)
-                routeHardware(left: output.leftEffort, right: output.rightEffort, now: ProcessInfo.processInfo.systemUptime, manualTarget: command)
+                routeHardware(left: output.leftEffort, right: output.rightEffort, now: ProcessInfo.processInfo.systemUptime, manualTarget: command, rustFrame: output.actuatorFrame)
             }
             if bleActive && (bleFeedback || vioWaypoint) && !fullyManual {
                 if !feedbackTrackingHealthy || output.safety != .active {
                     pauseHardwareMotion(reason: "Autonomy: \(TerraStopDiagnostic.autonomyReason(autonomy)); feedback controller safety=\(String(describing: output.safety)); time=\(now) target=(\(output.targetForward),\(output.targetYawRate)) estimated=(\(output.estimatedForward),\(output.estimatedYawRate)) effort=(\(output.leftEffort),\(output.rightEffort))")
                 }
-                if tick % 5 == 0 { routeHardware(left: output.leftEffort, right: output.rightEffort, now: ProcessInfo.processInfo.systemUptime, closedLoop: true) }
+                if tick % 5 == 0 { routeHardware(left: output.leftEffort, right: output.rightEffort, now: ProcessInfo.processInfo.systemUptime, closedLoop: true, rustFrame: output.actuatorFrame) }
             }
             if bleActive && !bleFeedback && !vioWaypoint && !fullyManual && tick % 5 == 0 && controller.dashboardStatus() == "connected" {
                 let command = DriveJoystickCommand(forward: (output.leftEffort + output.rightEffort) / 2, yaw: (output.rightEffort - output.leftEffort) / 2)
-                routeHardware(left: output.leftEffort, right: output.rightEffort, now: ProcessInfo.processInfo.systemUptime, manualTarget: command)
+                routeHardware(left: output.leftEffort, right: output.rightEffort, now: ProcessInfo.processInfo.systemUptime, manualTarget: command, rustFrame: output.actuatorFrame)
             }
             if tick % 10 == 0 { publish(output);updateAuthority() }
             if mode == .phone { publishLocalization(controller) }
@@ -1707,11 +1712,13 @@ extension PhoneController {
                   let actuator = layout.actuators.first(where: { $0.id == Int(id) && $0.kind == "positional_servo" }) else { return }
             let value = min(actuator.limits.max, max(actuator.limits.min, position))
             self.servoTargets[String(id)] = value
+            try? self.controller?.setServoTarget(id: id, value: value)
             DispatchQueue.main.async { self.servoPositions[id] = value }
         }
     }
     private func resetServoTargets() {
         servoTargets = [:]
+        rustLayoutSync = nil // Reloading the layout in Rust also resets its servo targets.
         if let layout = try? ActuatorDriveProfileSet.decode(json: bleLayout) {
             for a in layout.actuators where a.kind == "positional_servo" {
                 servoTargets[String(a.id)] = min(a.limits.max, max(a.limits.min, a.safe.value ?? 0))
@@ -1729,7 +1736,30 @@ extension PhoneController {
             DispatchQueue.main.async { self.phoneMounted = mounted }
         }
     }
-    private func routeHardware(left: Double, right: Double, now: TimeInterval, manualTarget: DriveJoystickCommand? = nil, closedLoop: Bool = false, localDebug: Bool = false) {
+    /// Shadow mode: Rust routes the same efforts so its frame can be compared with Swift's.
+    private func syncRustLayout(_ controller: MobileController) {
+        let id = ObjectIdentifier(controller)
+        if let sync = rustLayoutSync, sync.controller == id, sync.layout == bleLayout { return }
+        rustLayoutSync = (id, bleLayout)
+        // A pending ("{}") or invalid layout leaves Rust without one, as Swift's decode fails too.
+        try? controller.setActuatorLayout(profilesJson: bleLayout == "{}" ? "" : bleLayout)
+        for (key, value) in servoTargets { if let id = UInt8(key) { try? controller.setServoTarget(id: id, value: value) } }
+    }
+    private func compareRustFrame(_ rustFrame: String?, with routed: [[String: Any]], now: TimeInterval) {
+        let rust = rustFrame.flatMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) as? [[String: Any]] }
+        func pairs(_ frame: [[String: Any]]) -> [(Int, Double)] {
+            frame.compactMap { entry in (entry["id"] as? NSNumber).flatMap { id in (entry["value"] as? NSNumber).map { (id.intValue, $0.doubleValue) } } }
+        }
+        let expected = pairs(routed)
+        let matches = rust.map { frame in
+            let actual = pairs(frame)
+            return actual.count == expected.count && zip(actual, expected).allSatisfy { $0.0 == $1.0 && abs($0.1 - $1.1) < 1e-3 }
+        } ?? false
+        guard !matches, now - lastShadowMismatchLog >= 1 else { return }
+        lastShadowMismatchLog = now
+        TerraLog.control.error("Rust actuator frame differs; swift=\(String(describing: expected), privacy: .public) rust=\(rustFrame ?? "nil", privacy: .public)")
+    }
+    private func routeHardware(left: Double, right: Double, now: TimeInterval, manualTarget: DriveJoystickCommand? = nil, closedLoop: Bool = false, localDebug: Bool = false, rustFrame: String? = nil) {
         guard bleActive, bleReady, !dashboardEmergencyStop, !bleFeedback || bleCompatible else { return }
         guard phoneMountConfirmed || localDebug else {
             // Report once per hold; neutral output stays latched until the mount is confirmed.
@@ -1747,6 +1777,7 @@ extension PhoneController {
             let input: [String: Any] = ["left_effort": left, "right_effort": right, "forward": forward, "turn": turn, "servo_positions": servoTargets]
             let profile = try ActuatorDriveProfileSet.decode(json: bleLayout)
             let routed = try closedLoop ? profile.routeClosedLoop(left: left, right: right, servos: servoTargets) : profile.route(input: input)
+            compareRustFrame(rustFrame, with: routed, now: now)
             let values = String(decoding: try JSONSerialization.data(withJSONObject: routed), as: UTF8.self)
             bluetooth.drive(valuesJSON: values, producedAt: now)
         } catch {

@@ -225,6 +225,9 @@ pub struct ControlOutput {
     pub target_yaw_rate: f64,
     /// Active-loop or stopped-loop state for this tick.
     pub safety: SafetyState,
+    /// Efforts routed through the layout from [`MobileController::set_actuator_layout`],
+    /// as `[{"id","value"}]` JSON. `None` without a valid layout or when routing fails.
+    pub actuator_frame: Option<String>,
 }
 impl From<MotorOutput> for ControlOutput {
     fn from(value: MotorOutput) -> Self {
@@ -243,6 +246,7 @@ impl From<MotorOutput> for ControlOutput {
                 StopReason::StaleTarget => SafetyState::StaleTarget,
                 StopReason::InvalidTime => SafetyState::InvalidTime,
             },
+            actuator_frame: None,
         }
     }
 }
@@ -275,6 +279,7 @@ struct Brain {
     cloud_gate: publication::CloudGate,
     dashboard: Option<terra_transport::ControlPlane>,
     last_tick: f64,
+    actuators: Option<actuators::ActiveLayout>,
 }
 impl std::ops::Deref for Brain {
     type Target = terra_runtime::Runtime;
@@ -339,6 +344,7 @@ impl MobileController {
                 cloud_gate: Default::default(),
                 dashboard: None,
                 last_tick: 0.,
+                actuators: None,
             }),
         }))
     }
@@ -417,6 +423,42 @@ impl MobileController {
             received_at: at,
         })?;
         Ok(())
+    }
+    /// Replace the rover drive profiles used to route each tick's efforts into
+    /// [`ControlOutput::actuator_frame`]. Servo targets reset to their safe values.
+    /// An empty string clears the layout.
+    ///
+    /// # Errors
+    /// Returns `InvalidInput` for malformed or invalid profiles; the layout is
+    /// cleared so no frame is produced from stale profiles.
+    pub fn set_actuator_layout(&self, profiles_json: String) -> Result<(), ControllerError> {
+        let mut b = self.brain.lock().map_err(|_| ControllerError::Internal)?;
+        b.actuators = None;
+        if profiles_json.is_empty() {
+            return Ok(());
+        }
+        b.actuators = Some(actuators::ActiveLayout::parse(&profiles_json).map_err(|e| {
+            ControllerError::InvalidInput {
+                message: e.to_string(),
+            }
+        })?);
+        Ok(())
+    }
+    /// Set a normalized servo target, clipped to that servo's limits.
+    ///
+    /// # Errors
+    /// Returns `InvalidInput` without a layout, for an unknown or non-servo ID,
+    /// or for a nonfinite value.
+    pub fn set_servo_target(&self, id: u8, value: f64) -> Result<(), ControllerError> {
+        let mut b = self.brain.lock().map_err(|_| ControllerError::Internal)?;
+        let layout = b.actuators.as_mut().ok_or(ControllerError::InvalidInput {
+            message: "no actuator layout".into(),
+        })?;
+        layout
+            .set_servo(id, value)
+            .map_err(|e| ControllerError::InvalidInput {
+                message: e.to_string(),
+            })
     }
     /// Trusted local normalized manual input; remote envelopes cannot access this ingress.
     pub fn set_manual_input(
@@ -727,7 +769,12 @@ impl MobileController {
         }
         self.observation
             .effort(&brain, timestamp, &runtime_output.motor);
-        Ok(runtime_output.motor.into())
+        let mut control: ControlOutput = runtime_output.motor.into();
+        control.actuator_frame = brain
+            .actuators
+            .as_ref()
+            .and_then(|layout| layout.frame(control.left_effort, control.right_effort).ok());
+        Ok(control)
     }
 
     /// Reset estimator, velocity loop, and autonomy; detach dashboard and close recording.
