@@ -6,6 +6,7 @@
 //! holds the vocabulary used by estimation, control, and hardware adapters.
 
 pub mod connectivity_policy;
+pub mod point_capture;
 pub mod timing;
 
 /// Three-component vector; units and reference frame are defined by the containing field.
