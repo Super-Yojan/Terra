@@ -129,6 +129,33 @@ fn requests_default_and_validate() {
     assert_eq!(short.frame_count(), 1);
 }
 
+/// Live requests stream with a lease, a faster rate cap and a pixel stride.
+#[test]
+fn live_requests_validate() {
+    let request = CaptureRequest::decode(
+        br#"{"version":1,"request_id":"live","live":true,"rate_hz":4,"stride":3}"#,
+    )
+    .unwrap();
+    assert!(request.live);
+    assert_eq!(request.stride, 3);
+    assert_eq!(request.frame_count(), 0);
+    assert_eq!(request.duration_seconds, 10.0);
+    let built = CaptureRequest::live("live", 4.0, 3, 10.0);
+    assert_eq!(built, request);
+    assert_eq!(
+        CaptureRequest::decode(&serde_json::to_vec(&built).unwrap()),
+        Some(built)
+    );
+    for bad in [
+        r#"{"version":1,"request_id":"a","live":true,"rate_hz":6}"#,
+        r#"{"version":1,"request_id":"a","rate_hz":4,"stride":2}"#,
+        r#"{"version":1,"request_id":"a","stride":0}"#,
+        r#"{"version":1,"request_id":"a","stride":9}"#,
+    ] {
+        assert_eq!(CaptureRequest::decode(bad.as_bytes()), None, "{bad}");
+    }
+}
+
 /// Progress serializes with snake-case states.
 #[test]
 fn progress_json_is_stable() {

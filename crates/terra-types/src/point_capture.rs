@@ -5,6 +5,11 @@
 //! `pointcloud/full` and JSON [`CaptureProgress`] on `pointcloud/capture`.
 //! Nothing is sent unless a capture was requested.
 //!
+//! A `live` request streams instead of recording: frames keep coming at the
+//! requested rate, optionally decimated by `stride`, until the dashboard
+//! cancels or stops renewing it. `duration_seconds` is then a lease that a
+//! repeated request with the same id extends. Live frames carry count 0.
+//!
 //! # Frame layout (`TPC1`, little endian)
 //!
 //! | Field | Type |
@@ -40,6 +45,10 @@ pub const MAX_REQUEST_BYTES: usize = 2048;
 pub const MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
 /// Longest accepted request id, in bytes.
 pub const MAX_REQUEST_ID_BYTES: usize = 64;
+/// Highest frame rate a live request may ask for.
+pub const MAX_LIVE_RATE_HZ: f64 = 5.0;
+/// Largest pixel stride a request may ask for.
+pub const MAX_STRIDE: u32 = 8;
 const MAGIC: &[u8; 4] = b"TPC1";
 const POINT_BYTES: usize = 13;
 
@@ -104,6 +113,17 @@ pub struct CaptureRequest {
     /// Stop the capture with this id instead of starting one.
     #[serde(default)]
     pub cancel: bool,
+    /// Stream until cancelled or the lease lapses; `duration_seconds` is the
+    /// lease, renewed by repeating this request with the same id.
+    #[serde(default)]
+    pub live: bool,
+    /// Keep every `stride`-th pixel across and down; defaults to 1, within
+    /// [1, 8]. Frame width, height and intrinsics describe the kept grid.
+    #[serde(default = "default_stride")]
+    pub stride: u32,
+}
+fn default_stride() -> u32 {
+    1
 }
 fn default_duration() -> f64 {
     10.0
@@ -120,6 +140,24 @@ impl CaptureRequest {
             duration_seconds: default_duration(),
             rate_hz: default_rate(),
             cancel: false,
+            live: false,
+            stride: default_stride(),
+        }
+    }
+    /// A live stream request at `rate_hz` keeping every `stride`-th pixel,
+    /// leased for `lease_seconds`.
+    pub fn live(
+        request_id: impl Into<String>,
+        rate_hz: f64,
+        stride: u32,
+        lease_seconds: f64,
+    ) -> Self {
+        Self {
+            duration_seconds: lease_seconds,
+            rate_hz,
+            live: true,
+            stride,
+            ..Self::new(request_id)
         }
     }
     /// Parse and validate a request payload.
@@ -139,10 +177,14 @@ impl CaptureRequest {
             && self.duration_seconds <= 60.0
             && self.rate_hz.is_finite()
             && self.rate_hz > 0.0
-            && self.rate_hz <= 2.0
+            && self.rate_hz <= if self.live { MAX_LIVE_RATE_HZ } else { 2.0 }
+            && (1..=MAX_STRIDE).contains(&self.stride)
     }
-    /// Number of frames the capture aims to send, at least one.
+    /// Number of frames the capture aims to send, at least one; 0 for live.
     pub fn frame_count(&self) -> u16 {
+        if self.live {
+            return 0;
+        }
         (self.duration_seconds * self.rate_hz)
             .round()
             .clamp(1.0, 120.0) as u16
@@ -163,7 +205,7 @@ pub fn valid_request_id(id: &str) -> bool {
 pub enum CaptureState {
     /// Frames are being collected.
     Running,
-    /// Every requested frame was sent, or the time ran out.
+    /// Every requested frame was sent, the time ran out, or a live lease lapsed.
     Done,
     /// The operator cancelled it or the dashboard link was replaced.
     Cancelled,
@@ -181,7 +223,7 @@ pub struct CaptureProgress {
     pub state: CaptureState,
     /// Frames handed to the network so far.
     pub frames_sent: u16,
-    /// Frames the capture aims to send.
+    /// Frames the capture aims to send; 0 for a live stream.
     pub frames_total: u16,
     /// Why frames are missing, such as `no_depth` or `link_busy`; empty when none are.
     #[serde(default)]
@@ -223,7 +265,7 @@ pub struct CaptureFrame {
     pub request_id: String,
     /// Zero-based frame number within the capture.
     pub index: u16,
-    /// Frames the capture aims to send.
+    /// Frames the capture aims to send; 0 for a live stream, whose index wraps.
     pub count: u16,
     /// Depth exposure time, seconds on the rover's monotonic clock.
     pub timestamp: f64,
