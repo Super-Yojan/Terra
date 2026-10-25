@@ -92,8 +92,8 @@ struct PhoneGroundPlane {
 }
 
 /// Calibrate the world origin and camera clearance from a stable measured floor.
-/// Keep the world offset fixed, but follow terrain elevation and rover pitch/roll
-/// with a local supporting plane. Never move world points to flatten the terrain.
+/// Keep the world offset fixed and follow terrain elevation with a level plane
+/// below the camera. Never move world points to flatten the terrain.
 struct PhoneGroundPolicy {
  private let core = MobileGroundPolicy()
  var offset: Double? { core.offset() }
