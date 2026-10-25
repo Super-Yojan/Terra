@@ -24,7 +24,7 @@ flowchart LR
 
 Obstacle band: 0.15 m to 2.0 m. Range cap: 15 m. `pixel_stride` is 4.
 
-Phone simulated mode invents room depth. ARKit mode assumes the camera is 0.5 m up. Zenoh mode uses the published camera height instead.
+Phone simulated mode invents room depth. ARKit mode uses the mount calibration's camera height, or the ARKit floor when none is saved; the level band before either assumes 0.5 m. Zenoh mode uses the published camera height instead.
 
 ```sh
 cargo test -p terra-mapping

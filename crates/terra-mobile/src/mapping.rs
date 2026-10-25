@@ -332,6 +332,9 @@ impl MobileGroundPolicy {
             .unwrap()
             .observe(height, camera_height, area, now, up_z)
     }
+    pub fn mount(&self, clearance: f64, camera_height: f64) -> Option<f64> {
+        self.state.lock().unwrap().mount(clearance, camera_height)
+    }
     pub fn plane(
         &self,
         x: f64,

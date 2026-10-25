@@ -18,6 +18,22 @@ impl GroundPolicy {
             since: None,
         })
     }
+    /// Take the floor from the measured mount: the camera sits `clearance` above
+    /// the rover's ground point, the way a robot model's fixed camera transform
+    /// does. Unlike a floor anchor seen at startup, this stays right when the
+    /// phone is mounted after the app starts. `camera_height` is the camera's
+    /// current world z, so the floor maps to world z = 0.
+    pub fn mount(&mut self, clearance: f64, camera_height: f64) -> Option<f64> {
+        if self.offset.is_some() {
+            return self.offset;
+        }
+        if !camera_height.is_finite() {
+            return None;
+        }
+        *self = Self::calibrated(clearance)?;
+        self.offset = Some(clearance - camera_height);
+        self.offset
+    }
     pub fn reset(&mut self) {
         *self = Self::default();
     }

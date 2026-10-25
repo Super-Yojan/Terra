@@ -102,6 +102,9 @@ struct PhoneGroundPolicy {
  mutating func observe(height: Double?, cameraHeight: Double, area: Double, now: Double, upZ: Double = 1) -> Double? {
   core.observe(height: height, cameraHeight: cameraHeight, area: area, now: now, upZ: upZ)
  }
+ mutating func mount(clearance: Double, cameraHeight: Double) -> Double? {
+  core.mount(clearance: clearance, cameraHeight: cameraHeight)
+ }
  func groundPlane(cameraPosition: SIMD3<Double>, bodyUp: SIMD3<Double>) -> PhoneGroundPlane? {
   guard let value = core.plane(x: cameraPosition.x, y: cameraPosition.y, z: cameraPosition.z, upX: bodyUp.x, upY: bodyUp.y, upZ: bodyUp.z) else { return nil }
   return PhoneGroundPlane(normal: SIMD3(value.normalX, value.normalY, value.normalZ), offset: value.offset)

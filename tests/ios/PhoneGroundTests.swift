@@ -35,6 +35,9 @@ import Foundation
   precondition(policy.groundPlane(cameraPosition: .zero, bodyUp: SIMD3(0, 0, 1)) == nil, "reset requires measured ground before mapping")
   precondition(policy.observe(height: 0.2, cameraHeight: 0, area: 2, now: 3) == nil, "surface above camera is not the floor")
   precondition(policy.observe(height: -0.3, cameraHeight: 0, area: 0.05, now: 4) == nil, "small patches cannot calibrate ground")
-  print("Ground calibration: stable world frame, level plane under tilted body, raised obstacles, invalid plane and reset passed")
+  policy.reset()
+  precondition(policy.mount(clearance: 0.4, cameraHeight: 0.65) != nil, "a measured mount height fixes ground without a floor anchor")
+  precondition(abs(policy.offset! - (0.4 - 0.65)) < 0.000001)
+  print("Ground calibration: mount height, stable world frame, level plane under tilted body, raised obstacles, invalid plane and reset passed")
  }
 }
