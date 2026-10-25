@@ -233,3 +233,109 @@ fn cancel_stops_a_running_capture() {
     assert_eq!(last.state, CaptureState::Cancelled);
     assert_eq!(last.frames_sent, 0);
 }
+
+#[test]
+fn live_stream_decimates_renews_and_lapses() {
+    let socket = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let endpoint = format!("tcp/127.0.0.1:{}", socket.local_addr().unwrap().port());
+    drop(socket);
+    let controller = MobileController::new(default_control_settings()).unwrap();
+    controller
+        .host_dashboard(endpoint.clone(), "capture-live".into(), 7)
+        .unwrap();
+    let map = MobileOccupancyMap::new(default_occupancy_settings()).unwrap();
+    controller.attach_occupancy_map(map.clone()).unwrap();
+    let mut config = zenoh::Config::default();
+    config.insert_json5("mode", "\"client\"").unwrap();
+    config
+        .insert_json5(
+            "connect/endpoints",
+            &serde_json::json!([endpoint]).to_string(),
+        )
+        .unwrap();
+    config
+        .insert_json5("scouting/multicast/enabled", "false")
+        .unwrap();
+    let dashboard = zenoh::open(config).wait().unwrap();
+    let full = dashboard
+        .declare_subscriber("capture-live/7/pointcloud/full")
+        .wait()
+        .unwrap();
+    let thinned = dashboard
+        .declare_subscriber("capture-live/7/pointcloud")
+        .wait()
+        .unwrap();
+    let progress = dashboard
+        .declare_subscriber("capture-live/7/pointcloud/capture")
+        .wait()
+        .unwrap();
+    std::thread::sleep(Duration::from_millis(300));
+    let put = || {
+        dashboard
+            .put(
+                "capture-live/7/pointcloud/request",
+                serde_json::to_vec(&CaptureRequest::live("live-1", 5.0, 2, 1.0)).unwrap(),
+            )
+            .wait()
+            .unwrap();
+        std::thread::sleep(Duration::from_millis(200));
+    };
+    let cloud = |sequence: u64| {
+        serde_json::json!({"version":1,"sequence":sequence,"frameID":"f","points":[[1.0,2.0,0.0]]})
+            .to_string()
+    };
+    let mut frames = Vec::new();
+    let mut thinned_seen = false;
+    let mut t = 1.0;
+    let mut run = |until: f64, t: &mut f64| {
+        while *t < until {
+            controller.step(*t).unwrap();
+            map.integrate_depth(depth_frame(*t + 0.01)).unwrap();
+            controller.publish_point_cloud(cloud(*t as u64)).unwrap();
+            std::thread::sleep(Duration::from_millis(20));
+            while let Ok(Some(sample)) = full.try_recv() {
+                frames.push(CaptureFrame::decode(&sample.payload().to_bytes()).unwrap());
+            }
+            thinned_seen |= thinned.try_recv().unwrap().is_some();
+            *t += 0.1;
+        }
+    };
+
+    // A 1 s lease, renewed once at 1.6 s, keeps the stream up for about 2.6 s.
+    put();
+    run(1.6, &mut t);
+    put();
+    run(4.0, &mut t);
+    while let Ok(Some(sample)) = full.recv_timeout(Duration::from_millis(500)) {
+        frames.push(CaptureFrame::decode(&sample.payload().to_bytes()).unwrap());
+    }
+    assert!(
+        !thinned_seen,
+        "a live stream must not also send the thinned cloud"
+    );
+    assert!(
+        (9..=15).contains(&frames.len()),
+        "about 5 Hz for 2.6 s, got {}",
+        frames.len()
+    );
+    assert!(frames.windows(2).all(|w| w[1].index == w[0].index + 1));
+    let frame = &frames[0];
+    assert_eq!(frame.count, 0);
+    // 4 × 3 at stride 2 keeps pixels (0,0) (2,0) (0,2) (2,2).
+    assert_eq!((frame.width, frame.height, frame.points.len()), (2, 2, 4));
+    assert_eq!(frame.intrinsics, [1.0, 1.0, 0.75, 0.5]);
+    assert_eq!(frame.points[1].label, PointLabel::NoReturn);
+    assert_ne!(frame.points[0].label, PointLabel::NoReturn);
+    // Source pixel (2,2), 1 m down the 0.5 m-high camera's lowest row.
+    assert!((frame.points[3].position[0] - 1.0).abs() < 1e-5);
+
+    let mut last = None;
+    while let Ok(Some(sample)) = progress.recv_timeout(Duration::from_millis(300)) {
+        last =
+            Some(serde_json::from_slice::<CaptureProgress>(&sample.payload().to_bytes()).unwrap());
+    }
+    let last = last.expect("no progress");
+    assert_eq!(last.state, CaptureState::Done);
+    assert_eq!(last.detail, "lease_expired");
+    assert_eq!(last.frames_total, 0);
+}

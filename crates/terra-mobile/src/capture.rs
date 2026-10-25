@@ -4,6 +4,9 @@
 //! step then sends at most one labelled full-resolution frame per interval on
 //! `pointcloud/full` and reports progress on `pointcloud/capture`. Nothing is
 //! copied or sent while no capture runs. A capture never touches motion state.
+//!
+//! A live request keeps streaming, optionally decimated, until it is cancelled,
+//! replaced, or its lease lapses; repeating it with the same id renews the lease.
 use crate::Brain;
 use terra_types::point_capture::*;
 
@@ -15,6 +18,10 @@ const PROGRESS_SECONDS: f64 = 0.25;
 pub(crate) struct Capture {
     request_id: String,
     total: u16,
+    /// Live stream: no frame target, and the deadline is a renewable lease.
+    live: bool,
+    lease: f64,
+    stride: u32,
     interval: f64,
     next_due: f64,
     deadline: f64,
@@ -53,6 +60,14 @@ pub(crate) fn advance(brain: &mut Brain, now: f64) {
             }
             continue;
         }
+        if let Some(running) = brain
+            .capture
+            .as_mut()
+            .filter(|c| c.live && request.live && c.request_id == request.request_id)
+        {
+            running.deadline = now + running.lease;
+            continue;
+        }
         if brain.capture.is_some() {
             finish(brain, rover_id, CaptureState::Cancelled, "replaced");
         }
@@ -64,9 +79,16 @@ pub(crate) fn advance(brain: &mut Brain, now: f64) {
         brain.capture = Some(Capture {
             request_id: request.request_id,
             total,
+            live: request.live,
+            lease: request.duration_seconds,
+            stride: request.stride,
             interval,
             next_due: now,
-            deadline: now + f64::from(total - 1) * interval + GRACE_SECONDS,
+            deadline: if request.live {
+                now + request.duration_seconds
+            } else {
+                now + f64::from(total.saturating_sub(1)) * interval + GRACE_SECONDS
+            },
             sent: 0,
             detail: "",
             last_progress: None,
@@ -85,7 +107,7 @@ pub(crate) fn advance(brain: &mut Brain, now: f64) {
                     .is_some_and(|d| d.publish_bulk(FRAME_TOPIC, bytes))
             });
             if sent {
-                capture.sent += 1;
+                capture.sent = capture.sent.wrapping_add(1);
             } else {
                 capture.detail = "link_busy";
             }
@@ -94,7 +116,9 @@ pub(crate) fn advance(brain: &mut Brain, now: f64) {
             capture.detail = "no_depth";
         }
     }
-    if capture.sent >= capture.total || now >= capture.deadline {
+    if now >= capture.deadline && capture.live {
+        finish(brain, rover_id, CaptureState::Done, "lease_expired");
+    } else if (!capture.live && capture.sent >= capture.total) || now >= capture.deadline {
         let detail = capture.detail;
         finish(brain, rover_id, CaptureState::Done, detail);
     } else if capture
@@ -137,6 +161,13 @@ fn encode(
     rover_id: u64,
     capture: &Capture,
 ) -> Option<Vec<u8>> {
+    let decimated;
+    let depth = if capture.stride > 1 {
+        decimated = decimate(depth, capture.stride);
+        &decimated
+    } else {
+        depth
+    };
     let points = depth.label().ok()?;
     let q = depth.pose.orientation;
     let p = depth.pose.position;
@@ -181,7 +212,36 @@ fn encode(
     .ok()
 }
 
-/// Whether the always-on thinned cloud should go out: only during a capture.
+/// Keep every `stride`-th pixel across and down. Pixel `(u, v)` of the result
+/// is pixel `(stride·u, stride·v)` of the source, so dividing the focal lengths
+/// and principal point by `stride` keeps every ray exactly where it was.
+fn decimate(depth: &terra_mapping::DepthCapture, stride: u32) -> terra_mapping::DepthCapture {
+    let k = depth.intrinsics;
+    let width = k.width.div_ceil(stride);
+    let height = k.height.div_ceil(stride);
+    let scale = f64::from(stride);
+    terra_mapping::DepthCapture {
+        timestamp: depth.timestamp,
+        intrinsics: terra_mapping::CameraIntrinsics {
+            width,
+            height,
+            fx: k.fx / scale,
+            fy: k.fy / scale,
+            cx: k.cx / scale,
+            cy: k.cy / scale,
+        },
+        pose: depth.pose,
+        classifier: depth.classifier,
+        config: depth.config.clone(),
+        depth: (0..height)
+            .flat_map(|v| (0..width).map(move |u| (u, v)))
+            .map(|(u, v)| depth.depth[(v * stride * k.width + u * stride) as usize])
+            .collect(),
+    }
+}
+
+/// Whether the always-on thinned cloud should go out: only during a recorded
+/// capture, not a live stream, which already carries the points it needs.
 pub(crate) fn thinned_cloud_wanted(brain: &Brain) -> bool {
-    brain.capture.is_some()
+    brain.capture.as_ref().is_some_and(|c| !c.live)
 }
