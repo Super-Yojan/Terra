@@ -18,6 +18,7 @@
 //! # Ok::<(), terra_mapping::MapError>(())
 //! ```
 
+pub use terra_types::point_capture::PointLabel;
 use terra_types::{Quaternion, Vector3};
 
 /// Rolling grid dimensions, depth sampling, and obstacle classification limits.
@@ -166,22 +167,7 @@ impl LocalOccupancyMap {
     /// cells, resolution outside `0.01..=10.0` m, nonfinite or unordered obstacle
     /// heights, range outside `(0, 100]` m, or zero pixel stride.
     pub fn new(config: MapConfig) -> Result<Self, MapError> {
-        if config.width == 0
-            || config.height == 0
-            || u64::from(config.width) * u64::from(config.height) > 1_000_000
-            || !config.resolution.is_finite()
-            || config.resolution < 0.01
-            || config.resolution > 10.0
-            || !config.min_obstacle_height.is_finite()
-            || !config.max_obstacle_height.is_finite()
-            || config.min_obstacle_height >= config.max_obstacle_height
-            || !config.max_range.is_finite()
-            || config.max_range <= 0.0
-            || config.max_range > 100.0
-            || config.pixel_stride == 0
-        {
-            return Err(MapError::InvalidConfig);
-        }
+        validate_config(&config)?;
         let n = (config.width * config.height) as usize;
         Ok(Self {
             config,
@@ -300,31 +286,13 @@ impl LocalOccupancyMap {
         depth: &[f32],
         ground: GroundPlane,
     ) -> Result<(), MapError> {
-        let norm = ground
-            .normal
-            .x
-            .hypot(ground.normal.y)
-            .hypot(ground.normal.z);
-        if !ground.normal.finite()
-            || !norm.is_finite()
-            || norm < 1e-12
-            || ground.normal.z / norm < 0.5
-            || !(ground.offset / norm).is_finite()
-        {
-            return Err(MapError::InvalidGroundPlane);
-        }
-        let normal = ground.normal.scaled(1.0 / norm);
-        let ground_offset = ground.offset / norm;
-        let (min_height, max_height) = (
-            self.config.min_obstacle_height,
-            self.config.max_obstacle_height,
-        );
-        self.integrate_rays(timestamp, intrinsics, pose, depth, |endpoint, _, _| {
-            let height = normal.x * endpoint.x + normal.y * endpoint.y + normal.z * endpoint.z
-                - ground_offset;
-            // High overhead objects provide no ground-level free-space evidence.
-            (height <= max_height).then_some(height >= min_height)
-        })
+        self.integrate_classified(
+            timestamp,
+            intrinsics,
+            pose,
+            depth,
+            DepthClassifier::GroundPlane(ground),
+        )
     }
     /// Integrate depth without a ground estimate, keeping only rays within a
     /// horizontal band around the camera's level line.
@@ -345,64 +313,38 @@ impl LocalOccupancyMap {
         depth: &[f32],
         band: HorizonBand,
     ) -> Result<(), MapError> {
-        if !band.half_angle.is_finite()
-            || band.half_angle <= 0.0
-            || band.half_angle >= std::f64::consts::FRAC_PI_2
-            || !band.max_range.is_finite()
-            || band.max_range <= 0.0
-        {
-            return Err(MapError::InvalidBand);
-        }
-        let max_sin = band.half_angle.sin();
-        self.integrate_rays(timestamp, intrinsics, pose, depth, |_, ray, range| {
-            (range <= band.max_range && (ray.z / range).abs() <= max_sin).then_some(true)
-        })
+        self.integrate_classified(
+            timestamp,
+            intrinsics,
+            pose,
+            depth,
+            DepthClassifier::HorizonBand(band),
+        )
     }
-    /// Validate one frame and cast its sampled rays. `classify` receives the
-    /// world endpoint, world ray, and range; it returns `None` to ignore the ray,
-    /// or whether the endpoint is an obstacle.
-    fn integrate_rays(
+    /// Integrate one frame with either classifier. Sampled returns labelled
+    /// [`PointLabel::Free`] clear their endpoint, [`PointLabel::Obstacle`] marks
+    /// it occupied, and every other label adds no evidence. [`label_depth`]
+    /// applies the same rules to every pixel.
+    ///
+    /// # Errors
+    ///
+    /// The union of the errors of the two specialised methods.
+    pub fn integrate_classified(
         &mut self,
         timestamp: f64,
         intrinsics: CameraIntrinsics,
         pose: CameraPose,
         depth: &[f32],
-        classify: impl Fn(Vector3, Vector3, f64) -> Option<bool>,
+        classifier: DepthClassifier,
     ) -> Result<(), MapError> {
+        let rules = Rules::new(&self.config, classifier)?;
         if !timestamp.is_finite()
             || timestamp < 0.0
             || self.last_timestamp.is_some_and(|t| timestamp <= t)
         {
             return Err(MapError::InvalidTime);
         }
-        let camera_intrinsics = intrinsics;
-        if camera_intrinsics.width == 0
-            || camera_intrinsics.height == 0
-            || u64::from(camera_intrinsics.width) * u64::from(camera_intrinsics.height) > 4_194_304
-            || depth.len() != camera_intrinsics.width as usize * camera_intrinsics.height as usize
-            || ![
-                camera_intrinsics.fx,
-                camera_intrinsics.fy,
-                camera_intrinsics.cx,
-                camera_intrinsics.cy,
-            ]
-            .iter()
-            .all(|v| v.is_finite())
-            || camera_intrinsics.cx.abs() > 1e6
-            || camera_intrinsics.cy.abs() > 1e6
-            || camera_intrinsics.fx < 1e-6
-            || camera_intrinsics.fy < 1e-6
-        {
-            return Err(MapError::InvalidFrame);
-        }
-        if !pose.position.finite()
-            || pose.position.x.abs() > 1e9
-            || pose.position.y.abs() > 1e9
-            || pose.position.z.abs() > 1e9
-        {
-            return Err(MapError::InvalidPose);
-        }
-        let q = pose.orientation.normalized().ok_or(MapError::InvalidPose)?;
+        let q = validate_frame(intrinsics, pose, depth)?;
         let start = self.cell(pose.position);
         if self.index(start.0, start.1).is_none() {
             return Err(MapError::InvalidPose);
@@ -410,25 +352,17 @@ impl LocalOccupancyMap {
         // Deduplicate per frame so dense pixels cannot instantly saturate a cell.
         // Obstacle evidence wins over free evidence from another ray in the same frame.
         let mut updates = vec![0_i8; self.evidence.len()];
-        for v in (0..camera_intrinsics.height).step_by(self.config.pixel_stride as usize) {
-            for u in (0..camera_intrinsics.width).step_by(self.config.pixel_stride as usize) {
-                let z = depth[(v * camera_intrinsics.width + u) as usize] as f64;
-                if !z.is_finite() || z <= 0.0 {
+        for v in (0..intrinsics.height).step_by(self.config.pixel_stride as usize) {
+            for u in (0..intrinsics.width).step_by(self.config.pixel_stride as usize) {
+                let z = depth[(v * intrinsics.width + u) as usize] as f64;
+                let Some((endpoint, label)) = rules.classify(intrinsics, q, pose.position, u, v, z)
+                else {
                     continue;
-                }
-                let optical = Vector3 {
-                    x: (u as f64 - camera_intrinsics.cx) * z / camera_intrinsics.fx,
-                    y: (v as f64 - camera_intrinsics.cy) * z / camera_intrinsics.fy,
-                    z,
                 };
-                let range = optical.x.hypot(optical.y).hypot(optical.z);
-                if range > self.config.max_range {
-                    continue;
-                }
-                let ray = q.rotate(optical);
-                let endpoint = pose.position.plus(ray);
-                let Some(hit) = classify(endpoint, ray, range) else {
-                    continue;
+                let hit = match label {
+                    PointLabel::Free => false,
+                    PointLabel::Obstacle => true,
+                    _ => continue,
                 };
                 let end = self.cell(endpoint);
                 // Bound traversal by the local grid: never iterate to a distant off-grid endpoint.
@@ -495,6 +429,247 @@ impl LocalOccupancyMap {
                 })
                 .collect(),
         }
+    }
+}
+/// Rule set that decides what a depth return means for the grid.
+#[derive(Clone, Copy, Debug)]
+pub enum DepthClassifier {
+    /// Heights above a supporting plane; see [`LocalOccupancyMap::integrate_depth_with_ground_plane`].
+    GroundPlane(GroundPlane),
+    /// Level band used before a floor is known; see [`LocalOccupancyMap::integrate_depth_in_horizon_band`].
+    HorizonBand(HorizonBand),
+}
+/// Validated classifier with the config's limits folded in.
+enum Rules {
+    Ground {
+        normal: Vector3,
+        offset: f64,
+        min_height: f64,
+        max_height: f64,
+        max_range: f64,
+    },
+    Band {
+        max_sin: f64,
+        band_range: f64,
+        max_range: f64,
+    },
+}
+impl Rules {
+    fn new(config: &MapConfig, classifier: DepthClassifier) -> Result<Self, MapError> {
+        match classifier {
+            DepthClassifier::GroundPlane(ground) => {
+                let norm = ground
+                    .normal
+                    .x
+                    .hypot(ground.normal.y)
+                    .hypot(ground.normal.z);
+                if !ground.normal.finite()
+                    || !norm.is_finite()
+                    || norm < 1e-12
+                    || ground.normal.z / norm < 0.5
+                    || !(ground.offset / norm).is_finite()
+                {
+                    return Err(MapError::InvalidGroundPlane);
+                }
+                Ok(Self::Ground {
+                    normal: ground.normal.scaled(1.0 / norm),
+                    offset: ground.offset / norm,
+                    min_height: config.min_obstacle_height,
+                    max_height: config.max_obstacle_height,
+                    max_range: config.max_range,
+                })
+            }
+            DepthClassifier::HorizonBand(band) => {
+                if !band.half_angle.is_finite()
+                    || band.half_angle <= 0.0
+                    || band.half_angle >= std::f64::consts::FRAC_PI_2
+                    || !band.max_range.is_finite()
+                    || band.max_range <= 0.0
+                {
+                    return Err(MapError::InvalidBand);
+                }
+                Ok(Self::Band {
+                    max_sin: band.half_angle.sin(),
+                    band_range: band.max_range,
+                    max_range: config.max_range,
+                })
+            }
+        }
+    }
+    /// Project pixel `(u, v)` with axial depth `z` and label it. `None` means
+    /// no usable return; otherwise the world endpoint and its label.
+    fn classify(
+        &self,
+        k: CameraIntrinsics,
+        q: Quaternion,
+        origin: Vector3,
+        u: u32,
+        v: u32,
+        z: f64,
+    ) -> Option<(Vector3, PointLabel)> {
+        if !z.is_finite() || z <= 0.0 {
+            return None;
+        }
+        let optical = Vector3 {
+            x: (u as f64 - k.cx) * z / k.fx,
+            y: (v as f64 - k.cy) * z / k.fy,
+            z,
+        };
+        let range = optical.x.hypot(optical.y).hypot(optical.z);
+        let ray = q.rotate(optical);
+        let endpoint = origin.plus(ray);
+        let label = match *self {
+            Self::Ground { max_range, .. } | Self::Band { max_range, .. } if range > max_range => {
+                PointLabel::OutOfRange
+            }
+            Self::Ground {
+                normal,
+                offset,
+                min_height,
+                max_height,
+                ..
+            } => {
+                let height =
+                    normal.x * endpoint.x + normal.y * endpoint.y + normal.z * endpoint.z - offset;
+                // High overhead objects provide no ground-level free-space evidence.
+                if height > max_height {
+                    PointLabel::Overhead
+                } else if height >= min_height {
+                    PointLabel::Obstacle
+                } else {
+                    PointLabel::Free
+                }
+            }
+            Self::Band { band_range, .. } if range > band_range => PointLabel::OutOfRange,
+            Self::Band { max_sin, .. } if (ray.z / range).abs() > max_sin => {
+                PointLabel::OutsideBand
+            }
+            Self::Band { .. } => PointLabel::Obstacle,
+        };
+        Some((endpoint, label))
+    }
+}
+fn validate_config(config: &MapConfig) -> Result<(), MapError> {
+    if config.width == 0
+        || config.height == 0
+        || u64::from(config.width) * u64::from(config.height) > 1_000_000
+        || !config.resolution.is_finite()
+        || config.resolution < 0.01
+        || config.resolution > 10.0
+        || !config.min_obstacle_height.is_finite()
+        || !config.max_obstacle_height.is_finite()
+        || config.min_obstacle_height >= config.max_obstacle_height
+        || !config.max_range.is_finite()
+        || config.max_range <= 0.0
+        || config.max_range > 100.0
+        || config.pixel_stride == 0
+    {
+        return Err(MapError::InvalidConfig);
+    }
+    Ok(())
+}
+/// Check image storage, calibration and pose; return the normalized orientation.
+fn validate_frame(
+    k: CameraIntrinsics,
+    pose: CameraPose,
+    depth: &[f32],
+) -> Result<Quaternion, MapError> {
+    if k.width == 0
+        || k.height == 0
+        || u64::from(k.width) * u64::from(k.height) > 4_194_304
+        || depth.len() != k.width as usize * k.height as usize
+        || ![k.fx, k.fy, k.cx, k.cy].iter().all(|v| v.is_finite())
+        || k.cx.abs() > 1e6
+        || k.cy.abs() > 1e6
+        || k.fx < 1e-6
+        || k.fy < 1e-6
+    {
+        return Err(MapError::InvalidFrame);
+    }
+    if !pose.position.finite()
+        || pose.position.x.abs() > 1e9
+        || pose.position.y.abs() > 1e9
+        || pose.position.z.abs() > 1e9
+    {
+        return Err(MapError::InvalidPose);
+    }
+    pose.orientation.normalized().ok_or(MapError::InvalidPose)
+}
+/// One depth pixel projected to world and labelled by the mapper's rules.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LabeledPoint {
+    /// World endpoint in metres; NaN for [`PointLabel::NoReturn`].
+    pub position: Vector3,
+    /// What the mapper does with this return.
+    pub label: PointLabel,
+}
+/// Label every pixel of a depth frame with exactly the rules
+/// [`LocalOccupancyMap::integrate_classified`] applies to its sampled pixels.
+///
+/// Ignores `config.pixel_stride` and the grid window: every pixel is returned,
+/// row-major from the top-left, including returns that would fall off the grid.
+///
+/// # Errors
+///
+/// [`MapError::InvalidConfig`], [`MapError::InvalidFrame`],
+/// [`MapError::InvalidPose`], [`MapError::InvalidGroundPlane`] or
+/// [`MapError::InvalidBand`], as for integration. Time is not checked.
+pub fn label_depth(
+    config: &MapConfig,
+    intrinsics: CameraIntrinsics,
+    pose: CameraPose,
+    depth: &[f32],
+    classifier: DepthClassifier,
+) -> Result<Vec<LabeledPoint>, MapError> {
+    validate_config(config)?;
+    let rules = Rules::new(config, classifier)?;
+    let q = validate_frame(intrinsics, pose, depth)?;
+    let none = Vector3 {
+        x: f64::NAN,
+        y: f64::NAN,
+        z: f64::NAN,
+    };
+    let mut points = Vec::with_capacity(depth.len());
+    for v in 0..intrinsics.height {
+        for u in 0..intrinsics.width {
+            let z = depth[(v * intrinsics.width + u) as usize] as f64;
+            let (position, label) = rules
+                .classify(intrinsics, q, pose.position, u, v, z)
+                .unwrap_or((none, PointLabel::NoReturn));
+            points.push(LabeledPoint { position, label });
+        }
+    }
+    Ok(points)
+}
+/// Copy of one accepted depth frame and the rules it was integrated with.
+#[derive(Clone, Debug)]
+pub struct DepthCapture {
+    /// Exposure time, seconds.
+    pub timestamp: f64,
+    /// Calibration of `depth`.
+    pub intrinsics: CameraIntrinsics,
+    /// Camera pose at exposure.
+    pub pose: CameraPose,
+    /// Classifier used for this frame.
+    pub classifier: DepthClassifier,
+    /// Mapper limits in force.
+    pub config: MapConfig,
+    /// Row-major axial depth in metres.
+    pub depth: Vec<f32>,
+}
+impl DepthCapture {
+    /// Label every pixel; see [`label_depth`].
+    ///
+    /// # Errors
+    /// As [`label_depth`]; a frame the map accepted does not fail.
+    pub fn label(&self) -> Result<Vec<LabeledPoint>, MapError> {
+        label_depth(
+            &self.config,
+            self.intrinsics,
+            self.pose,
+            &self.depth,
+            self.classifier,
+        )
     }
 }
 #[cfg(test)]
@@ -782,5 +957,165 @@ mod tests {
         }
         map.integrate_depth_in_horizon_band(0.0, intrinsics, pose, &[2.0], BAND)
             .unwrap();
+    }
+
+    /// Every pixel gets the label integration acts on: free ground, an obstacle,
+    /// an overhead return, an out-of-range return and a missing return.
+    #[test]
+    fn label_depth_matches_ground_plane_rules() {
+        let (map, _, mut pose) = setup();
+        // Upright camera 0.5 m up: optical right/down/forward -> world -Y/-Z/+X.
+        pose.orientation = Quaternion {
+            x: -0.5,
+            y: 0.5,
+            z: -0.5,
+            w: 0.5,
+        };
+        // Rows at +45, 0 and -45 degrees, two columns.
+        let intrinsics = CameraIntrinsics {
+            width: 2,
+            height: 3,
+            fx: 1.0,
+            fy: 1.0,
+            cx: 0.0,
+            cy: 1.0,
+        };
+        // Row 0 looks up 45 degrees: 3 m axial reaches 3.5 m high, overhead.
+        // Row 1 is level: a 0.5 m high return is an obstacle; 20 m is out of range.
+        // Row 2 looks down 45 degrees: 0.5 m axial hits the floor.
+        let depth = [3.0, f32::NAN, 2.0, 20.0, 0.5, -1.0];
+        let points = label_depth(
+            &map.config,
+            intrinsics,
+            pose,
+            &depth,
+            DepthClassifier::GroundPlane(GroundPlane::default()),
+        )
+        .unwrap();
+        let labels: Vec<_> = points.iter().map(|p| p.label).collect();
+        assert_eq!(
+            labels,
+            [
+                PointLabel::Overhead,
+                PointLabel::NoReturn,
+                PointLabel::Obstacle,
+                PointLabel::OutOfRange,
+                PointLabel::Free,
+                PointLabel::NoReturn,
+            ]
+        );
+        assert!((points[2].position.x - 2.25).abs() < 1e-9);
+        assert!((points[4].position.z).abs() < 1e-9);
+        assert!(points[1].position.x.is_nan());
+    }
+
+    /// In band mode, level rows are obstacles, steep rows are outside the band
+    /// and returns past the band's range are out of range.
+    #[test]
+    fn label_depth_matches_horizon_band_rules() {
+        let (map, _, mut pose) = setup();
+        pose.orientation = Quaternion {
+            x: -0.5,
+            y: 0.5,
+            z: -0.5,
+            w: 0.5,
+        };
+        let intrinsics = CameraIntrinsics {
+            width: 2,
+            height: 3,
+            fx: 1.0,
+            fy: 1.0,
+            cx: 0.0,
+            cy: 1.0,
+        };
+        let depth = [1.0, 1.0, 2.0, 4.0, 1.0, 1.0];
+        let labels: Vec<_> = label_depth(
+            &map.config,
+            intrinsics,
+            pose,
+            &depth,
+            DepthClassifier::HorizonBand(BAND),
+        )
+        .unwrap()
+        .iter()
+        .map(|p| p.label)
+        .collect();
+        assert_eq!(
+            labels,
+            [
+                PointLabel::OutsideBand,
+                PointLabel::OutsideBand,
+                PointLabel::Obstacle,
+                PointLabel::OutOfRange,
+                PointLabel::OutsideBand,
+                PointLabel::OutsideBand,
+            ]
+        );
+    }
+
+    /// Integration and labelling share one rule set: the cells integration marks
+    /// occupied are exactly the cells of pixels labelled obstacle.
+    #[test]
+    fn integration_and_labels_agree() {
+        let (mut map, _, mut pose) = setup();
+        pose.orientation = Quaternion {
+            x: -0.5,
+            y: 0.5,
+            z: -0.5,
+            w: 0.5,
+        };
+        let intrinsics = CameraIntrinsics {
+            width: 1,
+            height: 3,
+            fx: 1.0,
+            fy: 1.0,
+            cx: 0.0,
+            cy: 1.0,
+        };
+        let depth = [3.0, 2.0, 0.5];
+        let ground = DepthClassifier::GroundPlane(GroundPlane::default());
+        let points = label_depth(&map.config, intrinsics, pose, &depth, ground).unwrap();
+        for t in 0..4 {
+            map.integrate_classified(t as f64, intrinsics, pose, &depth, ground)
+                .unwrap();
+        }
+        let s = map.snapshot();
+        let cell = |p: Vector3| {
+            ((p.y - s.origin_y) / s.resolution).floor() as usize * s.width as usize
+                + ((p.x - s.origin_x) / s.resolution).floor() as usize
+        };
+        assert!(s.occupancy[cell(points[1].position)] > 90);
+        assert!((0..50).contains(&s.occupancy[cell(points[2].position)]));
+        assert_eq!(points[0].label, PointLabel::Overhead);
+        assert_eq!(s.occupancy[cell(points[0].position)], -1);
+    }
+
+    /// Invalid classifiers and frames are rejected the same way as integration.
+    #[test]
+    fn label_depth_rejects_invalid_input() {
+        let (map, intrinsics, pose) = setup();
+        assert_eq!(
+            label_depth(
+                &map.config,
+                intrinsics,
+                pose,
+                &[],
+                DepthClassifier::HorizonBand(BAND)
+            ),
+            Err(MapError::InvalidFrame)
+        );
+        assert_eq!(
+            label_depth(
+                &map.config,
+                intrinsics,
+                pose,
+                &[1.0],
+                DepthClassifier::GroundPlane(GroundPlane {
+                    normal: Vector3::ZERO,
+                    offset: 0.0
+                })
+            ),
+            Err(MapError::InvalidGroundPlane)
+        );
     }
 }

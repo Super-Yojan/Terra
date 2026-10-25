@@ -180,3 +180,41 @@ fn sends_real_sized_cloud_and_occupancy_snapshots_but_bounds_other_topics() {
             .is_none()
     );
 }
+
+#[test]
+/// A capture request reaches its own inbox and never the control-action inbox,
+/// and a 640 KB bulk frame reaches the dashboard on `pointcloud/full`.
+fn capture_requests_bypass_control_and_bulk_frames_arrive() {
+    let (_router, endpoint) = router();
+    let operator = client(&endpoint);
+    let full = operator
+        .declare_subscriber("phone-capture/7/pointcloud/full")
+        .wait()
+        .unwrap();
+    let service = ControlPlane::connect(&endpoint, "phone-capture", 7).unwrap();
+    std::thread::sleep(Duration::from_millis(200));
+    let request = br#"{"version":1,"request_id":"cap"}"#;
+    operator
+        .put("phone-capture/7/pointcloud/request", request.as_slice())
+        .wait()
+        .unwrap();
+    let mut requests = Vec::new();
+    wait_for(|| {
+        requests.extend(service.take_capture_requests());
+        !requests.is_empty()
+    });
+    assert_eq!(requests, vec![request.to_vec()]);
+    assert!(service.take_actions().is_empty());
+    let frame: Vec<u8> = (0..640_000u32).map(|i| i as u8).collect();
+    assert!(service.publish_bulk("pointcloud/full", frame.clone()));
+    let received = full
+        .recv_timeout(Duration::from_secs(3))
+        .unwrap()
+        .expect("bulk frame dropped");
+    assert_eq!(received.payload().to_bytes().as_ref(), frame.as_slice());
+    assert!(!service.publish_bulk("pointcloud", vec![1]));
+    assert!(!service.publish_bulk(
+        "pointcloud/full",
+        vec![0; terra_types::point_capture::MAX_FRAME_BYTES + 1]
+    ));
+}

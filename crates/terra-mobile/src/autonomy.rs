@@ -155,6 +155,7 @@ impl MobileController {
         let mut brain = self.brain.lock().map_err(|_| ControllerError::Internal)?;
         brain.map_gate = Default::default();
         brain.cloud_gate = Default::default();
+        capture::reset(&mut brain);
         brain.runtime.link(true);
         brain.dashboard = Some(service);
         Ok(())
@@ -242,6 +243,7 @@ impl MobileController {
     }
     /// Bounded world-space visualization points; never a source of motor authority.
     /// Requires version 1 JSON, at most 4096 points, and at most 262144 bytes.
+    /// Published only while a dashboard point capture runs; otherwise accepted and dropped.
     /// Full content is coalesced; unchanged newer samples can emit heartbeats.
     /// Returns `InvalidInput` for size/schema rejection and `Internal` for malformed
     /// JSON or lock failure. No dashboard means no network publication.
@@ -263,7 +265,7 @@ impl MobileController {
         let mut brain = self.brain.lock().map_err(|_| ControllerError::Internal)?;
         // Exact parsed content comparison; preserve original full-payload bytes.
         let frame_id = value["frameID"].as_str().map(str::to_owned);
-        let publication = if brain.dashboard.is_some() {
+        let publication = if brain.dashboard.is_some() && capture::thinned_cloud_wanted(&brain) {
             if let (Some(sequence), Some(_)) = (value["sequence"].as_u64(), frame_id.as_ref()) {
                 value.as_object_mut().unwrap().remove("sequence");
                 brain.cloud_gate.observe(

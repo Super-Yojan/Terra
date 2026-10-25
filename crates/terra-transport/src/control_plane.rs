@@ -12,6 +12,11 @@ use std::{
 use zenoh::Wait;
 type Inbox = Arc<Mutex<VecDeque<(String, Vec<u8>, Instant)>>>;
 type SignalingInbox = Arc<Mutex<VecDeque<(String, Vec<u8>)>>>;
+type CaptureInbox = Arc<Mutex<VecDeque<Vec<u8>>>>;
+/// Point-capture requests waiting for the controller; older ones are dropped first.
+const CAPTURE_INBOX_LEN: usize = 4;
+/// Bulk frames waiting for the network; a full queue refuses new frames.
+const BULK_QUEUE_LEN: usize = 2;
 type States = Arc<Mutex<BTreeMap<String, (Option<String>, Instant)>>>;
 const TELEMETRY_TTL: Duration = Duration::from_millis(500);
 #[cfg(test)]
@@ -56,6 +61,11 @@ fn telemetry_snapshot(
 pub struct ControlPlane {
     inbox: Inbox,
     signaling: SignalingInbox,
+    captures: CaptureInbox,
+    /// Large one-shot payloads, sent by their own thread so a 640 KB frame
+    /// never delays the telemetry loop.
+    bulk: Option<std::sync::mpsc::SyncSender<(String, Vec<u8>)>>,
+    bulk_worker: Option<JoinHandle<()>>,
     states: States,
     /// Cloned Zenoh session used for one-shot signaling puts. The worker owns
     /// the session that publishes latched telemetry and closes the link.
@@ -150,6 +160,7 @@ impl ControlPlane {
             .map_err(|e| TransportError::Network(e.to_string()))?;
         let inbox: Inbox = Arc::new(Mutex::new(VecDeque::new()));
         let signaling: SignalingInbox = Arc::new(Mutex::new(VecDeque::new()));
+        let captures: CaptureInbox = Arc::new(Mutex::new(VecDeque::new()));
         let states: States = Arc::new(Mutex::new(BTreeMap::new()));
         let stop = Arc::new(AtomicBool::new(false));
         let failed = Arc::new(AtomicBool::new(false));
@@ -157,6 +168,7 @@ impl ControlPlane {
         let base = format!("{prefix}/{id}");
         let queue = inbox.clone();
         let signaling_queue = signaling.clone();
+        let capture_queue = captures.clone();
         let topic = base.clone();
         let subscriber = session
             .declare_subscriber(format!("{base}/**"))
@@ -180,6 +192,20 @@ impl ControlPlane {
                     }
                     let mut queue = signaling_queue.lock().unwrap();
                     crate::signaling::enqueue_signaling(&mut queue, kind.into(), bytes.to_vec());
+                    return;
+                }
+                // Capture requests are diagnostics, not intent: they get their
+                // own inbox and never reach the motion-authority path.
+                if kind == terra_types::point_capture::REQUEST_TOPIC {
+                    if !bytes.is_empty()
+                        && bytes.len() <= terra_types::point_capture::MAX_REQUEST_BYTES
+                    {
+                        let mut queue = capture_queue.lock().unwrap();
+                        if queue.len() >= CAPTURE_INBOX_LEN {
+                            queue.pop_front();
+                        }
+                        queue.push_back(bytes.to_vec());
+                    }
                     return;
                 }
                 if !crate::is_control_topic(kind) {
@@ -207,6 +233,21 @@ impl ControlPlane {
         let fleet = format!("{prefix}/fleet/state");
         let publication = session.clone();
         let key_base = base.clone();
+        let (bulk, bulk_queue) = std::sync::mpsc::sync_channel::<(String, Vec<u8>)>(BULK_QUEUE_LEN);
+        let bulk_session = session.clone();
+        let bulk_base = base.clone();
+        let bulk_worker = thread::spawn(move || {
+            // Ends when the sender is dropped. Background priority and drop-on-
+            // congestion keep a slow link from delaying control traffic or
+            // closing the session; a dropped frame is simply missing.
+            while let Ok((kind, bytes)) = bulk_queue.recv() {
+                let _ = bulk_session
+                    .put(format!("{bulk_base}/{kind}"), bytes)
+                    .priority(zenoh::qos::Priority::Background)
+                    .congestion_control(zenoh::qos::CongestionControl::Drop)
+                    .wait();
+            }
+        });
         let worker = thread::spawn(move || {
             let mut last_batch = Instant::now() - Duration::from_secs(1);
             while !stopped.load(Ordering::Acquire) {
@@ -274,6 +315,9 @@ impl ControlPlane {
         Ok(Self {
             inbox,
             signaling,
+            captures,
+            bulk: Some(bulk),
+            bulk_worker: Some(bulk_worker),
             states,
             session: publication,
             base: key_base,
@@ -363,6 +407,32 @@ impl ControlPlane {
             false
         }
     }
+    /// Drain raw `pointcloud/request` payloads, oldest first, at most four.
+    /// A failed session clears them. These are diagnostics requests and carry
+    /// no motion or hardware authority; validation belongs to the consumer.
+    pub fn take_capture_requests(&self) -> Vec<Vec<u8>> {
+        let mut queue = self.captures.lock().unwrap();
+        if self.failed() {
+            queue.clear();
+            return Vec::new();
+        }
+        queue.drain(..).collect()
+    }
+    /// Queue one large payload on `pointcloud/full` for the bulk thread.
+    /// Accepts at most [`terra_types::point_capture::MAX_FRAME_BYTES`] and two
+    /// frames in flight. Returns false for another topic, an oversized frame, a
+    /// failed link or a full queue. Delivery is best effort at background priority.
+    pub fn publish_bulk(&self, kind: &str, value: Vec<u8>) -> bool {
+        if kind != terra_types::point_capture::FRAME_TOPIC
+            || value.len() > terra_types::point_capture::MAX_FRAME_BYTES
+            || self.failed()
+        {
+            return false;
+        }
+        self.bulk
+            .as_ref()
+            .is_some_and(|bulk| bulk.try_send((kind.into(), value)).is_ok())
+    }
     /// Fair replay of bounded outstanding records on one contractual topic.
     /// Only `search/report` is accepted: at most 128 records, each at most 65536
     /// bytes. Invalid batches are ignored. The latest batch has a 500 ms TTL and
@@ -401,6 +471,11 @@ impl ControlPlane {
 impl Drop for ControlPlane {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Release);
+        // Let the bulk thread finish its current put before the session closes.
+        drop(self.bulk.take());
+        if let Some(w) = self.bulk_worker.take() {
+            let _ = w.join();
+        }
         if let Some(w) = self.worker.take() {
             let _ = w.join();
         }

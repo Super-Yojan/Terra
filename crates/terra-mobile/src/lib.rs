@@ -13,6 +13,7 @@ uniffi::setup_scaffolding!();
 mod actuators;
 pub use actuators::*;
 mod autonomy;
+mod capture;
 pub use autonomy::{FpvEffect, WebrtcSignal};
 mod observability;
 pub use observability::ObservationAttachment;
@@ -278,6 +279,8 @@ struct Brain {
     map_gate: publication::MapGate,
     cloud_gate: publication::CloudGate,
     dashboard: Option<terra_transport::ControlPlane>,
+    /// Running point capture, if the dashboard asked for one.
+    capture: Option<capture::Capture>,
     last_tick: f64,
     actuators: Option<actuators::ActiveLayout>,
 }
@@ -343,6 +346,7 @@ impl MobileController {
                 map_gate: Default::default(),
                 cloud_gate: Default::default(),
                 dashboard: None,
+                capture: None,
                 last_tick: 0.,
                 actuators: None,
             }),
@@ -538,6 +542,7 @@ impl MobileController {
             .map(|d| d.take_actions())
             .unwrap_or_default();
         brain.last_tick = timestamp;
+        capture::advance(&mut brain, timestamp);
         for (kind, bytes, age) in incoming {
             brain.runtime.ingest(terra_runtime::RuntimeEvent::Remote {
                 kind,

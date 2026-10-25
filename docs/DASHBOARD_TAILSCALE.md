@@ -52,7 +52,7 @@ On October 8, 2026, Terra's 68 workspace tests passed (two existing live remote 
 
 ### Scene telemetry and remote driving
 
-While phone tracking is active, Terra publishes `localization` (1 Hz), `pointcloud` (about 3 Hz), and the existing observed `map/occupancy` snapshots (up to 5 Hz) below the configured `prefix/<rover-id>`. Point clouds use LiDAR depth on supported phones and sparse ARKit features otherwise. Occupancy requires scene depth; feature points alone are not advertised as observed free space. Location permission affects geographic alignment only.
+While phone tracking is active, Terra publishes `localization` (1 Hz) and the existing observed `map/occupancy` snapshots (up to 5 Hz) below the configured `prefix/<rover-id>`. The thinned `pointcloud` (about 3 Hz) is sent only while a point capture runs. It uses LiDAR depth on supported phones and sparse ARKit features otherwise. Occupancy requires scene depth; feature points alone are not advertised as observed free space. Location permission affects geographic alignment only.
 
 ARGOS requests `autonomy` with a token and reads `autonomy/status` before enabling manual input. `teleop` carries bounded linear/angular speed, run ID, authority revision, operator session and increasing sequence. Idle phone controls do not continuously republish neutral over remote intent; a held local input retains priority and release publishes neutral once. The arbiter retains its existing 0.5-second operator timeout, sensor-health gating and emergency stop. Physical movement still requires the phone's normal hardware setup/arming; ARGOS takeover does not arm hardware.
 
@@ -60,3 +60,8 @@ The dashboard presents L0 teleop, L1 assisted teleop and L3 obstacle-aware waypo
 
 
 Cloud and occupancy messages have a dedicated 256 KiB publisher budget (matching ARGOS), while ordinary telemetry remains bounded to 64 KiB. Dense clouds and 200×200 occupancy grids exceed 64 KiB; older Terra builds silently dropped them, producing a connected dashboard with fresh pose but no cloud/map. The loopback regression sends real-sized JSON snapshots and checks exact receipt and oversized-message rejection.
+
+
+### Full point capture
+
+To see why the mapper calls a surface free or an obstacle, the dashboard puts a `pointcloud/request` (`{"version":1,"request_id":"<id>"}`, optional `duration_seconds` up to 60, `rate_hz` up to 2, or `cancel: true`). The rover then copies each depth frame the mapper accepts and, by default for 10 s at 1 Hz, sends every pixel projected to world and labelled by the mapper's own rules (free, obstacle, overhead, out of range, outside band, no return) as a binary `TPC1` frame on `pointcloud/full`, about 640 KB for the 256 × 192 LiDAR image. Progress is JSON on `pointcloud/capture`. Requests use their own inbox and never reach the motion-authority path; frames go out at background priority and are dropped, not queued, when the link is congested. The format is documented in `terra_types::point_capture`. Nothing is copied or sent unless a capture is requested.

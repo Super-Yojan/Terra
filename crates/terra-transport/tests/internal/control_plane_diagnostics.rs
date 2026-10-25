@@ -11,6 +11,9 @@ fn busy_telemetry_lock_is_unknown_not_stale() {
     let service = ControlPlane {
         inbox: Default::default(),
         signaling: Default::default(),
+        captures: Default::default(),
+        bulk: None,
+        bulk_worker: None,
         states: Default::default(),
         session,
         base: "diag/7".into(),
