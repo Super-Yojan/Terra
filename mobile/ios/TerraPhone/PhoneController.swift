@@ -141,8 +141,20 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
     private var bleCompatible = false
     private var phoneStartedAt = 0.0
     private let controlQueue = DispatchQueue(label: "terra.control", qos: .userInteractive)
+    /// ARKit delivers frames here, not on the control queue, so a slow control step cannot
+    /// back up frames in GCD. Only the newest frame waits for the control queue; older ones are dropped.
+    private let arFrameQueue = DispatchQueue(label: "terra.ar-frames", qos: .userInteractive, autoreleaseFrequency: .workItem)
+    private let arFrameLock = NSLock()
+    private var pendingARFrame: ARFrame?
+    private var arFrameScheduled = false
+    private var droppedARFrames = 0
     private let fpvVideo = FpvVideoCall()
-    private var fpvRunning = false
+    /// Read from the AR frame queue as well as the control queue.
+    private var fpvRunning: Bool {
+        get { fpvCameraLock.lock(); defer { fpvCameraLock.unlock() }; return fpvRunningFlag }
+        set { fpvCameraLock.lock(); fpvRunningFlag = newValue; fpvCameraLock.unlock() }
+    }
+    private var fpvRunningFlag = false
     private var fpvFailure: String?
     private let fpvCameraLock = NSLock()
     private var sharedCameraForFpv = false
@@ -235,7 +247,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
         motionQueue.maxConcurrentOperationCount = 1
         motionQueue.qualityOfService = .userInteractive
         session.delegate = self
-        session.delegateQueue = controlQueue
+        session.delegateQueue = arFrameQueue
         fpvVideo.onEvent = { [weak self] event in
             self?.controlQueue.async { self?.handleFpvEvent(event) }
         }
@@ -706,10 +718,36 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
             if mode == .phone { publishLocalization(controller) }
         } catch { fail(error, context: "Control update in \(mode) at \(now)") }
     }
+    /// Runs on `arFrameQueue`. ARKit stops delivering camera images once the delegate holds
+    /// too many frames, so keep at most one waiting and one being processed.
     func session(_ session: ARSession, didUpdate frame: ARFrame) {
         if fpvRunning && readSharedCamera() {
             fpvVideo.consume(pixelBuffer: frame.capturedImage, timestamp: frame.timestamp)
         }
+        arFrameLock.lock()
+        if pendingARFrame != nil { droppedARFrames += 1 }
+        let dropped = droppedARFrames
+        pendingARFrame = frame
+        let schedule = !arFrameScheduled
+        arFrameScheduled = true
+        arFrameLock.unlock()
+        if dropped > 0 && dropped % 300 == 0 {
+            TerraLog.tracking.notice("AR frames dropped while the control queue was busy; total=\(dropped)")
+        }
+        if schedule { controlQueue.async { self.drainARFrame() } }
+    }
+    /// One frame per control-queue block, so control ticks queued meanwhile still run.
+    private func drainARFrame() {
+        arFrameLock.lock()
+        let frame = pendingARFrame
+        pendingARFrame = nil
+        if frame == nil { arFrameScheduled = false }
+        arFrameLock.unlock()
+        guard let frame else { return }
+        autoreleasepool { processARFrame(frame) }
+        controlQueue.async { self.drainARFrame() }
+    }
+    private func processARFrame(_ frame: ARFrame) {
         guard mode == .phone, frame.timestamp >= phoneStartedAt, let controller else { return }
         guard phoneFrameOrder.accept(frame.timestamp, notBefore: phoneStartedAt) else {
             TerraLog.tracking.warning("Repeated or older AR frame skipped; timestamp=\(frame.timestamp) lastAccepted=\(self.phoneFrameOrder.lastTimestamp ?? 0)")
@@ -1102,7 +1140,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
                     "clearance": groundPolicy.clearance ?? 0, "world_offset": mapGroundOffset ?? 0,
                     "thresholds": ["min_obstacle_height": occupancySettings.minObstacleHeight, "max_obstacle_height": occupancySettings.maxObstacleHeight, "max_range": occupancySettings.maxRange, "pixel_stride": occupancySettings.pixelStride],
                     "map_revision": occupancyPublicationRevision, "integration_result": "accepted"]
-                observationCapture.capture(frame: frame, depth: values, width: width, height: height, grid: try? map.snapshot(), manifest: metadata, controller: controller)
+                observationCapture.capture(image: frame.capturedImage, exposure: frame.timestamp, depth: values, width: width, height: height, grid: try? map.snapshot(), manifest: metadata, controller: controller)
             }
         } catch { observation.recordChanged(component: "mapping", kind: "mapping.health", attributes: ["reason": "integration_failed", "error": error.localizedDescription]); DispatchQueue.main.async { self.mapStatus = "Map: " + error.localizedDescription } }
     }

@@ -58,20 +58,25 @@ final class PhoneObservationCapture: @unchecked Sendable {
             if !controller.recordMappingEvidence(manifestJson: String(decoding: data, as: UTF8.self), attachments: [attachment]) { controller.recordObservationGap(reason: "map_capture_rejected") }
         }
     }
-    func capture(frame: ARFrame, depth: [Float], width: Int, height: Int, grid: OccupancyGrid?, manifest: [String: Any], controller: MobileController) {
-        guard policy.shouldCapture(exposure: frame.timestamp, frameID: manifest["frame_id"] as? String ?? "") else { return }
+    /// Copies the camera image before encoding, so no ARFrame or camera-pool buffer is held
+    /// while the utility queue writes the JPEG.
+    func capture(image capturedImage: CVPixelBuffer, exposure: Double, depth: [Float], width: Int, height: Int, grid: OccupancyGrid?, manifest: [String: Any], controller: MobileController) {
+        guard policy.shouldCapture(exposure: exposure, frameID: manifest["frame_id"] as? String ?? "") else { return }
         guard acquireSlot() else { controller.recordObservationGap(reason: "camera_capture_queue_full"); return }
+        let copy = Self.copyPixelBuffer(capturedImage)
         queue.async {
             defer { self.releaseSlot() }
             var metadata = manifest
-            let image = CIImage(cvPixelBuffer: frame.capturedImage)
             var attachments = [ObservationAttachment(name: "depth", data: depth.withUnsafeBytes { Data($0) }, encoding: "f32le", dimensions: [UInt32(width), UInt32(height)], units: "metres")]
             let validity = depth.map { $0.isFinite && $0 > 0 ? UInt8(1) : UInt8(0) }
             attachments.append(ObservationAttachment(name: "depth_validity", data: Data(validity), encoding: "u8", dimensions: [UInt32(width), UInt32(height)], units: "valid"))
-            if let jpeg = self.imageContext.jpegRepresentation(of: image, colorSpace: CGColorSpaceCreateDeviceRGB(), options: [CIImageRepresentationOption(rawValue: kCGImageDestinationLossyCompressionQuality as String): 0.75]) {
-                metadata["rgb_exposure_ns"] = UInt64(frame.timestamp * 1e9)
-                attachments.append(ObservationAttachment(name: "rgb", data: jpeg, encoding: "jpeg", dimensions: [UInt32(image.extent.width), UInt32(image.extent.height)], units: "rgb"))
-            } else { metadata["rgb_missing_reason"] = "encoding_failed" }
+            if let copy {
+                let image = CIImage(cvPixelBuffer: copy)
+                if let jpeg = self.imageContext.jpegRepresentation(of: image, colorSpace: CGColorSpaceCreateDeviceRGB(), options: [CIImageRepresentationOption(rawValue: kCGImageDestinationLossyCompressionQuality as String): 0.75]) {
+                    metadata["rgb_exposure_ns"] = UInt64(exposure * 1e9)
+                    attachments.append(ObservationAttachment(name: "rgb", data: jpeg, encoding: "jpeg", dimensions: [UInt32(image.extent.width), UInt32(image.extent.height)], units: "rgb"))
+                } else { metadata["rgb_missing_reason"] = "encoding_failed" }
+            } else { metadata["rgb_missing_reason"] = "copy_failed" }
             if let grid {
                 metadata["occupancy"] = ["width": grid.width, "height": grid.height, "resolution": grid.resolution, "origin_x": grid.originX, "origin_y": grid.originY]
                 attachments.append(ObservationAttachment(name: "occupancy", data: Data(grid.occupancy.map { UInt8(bitPattern: $0) }), encoding: "i8", dimensions: [grid.width, grid.height], units: "occupancy_percent"))
@@ -79,6 +84,37 @@ final class PhoneObservationCapture: @unchecked Sendable {
             guard let data = try? JSONSerialization.data(withJSONObject: metadata) else { return }
             if !controller.recordMappingEvidence(manifestJson: String(decoding: data, as: UTF8.self), attachments: attachments) { controller.recordObservationGap(reason: "camera_capture_rejected") }
         }
+    }
+    /// Deep copy of a (possibly planar) camera buffer, keeping its colour attachments.
+    static func copyPixelBuffer(_ source: CVPixelBuffer) -> CVPixelBuffer? {
+        let width = CVPixelBufferGetWidth(source), height = CVPixelBufferGetHeight(source)
+        let attributes = [kCVPixelBufferIOSurfacePropertiesKey: [:] as CFDictionary] as CFDictionary
+        var created: CVPixelBuffer?
+        guard CVPixelBufferCreate(nil, width, height, CVPixelBufferGetPixelFormatType(source), attributes, &created) == kCVReturnSuccess,
+              let copy = created,
+              CVPixelBufferLockBaseAddress(source, .readOnly) == kCVReturnSuccess else { return nil }
+        defer { CVPixelBufferUnlockBaseAddress(source, .readOnly) }
+        guard CVPixelBufferLockBaseAddress(copy, []) == kCVReturnSuccess else { return nil }
+        defer { CVPixelBufferUnlockBaseAddress(copy, []) }
+        func copyRows(from: UnsafeMutableRawPointer?, fromStride: Int, to: UnsafeMutableRawPointer?, toStride: Int, rows: Int) -> Bool {
+            guard let from, let to else { return false }
+            let bytes = min(fromStride, toStride)
+            for row in 0..<rows { memcpy(to + row * toStride, from + row * fromStride, bytes) }
+            return true
+        }
+        if CVPixelBufferIsPlanar(source) {
+            guard CVPixelBufferGetPlaneCount(source) == CVPixelBufferGetPlaneCount(copy) else { return nil }
+            for plane in 0..<CVPixelBufferGetPlaneCount(source) {
+                guard copyRows(from: CVPixelBufferGetBaseAddressOfPlane(source, plane), fromStride: CVPixelBufferGetBytesPerRowOfPlane(source, plane),
+                               to: CVPixelBufferGetBaseAddressOfPlane(copy, plane), toStride: CVPixelBufferGetBytesPerRowOfPlane(copy, plane),
+                               rows: CVPixelBufferGetHeightOfPlane(source, plane)) else { return nil }
+            }
+        } else {
+            guard copyRows(from: CVPixelBufferGetBaseAddress(source), fromStride: CVPixelBufferGetBytesPerRow(source),
+                           to: CVPixelBufferGetBaseAddress(copy), toStride: CVPixelBufferGetBytesPerRow(copy), rows: height) else { return nil }
+        }
+        CVBufferPropagateAttachments(source, copy)
+        return copy
     }
 }
 #endif
