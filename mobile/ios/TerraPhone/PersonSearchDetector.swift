@@ -11,7 +11,8 @@ struct PersonSearchFrame {
     let rejected: Int
 }
 
-/// One retained AR frame and one inference at a time; never queue camera history.
+/// One inference at a time; never queue camera history. Only the camera image, depth and camera
+/// pose are kept during inference, not the ARFrame, so ARKit's frame budget is untouched.
 final class PersonSearchDetector {
     private let queue = DispatchQueue(label: "terra.person-detector", qos: .userInitiated)
     private let lock = NSLock()
@@ -40,17 +41,18 @@ final class PersonSearchDetector {
         guard let id = gate.begin(timestamp: frame.timestamp) else { lock.unlock(); return }
         let orientation = self.orientation
         lock.unlock()
+        let capturedImage = frame.capturedImage, sceneDepth = frame.sceneDepth, camera = frame.camera, timestamp = frame.timestamp
         queue.async { [self] in
             defer { lock.lock(); gate.finish(); lock.unlock() }
             do {
-                guard let depth = frame.sceneDepth, let confidenceMap = depth.confidenceMap else {
+                guard let depth = sceneDepth, let confidenceMap = depth.confidenceMap else {
                     throw DetectorError.depthUnavailable
                 }
                 let imageOrientation: CGImagePropertyOrientation
                 switch orientation { case .up: imageOrientation = .up; case .right: imageOrientation = .right; case .down: imageOrientation = .down; case .left: imageOrientation = .left }
                 let request = VNDetectHumanRectanglesRequest()
                 request.upperBodyOnly = true
-                try VNImageRequestHandler(cvPixelBuffer: frame.capturedImage, orientation: imageOrientation).perform([request])
+                try VNImageRequestHandler(cvPixelBuffer: capturedImage, orientation: imageOrientation).perform([request])
                 var detections: [PersonSearchDetection] = [], rejected = 0
                 CVPixelBufferLockBaseAddress(depth.depthMap, .readOnly)
                 CVPixelBufferLockBaseAddress(confidenceMap, .readOnly)
@@ -78,13 +80,13 @@ final class PersonSearchDetector {
                         }
                     } }
                     let raw = PersonDepthGeometry.rawPoint(x: Float(box.midX), y: Float(box.midY), orientation: orientation)
-                    let pixel = raw * SIMD2(Float(frame.camera.imageResolution.width), Float(frame.camera.imageResolution.height))
+                    let pixel = raw * SIMD2(Float(camera.imageResolution.width), Float(camera.imageResolution.height))
                     guard let measured = PersonDepthGeometry.measuredDepth(samples),
-                          let world = PersonDepthGeometry.worldPoint(pixel: pixel, depth: measured, intrinsics: frame.camera.intrinsics,
-                                                                    cameraTransform: frame.camera.transform, worldFromAR: worldFromAR) else { rejected += 1; continue }
+                          let world = PersonDepthGeometry.worldPoint(pixel: pixel, depth: measured, intrinsics: camera.intrinsics,
+                                                                    cameraTransform: camera.transform, worldFromAR: worldFromAR) else { rejected += 1; continue }
                     detections.append(PersonSearchDetection(confidence: Double(person.confidence), world: world))
                 }
-                completion(.success(PersonSearchFrame(timestamp: frame.timestamp, frameID: id, detections: detections, rejected: rejected)))
+                completion(.success(PersonSearchFrame(timestamp: timestamp, frameID: id, detections: detections, rejected: rejected)))
             } catch { completion(.failure(error)) }
         }
     }
