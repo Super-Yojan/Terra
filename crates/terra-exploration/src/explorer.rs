@@ -51,6 +51,9 @@ pub struct ExplorationStatus {
     pub blacklist_count: u32,
     /// Number of frontier assignments made during this run.
     pub frontiers_attempted: u64,
+    /// True while the rover turns in place to map its blind zone.
+    #[serde(default)]
+    pub scanning: bool,
 }
 impl Default for ExplorationStatus {
     fn default() -> Self {
@@ -66,6 +69,7 @@ impl Default for ExplorationStatus {
             end_reason: None,
             blacklist_count: 0,
             frontiers_attempted: 0,
+            scanning: false,
         }
     }
 }
@@ -96,6 +100,17 @@ pub struct ExplorationConfig {
     pub map_stale_timeout: f64,
     /// Continuous seconds of an unhealthy sensor hold before the run ends. Emergency stop is immediate.
     pub safety_hold_timeout: f64,
+    /// Look-around turn rate in rad/s. Zero or less disables the look-around.
+    ///
+    /// A front depth camera cannot see beside or behind the chassis. When no
+    /// frontier is reachable and unknown cells lie within [`Self::scan_radius`],
+    /// the rover turns in place once so the camera maps around it before the run
+    /// gives up. Unknown space stays an obstacle throughout.
+    pub scan_yaw_rate: f64,
+    /// Metres beyond the footprint radius in which unknown cells trigger a look-around.
+    pub scan_radius: f64,
+    /// Seconds a look-around may take before it counts as finished.
+    pub scan_timeout: f64,
 }
 impl Default for ExplorationConfig {
     fn default() -> Self {
@@ -110,8 +125,18 @@ impl Default for ExplorationConfig {
             progress_period: terra_types::timing::EXPLORATION_PROGRESS_PERIOD_SECONDS,
             map_stale_timeout: terra_types::timing::EXPLORATION_MAP_STALE_GRACE_SECONDS,
             safety_hold_timeout: terra_types::timing::EXPLORATION_SAFETY_HOLD_GRACE_SECONDS,
+            scan_yaw_rate: 0.35,
+            scan_radius: 1.,
+            scan_timeout: terra_types::timing::EXPLORATION_SCAN_TIMEOUT_SECONDS,
         }
     }
+}
+/// One in-place look-around: accumulated turn since it began.
+#[derive(Clone, Copy, Debug)]
+struct Scan {
+    started_at: f64,
+    last_yaw: f64,
+    turned: f64,
 }
 #[derive(Clone, Debug)]
 struct BlackEntry {
@@ -142,6 +167,11 @@ pub enum ExploreAction {
     },
     /// No usable frontier yet. The blacklist will expire; do not end the run.
     Hold,
+    /// Turn in place at `yaw_rate` rad/s to map the blind zone, then look again.
+    Scan {
+        /// Signed yaw rate in rad/s; positive turns left.
+        yaw_rate: f64,
+    },
     /// Stop following exploration goals and report the terminal reason.
     Finished(EndReason),
 }
@@ -188,6 +218,9 @@ pub struct Explorer {
     coverage_m2: f64,
     explored_ratio: f64,
     detection_count: usize,
+    scan: Option<Scan>,
+    /// A look-around finished since the last frontier assignment.
+    scan_done: bool,
     events: Vec<ExploreEvent>,
 }
 impl Default for Explorer {
@@ -213,6 +246,8 @@ impl Default for Explorer {
             coverage_m2: 0.,
             explored_ratio: 0.,
             detection_count: 0,
+            scan: None,
+            scan_done: false,
             events: Vec::new(),
         }
     }
@@ -279,6 +314,8 @@ impl Explorer {
         self.frontiers_attempted = 0;
         self.last_progress_emit = 0.;
         self.detection_count = 0;
+        self.scan = None;
+        self.scan_done = false;
         self.objective.reset();
         self.objective.set_budget(budget_seconds);
         self.events.push(ExploreEvent {
@@ -338,6 +375,7 @@ impl Explorer {
             end_reason: self.end_reason,
             blacklist_count: self.blacklist.len() as u32,
             frontiers_attempted: self.frontiers_attempted,
+            scanning: self.scan.is_some(),
         }
     }
     /// Update coverage and advance one frontier-selection tick.
@@ -443,6 +481,8 @@ impl Explorer {
             }
         } else if self.retry_pending(tick.now) {
             ExploreAction::Hold
+        } else if let Some(yaw_rate) = self.scan_step(tick.map, tick.pose, tick.now) {
+            ExploreAction::Scan { yaw_rate }
         } else {
             self.finish(EndReason::NoFrontiersLeft);
             ExploreAction::Finished(EndReason::NoFrontiersLeft)
@@ -468,6 +508,64 @@ impl Explorer {
             self.scorer.as_ref(),
         )
     }
+    /// Advance the look-around. `None` once it is finished, disabled, or not needed.
+    ///
+    /// Frontier selection runs before this every tick, so a frontier that comes
+    /// into view mid-turn ends the look-around at once.
+    fn scan_step(&mut self, map: Option<&MapSnapshot>, pose: Pose, now: f64) -> Option<f64> {
+        let rate = self.config.scan_yaw_rate;
+        if self.scan_done || !rate.is_finite() || rate <= 0. || !pose.finite() {
+            return None;
+        }
+        let scan = match self.scan.as_mut() {
+            Some(scan) => {
+                let step = (pose.yaw - scan.last_yaw + std::f64::consts::PI)
+                    .rem_euclid(std::f64::consts::TAU)
+                    - std::f64::consts::PI;
+                scan.turned += step.abs();
+                scan.last_yaw = pose.yaw;
+                *scan
+            }
+            None => {
+                let blind = map.is_some_and(|map| {
+                    unknown_within(
+                        map,
+                        pose,
+                        self.config.footprint_radius + self.config.scan_radius,
+                    )
+                });
+                if !blind {
+                    return None;
+                }
+                let scan = Scan {
+                    started_at: now,
+                    last_yaw: pose.yaw,
+                    turned: 0.,
+                };
+                self.scan = Some(scan);
+                self.events.push(ExploreEvent {
+                    kind: "exploration_scan_started",
+                    reason: "no_reachable_frontier".into(),
+                });
+                scan
+            }
+        };
+        if scan.turned >= std::f64::consts::TAU || now - scan.started_at >= self.config.scan_timeout
+        {
+            self.scan = None;
+            self.scan_done = true;
+            self.events.push(ExploreEvent {
+                kind: "exploration_scan_done",
+                reason: format!(
+                    "turned_rad={:.3},seconds={:.3}",
+                    scan.turned,
+                    now - scan.started_at
+                ),
+            });
+            return None;
+        }
+        Some(rate)
+    }
     fn excluded(&self, now: f64) -> Vec<(f64, f64)> {
         self.blacklist
             .iter()
@@ -483,6 +581,8 @@ impl Explorer {
         })
     }
     fn assign(&mut self, candidate: FrontierCandidate, now: f64) {
+        self.scan = None;
+        self.scan_done = false;
         self.target = Some(FrontierTarget {
             x: candidate.x,
             y: candidate.y,
@@ -550,6 +650,7 @@ impl Explorer {
         self.phase = ExplorePhase::Ended;
         self.end_reason = Some(reason);
         self.target = None;
+        self.scan = None;
         self.events.push(ExploreEvent {
             kind: "exploration_ended",
             reason: format!(
@@ -568,4 +669,28 @@ impl Explorer {
             .map(|start| (now - start).max(0.))
             .unwrap_or(0.)
     }
+}
+/// Whether any unknown cell centre lies within `distance` metres of `pose`.
+fn unknown_within(map: &MapSnapshot, pose: Pose, distance: f64) -> bool {
+    let Some((cx, cy)) = terra_navigation::grid_cell(map, pose.x, pose.y) else {
+        return false;
+    };
+    let reach = (distance / map.resolution).ceil() as isize + 1;
+    for dy in -reach..=reach {
+        for dx in -reach..=reach {
+            let a = cx as isize + dx;
+            let b = cy as isize + dy;
+            if a < 0 || b < 0 || a >= map.width as isize || b >= map.height as isize {
+                continue;
+            }
+            let x = map.origin_x + (a as f64 + 0.5) * map.resolution;
+            let y = map.origin_y + (b as f64 + 0.5) * map.resolution;
+            if (x - pose.x).hypot(y - pose.y) <= distance
+                && map.occupancy[b as usize * map.width as usize + a as usize] < 0
+            {
+                return true;
+            }
+        }
+    }
+    false
 }

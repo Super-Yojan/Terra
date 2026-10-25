@@ -43,6 +43,7 @@ impl AutonomyArbiter {
     /// `Some` when exploration itself is holding or finished. `None` when the follower should move.
     pub(super) fn drive_explore(&mut self, input: &ArbiterInput<'_>) -> Option<&'static str> {
         self.explorer.set_footprint(self.planner.config.radius);
+        self.explore_scan = None;
         let preview = self
             .follower
             .step(input.pose.x, input.pose.y, input.pose.yaw);
@@ -57,6 +58,9 @@ impl AutonomyArbiter {
             goal_y: preview.status.y,
             goal_distance: preview.status.distance,
         });
+        if !matches!(action, ExploreAction::Scan { .. }) {
+            self.scan_turning = None;
+        }
         match action {
             ExploreAction::Seek { x, y } => {
                 let same = matches!(preview.status.state, GoalState::Active | GoalState::Arrived)
@@ -76,6 +80,12 @@ impl AutonomyArbiter {
                 }
                 None
             }
+            ExploreAction::Scan { yaw_rate } => {
+                self.follower.cancel();
+                self.last_plan = None;
+                self.explore_scan = Some(yaw_rate);
+                return None;
+            }
             ExploreAction::Hold => {
                 self.follower.cancel();
                 self.last_plan = None;
@@ -87,6 +97,52 @@ impl AutonomyArbiter {
                 Some(reason.as_str())
             }
             ExploreAction::Idle => Some("exploration_idle"),
+        }
+    }
+    /// Turn in place for the look-around. Unknown cells stay obstacles: the turn
+    /// sweeps only the rover's own footprint, which must hold no occupied cell.
+    pub(super) fn scan_motion(
+        &mut self,
+        input: &ArbiterInput<'_>,
+        planning_map: Option<&MapSnapshot>,
+        yaw_rate: f64,
+        decision: &mut TickDecision,
+    ) {
+        let intent = Twist {
+            linear: 0.,
+            angular: yaw_rate,
+        };
+        decision.intent_command = intent;
+        decision.source = "explore";
+        if !planning_map.is_some_and(|map| self.planner.admissible(map, input.pose, intent)) {
+            decision.held = true;
+            decision.reason = "obstacle_blocked";
+            return;
+        }
+        let config = TurningConfig {
+            allow_in_place: true,
+            ..self.turning_config
+        };
+        let limiter = self
+            .scan_turning
+            .get_or_insert_with(|| TurningLimiter::new(config).unwrap());
+        match limiter.step(terra_types::VelocityTarget {
+            timestamp: input.now,
+            forward: 0.,
+            yaw_rate,
+        }) {
+            Ok(target) => {
+                decision.twist = Twist {
+                    linear: 0.,
+                    angular: target.yaw_rate,
+                };
+                decision.reason = "exploration_scan";
+            }
+            Err(_) => {
+                self.scan_turning = None;
+                decision.held = true;
+                decision.reason = "invalid_turn_timing";
+            }
         }
     }
 }

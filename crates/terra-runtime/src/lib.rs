@@ -624,7 +624,10 @@ impl Runtime {
         } else if effective_mode == ActuationMode::DirectEffort {
             let (forward, turn) = (output.twist.linear / 0.5, output.twist.angular);
             let managed = output.command_origin != CommandOrigin::LocalManual;
-            let turn = if managed && !self.navigation.parameters.turning.allow_in_place {
+            let turn = if managed
+                && !self.navigation.parameters.turning.allow_in_place
+                && !output.in_place_turn
+            {
                 turn.clamp(-forward.abs(), forward.abs())
             } else {
                 turn
@@ -642,8 +645,14 @@ impl Runtime {
             }
         } else {
             self.controller.set_turning_constraint(
-                (output.command_origin != CommandOrigin::LocalManual)
-                    .then_some(self.navigation.parameters.turning),
+                (output.command_origin != CommandOrigin::LocalManual).then_some(
+                    terra_control::TurningConfig {
+                        // The exploration look-around is a slow turn in place.
+                        allow_in_place: self.navigation.parameters.turning.allow_in_place
+                            || output.in_place_turn,
+                        ..self.navigation.parameters.turning
+                    },
+                ),
             );
             self.controller.set_target(VelocityTarget {
                 timestamp: now,

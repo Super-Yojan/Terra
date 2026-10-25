@@ -1,7 +1,8 @@
 use terra_autonomy::*;
-use terra_exploration::Detection;
+use terra_exploration::{Detection, ExplorePhase};
 use terra_mapping::MapSnapshot;
 use terra_navigation::{Pose, Twist};
+use terra_types::timing::EXPLORATION_MAP_STALE_GRACE_SECONDS;
 /// Build fresh healthy evidence for the supplied world pose and map at `now` seconds, with zero measured motion.
 fn input_at(now: f64, pose: Pose, map: &MapSnapshot) -> ArbiterInput<'_> {
     ArbiterInput {
@@ -194,8 +195,33 @@ fn no_frontiers_and_map_stale_stop_cleanly() {
     });
     assert_eq!(stale.status.reason, "map_stale");
     assert_eq!(stale.twist, Twist::default());
+    // A short gap holds motion but keeps the run alive.
     assert_eq!(
-        stale
+        stale.exploration.as_ref().map(|status| status.phase),
+        Some(ExplorePhase::Running)
+    );
+    let recovered = arbiter.step(input_at(0.4, Pose::default(), &map));
+    assert_ne!(recovered.status.reason, "map_stale");
+    assert!(arbiter.explorer.is_running());
+    let gap = |now: f64| ArbiterInput {
+        now,
+        pose: Pose::default(),
+        pose_time: now,
+        map: None,
+        map_time: None,
+        map_revision: 0,
+        measured: Twist::default(),
+        healthy: true,
+    };
+    // The grace restarts after recovery and ends the run once it is used up.
+    let _ = arbiter.step(gap(0.5));
+    let held = arbiter.step(gap(0.5 + EXPLORATION_MAP_STALE_GRACE_SECONDS - 0.1));
+    assert_eq!(held.twist, Twist::default());
+    assert!(arbiter.explorer.is_running());
+    let ended = arbiter.step(gap(0.5 + EXPLORATION_MAP_STALE_GRACE_SECONDS));
+    assert_eq!(ended.twist, Twist::default());
+    assert_eq!(
+        ended
             .exploration
             .as_ref()
             .and_then(|status| status.end_reason),
@@ -300,4 +326,56 @@ fn simulated_rover_explores_until_the_budget_expires() {
         "coverage {coverage} did not grow past {initial}; pose {pose:?}"
     );
     assert!(pose.x.hypot(pose.y) > 0.2, "pose {pose:?} did not move");
+}
+/// In its blind zone the rover turns in place slowly, flagged so the vehicle allows it.
+#[test]
+fn blind_zone_look_around_turns_in_place() {
+    let (width, resolution) = (200usize, 0.1);
+    let mut occupancy = vec![-1i8; width * width];
+    for row in 0..width {
+        for column in 0..width {
+            let x = -10. + (column as f64 + 0.5) * resolution;
+            let y = -10. + (row as f64 + 0.5) * resolution;
+            if x > 0.35 && x < 8. && y.abs() < x * 30f64.to_radians().tan() {
+                occupancy[row * width + column] = 0;
+            }
+        }
+    }
+    let map = MapSnapshot {
+        width: width as u32,
+        height: width as u32,
+        resolution,
+        origin_x: -10.,
+        origin_y: -10.,
+        occupancy,
+    };
+    let mut arbiter = AutonomyArbiter::default();
+    arbiter.set_level(explore("scan", 60.));
+    let mut last = None;
+    for tick in 0..20 {
+        let out = arbiter.step(input_at(0.1 * (tick + 1) as f64, Pose::default(), &map));
+        assert_eq!(out.status.reason, "exploration_scan");
+        assert!(out.in_place_turn);
+        assert_eq!(out.twist.linear, 0.);
+        assert!(out.twist.angular >= 0. && out.twist.angular <= 0.35 + 1e-9);
+        assert!(
+            out.exploration
+                .as_ref()
+                .is_some_and(|status| status.scanning)
+        );
+        last = Some(out.twist.angular);
+    }
+    // The turn ramps up to the look-around rate within the turning limits.
+    assert!((last.unwrap() - 0.35).abs() < 1e-9);
+    // An emergency stop still wins over the look-around.
+    arbiter.set_safety(
+        SafetyRequest {
+            action: SafetyAction::Stop,
+            token: "stop".into(),
+        },
+        true,
+    );
+    let stopped = arbiter.step(input_at(2.5, Pose::default(), &map));
+    assert_eq!(stopped.twist, Twist::default());
+    assert!(!stopped.in_place_turn);
 }
