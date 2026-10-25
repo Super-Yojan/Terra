@@ -56,10 +56,16 @@ impl GroundPolicy {
         }
         if self.since.is_some_and(|since| now - since >= 1.) {
             self.offset = Some(-height);
-            self.clearance = Some((camera_height - height) * up_z);
+            // Vertical drop from camera to floor; `plane` measures along world up.
+            self.clearance = Some(camera_height - height);
         }
         self.offset
     }
+    /// Level floor `clearance` below the camera, so it follows terrain elevation.
+    /// `up` is the body's up axis in world; it only rejects a tipped-over body.
+    /// The normal is world up, not `up`: a mount pitch/roll error tilts body up
+    /// even on flat floor, and a tilted plane turns floor a few metres out into
+    /// obstacles on one side and walls into free space on the other.
     pub fn plane(&self, camera: Vector3, up: Vector3) -> Option<GroundPlane> {
         let offset = self.offset?;
         let clearance = self.clearance?;
@@ -67,21 +73,16 @@ impl GroundPolicy {
             return None;
         }
         let length = up.x.hypot(up.y).hypot(up.z);
-        if length < 1e-12 || !length.is_finite() {
-            return None;
-        }
-        let normal = Vector3 {
-            x: up.x / length,
-            y: up.y / length,
-            z: up.z / length,
-        };
-        if normal.z < 0.5 {
+        if length < 1e-12 || !length.is_finite() || up.z / length < 0.5 {
             return None;
         }
         Some(GroundPlane {
-            normal,
-            offset: normal.x * camera.x + normal.y * camera.y + normal.z * (camera.z + offset)
-                - clearance,
+            normal: Vector3 {
+                x: 0.0,
+                y: 0.0,
+                z: 1.0,
+            },
+            offset: camera.z + offset - clearance,
         })
     }
 }

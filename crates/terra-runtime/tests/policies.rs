@@ -292,6 +292,32 @@ fn ground_calibration_retains_existing_stability_and_mount_rules() {
         .is_none()
     );
 }
+/// A 16-degree mount error tilts body up on flat floor. The plane must stay
+/// level, or floor 3.5 m out reads as an obstacle (capture argos-75eca1f97bcb).
+#[test]
+fn ground_plane_stays_level_when_body_up_is_tilted() {
+    let mut g = ground::GroundPolicy::default();
+    let tilt = 16_f64.to_radians();
+    let up = Vector3 {
+        x: -tilt.sin(),
+        y: 0.,
+        z: tilt.cos(),
+    };
+    g.observe(Some(-0.45), 0., 1., 0., up.z);
+    assert_eq!(g.observe(Some(-0.45), 0., 1., 1., up.z), Some(0.45));
+    let camera = Vector3 {
+        x: 2.,
+        y: 1.,
+        z: 0.,
+    };
+    let p = g.plane(camera, up).unwrap();
+    assert_eq!((p.normal.x, p.normal.y, p.normal.z), (0., 0., 1.));
+    // World points carry the offset, so the floor at z = 0 is height 0 everywhere.
+    assert!(p.offset.abs() < 1e-9);
+    // Driving up 0.3 m of terrain lifts the plane with the camera.
+    let raised = g.plane(Vector3 { z: 0.3, ..camera }, up).unwrap();
+    assert!((raised.offset - 0.3).abs() < 1e-9);
+}
 #[test]
 fn configuration_identity_tracks_profile_changes() {
     let mut r = runtime(ActuationMode::VelocityFeedback);

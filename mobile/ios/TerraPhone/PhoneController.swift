@@ -1006,7 +1006,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
     private func updatePhoneGround(frame: ARFrame, position: SIMD3<Float>, bodyUp: SIMD3<Float>) {
         // ARKit world origin is the initial camera, not the floor. Use a stable
         // classified floor to calibrate clearance and keep world coordinates fixed.
-        // The local supporting plane follows body attitude/elevation during integration.
+        // The level supporting plane follows camera elevation during integration.
         if mapGroundOffset == nil {
             let floors = frame.anchors.compactMap { $0 as? ARPlaneAnchor }.filter {
                 $0.alignment == .horizontal && ($0.classification == .floor || { if case .none = $0 { return true } else { return false } }($0.classification))
