@@ -41,7 +41,11 @@ private val levelLabels = mapOf(
 )
 
 @Composable
-fun ControllerScreen(session: TerraSession, onStartPhone: () -> Unit) {
+fun ControllerScreen(
+    session: TerraSession,
+    onStartPhone: () -> Unit,
+    onScanBluetooth: () -> Unit = {},
+) {
     var forward by remember { mutableFloatStateOf(0f) }
     var yaw by remember { mutableFloatStateOf(0f) }
     var endpoint by remember { mutableStateOf(session.savedEndpoint()) }
@@ -86,6 +90,7 @@ fun ControllerScreen(session: TerraSession, onStartPhone: () -> Unit) {
                 forward = 0f
                 yaw = 0f
                 session.setTarget(0.0, 0.0)
+                session.setBluetoothEffort(0.0, 0.0)
                 session.stop()
             }) { Text("Stop") }
         }
@@ -121,12 +126,11 @@ fun ControllerScreen(session: TerraSession, onStartPhone: () -> Unit) {
                 )
             }
         } else {
-            SectionCard("Bluetooth actuators") {
-                Text(
-                    "A physical phone hides Zenoh, the same split as an iPhone. The Bluetooth client is not in this build. Framing stays in terra-actuators (actuator_route, actuator_encode_frame, actuator_fragment) for the follow-up.",
-                    style = MaterialTheme.typography.bodySmall,
-                )
-            }
+            BluetoothSection(
+                session = session,
+                onScan = onScanBluetooth,
+                onEffort = { forward = it.first; yaw = it.second },
+            )
         }
 
         SectionCard("Velocity target") {
@@ -136,6 +140,7 @@ fun ControllerScreen(session: TerraSession, onStartPhone: () -> Unit) {
                 onValueChange = {
                     forward = snap(it)
                     session.setTarget(forward.toDouble(), yaw.toDouble())
+                    session.setBluetoothEffort(forward.toDouble(), yaw.toDouble())
                 },
                 valueRange = -1f..1f,
                 enabled = !session.waypointActive,
@@ -146,6 +151,7 @@ fun ControllerScreen(session: TerraSession, onStartPhone: () -> Unit) {
                 onValueChange = {
                     yaw = snap(it)
                     session.setTarget(forward.toDouble(), yaw.toDouble())
+                    session.setBluetoothEffort(forward.toDouble(), yaw.toDouble())
                 },
                 valueRange = -1f..1f,
                 enabled = !session.waypointActive,
@@ -155,6 +161,7 @@ fun ControllerScreen(session: TerraSession, onStartPhone: () -> Unit) {
                     forward = 0f
                     yaw = 0f
                     session.setTarget(0.0, 0.0)
+                    session.setBluetoothEffort(0.0, 0.0)
                 },
                 enabled = !session.waypointActive,
             ) { Text("Zero target") }
@@ -332,7 +339,7 @@ private fun LevelPicker(session: TerraSession, onSelect: () -> Unit) {
 }
 
 @Composable
-private fun SectionCard(title: String, content: @Composable () -> Unit) {
+internal fun SectionCard(title: String, content: @Composable () -> Unit) {
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(title, style = MaterialTheme.typography.titleMedium)
@@ -342,7 +349,7 @@ private fun SectionCard(title: String, content: @Composable () -> Unit) {
 }
 
 @Composable
-private fun Readout(label: String, value: String) {
+internal fun Readout(label: String, value: String) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
         Text(label)
         Text(value)

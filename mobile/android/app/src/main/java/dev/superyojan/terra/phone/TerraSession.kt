@@ -47,6 +47,7 @@ class TerraSession(context: Context) {
     private val main = Handler(Looper.getMainLooper())
 
     val emulator = isEmulator()
+    val ble: TerraBluetooth? = if (emulator) null else TerraBluetooth(appContext)
     val supportedLevels: List<String> = supportedAutonomyLevels()
 
     var source by mutableStateOf("Stopped")
@@ -245,8 +246,25 @@ class TerraSession(context: Context) {
         }
     }
 
+    fun setBluetoothEffort(forward: Double, turn: Double) {
+        ble?.setEffort(forward, turn)
+    }
+
+    fun armBluetooth() {
+        ble?.arm()
+    }
+
+    fun disarmBluetooth() {
+        ble?.disarm()
+    }
+
+    fun scanBluetooth() {
+        ble?.startScan()
+    }
+
     /** Leaving the foreground and Stop both end here. Disconnect publishes a final zero. */
     fun stop() {
+        ble?.disarmAndDisconnect()
         generation += 1
         if (Looper.myLooper() == thread.looper) {
             stopOnControl()
@@ -351,6 +369,7 @@ class TerraSession(context: Context) {
     }
 
     fun emergencyStop(reset: Boolean) {
+        ble?.disarm()
         control.post {
             forward = 0.0
             yaw = 0.0
@@ -443,6 +462,7 @@ class TerraSession(context: Context) {
 
     fun close() {
         stop()
+        ble?.close()
         thread.quitSafely()
     }
 

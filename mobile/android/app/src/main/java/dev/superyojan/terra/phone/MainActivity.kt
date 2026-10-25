@@ -2,6 +2,7 @@ package dev.superyojan.terra.phone
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -21,6 +22,9 @@ class MainActivity : ComponentActivity() {
     private val cameraPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) session.startPhone()
     }
+    private val bluetoothPermission = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { granted ->
+        if (granted.values.all { it }) session.scanBluetooth() else session.ble?.permissionDenied()
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -37,9 +41,22 @@ class MainActivity : ComponentActivity() {
                             cameraPermission.launch(Manifest.permission.CAMERA)
                         }
                     },
+                    onScanBluetooth = { requestBluetoothScan() },
                 )
             }
         }
+    }
+
+    private fun requestBluetoothScan() {
+        val permissions = if (Build.VERSION.SDK_INT >= 31) {
+            arrayOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT)
+        } else {
+            arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
+        }
+        val missing = permissions.filter {
+            ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
+        }
+        if (missing.isEmpty()) session.scanBluetooth() else bluetoothPermission.launch(missing.toTypedArray())
     }
 
     override fun onStop() {
