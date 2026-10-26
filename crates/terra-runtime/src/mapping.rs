@@ -12,12 +12,16 @@ pub struct MappingState(
     Arc<Mutex<LocalOccupancyMap>>,
     MapConfig,
     Arc<Mutex<CaptureSlot>>,
+    /// Second, independent copy slot for the phone's on-device classification
+    /// view, so it never steals frames from a dashboard capture.
+    Arc<Mutex<CaptureSlot>>,
 );
 impl MappingState {
     pub fn new(config: MapConfig) -> Result<Self, MapError> {
         Ok(Self(
             Arc::new(Mutex::new(LocalOccupancyMap::new(config)?)),
             config,
+            Default::default(),
             Default::default(),
         ))
     }
@@ -66,6 +70,19 @@ impl MappingState {
     pub fn take_capture(&self) -> Option<DepthCapture> {
         self.2.lock().ok()?.latest.take()
     }
+    /// Arm or disarm the on-device debug copy; see [`Self::arm_capture`].
+    pub fn set_debug_capture(&self, armed: bool) {
+        if let Ok(mut slot) = self.3.lock() {
+            *slot = CaptureSlot {
+                armed,
+                latest: None,
+            };
+        }
+    }
+    /// Take the newest accepted frame for the debug view, if armed.
+    pub fn take_debug_capture(&self) -> Option<DepthCapture> {
+        self.3.lock().ok()?.latest.take()
+    }
     pub fn integrate_depth(
         &self,
         t: f64,
@@ -108,18 +125,21 @@ impl MappingState {
             map.integrate_classified(t, k, c, pixels, classifier)?;
             map.floor_surface()
         };
-        if let Ok(mut slot) = self.2.lock()
-            && slot.armed
-        {
-            slot.latest = Some(DepthCapture {
-                timestamp: t,
-                intrinsics: k,
-                pose: c,
-                classifier,
-                config: self.1,
-                depth: pixels.to_vec(),
-                floor,
-            });
+        let copy = || DepthCapture {
+            timestamp: t,
+            intrinsics: k,
+            pose: c,
+            classifier,
+            config: self.1,
+            depth: pixels.to_vec(),
+            floor: floor.clone(),
+        };
+        for slot in [&self.2, &self.3] {
+            if let Ok(mut slot) = slot.lock()
+                && slot.armed
+            {
+                slot.latest = Some(copy());
+            }
         }
         Ok(())
     }

@@ -30,6 +30,9 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
     private var offsetFitSamples: [RotationOffsetSample] = []
     private var firstTurnFit: RotationOffsetFit?
     private var occupancyMap: MobileOccupancyMap?
+    /// Control-queue copy of whether the classification view wants labelled frames;
+    /// re-applied to every new map.
+    private var classificationDebugEnabled = false
     private let plant = SimulatedPlant()
     private let velocityFilter = PoseVelocityFilter()
     private var mapGroundOffset: Double?
@@ -429,7 +432,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
             do {
                 self.occupancyMap = try MobileOccupancyMap(settings: self.occupancySettings)
                 self.floorEpoch &+= 1
-                if let map = self.occupancyMap { try self.controller?.attachOccupancyMap(map: map) }
+                if let map = self.occupancyMap { try self.controller?.attachOccupancyMap(map: map); map.setClassificationDebug(enabled: self.classificationDebugEnabled) }
                 self.mapGroundOffset = nil; self.groundPolicy.reset()
                 self.lastMapTime = -Double.infinity
                 self.zenoh = try MobileZenohClient(endpoint: endpoint, prefix: "terra/rover", roverId: id)
@@ -575,7 +578,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
         try self.controller?.setTaskModel(name: mode == .phone ? taskModel?.model.name : nil)
         self.occupancyMap = try MobileOccupancyMap(settings: self.occupancySettings)
         self.floorEpoch &+= 1
-        if let map = self.occupancyMap { try self.controller?.attachOccupancyMap(map: map) }
+        if let map = self.occupancyMap { try self.controller?.attachOccupancyMap(map: map); map.setClassificationDebug(enabled: classificationDebugEnabled) }
         mapGroundOffset = nil; groundPolicy.reset(); lastMapTime = -Double.infinity
         DispatchQueue.main.async { self.occupancy = nil; self.mapPose = .zero; self.mapStatus = mode == .simulation ? "Simulated depth · 10 Hz" : (ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) ? "Waiting for scene depth" : "Scene depth unavailable on this device") }
         self.mode = mode
@@ -987,6 +990,25 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
                 DispatchQueue.main.async {
                     self.offsetFitStatus = String(format: "First pass accepted · %.1f cm RMS. Now start and perform a turn in the opposite direction.", fit.rmsError * 100)
                 }
+            }
+        }
+    }
+    /// Ask the mapper for labelled frames (or stop). Works in phone mode with no
+    /// rover connected, so classification can be checked off the robot.
+    func setClassificationDebug(_ enabled: Bool) {
+        controlQueue.async {
+            self.classificationDebugEnabled = enabled
+            self.occupancyMap?.setClassificationDebug(enabled: enabled)
+        }
+    }
+    /// Newest labelled depth frame since the last call, labelled in Rust with the
+    /// grid's own rules, delivered on the main queue (nil when none is new).
+    func takeClassifiedFrame(stride: UInt32, _ deliver: @escaping (ClassifiedFrame?) -> Void) {
+        controlQueue.async {
+            let map = self.occupancyMap
+            DispatchQueue.global(qos: .userInitiated).async {
+                let frame = map?.takeClassifiedFrame(stride: stride)
+                DispatchQueue.main.async { deliver(frame) }
             }
         }
     }
