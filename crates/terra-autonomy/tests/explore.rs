@@ -379,3 +379,62 @@ fn blind_zone_look_around_turns_in_place() {
     assert_eq!(stopped.twist, Twist::default());
     assert!(!stopped.in_place_turn);
 }
+/// Leaving L4 mid look-around hands control to the new level instead of the stale turn.
+#[test]
+fn level_change_ends_the_look_around() {
+    let (width, resolution) = (200usize, 0.1);
+    let mut occupancy = vec![-1i8; width * width];
+    for row in 0..width {
+        for column in 0..width {
+            let x = -10. + (column as f64 + 0.5) * resolution;
+            let y = -10. + (row as f64 + 0.5) * resolution;
+            if x > 0.35 && x < 8. && y.abs() < x * 30f64.to_radians().tan() {
+                occupancy[row * width + column] = 0;
+            }
+        }
+    }
+    let map = MapSnapshot {
+        width: width as u32,
+        height: width as u32,
+        resolution,
+        origin_x: -10.,
+        origin_y: -10.,
+        occupancy,
+    };
+    let mut arbiter = AutonomyArbiter::default();
+    arbiter.set_level(explore("scan", 300.));
+    let out = arbiter.step(input_at(0.1, Pose::default(), &map));
+    assert_eq!(out.status.reason, "exploration_scan");
+
+    arbiter.set_level(LevelRequest::new(Level::Teleop, "manual"));
+    arbiter.accept_operator(
+        TeleopRequest {
+            linear: 0.3,
+            angular: 0.,
+            run_id: None,
+            authority_revision: None,
+            operator_session_id: None,
+            sequence: None,
+        },
+        0.2,
+    );
+    let manual = arbiter.step(input_at(0.2, Pose::default(), &map));
+    assert_eq!(manual.status.reason, "active");
+    assert_eq!(manual.status.effective_level, Some(Level::Teleop));
+    assert!(manual.twist.linear > 0.);
+    assert!(!manual.in_place_turn);
+
+    arbiter.set_level(LevelRequest::new(Level::WaypointDirect, "direct"));
+    assert!(arbiter.accept_goal(
+        &terra_waypoint::GoalCommand::Local {
+            x: 2.,
+            y: 0.,
+            yaw: None,
+            token: Some("goal".into()),
+        },
+        50.,
+    ));
+    let direct = arbiter.step(input_at(0.3, Pose::default(), &map));
+    assert_ne!(direct.status.reason, "obstacle_blocked");
+    assert!(direct.twist.linear > 0.);
+}
