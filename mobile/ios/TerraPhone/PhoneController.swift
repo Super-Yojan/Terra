@@ -222,6 +222,9 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
     private var lastLocalTarget = (forward: 0.0, yaw: 0.0)
     private var lastCloudTime = -Double.infinity
     private var lastFloorTime = -Double.infinity
+    // Control-queue state; the mesh walk itself runs on floorQueue.
+    private var floorUpdateInFlight = false
+    private let floorQueue = DispatchQueue(label: "terra.floor-mesh", qos: .utility)
     private var tick = 0
     // Publication identity must survive prepare/preserveRuntime and UI tick resets.
     private var occupancyPublicationRevision: UInt64 = 0
@@ -1100,11 +1103,23 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
             observation.recordChanged(component: "mapping", kind: "mapping.health", attributes: ["reason": frame.sceneDepth == nil ? "depth_unavailable" : "map_unavailable"])
             return
         }
-        if frame.timestamp - lastFloorTime >= 1 {
+        if frame.timestamp - lastFloorTime >= 1, !floorUpdateInFlight {
             lastFloorTime = frame.timestamp
+            floorUpdateInFlight = true
             let lift = mapGroundOffset ?? 0
-            let cells = try? map.updateFloorSurface(cameraX: Double(position.x), cameraY: Double(position.y), cameraZ: Double(position.z) + lift, xyz: collectFloorSamples(frame: frame, lift: Float(lift)))
-            observation.recordChanged(component: "mapping", kind: "mapping.floor_mesh", attributes: ["available": (cells ?? 0) > 0])
+            let anchors = frame.anchors.compactMap { $0 as? ARMeshAnchor }
+            let worldFromAR = self.worldFromAR
+            // The mesh walk can exceed 100 ms; on the control queue it stalled VIO
+            // and IMU once a second, which tripped SensorNotReady holds.
+            floorQueue.async { [weak self] in
+                let xyz = Self.collectFloorSamples(anchors: anchors, worldFromAR: worldFromAR, lift: Float(lift))
+                let cells = try? map.updateFloorSurface(cameraX: Double(position.x), cameraY: Double(position.y), cameraZ: Double(position.z) + lift, xyz: xyz)
+                self?.controlQueue.async {
+                    guard let self else { return }
+                    self.floorUpdateInFlight = false
+                    self.observation.recordChanged(component: "mapping", kind: "mapping.floor_mesh", attributes: ["available": (cells ?? 0) > 0])
+                }
+            }
         }
         let up = bodyOrientation.act(SIMD3<Float>(0, 0, 1))
         // Nil until ARKit finds the floor; the level band maps in the meantime.
@@ -1178,10 +1193,10 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
     }
     /// Centres of mesh faces ARKit classifies as floor, as world x, y, z triples
     /// lifted by the same ground offset as depth frames. Rust decides what they veto.
-    private func collectFloorSamples(frame: ARFrame, lift: Float) -> [Float] {
+    private static func collectFloorSamples(anchors: [ARMeshAnchor], worldFromAR: simd_float3x3, lift: Float) -> [Float] {
         var xyz: [Float] = []
         let floorClass = UInt8(ARMeshClassification.floor.rawValue)
-        for case let anchor as ARMeshAnchor in frame.anchors {
+        for anchor in anchors {
             let geometry = anchor.geometry
             let faces = geometry.faces, vertices = geometry.vertices
             guard let classes = geometry.classification, classes.count == faces.count,
