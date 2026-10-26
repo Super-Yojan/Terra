@@ -52,6 +52,10 @@ class FusionHatChannelTests(unittest.TestCase):
 
     def setUp(self): ENABLED.clear()
 
+    def test_every_channel_is_available_without_port_configuration(self):
+        ports = FusionHatBackend().capabilities()['ports']
+        self.assertEqual(set(ports), set(MOTOR_PINS) | {f'P{i}' for i in range(12)})
+
     def test_motor_leg_disabled_elsewhere_is_reenabled_instead_of_faulting(self):
         backend = self.backend()
         for channel in ENABLED: ENABLED[channel] = False

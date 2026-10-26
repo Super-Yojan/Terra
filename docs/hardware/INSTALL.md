@@ -130,15 +130,9 @@ headers for the Pi's running kernel; building a kernel driver on the development
 Mac or in the generic Docker builder cannot replace this Pi-specific step.
 See [Fusion HAT deployment requirements](FUSION_HAT.md).
 
-Edit `/etc/terra-rover/rover.env`:
-
-```ini
-TERRA_PWM_PORTS=P0,P1,P2,P3,P4,P5,P6,P7,P8,P9,P10,P11
-```
-
-The default advertises P0–P11 alongside M0–M3. Narrow `TERRA_PWM_PORTS` to
-match your wiring if needed, for example `P0,P1`; an empty list advertises only
-M0–M3. Existing installations retain their configured list on upgrade. Shared
+The service always advertises every Fusion HAT channel, M0–M3 and P0–P11; the
+saved layout decides which ones are opened. A `TERRA_PWM_PORTS` line left in an
+existing `/etc/terra-rover/rover.env` is ignored. Shared
 pins and incompatible timer frequencies are still rejected when saving a layout. The default
 service uses the battery's external power cutoff and requires no Pi switch signal.
 Configuration requires disarm, and motion requires explicit arming and fresh
@@ -191,7 +185,7 @@ processes at once.
 To run in the foreground instead, keep the service stopped and use:
 
 ```sh
-sudo -u terra-rover terra-rover --pwm-ports P0,P1
+sudo -u terra-rover terra-rover
 ```
 
 For a mock backend on a Linux host with a Bluetooth radio, use

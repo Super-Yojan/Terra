@@ -58,8 +58,8 @@ the private owner directory and run provisioning as the normal service account
 with its BlueZ permissions; setup does not create that directory.
 
 The [service unit](https://github.com/Super-Yojan/Terra/blob/main/packaging/terra-rover.service) uses the compiled executable,
-defaults to no exposed PWM ports, and restarts on failure. Adapt its
-gate source and `--pwm-ports` list in `/etc/terra-rover/rover.env` to confirmed connectors. Its writable
+advertises M0–M3 and every PWM port P0–P11, and restarts on failure. The saved
+layout decides which channels are opened. Its writable
 state directory is separate from the gate producer. Stop it before any standalone
 CLI invocation; two processes must not own the same hardware or GATT application.
 
@@ -78,10 +78,10 @@ The expected peer is the phone identity address visible to BlueZ; compare the di
 Run the service or a standalone mock (a Linux Bluetooth radio is still required):
 
 ```
-python3 -m terra_rover --mock --name 'Terra Rover' --config /var/lib/terra-rover/mock-layout.json --owner /var/lib/terra-rover/owner.json --pwm-ports P0,P1 --mock-gate-closed
+python3 -m terra_rover --mock --name 'Terra Rover' --config /var/lib/terra-rover/mock-layout.json --owner /var/lib/terra-rover/owner.json --mock-gate-closed
 ```
 
-Mock gate defaults open; --mock-gate-closed explicitly enables its simulated interlock. Real hardware defaults to an external battery cutoff and M0–M3 capabilities, with no Pi switch signal required. Supply --pwm-ports only for physically confirmed exposed P0–P11 ports. Optional --gate-file installations retain physical interlock checks. Timer/resource conflicts are validated before activation; reconnect never restores arming.
+Mock gate defaults open; --mock-gate-closed explicitly enables its simulated interlock. Real hardware defaults to an external battery cutoff and M0–M3 capabilities, with no Pi switch signal required. P0–P11 are always advertised; only map layout actuators to physically confirmed connectors. Optional --gate-file installations retain physical interlock checks. Timer/resource conflicts are validated before activation; reconnect never restores arming.
 
 ```mermaid
 flowchart LR

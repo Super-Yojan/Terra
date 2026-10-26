@@ -10,6 +10,7 @@ from .layout import normalize_layout, validate_layout
 from .drive_relay import OutputBatch
 
 KINDS = ['dc_motor', 'bidirectional_esc', 'unidirectional_esc', 'positional_servo']
+PWM_PORTS = tuple(f'P{i}' for i in range(12))
 MOTOR_PINS = {'M0': ['P11', 'P10'], 'M1': ['P9', 'P8'],
               'M2': ['P6', 'P7'], 'M3': ['P4', 'P5']}
 
@@ -216,7 +217,7 @@ class _Adapter:
         if failures: raise BackendError(None, 'close', '; '.join(failures))
 
 class FusionHatBackend(_Adapter):
-    def __init__(self, pwm_ports=(), *, supported_library_versions=('1.14.0',),
+    def __init__(self, pwm_ports=PWM_PORTS, *, supported_library_versions=('1.14.0',),
                  motor_factory=None, pwm_factory=None, library_version=None, occupied_resources=()):
         self._versions = tuple(supported_library_versions)
         self._motor_factory, self._pwm_factory = motor_factory, pwm_factory

@@ -150,7 +150,6 @@ def main():
     parser.add_argument('--name', default='Terra Rover')
     parser.add_argument('--config', type=Path, default=Path('/var/lib/terra-rover/layout.json'))
     parser.add_argument('--owner', type=Path, default=Path('/var/lib/terra-rover/owner.json'))
-    parser.add_argument('--pwm-ports', default=','.join(f'P{i}' for i in range(12)), help='comma-separated PWM ports (default: P0-P11; empty disables PWM ports)')
     parser.add_argument('--adapter')
     parser.add_argument('--button-pairing', action='store_true', help='Fusion HAT USR enrollment and ownership reset; then normal operation')
     parser.add_argument('--button-file', type=Path, default=Path('/sys/class/fusion_hat/fusion_hat/button'))
@@ -186,8 +185,8 @@ def main():
         asyncio.run(run_normal(args, args.name))
 
 async def run_normal(args, name):
-    ports = tuple(p.strip() for p in args.pwm_ports.split(',') if p.strip())
-    backend = FusionHatBackend(ports)
+    # Every Fusion HAT channel is available; the layout decides which ones are opened.
+    backend = FusionHatBackend()
     await BlePeripheral(name, args.adapter).run(backend, args.config, args.owner,
         manage_signals=not getattr(args, 'button_pairing', False))
 
