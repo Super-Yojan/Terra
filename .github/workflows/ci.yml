@@ -1,9 +1,8 @@
 name: Rust
 
 on:
-  pull_request:
   push:
-    branches: [main]
+    tags: ["v*", "rover-v*"]
   workflow_dispatch:
 
 concurrency:
