@@ -21,7 +21,7 @@ class PairingTests(unittest.IsolatedAsyncioTestCase):
         s.read('/phone'); self.assertTrue(s.ready(fields))
         fields['Connected']=Variant('b',False); self.assertFalse(s.ready(fields))
         s.cancel(); self.assertFalse(s.ready(fields))
-    async def test_status_rejects_unapproved_device_and_is_disarmed(self):
+    async def test_status_rejects_unapproved_device_and_confirms_pairing(self):
         s=PairingSession(60,set(),clock=lambda:1)
         committed=[]
         async def commit(device): committed.append(device)
@@ -30,7 +30,7 @@ class PairingTests(unittest.IsolatedAsyncioTestCase):
         read=ButtonSetupStatus.ReadValue.__wrapped__
         with self.assertRaises(DBusError): await read(status,{'device':Variant('o','/phone')})
         s.authorize('/phone')
-        self.assertIn(b'"armed":false',await read(status,{'device':Variant('o','/phone')}))
+        self.assertIn(b'"pairing_confirmed":true',await read(status,{'device':Variant('o','/phone')}))
         self.assertTrue(s.read_seen)
         self.assertEqual(committed,['/phone'])
 

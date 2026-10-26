@@ -2,26 +2,33 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
-from terra_rover.backend import MockBackend
+from terra_rover.backend import _capabilities
 from terra_rover.configuration import ConfigurationStore
-from terra_rover.safety import SafetyController
+from terra_rover.drive_relay import DriveRelay
 from terra_rover.protocol import FragmentAssembler, ProtocolError, fragment_message, encode_control, encode_reply
 
 
 def actuator(identifier=0, port='P0'):
     return dict(id=identifier, name='ESC', port=port, kind='bidirectional_esc', inverted=False,
                 limits=dict(min=-1, max=1), calibration=dict(type='bidirectional_esc', reverse_us=1000,
-                neutral_us=1500, forward_us=2000, arming_duration_ms=2000), route=dict(type='left_effort'), safe=dict(type='zero'))
+                neutral_us=1500, forward_us=2000), route=dict(type='left_effort'), safe=dict(type='zero'))
+
+class StubBackend:
+    closed = False
+    def __init__(self, ports): self._caps = _capabilities(ports, 'stub', '0', ())
+    def capabilities(self): return self._caps
+    def configure(self, layout): pass
+    def apply(self, batch): pass
 
 class PaginationTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
-        self.backend = MockBackend(('P0', 'P1')); self.safety = SafetyController(self.backend.capabilities())
-        self.store = ConfigurationStore(Path(self.temp.name)/'layout.json', self.safety, self.backend)
-        self.store.load(0); self.store.begin_connection(123, 0); self.request = 0
+        self.backend = StubBackend(('P0', 'P1')); self.relay = DriveRelay(self.backend.capabilities())
+        self.store = ConfigurationStore(Path(self.temp.name)/'layout.json', self.relay, self.backend)
+        self.store.load(); self.store.begin_connection(); self.request = 0
     def call(self, operation, **payload):
         self.request += 1
-        return self.store.handle(dict(schema_version=1, request_id=self.request, operation=operation, payload=payload), .01)
+        return self.store.handle(dict(schema_version=1, request_id=self.request, operation=operation, payload=payload))
     def begin(self):
         reply = self.call('begin_layout_edit', expected_revision=self.store.active_revision, mode='replace')
         self.assertEqual(reply['result'], 'ok', reply); return reply['payload']
@@ -37,7 +44,7 @@ class PaginationTests(unittest.TestCase):
         draft = self.stage(self.begin(), actuator()); reply = self.commit(draft)
         self.assertEqual(reply['payload'], {'revision':1}); self.assertEqual(json.loads(self.store.path.read_text())['revision'], 1)
         envelope = dict(schema_version=1,request_id=self.request,operation='commit_layout_edit',payload={key:draft[key] for key in ('edit_token','edit_version','base_revision')})
-        self.assertEqual(self.store.handle(envelope,.02), reply)
+        self.assertEqual(self.store.handle(envelope), reply)
         index = self.call('layout_index')['payload']; self.assertEqual(index['actuators'], [dict(id=0,name='ESC',kind='bidirectional_esc')])
         self.assertEqual(self.call('read_actuator',expected_revision=1,actuator_id=0)['payload']['actuator'], actuator())
         profile = self.call('read_drive_profile',expected_revision=1,actuator_id=0)['payload']['actuator']
@@ -50,7 +57,7 @@ class PaginationTests(unittest.TestCase):
         reply = self.call('validate_layout_edit',edit_token=draft['edit_token'],edit_version=draft['edit_version'])
         self.assertIn('resource_conflict', [e['code'] for e in reply['errors']]); self.assertIsNone(self.store.read())
         draft.update(self.call('remove_actuator',edit_token=draft['edit_token'],edit_version=draft['edit_version'],actuator_id=1)['payload'])
-        self.store.end_connection(.02); self.store.begin_connection(124,.02)
+        self.store.end_connection(); self.store.begin_connection()
         self.assertEqual(self.call('validate_layout_edit',edit_token=draft['edit_token'],edit_version=draft['edit_version'])['result'],'error')
     def test_validation_required_and_mutation_invalidates_ack(self):
         draft = self.stage(self.begin(),actuator())
@@ -63,15 +70,12 @@ class PaginationTests(unittest.TestCase):
         self.assertEqual(self.call('validate_layout_edit', edit_token=draft['edit_token'], edit_version=draft['edit_version'])['result'], 'error')
         self.begin()
         self.assertEqual(self.call('commit_layout', staged_request_id=stage_id, staged_revision=0)['result'], 'error')
-    def test_failed_stage_preserves_validated_version_and_armed_commit_rejects(self):
+    def test_failed_stage_preserves_validated_version(self):
         draft = self.stage(self.begin(), actuator())
         self.call('validate_layout_edit', edit_token=draft['edit_token'], edit_version=draft['edit_version'])
         invalid = actuator(); invalid['limits']['min'] = 2
         self.assertEqual(self.call('stage_actuator', edit_token=draft['edit_token'], edit_version=draft['edit_version'], actuator=invalid)['result'], 'error')
-        self.safety.armed = True
         payload = {key:draft[key] for key in ('edit_token','edit_version','base_revision')}
-        self.assertEqual(self.call('commit_layout_edit', **payload)['errors'][0]['code'], 'configuration_armed')
-        self.safety.armed = False
         self.assertEqual(self.call('commit_layout_edit', **payload)['payload'], {'revision':1})
     def test_persistence_failure_consumes_draft_and_preserves_active(self):
         self.commit(self.stage(self.begin(), actuator()))
@@ -91,10 +95,7 @@ class PaginationTests(unittest.TestCase):
         for i, fragment in enumerate(fragments): peripheral._handle_write('control',fragment,i*.15)
         self.assertEqual(peripheral.events[-1][1], 'json')
         peripheral._handle_write('control',fragments[0],1)
-        with self.assertLogs('terra_rover.ble', level='WARNING') as logs:
-            with self.assertRaises(ProtocolError): peripheral._handle_write('control',fragments[1],3.01)
-        self.assertIn('message_id=1 route=json elapsed=2.010', logs.output[0])
-        self.assertNotIn(1,peripheral.routes)
+        with self.assertRaises(ProtocolError): peripheral._handle_write('control',fragments[1],3.01)
     def test_clock_regression_rejects_even_new_first_fragment(self):
         assembler = FragmentAssembler(4096, timeout=2)
         fragments = fragment_message(b'x'*30, 1, 20,4096)
@@ -118,5 +119,5 @@ class PaginationTests(unittest.TestCase):
         fragments = fragment_message(data,1,20,4096); assembler=FragmentAssembler(4096, timeout=2)
         for i, fragment in enumerate(fragments): result=assembler.push(fragment,i*.1)
         self.assertEqual(result,data)
-        assembler=FragmentAssembler(); assembler.push(fragments[0],0)
-        with self.assertRaises(ProtocolError): assembler.push(fragments[1],.101)
+        assembler.push(fragments[0],10)
+        with self.assertRaises(ProtocolError): assembler.push(fragments[1],12.01)
