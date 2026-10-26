@@ -7,8 +7,6 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		A10B0B5E0000000000000003 /* PhoneObservationCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10B0B5E0000000000000004 /* PhoneObservationCapture.swift */; };
-		A10B0B5E0000000000000001 /* TerraObservation.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10B0B5E0000000000000002 /* TerraObservation.swift */; };
 		014E5986C12CC878354BE533 /* View+TerraPairingConsent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B42D733D17017ED54DF9E3E /* View+TerraPairingConsent.swift */; };
 		06793BBE2D9E7876A63D0C2A /* ActuatorPagination.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C11A546598F9DA3655EF0C0 /* ActuatorPagination.swift */; };
 		08906BAF4104CBE47B269B2D /* PhoneController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C2FA04187CC39D929F3A531 /* PhoneController.swift */; };
@@ -33,6 +31,13 @@
 		836ABE039025B23DE742B338 /* TerraDebugTools.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9BC2EE52CB19C0C8A6F9709C /* TerraDebugTools.swift */; };
 		86E1E1E57236DEEBBBCE648E /* JoystickPad.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB9E97733E0A85302873CDBB /* JoystickPad.swift */; };
 		92B31E59B86ACCACCD2A1F18 /* TerraDestination.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9DE1936CC09E26932C0F66FE /* TerraDestination.swift */; };
+		A10B0B5E0000000000000001 /* TerraObservation.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10B0B5E0000000000000002 /* TerraObservation.swift */; };
+		A10B0B5E0000000000000003 /* PhoneObservationCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10B0B5E0000000000000004 /* PhoneObservationCapture.swift */; };
+		A11F0E510000000000000004 /* FpvIceSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = A11F0E510000000000000003 /* FpvIceSettings.swift */; };
+		A11F0E510000000000000006 /* FpvIceStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A11F0E510000000000000005 /* FpvIceStore.swift */; };
+		A11F0E510000000000000008 /* FpvVideoCall.swift in Sources */ = {isa = PBXBuildFile; fileRef = A11F0E510000000000000007 /* FpvVideoCall.swift */; };
+		A11F0E51000000000000000A /* FpvStatusRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = A11F0E510000000000000009 /* FpvStatusRow.swift */; };
+		A11F0E51000000000000000D /* WebRTC in Frameworks */ = {isa = PBXBuildFile; productRef = A11F0E51000000000000000C /* WebRTC */; };
 		A2AAFA46C65B8E09104E2FDF /* OccupancyMapView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9269BB859EF5B3B6A578B3D6 /* OccupancyMapView.swift */; };
 		A58122FA6F3E1A8414B6B6C3 /* ActuatorDriveProfile.swift in Sources */ = {isa = PBXBuildFile; fileRef = D04DB8926762D65151B5C411 /* ActuatorDriveProfile.swift */; };
 		A6C33506D9D00B29200889FD /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6ED85D206145C66F75335E86 /* ContentView.swift */; };
@@ -62,16 +67,9 @@
 		E3E5AAF1C047AFF6D4C9789B /* FleetConnectionDetails.swift in Sources */ = {isa = PBXBuildFile; fileRef = 05345BECCAB64836C1C5C910 /* FleetConnectionDetails.swift */; };
 		E72EDE257A3ACC038FC8CA9E /* ConnectionPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 15314EB9500C69B32E097620 /* ConnectionPresentation.swift */; };
 		F0EA40F2756462AED7DD4EE2 /* BluetoothFragmentAssembler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58BEF209DEE2945A7D96965A /* BluetoothFragmentAssembler.swift */; };
-		A11F0E510000000000000004 /* FpvIceSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = A11F0E510000000000000003 /* FpvIceSettings.swift */; };
-		A11F0E510000000000000006 /* FpvIceStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A11F0E510000000000000005 /* FpvIceStore.swift */; };
-		A11F0E510000000000000008 /* FpvVideoCall.swift in Sources */ = {isa = PBXBuildFile; fileRef = A11F0E510000000000000007 /* FpvVideoCall.swift */; };
-		A11F0E51000000000000000A /* FpvStatusRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = A11F0E510000000000000009 /* FpvStatusRow.swift */; };
-		A11F0E51000000000000000D /* WebRTC in Frameworks */ = {isa = PBXBuildFile; productRef = A11F0E51000000000000000C /* WebRTC */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
-		A10B0B5E0000000000000004 /* PhoneObservationCapture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhoneObservationCapture.swift; sourceTree = "<group>"; };
-		A10B0B5E0000000000000002 /* TerraObservation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerraObservation.swift; sourceTree = "<group>"; };
 		05345BECCAB64836C1C5C910 /* FleetConnectionDetails.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = FleetConnectionDetails.swift; sourceTree = "<group>"; };
 		0D2EB8FAB5C424C195564DB7 /* MountCalibration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MountCalibration.swift; sourceTree = "<group>"; };
 		15314EB9500C69B32E097620 /* ConnectionPresentation.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ConnectionPresentation.swift; sourceTree = "<group>"; };
@@ -105,6 +103,12 @@
 		9BC2EE52CB19C0C8A6F9709C /* TerraDebugTools.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TerraDebugTools.swift; sourceTree = "<group>"; };
 		9C2FA04187CC39D929F3A531 /* PhoneController.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = PhoneController.swift; sourceTree = "<group>"; };
 		9DE1936CC09E26932C0F66FE /* TerraDestination.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TerraDestination.swift; sourceTree = "<group>"; };
+		A10B0B5E0000000000000002 /* TerraObservation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerraObservation.swift; sourceTree = "<group>"; };
+		A10B0B5E0000000000000004 /* PhoneObservationCapture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhoneObservationCapture.swift; sourceTree = "<group>"; };
+		A11F0E510000000000000003 /* FpvIceSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FpvIceSettings.swift; sourceTree = "<group>"; };
+		A11F0E510000000000000005 /* FpvIceStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FpvIceStore.swift; sourceTree = "<group>"; };
+		A11F0E510000000000000007 /* FpvVideoCall.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FpvVideoCall.swift; sourceTree = "<group>"; };
+		A11F0E510000000000000009 /* FpvStatusRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FpvStatusRow.swift; sourceTree = "<group>"; };
 		A6D2B5DFC45F42ECE9CFDE33 /* RoverSceneView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = RoverSceneView.swift; sourceTree = "<group>"; };
 		AB9E97733E0A85302873CDBB /* JoystickPad.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = JoystickPad.swift; sourceTree = "<group>"; };
 		AC0000000000000000000002 /* ActuatorConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActuatorConfiguration.swift; sourceTree = "<group>"; };
@@ -127,10 +131,6 @@
 		F236F546C5E50DEBDBC44862 /* JoystickSurface.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = JoystickSurface.swift; sourceTree = "<group>"; };
 		F9F7CE3FE9E7E9C9734B9A85 /* PhoneMountGeometry.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = PhoneMountGeometry.swift; sourceTree = "<group>"; };
 		FD7D52E4241E3416851D20EB /* TerraCore.xcframework */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = wrapper.xcframework; path = TerraCore.xcframework; sourceTree = "<group>"; };
-		A11F0E510000000000000003 /* FpvIceSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FpvIceSettings.swift; sourceTree = "<group>"; };
-		A11F0E510000000000000005 /* FpvIceStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FpvIceStore.swift; sourceTree = "<group>"; };
-		A11F0E510000000000000007 /* FpvVideoCall.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FpvVideoCall.swift; sourceTree = "<group>"; };
-		A11F0E510000000000000009 /* FpvStatusRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FpvStatusRow.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -193,7 +193,6 @@
 				8B42D733D17017ED54DF9E3E /* View+TerraPairingConsent.swift */,
 				A11F0E510000000000000009 /* FpvStatusRow.swift */,
 			);
-			name = Views;
 			path = Views;
 			sourceTree = "<group>";
 		};
@@ -309,10 +308,10 @@
 				Base,
 			);
 			mainGroup = 5DCD7148EBFDD85DE41A6F6F;
-			productRefGroup = 3BB314A2FAAB054273A28597 /* Products */;
 			packageReferences = (
 				A11F0E51000000000000000B /* XCRemoteSwiftPackageReference "WebRTC" */,
 			);
+			productRefGroup = 3BB314A2FAAB054273A28597 /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
@@ -392,25 +391,6 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
-
-/* Begin XCRemoteSwiftPackageReference section */
-		A11F0E51000000000000000B /* XCRemoteSwiftPackageReference "WebRTC" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/stasel/WebRTC.git";
-			requirement = {
-				kind = exactVersion;
-				version = 155.0.0;
-			};
-		};
-/* End XCRemoteSwiftPackageReference section */
-
-/* Begin XCSwiftPackageProductDependency section */
-		A11F0E51000000000000000C /* WebRTC */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = A11F0E51000000000000000B /* XCRemoteSwiftPackageReference "WebRTC" */;
-			productName = WebRTC;
-		};
-/* End XCSwiftPackageProductDependency section */
 
 /* Begin XCBuildConfiguration section */
 		420437FE1C47FAB760B32FDF /* Debug */ = {
@@ -540,6 +520,7 @@
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = TerraPhone/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "Terra Brain";
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -566,6 +547,7 @@
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = TerraPhone/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "Terra Brain";
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -601,6 +583,25 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		A11F0E51000000000000000B /* XCRemoteSwiftPackageReference "WebRTC" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/stasel/WebRTC.git";
+			requirement = {
+				kind = exactVersion;
+				version = 155.0.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		A11F0E51000000000000000C /* WebRTC */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A11F0E51000000000000000B /* XCRemoteSwiftPackageReference "WebRTC" */;
+			productName = WebRTC;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 660A8CF2775CA1B491A8CBAE /* Project object */;
 }

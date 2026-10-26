@@ -1,20 +1,43 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict>
-<key>CFBundleDisplayName</key><string>Terra Brain</string>
-<key>CFBundleExecutable</key><string>$(EXECUTABLE_NAME)</string>
-<key>CFBundleIdentifier</key><string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
-<key>CFBundleName</key><string>$(PRODUCT_NAME)</string>
-<key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>0.1.0</string>
-<key>CFBundleVersion</key><string>1</string>
-<key>LSRequiresIPhoneOS</key><true/>
-<key>UIApplicationSceneManifest</key><dict><key>UIApplicationSupportsMultipleScenes</key><false/></dict>
-<key>UILaunchScreen</key><dict/>
-<key>UISupportedInterfaceOrientations</key><array><string>UIInterfaceOrientationPortrait</string></array>
-<key>NSCameraUsageDescription</key><string>Terra uses the rear camera for visual tracking and, when an operator requests it, a live FPV video stream. The stream does not drive the rover.</string>
-<key>NSLocationWhenInUseUsageDescription</key><string>Terra uses GPS and heading while tracking to align the rover with the ARGOS geographic scene. Local tracking remains available without location access.</string>
-<key>NSMotionUsageDescription</key><string>Terra combines phone motion with visual tracking for rover velocity control.</string>
-<key>NSLocalNetworkUsageDescription</key><string>Terra connects to the ARGOS dashboard router and simulator to share rover telemetry and receive operator requests.</string>
-<key>NSBluetoothAlwaysUsageDescription</key><string>Terra connects to your bonded rover to configure and control its actuators.</string>
-</dict></plist>
+<plist version="1.0">
+<dict>
+	<key>CFBundleDisplayName</key>
+	<string>Terra Brain</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleName</key>
+	<string>$(PRODUCT_NAME)</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.1.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>LSRequiresIPhoneOS</key>
+	<true/>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>Terra connects to your bonded rover to configure and control its actuators.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Terra uses the rear camera for visual tracking and, when an operator requests it, a live FPV video stream. The stream does not drive the rover.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Terra connects to the ARGOS dashboard router and simulator to share rover telemetry and receive operator requests.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Terra uses GPS and heading while tracking to align the rover with the ARGOS geographic scene. Local tracking remains available without location access.</string>
+	<key>NSMotionUsageDescription</key>
+	<string>Terra combines phone motion with visual tracking for rover velocity control.</string>
+	<key>UIApplicationSceneManifest</key>
+	<dict>
+		<key>UIApplicationSupportsMultipleScenes</key>
+		<false/>
+	</dict>
+	<key>UILaunchScreen</key>
+	<dict/>
+	<key>UISupportedInterfaceOrientations</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+	</array>
+</dict>
+</plist>
