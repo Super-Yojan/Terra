@@ -1,7 +1,9 @@
 //! UniFFI map facade; depth acquisition and exposure-aligned poses belong to the caller.
 use crate::{ControllerError, MobileController};
 use std::sync::{Arc, Mutex};
-use terra_mapping::{CameraIntrinsics, CameraPose, GroundPlane, HorizonBand, MapConfig, MapError};
+use terra_mapping::{
+    CameraIntrinsics, CameraPose, FloorSurface, GroundPlane, HorizonBand, MapConfig, MapError,
+};
 use terra_types::{Quaternion, Vector3};
 #[derive(Clone, uniffi::Record)]
 /// Rolling-map dimensions and depth-integration limits. Distances are metres.
@@ -99,6 +101,18 @@ pub struct OccupancyGrid {
     /// Row-major cells, rows increasing in world +Y: -1 unknown, 0..=100 occupancy.
     pub occupancy: Vec<i8>,
 }
+/// Mesh floor near the camera, for seeding the ground policy.
+#[derive(Clone, uniffi::Record)]
+pub struct FloorEstimate {
+    /// Median trusted floor height, world metres.
+    pub height: f64,
+    /// Area of the trusted floor cells counted, square metres.
+    pub area: f64,
+}
+/// Half-side of the square of floor samples kept around the camera, metres.
+const FLOOR_HALF_EXTENT: f64 = 6.0;
+/// Most floor sample coordinates accepted per update (100,000 points).
+const MAX_FLOOR_VALUES: usize = 300_000;
 fn frame_intrinsics(frame: &MappingDepthFrame) -> CameraIntrinsics {
     CameraIntrinsics {
         width: frame.width,
@@ -276,6 +290,63 @@ impl MobileOccupancyMap {
             .map_err(|_| ControllerError::Internal)?
             .clear();
         Ok(())
+    }
+    /// Replace the mesh floor with world-metre `xyz` triples of faces ARKit
+    /// classifies as floor, in the same world frame (and offset) as depth
+    /// frames. Samples within 6 m of the camera and at least 0.1 m below it
+    /// count; raised patches are dropped. An update with no usable sample
+    /// turns the veto off. Returns the number of trusted floor cells.
+    ///
+    /// # Errors
+    /// `InvalidInput` for a length that is not a multiple of three, more than
+    /// 300,000 values, or a nonfinite camera position; `Internal` for a
+    /// poisoned mutex.
+    pub fn update_floor_surface(
+        &self,
+        camera_x: f64,
+        camera_y: f64,
+        camera_z: f64,
+        xyz: Vec<f32>,
+    ) -> Result<u32, ControllerError> {
+        if !xyz.len().is_multiple_of(3)
+            || xyz.len() > MAX_FLOOR_VALUES
+            || ![camera_x, camera_y, camera_z].iter().all(|v| v.is_finite())
+        {
+            return Err(ControllerError::InvalidInput {
+                message: "floor samples must be finite xyz triples, at most 100,000 points".into(),
+            });
+        }
+        let samples: Vec<Vector3> = xyz
+            .chunks_exact(3)
+            .map(|p| Vector3 {
+                x: p[0] as f64,
+                y: p[1] as f64,
+                z: p[2] as f64,
+            })
+            .collect();
+        let map = self.map.lock().map_err(|_| ControllerError::Internal)?;
+        let surface = FloorSurface::build(
+            &samples,
+            camera_x,
+            camera_y,
+            camera_z,
+            FLOOR_HALF_EXTENT,
+            map.config().resolution,
+        );
+        let cells = surface.as_ref().map_or(0, |s| s.trusted_cells() as u32);
+        map.set_floor_surface(surface.map(Arc::new));
+        Ok(cells)
+    }
+    /// Median mesh floor height within `radius` metres of world `(x, y)` and
+    /// the area it covers, or `None` without trusted floor there.
+    pub fn floor_estimate(&self, x: f64, y: f64, radius: f64) -> Option<FloorEstimate> {
+        let (height, area) = self
+            .map
+            .lock()
+            .ok()?
+            .floor_surface()?
+            .estimate(x, y, radius)?;
+        Some(FloorEstimate { height, area })
     }
 }
 
