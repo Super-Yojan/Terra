@@ -44,6 +44,14 @@ pub fn default_connectivity_policy_settings() -> String {
         .expect("finite policy defaults")
 }
 
+/// Built-in rover profiles as a JSON array; each entry is accepted by
+/// [`MobileController::set_rover_profile`]. The first entry is Terra.
+#[uniffi::export]
+pub fn rover_profile_presets() -> String {
+    serde_json::to_string(&terra_runtime::rover_profile::RoverProfile::presets())
+        .expect("finite rover profiles")
+}
+
 #[derive(Clone, Debug, uniffi::Record)]
 /// Sensor freshness, PI gains, and wheel effort limits used at construction.
 /// All values must be finite. Gains lie in 0..=100; timeouts and limits must
@@ -96,6 +104,7 @@ impl ControlSettings {
             max_step: self.max_step,
             anti_windup: self.anti_windup,
             spin_effort: self.spin_effort,
+            wheel_deadband: 0.0,
         }
     }
     fn estimator(&self) -> EstimatorConfig {
@@ -465,6 +474,23 @@ impl MobileController {
             .map_err(|e| ControllerError::InvalidInput {
                 message: e.to_string(),
             })
+    }
+    /// Drive and plan as the rover described by `profile_json`, one entry of
+    /// [`rover_profile_presets`] or an edited copy. Sets the planner footprint,
+    /// turning policy, speed limits, velocity-loop gains and wheel deadband, and
+    /// restarts the velocity loop. Local and trusted; ARGOS cannot call it.
+    ///
+    /// # Errors
+    /// Returns `InvalidInput` for malformed JSON or out-of-range values; the
+    /// current profile then stays in place.
+    pub fn set_rover_profile(&self, profile_json: String) -> Result<(), ControllerError> {
+        let profile =
+            serde_json::from_str(&profile_json).map_err(|e| ControllerError::InvalidInput {
+                message: format!("rover profile: {e}"),
+            })?;
+        let mut b = self.brain.lock().map_err(|_| ControllerError::Internal)?;
+        b.runtime.apply_rover_profile(profile)?;
+        Ok(())
     }
     /// Trusted local normalized manual input; remote envelopes cannot access this ingress.
     pub fn set_manual_input(
@@ -890,6 +916,26 @@ mod tests {
         let mut settings = default_control_settings();
         settings.max_effort = 1.5;
         assert!(MobileController::new(settings).is_err());
+    }
+    #[test]
+    /// A preset from `rover_profile_presets` sets the planner footprint and is
+    /// reported in navigation status; a malformed profile changes nothing.
+    fn rover_profile_sets_planner_footprint() {
+        let controller = MobileController::new(default_control_settings()).unwrap();
+        let presets: Vec<serde_json::Value> =
+            serde_json::from_str(&rover_profile_presets()).unwrap();
+        let mini = presets.iter().find(|p| p["name"] == "terra_mini").unwrap();
+        assert!(controller.set_rover_profile("{}".into()).is_err());
+        controller.set_rover_profile(mini.to_string()).unwrap();
+        controller.step(0.0).unwrap();
+        let status: serde_json::Value =
+            serde_json::from_str(&controller.autonomy_status()).unwrap();
+        assert_eq!(status["navigation"]["profile"], "terra_mini");
+        let radius = status["navigation"]["footprint_radius"].as_f64().unwrap();
+        assert!(radius < 0.3, "radius={radius}");
+        let mut bad = mini.clone();
+        bad["wheel_deadband"] = serde_json::json!(2.0);
+        assert!(controller.set_rover_profile(bad.to_string()).is_err());
     }
 }
 

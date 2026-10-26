@@ -15,6 +15,7 @@ pub mod mapping;
 pub mod navigation;
 pub mod outdoor;
 pub mod pose_quality;
+pub mod rover_profile;
 pub mod search;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RuntimeError {
@@ -310,6 +311,35 @@ impl Runtime {
         config.mode = self.mode;
         config.outdoor_supported = self.outdoor.supported;
         config.identity()
+    }
+    /// Drive and plan as the rover in `profile`: planner footprint, turning,
+    /// speed limits and velocity-loop gains change together. The velocity loop
+    /// restarts, so call this while the rover is stopped.
+    pub fn apply_rover_profile(
+        &mut self,
+        profile: rover_profile::RoverProfile,
+    ) -> Result<(), RuntimeError> {
+        if !profile.valid() {
+            return Err(invalid("invalid rover profile"));
+        }
+        let navigation = profile.navigation(&self.navigation.parameters);
+        let controller = profile.controller(self.configuration.controller);
+        if !navigation.valid() || controller.validate().is_err() {
+            return Err(invalid("invalid rover profile"));
+        }
+        self.autonomy.configure_planner(navigation.planner());
+        self.autonomy.configure_turning(navigation.turning)?;
+        self.controller = VelocityController::new(controller)?;
+        self.configuration.controller = controller;
+        self.control_limits = (controller.max_forward, controller.max_yaw_rate);
+        self.navigation.parameters = navigation;
+        self.navigation.revision = self.navigation.revision.saturating_add(1);
+        self.navigation.profile = Some(profile.name.clone());
+        self.navigation.result = Some(format!("profile {}", profile.name));
+        self.outdoor.revision = self.outdoor.revision.saturating_add(1);
+        self.events
+            .push(json!({"kind":"rover_profile.applied","profile":profile}));
+        Ok(())
     }
     pub fn mapping_handle(&self) -> mapping::MappingState {
         self.grid.clone()

@@ -335,7 +335,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
         controlQueue.async {
             guard self.sensorEpochMatches(epoch), self.dashboardAttemptMatches(attempt) else { return }
             if self.mode == .bluetoothManual, self.controller == nil {
-                do { self.controller = try MobileController(settings: defaultControlSettings()) }
+                do { self.controller = try self.makeController() }
                 catch {
                     DispatchQueue.main.async {
                         guard self.dashboardAttemptMatches(attempt) else { return }
@@ -554,7 +554,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
         let preserveRuntime = mode == .phone && self.mode == .bluetoothManual && self.controller != nil
         if !preserveRuntime {
             try? self.controller?.reset()
-            self.controller = try MobileController(settings: defaultControlSettings())
+            self.controller = try makeController()
             DispatchQueue.main.async {
                 self.dashboardConnecting = false; self.dashboardConnected = false; self.dashboardStatus = "Disconnected"
             }
@@ -617,7 +617,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
         if mode == .bluetoothManual {
             let now = CACurrentMediaTime()
             do {
-                if controller == nil { controller = try MobileController(settings: defaultControlSettings()) }
+                if controller == nil { controller = try makeController() }
                 guard let controller else { return }
                 try controller.setActuationMode(feedback: false)
                 // Without a fleet session this is the phone's own debug joystick.
@@ -1783,6 +1783,23 @@ extension PhoneController {
             self.phoneMountConfirmed = mounted
             self.mountHoldReported = false
             DispatchQueue.main.async { self.phoneMounted = mounted }
+        }
+    }
+    /// Selected rover profile; Rust owns its dimensions and drive parameters.
+    @Published private(set) var roverProfile = RoverProfiles.selected
+    /// Runs on `controlQueue`. Every driving controller starts with the selected rover profile.
+    private func makeController() throws -> MobileController {
+        let controller = try MobileController(settings: defaultControlSettings())
+        if let json = RoverProfiles.json(named: RoverProfiles.selected) { try controller.setRoverProfile(profileJson: json) }
+        return controller
+    }
+    func selectRoverProfile(_ name: String) {
+        guard let json = RoverProfiles.json(named: name) else { return }
+        UserDefaults.standard.set(name, forKey: RoverProfiles.key)
+        roverProfile = name
+        controlQueue.async {
+            do { try self.controller?.setRoverProfile(profileJson: json) }
+            catch { DispatchQueue.main.async { self.configurationStatus = "Rover profile rejected: \(error)" } }
         }
     }
     /// Shadow mode: Rust routes the same efforts so its frame can be compared with Swift's.
