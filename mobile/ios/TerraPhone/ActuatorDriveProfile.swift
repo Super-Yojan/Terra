@@ -123,3 +123,23 @@ struct ActuatorProfileSynchronization {
     }
     mutating func clear() { self = Self() }
 }
+
+/// Built-in rover profiles from Rust. Swift only stores which one is selected.
+enum RoverProfiles {
+    static let key = "roverProfile"
+    static let all: [[String: Any]] = (try? JSONSerialization.jsonObject(with: Data(roverProfilePresets().utf8))) as? [[String: Any]] ?? []
+    static var names: [String] { all.compactMap { $0["name"] as? String } }
+    static var selected: String { UserDefaults.standard.string(forKey: key) ?? "terra" }
+    static func json(named name: String) -> String? {
+        guard let profile = all.first(where: { $0["name"] as? String == name }),
+              let data = try? JSONSerialization.data(withJSONObject: profile) else { return nil }
+        return String(decoding: data, as: UTF8.self)
+    }
+    static func title(_ name: String) -> String {
+        switch name {
+        case "terra": return "Terra"
+        case "terra_mini": return "terra-mini"
+        default: return name
+        }
+    }
+}

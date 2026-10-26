@@ -60,6 +60,10 @@ pub struct ControllerConfig {
     /// Open-loop wheel effort for a managed in-place spin, in `[0, 1]`; 0 keeps
     /// spins on feedback. See [`VelocityController::step`].
     pub spin_effort: f64,
+    /// Wheel effort below which the motors do not turn the wheels, in `[0, 0.9]`
+    /// and below `max_effort`. A moving wheel command is lifted past it; see
+    /// [`VelocityController::step`]. 0 sends feedback effort unchanged.
+    pub wheel_deadband: f64,
 }
 impl Default for ControllerConfig {
     fn default() -> Self {
@@ -78,6 +82,7 @@ impl Default for ControllerConfig {
             anti_windup: 4.0,
             // Not measured: enough to break CrabTrapBot's skid-steer scrub. Tune on hardware.
             spin_effort: 0.35,
+            wheel_deadband: 0.0,
         }
     }
 }
@@ -113,6 +118,8 @@ impl ControllerConfig {
             || self.max_yaw_rate > 20.0
             || self.max_step > 1.0
             || !(0.0..=1.0).contains(&self.spin_effort)
+            || !(0.0..=0.9).contains(&self.wheel_deadband)
+            || self.wheel_deadband >= self.max_effort
         {
             return Err(InputError::InvalidConfiguration);
         }
@@ -209,6 +216,11 @@ impl VelocityController {
     /// target, nonzero yaw target) bypasses feedback: wheels get `∓spin_effort`
     /// in the target's direction and the integrals stay cleared. Health and target
     /// checks still apply, and the caller still decides when the spin ends.
+    ///
+    /// With a `wheel_deadband`, feedback effort `e` on a wheel becomes
+    /// `sign(e) · (deadband + (max_effort − deadband) · |e| / max_effort)`, so a
+    /// small command still turns the wheel. Efforts under 0.01 stay zero. The
+    /// integrals work on the uncompensated effort.
     pub fn step(&mut self, estimate: VelocityEstimate) -> MotorOutput {
         let now = estimate.timestamp;
         let dt = self.last_step.map_or(0.01, |last| now - last);
@@ -302,6 +314,7 @@ impl VelocityController {
             left = 0.0;
             right = 0.0;
         }
+        let (left, right) = (self.past_deadband(left), self.past_deadband(right));
         MotorOutput {
             left,
             right,
@@ -311,6 +324,19 @@ impl VelocityController {
             target_yaw_rate: target.yaw_rate,
             stop_reason: StopReason::None,
         }
+    }
+}
+impl VelocityController {
+    fn past_deadband(&self, effort: f64) -> f64 {
+        let deadband = self.config.wheel_deadband;
+        if deadband == 0.0 {
+            return effort;
+        }
+        if effort.abs() < 0.01 {
+            return 0.0;
+        }
+        let max = self.config.max_effort;
+        effort.signum() * (deadband + (max - deadband) * (effort.abs() / max).min(1.0))
     }
 }
 #[cfg(test)]
@@ -439,6 +465,48 @@ mod tests {
         })
         .unwrap();
         assert!(!open(arc.step(estimate(0.0, 0.0, 0.0))));
+    }
+
+    /// A small feedback effort is lifted past the wheel deadband in its own
+    /// direction, full effort stays full, and a stop stays exactly zero.
+    #[test]
+    fn wheel_deadband_lifts_small_efforts() {
+        let mut c = VelocityController::new(ControllerConfig {
+            wheel_deadband: 0.4,
+            ..Default::default()
+        })
+        .unwrap();
+        c.set_target(VelocityTarget {
+            timestamp: 0.0,
+            forward: 0.2,
+            yaw_rate: 0.0,
+        })
+        .unwrap();
+        let out = c.step(estimate(0.0, 0.0, 0.0));
+        // Uncompensated this is 0.2/3 + 0.3 * 0.2 ≈ 0.127.
+        assert!(out.left > 0.4 && out.left < 0.5, "left={}", out.left);
+        assert_eq!(out.left, out.right);
+        assert_eq!(c.past_deadband(1.0), 1.0);
+        assert!((c.past_deadband(-0.5) + 0.7).abs() < 1e-12);
+        assert_eq!(c.past_deadband(0.005), 0.0);
+        c.set_target(VelocityTarget {
+            timestamp: 0.01,
+            forward: 0.0,
+            yaw_rate: 0.0,
+        })
+        .unwrap();
+        let stopped = c.step(estimate(0.01, 0.0, 0.0));
+        assert_eq!((stopped.left, stopped.right), (0.0, 0.0));
+        for wheel_deadband in [-0.1, 0.95, f64::NAN] {
+            assert!(
+                ControllerConfig {
+                    wheel_deadband,
+                    ..Default::default()
+                }
+                .validate()
+                .is_err()
+            );
+        }
     }
 
     /// Tracking loss and stale targets still stop an open-loop spin.

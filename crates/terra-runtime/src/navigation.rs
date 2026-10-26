@@ -93,12 +93,14 @@ pub struct State {
     pub token: Option<String>,
     /// Latest acceptance or rejection diagnostic.
     pub result: Option<String>,
+    /// Rover profile that last set these parameters, if any.
+    pub profile: Option<String>,
     seen: std::collections::VecDeque<String>,
 }
 impl State {
     /// Return versioned navigation configuration status JSON, including radius, revision, and latest result.
     pub fn status(&self) -> serde_json::Value {
-        serde_json::json!({"schema_version":1,"revision":self.revision,"parameters":self.parameters,"footprint_radius":self.parameters.planner().radius,"token":self.token,"result":self.result})
+        serde_json::json!({"schema_version":1,"revision":self.revision,"parameters":self.parameters,"footprint_radius":self.parameters.planner().radius,"profile":self.profile,"token":self.token,"result":self.result})
     }
 }
 #[derive(Deserialize)]

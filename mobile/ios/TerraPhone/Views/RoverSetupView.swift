@@ -22,6 +22,13 @@ struct RoverSetupView: View {
                 Text("ARGOS manages tracking automatically in every autonomy mode. Camera access and phone sensors are required. Feedback control also requires a compatible actuator layout.")
                     .font(.footnote).foregroundStyle(.secondary)
             }
+            Section {
+                Picker("Rover", selection: Binding(get: { brain.roverProfile }, set: { brain.selectRoverProfile($0) })) {
+                    ForEach(RoverProfiles.names, id: \.self) { Text(RoverProfiles.title($0)).tag($0) }
+                }
+                Text("Sets the body size the planner avoids obstacles with, the speed limits, and the motor deadband the speed loop drives past.")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
             Section("GPS position") {
                 PhoneLocalizationStatusView(report: brain.localizationReport, trackingActive: brain.phoneTrackingActive)
             }
