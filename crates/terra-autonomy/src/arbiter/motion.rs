@@ -52,7 +52,7 @@ impl AutonomyArbiter {
             decision.reason = why;
             decision.held = true;
             self.explore_blocked = false;
-        } else if let Some(yaw_rate) = self.explore_scan {
+        } else if let Some(yaw_rate) = self.explore_scan.filter(|_| self.level == Level::Explore) {
             self.explore_blocked = false;
             self.scan_motion(input, planning_map, yaw_rate, decision);
         } else {
