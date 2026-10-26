@@ -221,6 +221,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
     private var target = (forward: 0.0, yaw: 0.0)
     private var lastLocalTarget = (forward: 0.0, yaw: 0.0)
     private var lastCloudTime = -Double.infinity
+    private var lastFloorTime = -Double.infinity
     private var tick = 0
     // Publication identity must survive prepare/preserveRuntime and UI tick resets.
     private var occupancyPublicationRevision: UInt64 = 0
@@ -463,6 +464,8 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
         configuration.worldAlignment = .gravity
         configuration.planeDetection = [.horizontal]
         if ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) { configuration.frameSemantics.insert(.sceneDepth) }
+        // Classified mesh (LiDAR only): its floor faces veto false obstacles in Rust.
+        if ARWorldTrackingConfiguration.supportsSceneReconstruction(.meshWithClassification) { configuration.sceneReconstruction = .meshWithClassification }
         locationManager.requestWhenInUseAuthorization()
         locationManager.startUpdatingLocation()
         if CLLocationManager.headingAvailable() { locationManager.startUpdatingHeading() }
@@ -1024,7 +1027,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
         if mapGroundOffset == nil, mountCalibration.isPlausible {
             mapGroundOffset = groundPolicy.mount(clearance: mountCalibration.cameraHeight, cameraHeight: Double(position.z))
             guard mapGroundOffset != nil else { return }
-            try? occupancyMap?.clear()
+            try? occupancyMap?.clear(); lastFloorTime = -Double.infinity
         }
         if mapGroundOffset == nil {
             let floors = frame.anchors.compactMap { $0 as? ARPlaneAnchor }.filter {
@@ -1034,12 +1037,16 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
             }
             let classified = floors.filter { $0.classification == .floor }
             let floor = (classified.isEmpty ? floors : classified).min { $0.transform.columns.3.y < $1.transform.columns.3.y }
-            let height = floor.map { Double(($0.transform * SIMD4<Float>($0.center.x, $0.center.y, $0.center.z, 1)).y) }
-            let area = floor.map { Double($0.planeExtent.width * $0.planeExtent.height) } ?? 0
+            var height = floor.map { Double(($0.transform * SIMD4<Float>($0.center.x, $0.center.y, $0.center.z, 1)).y) }
+            var area = floor.map { Double($0.planeExtent.width * $0.planeExtent.height) } ?? 0
+            // No floor plane yet: the classified mesh's floor near the camera is the next best measurement.
+            if floor == nil, let mesh = occupancyMap?.floorEstimate(x: Double(position.x), y: Double(position.y), radius: 2.0) {
+                height = mesh.height; area = mesh.area
+            }
             mapGroundOffset = groundPolicy.observe(height: height, cameraHeight: Double(position.z), area: area, now: frame.timestamp, upZ: Double(bodyUp.z))
             // The level-band map reports its own "finding floor" status meanwhile.
             guard mapGroundOffset != nil else { return }
-            try? occupancyMap?.clear()
+            try? occupancyMap?.clear(); lastFloorTime = -Double.infinity
         }
     }
     private func publishPhoneCloud(frame: ARFrame, position: SIMD3<Float>) {
@@ -1092,6 +1099,12 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
         guard let depth = frame.sceneDepth, let map = occupancyMap else {
             observation.recordChanged(component: "mapping", kind: "mapping.health", attributes: ["reason": frame.sceneDepth == nil ? "depth_unavailable" : "map_unavailable"])
             return
+        }
+        if frame.timestamp - lastFloorTime >= 1 {
+            lastFloorTime = frame.timestamp
+            let lift = mapGroundOffset ?? 0
+            let cells = try? map.updateFloorSurface(cameraX: Double(position.x), cameraY: Double(position.y), cameraZ: Double(position.z) + lift, xyz: collectFloorSamples(frame: frame, lift: Float(lift)))
+            observation.recordChanged(component: "mapping", kind: "mapping.floor_mesh", attributes: ["available": (cells ?? 0) > 0])
         }
         let up = bodyOrientation.act(SIMD3<Float>(0, 0, 1))
         // Nil until ARKit finds the floor; the level band maps in the meantime.
@@ -1162,6 +1175,35 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
                 observationCapture.capture(image: frame.capturedImage, exposure: frame.timestamp, depth: values, width: width, height: height, grid: try? map.snapshot(), manifest: metadata, controller: controller)
             }
         } catch { observation.recordChanged(component: "mapping", kind: "mapping.health", attributes: ["reason": "integration_failed", "error": error.localizedDescription]); DispatchQueue.main.async { self.mapStatus = "Map: " + error.localizedDescription } }
+    }
+    /// Centres of mesh faces ARKit classifies as floor, as world x, y, z triples
+    /// lifted by the same ground offset as depth frames. Rust decides what they veto.
+    private func collectFloorSamples(frame: ARFrame, lift: Float) -> [Float] {
+        var xyz: [Float] = []
+        let floorClass = UInt8(ARMeshClassification.floor.rawValue)
+        for case let anchor as ARMeshAnchor in frame.anchors {
+            let geometry = anchor.geometry
+            let faces = geometry.faces, vertices = geometry.vertices
+            guard let classes = geometry.classification, classes.count == faces.count,
+                  faces.indexCountPerPrimitive == 3, vertices.format == .float3 else { continue }
+            let faceBase = faces.buffer.contents(), vertexBase = vertices.buffer.contents(), classBase = classes.buffer.contents()
+            let transform = anchor.transform
+            for face in 0..<faces.count {
+                guard classBase.load(fromByteOffset: classes.offset + classes.stride * face, as: UInt8.self) == floorClass else { continue }
+                var centre = SIMD3<Float>(repeating: 0)
+                for corner in 0..<3 {
+                    let at = (face * 3 + corner) * faces.bytesPerIndex
+                    let index = faces.bytesPerIndex == 4 ? Int(faceBase.load(fromByteOffset: at, as: UInt32.self)) : Int(faceBase.load(fromByteOffset: at, as: UInt16.self))
+                    let v = vertexBase.advanced(by: vertices.offset + vertices.stride * index).assumingMemoryBound(to: Float.self)
+                    centre += SIMD3(v[0], v[1], v[2])
+                }
+                let ar = transform * SIMD4(centre / 3, 1)
+                let p = worldFromAR * SIMD3(ar.x, ar.y, ar.z)
+                xyz.append(contentsOf: [p.x, p.y, p.z + lift])
+                if xyz.count >= 300_000 { return xyz }
+            }
+        }
+        return xyz
     }
     /// Half-height of the level depth band used before the floor is found, degrees.
     private static let horizonBandHalfAngleDegrees = 10.0

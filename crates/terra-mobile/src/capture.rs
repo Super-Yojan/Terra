@@ -237,6 +237,7 @@ fn decimate(depth: &terra_mapping::DepthCapture, stride: u32) -> terra_mapping::
             .flat_map(|v| (0..width).map(move |u| (u, v)))
             .map(|(u, v)| depth.depth[(v * stride * k.width + u * stride) as usize])
             .collect(),
+        floor: depth.floor.clone(),
     }
 }
 

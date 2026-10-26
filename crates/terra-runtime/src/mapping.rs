@@ -36,6 +36,16 @@ impl MappingState {
     pub fn snapshot(&self) -> MapSnapshot {
         self.0.lock().unwrap().snapshot()
     }
+    /// Install the mesh floor that vetoes obstacle returns; see
+    /// [`LocalOccupancyMap::set_floor_surface`].
+    pub fn set_floor_surface(&self, floor: Option<std::sync::Arc<FloorSurface>>) {
+        if let Ok(mut map) = self.0.lock() {
+            map.set_floor_surface(floor);
+        }
+    }
+    pub fn floor_surface(&self) -> Option<std::sync::Arc<FloorSurface>> {
+        self.0.lock().ok()?.floor_surface()
+    }
     /// Start keeping a copy of each accepted depth frame. Copies cost a full
     /// depth image per frame, so they are made only while armed.
     pub fn arm_capture(&self) {
@@ -93,10 +103,11 @@ impl MappingState {
         pixels: &[f32],
         classifier: DepthClassifier,
     ) -> Result<(), MapError> {
-        self.0
-            .lock()
-            .map_err(|_| MapError::InvalidFrame)?
-            .integrate_classified(t, k, c, pixels, classifier)?;
+        let floor = {
+            let mut map = self.0.lock().map_err(|_| MapError::InvalidFrame)?;
+            map.integrate_classified(t, k, c, pixels, classifier)?;
+            map.floor_surface()
+        };
         if let Ok(mut slot) = self.2.lock()
             && slot.armed
         {
@@ -107,6 +118,7 @@ impl MappingState {
                 classifier,
                 config: self.1,
                 depth: pixels.to_vec(),
+                floor,
             });
         }
         Ok(())

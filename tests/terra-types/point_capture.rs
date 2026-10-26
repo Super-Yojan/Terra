@@ -7,8 +7,8 @@ fn frame() -> CaptureFrame {
         index: 2,
         count: 10,
         timestamp: 12.5,
-        width: 3,
-        height: 2,
+        width: 7,
+        height: 1,
         camera_position: [1.0, 2.0, 0.4],
         camera_orientation: [0.0, 0.0, 0.0, 1.0],
         intrinsics: [200.0, 201.0, 1.0, 0.5],
@@ -41,9 +41,10 @@ fn frame_round_trips() {
     let original = frame();
     let bytes = original.encode().unwrap();
     assert_eq!(&bytes[..4], b"TPC1");
-    assert_eq!(bytes.len(), 4 + 8 + 1 + 5 + 4 + 8 + 8 + 8 * 18 + 1 + 6 * 13);
+    assert_eq!(bytes.len(), 4 + 8 + 1 + 5 + 4 + 8 + 8 + 8 * 18 + 1 + 7 * 13);
     let decoded = CaptureFrame::decode(&bytes).unwrap();
     assert_eq!(decoded.points[5].label, PointLabel::NoReturn);
+    assert_eq!(decoded.points[6].label, PointLabel::FloorVeto);
     assert!(decoded.points[5].position[0].is_nan());
     let mut comparable = decoded.clone();
     comparable.points[5].position = [0.0; 3];

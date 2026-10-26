@@ -68,16 +68,20 @@ pub enum PointLabel {
     OutsideBand = 4,
     /// No finite, positive depth for this pixel.
     NoReturn = 5,
+    /// Would be an obstacle, but lands on surface ARKit's mesh classifies as
+    /// floor: clears its ray and endpoint like [`Self::Free`].
+    FloorVeto = 6,
 }
 impl PointLabel {
     /// Every label, in wire order.
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::Free,
         Self::Obstacle,
         Self::Overhead,
         Self::OutOfRange,
         Self::OutsideBand,
         Self::NoReturn,
+        Self::FloorVeto,
     ];
     /// Decode a wire byte.
     pub fn from_u8(value: u8) -> Option<Self> {
@@ -92,6 +96,7 @@ impl PointLabel {
             Self::OutOfRange => "out_of_range",
             Self::OutsideBand => "outside_band",
             Self::NoReturn => "no_return",
+            Self::FloorVeto => "floor_veto",
         }
     }
 }
