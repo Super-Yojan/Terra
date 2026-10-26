@@ -15,6 +15,7 @@
 		24894F900F7490AA19DE55B3 /* PersonDepthGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = DB887F7AD412C1F04EDC079D /* PersonDepthGeometry.swift */; };
 		2A76E570455AA88AE9F27D16 /* PhoneFrameOrder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 948E9284D4E99774F72ADCB8 /* PhoneFrameOrder.swift */; };
 		37C8F681B8564FABEA922179 /* PersonSearchDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50BE71F885C99967A195ECC8 /* PersonSearchDetector.swift */; };
+		7A5C0E12D2B34F6A8C9D0E1F /* TaskModelRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A5C0E11D2B34F6A8C9D0E1F /* TaskModelRunner.swift */; };
 		3DF9E05C49FEB1A06432E1A7 /* TerraLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 25948E386E416BE1611442F7 /* TerraLog.swift */; };
 		4114E38BEE246A763559F11E /* MountCalibration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D2EB8FAB5C424C195564DB7 /* MountCalibration.swift */; };
 		5103B205700BE25C836BE434 /* DriveControlPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C4723336D834BA5A0020B66 /* DriveControlPanel.swift */; };
@@ -86,6 +87,7 @@
 		48EBDF0CFE543A6304242A8B /* FleetConnectionSettings.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = FleetConnectionSettings.swift; sourceTree = "<group>"; };
 		4DB3F3D968483A1FD1080BEB /* TerraPhone.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = TerraPhone.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		50BE71F885C99967A195ECC8 /* PersonSearchDetector.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = PersonSearchDetector.swift; sourceTree = "<group>"; };
+		7A5C0E11D2B34F6A8C9D0E1F /* TaskModelRunner.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TaskModelRunner.swift; sourceTree = "<group>"; };
 		543C3C67B32982AE4FA32C81 /* Info.plist */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		5695D4ADB6DDDB9AD9ECC1EB /* TerraPhoneApp.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TerraPhoneApp.swift; sourceTree = "<group>"; };
 		58BEF209DEE2945A7D96965A /* BluetoothFragmentAssembler.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = BluetoothFragmentAssembler.swift; sourceTree = "<group>"; };
@@ -248,6 +250,7 @@
 				58BEF209DEE2945A7D96965A /* BluetoothFragmentAssembler.swift */,
 				DB887F7AD412C1F04EDC079D /* PersonDepthGeometry.swift */,
 				50BE71F885C99967A195ECC8 /* PersonSearchDetector.swift */,
+				7A5C0E11D2B34F6A8C9D0E1F /* TaskModelRunner.swift */,
 				F9F7CE3FE9E7E9C9734B9A85 /* PhoneMountGeometry.swift */,
 				C2AC19B9778E4A6CD3D5E1BA /* RotationOffsetFit.swift */,
 				0D2EB8FAB5C424C195564DB7 /* MountCalibration.swift */,
@@ -379,6 +382,7 @@
 				F0EA40F2756462AED7DD4EE2 /* BluetoothFragmentAssembler.swift in Sources */,
 				24894F900F7490AA19DE55B3 /* PersonDepthGeometry.swift in Sources */,
 				37C8F681B8564FABEA922179 /* PersonSearchDetector.swift in Sources */,
+				7A5C0E12D2B34F6A8C9D0E1F /* TaskModelRunner.swift in Sources */,
 				CD7A9A2C8F638D6DB8443AE7 /* PhoneMountGeometry.swift in Sources */,
 				D637CFC5BD62A44FA1709F52 /* RotationOffsetFit.swift in Sources */,
 				4114E38BEE246A763559F11E /* MountCalibration.swift in Sources */,

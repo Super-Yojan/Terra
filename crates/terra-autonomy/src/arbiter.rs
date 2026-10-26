@@ -90,6 +90,8 @@ pub struct ArbiterOutput {
     /// True when `twist` is an exploration look-around: a slow turn in place that
     /// the vehicle may run even where in-place turns are otherwise disabled.
     pub in_place_turn: bool,
+    /// L5 task status once a task has started under the `task` level.
+    pub task: Option<crate::TaskStatus>,
 }
 /// Stateful authority arbiter, waypoint follower, exploration runner, and target-search coordinator.
 pub struct AutonomyArbiter {
@@ -150,6 +152,12 @@ pub struct AutonomyArbiter {
     explore_scan: Option<f64>,
     /// Turning limits for the look-around, with in-place turns allowed.
     scan_turning: Option<TurningLimiter>,
+    /// L5 task run under the `task` level, kept after it ends for status.
+    task: Option<task::TaskRun>,
+    /// Name of the host's language model; `task` is offered only while set.
+    task_model: Option<String>,
+    task_landmarks: Vec<crate::task::TaskLandmark>,
+    next_task_query: u64,
 }
 impl Default for AutonomyArbiter {
     fn default() -> Self {
@@ -205,6 +213,10 @@ impl Default for AutonomyArbiter {
             explore_unhealthy_since: None,
             explore_scan: None,
             scan_turning: None,
+            task: None,
+            task_model: None,
+            task_landmarks: Vec::new(),
+            next_task_query: 0,
         }
     }
 }
@@ -214,6 +226,7 @@ mod motion;
 mod requests;
 mod search_requests;
 mod status;
+mod task;
 
 /// Working result for one tick. Kept private so external code uses ArbiterOutput.
 struct TickDecision {
@@ -292,9 +305,16 @@ impl AutonomyArbiter {
 
         // 2. Safety has priority over operator intent, goals and planning.
         self.check_initial_safety(&input, valid_time, &mut decision);
+        if !decision.held && self.level == Level::Task {
+            // L5: apply the model's latest answer, or hold while it thinks.
+            self.drive_task(&input, &mut decision);
+        }
         if !decision.held {
             // 3. Choose intent and check the planned motion against occupancy.
             self.select_motion(&input, planning_map, command_origin, &mut decision);
+        }
+        if self.level == Level::Task {
+            self.watch_task_route(&input, &decision);
         }
 
         // 4. Apply the vehicle's turning constraints to the selected command.
@@ -315,6 +335,7 @@ impl AutonomyArbiter {
         self.drain_explore_events();
         let in_place_turn = !decision.held && decision.reason == "exploration_scan";
         ArbiterOutput {
+            task: status.task.clone(),
             in_place_turn,
             command_origin,
             intent: decision.intent_command,

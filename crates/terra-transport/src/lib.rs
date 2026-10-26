@@ -457,7 +457,7 @@ impl RoverConnection {
     }
     /// Queue an action suffix and JSON payload for the worker. Accepted suffixes are
     /// `autonomy`, `safety`, `goal`, `goal/decision`, `search`, `search/action`,
-    /// and `search/report/ack`; JSON must fit 2048 bytes.
+    /// `search/report/ack`, `task` and `task/action`; JSON must fit 2048 bytes.
     ///
     /// # Errors
     /// Returns `InvalidTarget` for topic/JSON/size rejection, `Closed` after shutdown,
@@ -474,6 +474,8 @@ impl RoverConnection {
                 | "search"
                 | "search/action"
                 | "search/report/ack"
+                | "task"
+                | "task/action"
         ) || payload.len() > 2048
             || serde_json::from_str::<serde_json::Value>(payload).is_err()
         {
@@ -492,7 +494,8 @@ impl RoverConnection {
             || (kind == "safety" && value["action"] == "stop")
             || (kind == "search/action"
                 && matches!(value["action"].as_str(), Some("pause" | "cancel")))
-            || kind == "search/report/ack";
+            || kind == "search/report/ack"
+            || (kind == "task/action" && value["action"] == "cancel");
         if !neutral {
             let authority: serde_json::Value =
                 serde_json::from_str(&state.authority).unwrap_or_default();
@@ -850,5 +853,7 @@ pub fn is_control_topic(kind: &str) -> bool {
             | "search"
             | "search/action"
             | "search/report/ack"
+            | "task"
+            | "task/action"
     )
 }

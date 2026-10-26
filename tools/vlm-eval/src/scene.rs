@@ -173,6 +173,7 @@ pub fn level_label(level: Level) -> &'static str {
         Level::Supervised => "supervised",
         Level::Explore => "explore (time-bounded frontier)",
         Level::TargetSearch => "target_search (L4)",
+        Level::Task => "task (L5)",
     }
 }
 

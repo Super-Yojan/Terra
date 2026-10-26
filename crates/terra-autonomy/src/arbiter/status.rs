@@ -9,7 +9,7 @@ impl AutonomyArbiter {
         decision: &TickDecision,
     ) -> AutonomyStatus {
         AutonomyStatus {
-            global_route: if self.level == Level::Waypoint
+            global_route: if matches!(self.level, Level::Waypoint | Level::Task)
                 && decision.route_failure.is_none()
                 && valid_time
                 && !self.stopped
@@ -69,10 +69,14 @@ impl AutonomyArbiter {
                 {
                     levels.push(Level::TargetSearch);
                 }
+                if self.task_model.is_some() {
+                    levels.push(Level::Task);
+                }
                 levels
             },
             paused: self.paused,
             exploration: self.exploration_report(input.now),
+            task: self.task_status(input.now),
         }
     }
 }

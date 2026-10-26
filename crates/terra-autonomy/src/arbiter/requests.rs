@@ -40,6 +40,7 @@ impl AutonomyArbiter {
                 self.has_active_goal(pose)
             }
             Level::Explore => self.explorer.is_running(),
+            Level::Task => self.task_running(),
             Level::TargetSearch => self.search.as_ref().is_some_and(|s| {
                 matches!(s.phase(), SearchPhase::Searching | SearchPhase::Confirming)
             }),
@@ -233,9 +234,13 @@ impl AutonomyArbiter {
     ///
     /// Invalid tokens are ignored. Budget and detector rejections are exposed through status receipts and decision events.
     pub fn set_level(&mut self, r: LevelRequest) {
+        self.set_level_with_task(r, None);
+    }
+    /// [`Self::set_level`] that also starts `task` when the level is `task`.
+    pub fn set_level_with_task(&mut self, r: LevelRequest, task: Option<TaskSpec>) {
         let fp = format!(
-            "level:{:?}:{:?}:{:?}",
-            r.level, r.budget_seconds, r.budget_minutes
+            "level:{:?}:{:?}:{:?}:{:?}",
+            r.level, r.budget_seconds, r.budget_minutes, task
         );
         if !valid_token(&r.token) || self.duplicate(&r.token, &fp) {
             return;
@@ -246,6 +251,17 @@ impl AutonomyArbiter {
         }
         if !budget_fields_valid(&r) {
             self.acknowledge(r.token, fp, false, "invalid_budget");
+            return;
+        }
+        if r.level == Level::Task && self.task_model.is_none() {
+            self.acknowledge(r.token, fp, false, "task_model_unavailable");
+            return;
+        }
+        if task
+            .as_ref()
+            .is_some_and(|t| r.level != Level::Task || !t.valid())
+        {
+            self.acknowledge(r.token, fp, false, "invalid_task");
             return;
         }
         let budget = r
@@ -263,6 +279,15 @@ impl AutonomyArbiter {
             self.explorer.stop(EndReason::OperatorTakeover);
         }
         let changed = self.level != r.level;
+        self.end_task(
+            TaskPhase::Cancelled,
+            if changed {
+                "level_changed"
+            } else {
+                "operator_reselection"
+            },
+            f64::NAN,
+        );
         self.clear();
         self.level = r.level;
         let config = if r.level == Level::TargetSearch {
@@ -287,6 +312,9 @@ impl AutonomyArbiter {
         {
             self.exploration_budget = Some(seconds);
             self.explorer.start(seconds, &self.run_id);
+        }
+        if let Some(task) = task {
+            self.begin_task(task, self.last_time.unwrap_or(0.));
         }
         self.acknowledge(
             r.token,
@@ -382,6 +410,9 @@ impl AutonomyArbiter {
             if self.level == Level::Explore && self.explorer.is_running() {
                 self.explorer.stop(EndReason::OperatorStop);
             }
+            if self.level == Level::Task {
+                self.end_task(TaskPhase::Cancelled, "operator_cancel", f64::NAN);
+            }
             self.clear();
             if matches!(self.level, Level::Waypoint | Level::WaypointDirect) {
                 self.level = Level::Teleop;
@@ -476,6 +507,9 @@ impl AutonomyArbiter {
         if ok {
             if r.action == SafetyAction::Stop && self.explorer.is_running() {
                 self.explorer.stop(EndReason::OperatorStop);
+            }
+            if r.action == SafetyAction::Stop {
+                self.end_task(TaskPhase::Cancelled, "operator_stop", f64::NAN);
             }
             self.clear();
             self.stopped = r.action == SafetyAction::Stop;

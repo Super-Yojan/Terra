@@ -105,6 +105,7 @@ nav:
   - Autonomy:
       - Guide: autonomy/README.md
       - Contract: autonomy/PROTOCOL.md
+      - L5 task: autonomy/TASK.md
       - Evidence: autonomy/evidence/README.md
   - Simulation: simulation.md
   - Development:

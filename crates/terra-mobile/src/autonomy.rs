@@ -164,7 +164,8 @@ impl MobileController {
 
 /// Levels the shared arbiter accepts today.
 ///
-/// Target search is advertised dynamically only when a fresh detector is available.
+/// Target search is advertised dynamically only when a fresh detector is available,
+/// and the L5 `task` level only while the phone advertises a language model.
 #[uniffi::export]
 pub fn supported_autonomy_levels() -> Vec<String> {
     [
@@ -184,6 +185,7 @@ pub fn supported_autonomy_levels() -> Vec<String> {
         terra_autonomy::Level::WaypointDirect => "waypoint_direct",
         terra_autonomy::Level::Explore => "explore",
         terra_autonomy::Level::TargetSearch => "target_search",
+        terra_autonomy::Level::Task => "task",
     })
     .map(str::to_string)
     .collect()

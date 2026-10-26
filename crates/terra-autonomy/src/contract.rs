@@ -20,6 +20,9 @@ pub enum Level {
     TargetSearch,
     /// Time-bounded frontier exploration. Goals are not held for approval.
     Explore,
+    /// L5: an on-device language model turns an operator task into waypoints,
+    /// which run on the L3 route. Requires a model advertised by the host.
+    Task,
 }
 /// Token-correlated authority selection with an optional exploration budget.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -190,6 +193,9 @@ pub struct AutonomyStatus {
     /// Present once an exploration run has started, including after it ends.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exploration: Option<terra_exploration::ExplorationStatus>,
+    /// Present once an L5 task has started, including after it ends.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task: Option<crate::TaskStatus>,
 }
 /// Return whether `s` is 1–64 ASCII letters, digits, or characters from `._:-`.
 pub fn valid_token(s: &str) -> bool {
@@ -206,6 +212,26 @@ fn decode<T: serde::de::DeserializeOwned>(b: &[u8]) -> Option<T> {
 /// Decode at most 2048 bytes of strict JSON; return `None` for invalid tokens, budgets, fields, or syntax.
 pub fn decode_level(b: &[u8]) -> Option<LevelRequest> {
     decode::<LevelRequest>(b).filter(|r| valid_token(&r.token) && budget_fields_valid(r))
+}
+/// Decode a level request that may carry an inline `task` object, so one message
+/// selects L5 and gives the task. A `task` is accepted only with `"level":"task"`.
+pub fn decode_level_with_task(b: &[u8]) -> Option<(LevelRequest, Option<crate::TaskSpec>)> {
+    if b.is_empty() || b.len() > 2048 {
+        return None;
+    }
+    let mut value: serde_json::Value = serde_json::from_slice(b).ok()?;
+    let task = match value.as_object_mut()?.remove("task") {
+        None => None,
+        Some(task) => Some(serde_json::from_value::<crate::TaskSpec>(task).ok()?),
+    };
+    let request: LevelRequest = serde_json::from_value(value).ok()?;
+    if !valid_token(&request.token) || !budget_fields_valid(&request) {
+        return None;
+    }
+    match &task {
+        Some(t) if request.level != Level::Task || !t.valid() => None,
+        _ => Some((request, task)),
+    }
 }
 /// Decode at most 2048 bytes of strict JSON; return `None` for invalid fields, tokens, or syntax.
 pub fn decode_safety(b: &[u8]) -> Option<SafetyRequest> {

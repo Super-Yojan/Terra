@@ -23,6 +23,8 @@ impl Runtime {
                 | "search"
                 | "search/action"
                 | "search/report/ack"
+                | "task"
+                | "task/action"
         ) {
             return Err("unsupported_request");
         }
@@ -31,6 +33,7 @@ impl Runtime {
             || (kind == "search/action"
                 && matches!(v["action"].as_str(), Some("pause" | "cancel")))
             || kind == "search/report/ack"
+            || (kind == "task/action" && v["action"] == "cancel")
             || (kind == "teleop"
                 && v["linear"].as_f64() == Some(0.)
                 && v["angular"].as_f64() == Some(0.));
@@ -54,7 +57,13 @@ impl Runtime {
             o.remove("authority_revision");
         } else if matches!(
             kind,
-            "goal/decision" | "search" | "search/action" | "search/report/ack" | "goal"
+            "goal/decision"
+                | "search"
+                | "search/action"
+                | "search/report/ack"
+                | "goal"
+                | "task"
+                | "task/action"
         ) {
             o.remove("authority_revision");
         }
@@ -113,6 +122,8 @@ impl Runtime {
                     | "search"
                     | "search/action"
                     | "search/report/ack"
+                    | "task"
+                    | "task/action"
             )
         {
             return Err(invalid("invalid local request"));
@@ -125,10 +136,10 @@ impl Runtime {
     }
     fn dispatch_action(&mut self, kind: &str, bytes: &[u8], now: f64, at: f64) -> bool {
         match kind {
-            "autonomy" => terra_autonomy::decode_level(&bytes)
-                .map(|r| {
+            "autonomy" => terra_autonomy::decode_level_with_task(&bytes)
+                .map(|(r, task)| {
                     let token = r.token.clone();
-                    self.autonomy.set_level(r);
+                    self.autonomy.set_level_with_task(r, task);
                     self.autonomy.request_receipt() == Some((token.as_str(), true))
                 })
                 .unwrap_or(false),
@@ -153,6 +164,14 @@ impl Runtime {
             "search" | "search/action" | "search/report/ack" => {
                 search::dispatch_search(self, &kind, &bytes, now).is_ok()
             }
+            "task" => terra_autonomy::decode_task_request(&bytes).is_some_and(|r| {
+                self.autonomy.run_id = self.run_id.clone();
+                self.autonomy.start_task(r, now).is_ok()
+            }),
+            "task/action" => terra_autonomy::decode_task_action(&bytes).is_some_and(|a| {
+                self.autonomy.run_id = self.run_id.clone();
+                self.autonomy.apply_task_action(a, now).is_ok()
+            }),
             "goal/decision" => {
                 if let Some(r) = terra_autonomy::decode_decision(&bytes) {
                     let pose = self.pose.unwrap_or_default();

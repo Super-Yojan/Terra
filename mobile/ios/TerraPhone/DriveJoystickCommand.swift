@@ -53,14 +53,15 @@ enum TerraFleetManualDrive {
     static func requiresAutonomousControl(_ json: String) -> Bool {
         guard let root = (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any],
               let status = root["status"] as? [String: Any] else { return false }
-        return ["waypoint", "waypoint_direct", "supervised", "explore", "target_search"].contains(status["requested_level"] as? String ?? "")
+        return ["waypoint", "waypoint_direct", "supervised", "explore", "target_search", "task"].contains(status["requested_level"] as? String ?? "")
     }
 
-    /// L3 uses phone VIO motion estimates, independently of the actuator routing format.
+    /// L3, and L5 tasks that drive on the L3 route, use phone VIO motion estimates,
+    /// independently of the actuator routing format.
     static func requiresVioControl(_ json: String) -> Bool {
         guard let root = (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any],
               let status = root["status"] as? [String: Any] else { return false }
-        return status["requested_level"] as? String == "waypoint" || status["effective_level"] as? String == "waypoint"
+        return ["waypoint", "task"].contains(status["requested_level"] as? String ?? "") || ["waypoint", "task"].contains(status["effective_level"] as? String ?? "")
     }
     static func vioReady(_ json: String) -> Bool {
         guard let root = (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any],
