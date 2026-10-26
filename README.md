@@ -67,6 +67,6 @@ Terra includes time-bounded frontier exploration (`terra-exploration`), the Andr
 TerraPhone adapter, and an [offline VLM decision evaluator](tools/vlm-eval/README.md).
 The evaluator is a research tool and does not command live vehicles. Android setup
 and limitations are in [the Android guide](docs/MOBILE_ANDROID.md).
-Phone mount measurements and the two-pass offset fit are in Settings; stop tracking
-before saving measurements. See [the calibration checklist](docs/MOUNT_CALIBRATION_CHECKLIST.md).
+Phone mount measurements and the two-pass offset fit are in Settings → Debug tools → Controller & simulation;
+saving the measurements stops the controller first. See [the calibration checklist](docs/MOUNT_CALIBRATION_CHECKLIST.md).
 Measured ground-plane detection remains independent of mount height.
