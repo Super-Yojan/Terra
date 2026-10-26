@@ -18,6 +18,9 @@
 //! # Ok::<(), terra_mapping::MapError>(())
 //! ```
 
+mod floor;
+pub use floor::{FLOOR_BELOW_CAMERA, FLOOR_OUTLIER, FloorSurface};
+use std::sync::Arc;
 pub use terra_types::point_capture::PointLabel;
 use terra_types::{Quaternion, Vector3};
 
@@ -157,6 +160,7 @@ pub struct LocalOccupancyMap {
     evidence: Vec<f32>,
     observed: Vec<bool>,
     last_timestamp: Option<f64>,
+    floor: Option<Arc<FloorSurface>>,
 }
 impl LocalOccupancyMap {
     /// Allocate an unknown grid centered on world `(0, 0)`.
@@ -176,13 +180,29 @@ impl LocalOccupancyMap {
             evidence: vec![0.0; n],
             observed: vec![false; n],
             last_timestamp: None,
+            floor: None,
         })
     }
-    /// Erase observations and timestamp history while retaining geometry and origin.
+    /// Erase observations, timestamp history and the floor surface while
+    /// retaining geometry and origin.
     pub fn clear(&mut self) {
         self.evidence.fill(0.0);
         self.observed.fill(false);
         self.last_timestamp = None;
+        self.floor = None;
+    }
+    /// Replace the mesh floor that vetoes obstacle returns; `None` turns the veto off.
+    /// See [`PointLabel::FloorVeto`].
+    pub fn set_floor_surface(&mut self, floor: Option<Arc<FloorSurface>>) {
+        self.floor = floor;
+    }
+    /// The floor surface integration currently consults.
+    pub fn floor_surface(&self) -> Option<Arc<FloorSurface>> {
+        self.floor.clone()
+    }
+    /// The limits this map was built with.
+    pub fn config(&self) -> MapConfig {
+        self.config
     }
     /// Shift by whole cells, preserving overlapping world cells. Newly exposed cells are unknown.
     ///
@@ -322,9 +342,10 @@ impl LocalOccupancyMap {
         )
     }
     /// Integrate one frame with either classifier. Sampled returns labelled
-    /// [`PointLabel::Free`] clear their endpoint, [`PointLabel::Obstacle`] marks
-    /// it occupied, and every other label adds no evidence. [`label_depth`]
-    /// applies the same rules to every pixel.
+    /// [`PointLabel::Free`] or [`PointLabel::FloorVeto`] clear their endpoint,
+    /// [`PointLabel::Obstacle`] marks it occupied, and every other label adds no
+    /// evidence. The floor surface set by [`Self::set_floor_surface`] decides
+    /// the veto. [`label_depth_with_floor`] applies the same rules to every pixel.
     ///
     /// # Errors
     ///
@@ -345,6 +366,7 @@ impl LocalOccupancyMap {
             return Err(MapError::InvalidTime);
         }
         let q = validate_frame(intrinsics, pose, depth)?;
+        let floor = self.floor.clone();
         let start = self.cell(pose.position);
         if self.index(start.0, start.1).is_none() {
             return Err(MapError::InvalidPose);
@@ -355,12 +377,13 @@ impl LocalOccupancyMap {
         for v in (0..intrinsics.height).step_by(self.config.pixel_stride as usize) {
             for u in (0..intrinsics.width).step_by(self.config.pixel_stride as usize) {
                 let z = depth[(v * intrinsics.width + u) as usize] as f64;
-                let Some((endpoint, label)) = rules.classify(intrinsics, q, pose.position, u, v, z)
+                let Some((endpoint, label)) =
+                    rules.classify(intrinsics, q, pose.position, u, v, z, floor.as_deref())
                 else {
                     continue;
                 };
                 let hit = match label {
-                    PointLabel::Free => false,
+                    PointLabel::Free | PointLabel::FloorVeto => false,
                     PointLabel::Obstacle => true,
                     _ => continue,
                 };
@@ -452,6 +475,7 @@ enum Rules {
         max_sin: f64,
         band_range: f64,
         max_range: f64,
+        min_height: f64,
     },
 }
 impl Rules {
@@ -492,12 +516,14 @@ impl Rules {
                     max_sin: band.half_angle.sin(),
                     band_range: band.max_range,
                     max_range: config.max_range,
+                    min_height: config.min_obstacle_height,
                 })
             }
         }
     }
     /// Project pixel `(u, v)` with axial depth `z` and label it. `None` means
     /// no usable return; otherwise the world endpoint and its label.
+    #[allow(clippy::too_many_arguments)]
     fn classify(
         &self,
         k: CameraIntrinsics,
@@ -506,6 +532,7 @@ impl Rules {
         u: u32,
         v: u32,
         z: f64,
+        floor: Option<&FloorSurface>,
     ) -> Option<(Vector3, PointLabel)> {
         if !z.is_finite() || z <= 0.0 {
             return None;
@@ -546,7 +573,19 @@ impl Rules {
             }
             Self::Band { .. } => PointLabel::Obstacle,
         };
+        if label == PointLabel::Obstacle && floor.is_some_and(|f| self.on_floor(f, endpoint)) {
+            return Some((endpoint, PointLabel::FloorVeto));
+        }
         Some((endpoint, label))
+    }
+    /// True when `endpoint` sits less than the minimum obstacle height above
+    /// trusted mesh floor. [`FloorSurface::build`] already dropped raised
+    /// patches, so a mislabelled box top cannot hide what stands on it.
+    fn on_floor(&self, floor: &FloorSurface, endpoint: Vector3) -> bool {
+        let (Self::Ground { min_height, .. } | Self::Band { min_height, .. }) = *self;
+        floor
+            .height_at(endpoint.x, endpoint.y)
+            .is_some_and(|h| endpoint.z - h < min_height)
     }
 }
 fn validate_config(config: &MapConfig) -> Result<(), MapError> {
@@ -603,8 +642,23 @@ pub struct LabeledPoint {
     /// What the mapper does with this return.
     pub label: PointLabel,
 }
+/// Label every pixel of a depth frame without a floor surface; see
+/// [`label_depth_with_floor`].
+///
+/// # Errors
+/// As [`label_depth_with_floor`].
+pub fn label_depth(
+    config: &MapConfig,
+    intrinsics: CameraIntrinsics,
+    pose: CameraPose,
+    depth: &[f32],
+    classifier: DepthClassifier,
+) -> Result<Vec<LabeledPoint>, MapError> {
+    label_depth_with_floor(config, intrinsics, pose, depth, classifier, None)
+}
 /// Label every pixel of a depth frame with exactly the rules
-/// [`LocalOccupancyMap::integrate_classified`] applies to its sampled pixels.
+/// [`LocalOccupancyMap::integrate_classified`] applies to its sampled pixels,
+/// including the floor veto when `floor` is the surface the map consulted.
 ///
 /// Ignores `config.pixel_stride` and the grid window: every pixel is returned,
 /// row-major from the top-left, including returns that would fall off the grid.
@@ -614,12 +668,13 @@ pub struct LabeledPoint {
 /// [`MapError::InvalidConfig`], [`MapError::InvalidFrame`],
 /// [`MapError::InvalidPose`], [`MapError::InvalidGroundPlane`] or
 /// [`MapError::InvalidBand`], as for integration. Time is not checked.
-pub fn label_depth(
+pub fn label_depth_with_floor(
     config: &MapConfig,
     intrinsics: CameraIntrinsics,
     pose: CameraPose,
     depth: &[f32],
     classifier: DepthClassifier,
+    floor: Option<&FloorSurface>,
 ) -> Result<Vec<LabeledPoint>, MapError> {
     validate_config(config)?;
     let rules = Rules::new(config, classifier)?;
@@ -634,7 +689,7 @@ pub fn label_depth(
         for u in 0..intrinsics.width {
             let z = depth[(v * intrinsics.width + u) as usize] as f64;
             let (position, label) = rules
-                .classify(intrinsics, q, pose.position, u, v, z)
+                .classify(intrinsics, q, pose.position, u, v, z, floor)
                 .unwrap_or((none, PointLabel::NoReturn));
             points.push(LabeledPoint { position, label });
         }
@@ -656,6 +711,8 @@ pub struct DepthCapture {
     pub config: MapConfig,
     /// Row-major axial depth in metres.
     pub depth: Vec<f32>,
+    /// Mesh floor the map consulted for this frame, if any.
+    pub floor: Option<Arc<FloorSurface>>,
 }
 impl DepthCapture {
     /// Label every pixel; see [`label_depth`].
@@ -663,12 +720,13 @@ impl DepthCapture {
     /// # Errors
     /// As [`label_depth`]; a frame the map accepted does not fail.
     pub fn label(&self) -> Result<Vec<LabeledPoint>, MapError> {
-        label_depth(
+        label_depth_with_floor(
             &self.config,
             self.intrinsics,
             self.pose,
             &self.depth,
             self.classifier,
+            self.floor.as_deref(),
         )
     }
 }
@@ -1088,6 +1146,115 @@ mod tests {
         assert!((0..50).contains(&s.occupancy[cell(points[2].position)]));
         assert_eq!(points[0].label, PointLabel::Overhead);
         assert_eq!(s.occupancy[cell(points[0].position)], -1);
+    }
+
+    /// Floor samples on a 0.1 m lattice covering `n` × `n` cells from `(x0, y0)`.
+    fn floor_patch(x0: f64, y0: f64, n: usize, z: f64) -> Vec<Vector3> {
+        (0..n * n)
+            .map(|i| Vector3 {
+                x: x0 + (i % n) as f64 * 0.1 + 0.05,
+                y: y0 + (i / n) as f64 * 0.1 + 0.05,
+                z,
+            })
+            .collect()
+    }
+    fn surface(samples: &[Vector3]) -> Arc<FloorSurface> {
+        Arc::new(FloorSurface::build(samples, 0.0, 0.0, 0.5, 6.0, 0.1).unwrap())
+    }
+
+    /// A band return that lands just above mesh floor clears instead of
+    /// blocking: this is the false floor ring of the horizon-band fallback.
+    #[test]
+    fn floor_veto_frees_band_return_on_mesh_floor() {
+        let (mut map, intrinsics, pose) = setup();
+        map.set_floor_surface(Some(surface(&floor_patch(1.0, -1.0, 20, 0.38))));
+        for t in 0..4 {
+            map.integrate_depth_in_horizon_band(t as f64, intrinsics, pose, &[2.0], BAND)
+                .unwrap();
+        }
+        let s = map.snapshot();
+        assert!((0..50).contains(&s.occupancy[10 * 20 + 14]));
+        let floor = map.floor_surface();
+        let labels = label_depth_with_floor(
+            &map.config,
+            intrinsics,
+            pose,
+            &[2.0],
+            DepthClassifier::HorizonBand(BAND),
+            floor.as_deref(),
+        )
+        .unwrap();
+        assert_eq!(labels[0].label, PointLabel::FloorVeto);
+    }
+
+    /// Something standing on mesh floor is still an obstacle: the veto tests
+    /// the return's height above the floor, it does not wipe the cell.
+    #[test]
+    fn floor_veto_keeps_obstacle_standing_on_floor() {
+        let (mut map, intrinsics, pose) = setup();
+        map.set_floor_surface(Some(surface(&floor_patch(1.0, -1.0, 20, 0.0))));
+        for t in 0..4 {
+            map.integrate_depth_in_horizon_band(2.0 * t as f64, intrinsics, pose, &[2.0], BAND)
+                .unwrap();
+            map.integrate_depth_with_ground_plane(
+                2.0 * t as f64 + 1.0,
+                intrinsics,
+                pose,
+                &[2.0],
+                GroundPlane::default(),
+            )
+            .unwrap();
+        }
+        assert!(map.snapshot().occupancy[10 * 20 + 14] > 90);
+    }
+
+    /// A raised patch the mesh mislabels as floor is dropped from the surface,
+    /// so the object under it keeps blocking.
+    #[test]
+    fn floor_surface_drops_mislabelled_box_top() {
+        let (mut map, intrinsics, pose) = setup();
+        let mut samples = floor_patch(-3.0, -3.0, 50, 0.0);
+        samples.retain(|p| !(1.9..2.6).contains(&p.x) || !(0.0..0.5).contains(&p.y));
+        samples.extend(floor_patch(1.9, 0.0, 5, 0.38));
+        map.set_floor_surface(Some(surface(&samples)));
+        for t in 0..4 {
+            map.integrate_depth_in_horizon_band(t as f64, intrinsics, pose, &[2.0], BAND)
+                .unwrap();
+        }
+        assert!(map.snapshot().occupancy[10 * 20 + 14] > 90);
+    }
+
+    /// Without mesh floor, or where it has no cell, labels are unchanged.
+    #[test]
+    fn floor_veto_without_mesh_matches_today() {
+        let (map, intrinsics, pose) = setup();
+        let far = surface(&floor_patch(-3.0, -3.0, 5, 0.38));
+        for classifier in [
+            DepthClassifier::HorizonBand(BAND),
+            DepthClassifier::GroundPlane(GroundPlane::default()),
+        ] {
+            let plain = label_depth(&map.config, intrinsics, pose, &[2.0], classifier).unwrap();
+            let vetoed = label_depth_with_floor(
+                &map.config,
+                intrinsics,
+                pose,
+                &[2.0],
+                classifier,
+                Some(&far),
+            )
+            .unwrap();
+            assert_eq!(plain, vetoed);
+            assert_eq!(plain[0].label, PointLabel::Obstacle);
+        }
+    }
+
+    /// Clearing the map drops the floor surface with the evidence.
+    #[test]
+    fn clear_drops_floor_surface() {
+        let (mut map, ..) = setup();
+        map.set_floor_surface(Some(surface(&floor_patch(1.0, -1.0, 4, 0.0))));
+        map.clear();
+        assert!(map.floor_surface().is_none());
     }
 
     /// Invalid classifiers and frames are rejected the same way as integration.
