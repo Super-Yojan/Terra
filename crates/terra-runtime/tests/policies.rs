@@ -318,6 +318,42 @@ fn ground_plane_stays_level_when_body_up_is_tilted() {
     let raised = g.plane(Vector3 { z: 0.3, ..camera }, up).unwrap();
     assert!((raised.offset - 0.3).abs() < 1e-9);
 }
+/// The mount height fixes the floor even when the app starts in the hand
+/// (camera 1.05 m up) and the phone is mounted at 0.4 m afterwards.
+#[test]
+fn mount_height_keeps_floor_after_phone_is_mounted() {
+    let up = Vector3 {
+        x: 0.,
+        y: 0.,
+        z: 1.,
+    };
+    let mut g = ground::GroundPolicy::default();
+    assert_eq!(g.mount(0.4, 0.), Some(0.4));
+    // A later floor anchor cannot replace the mount.
+    assert_eq!(g.observe(Some(-1.05), 0., 1., 5., 1.), Some(0.4));
+    // Hand-held at startup: ARKit origin 1.05 m above the floor.
+    let mut g = ground::GroundPolicy::default();
+    let offset = g.mount(0.4, 0.).unwrap();
+    // Mounted: camera now 0.65 m lower in ARKit z, 0.4 m above the floor.
+    let camera_z = -0.65;
+    let p = g
+        .plane(
+            Vector3 {
+                x: 0.,
+                y: 0.,
+                z: camera_z,
+            },
+            up,
+        )
+        .unwrap();
+    let floor_world_z = camera_z + offset - 0.4;
+    let floor_height = floor_world_z - p.offset;
+    assert!(floor_height.abs() < 1e-9, "floor reads {floor_height}");
+    assert_eq!(g.mount(f64::NAN, 0.), Some(offset));
+    let mut bad = ground::GroundPolicy::default();
+    assert_eq!(bad.mount(0.05, 0.), None);
+    assert_eq!(bad.mount(0.4, f64::NAN), None);
+}
 #[test]
 fn configuration_identity_tracks_profile_changes() {
     let mut r = runtime(ActuationMode::VelocityFeedback);
