@@ -4,7 +4,7 @@
 
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
-pi := env("TERRA_PI", "pi@192.168.77.1")
+pi := env("TERRA_PI", "pi@192.168.78.1")
 ssh_key := env("TERRA_PI_KEY", env("HOME", "") + "/Library/Application Support/Terra/pi-admin/id_ed25519")
 ssh_opts := if path_exists(ssh_key) == "true" { "-i '" + ssh_key + "'" } else { "" }
 version := `sed -n 's/^version = "\(.*\)"/\1/p' hardware/raspberry-pi/pyproject.toml`

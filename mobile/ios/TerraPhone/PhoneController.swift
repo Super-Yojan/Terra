@@ -69,6 +69,8 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
     @Published private(set) var hardwareActive = false
     @Published private(set) var hardwareFeedback = false
     @Published private(set) var phoneTrackingActive = false
+    /// Selected rover profile; Rust owns its dimensions and drive parameters.
+    @Published private(set) var roverProfile = RoverProfiles.selected
     @Published private(set) var localizationReport: PhoneLocalizationReport?
     @Published private(set) var phoneTrackingStatus = "Tracking starts after ARGOS connects"
     private var fleetTrackingManaged = false
@@ -1785,8 +1787,6 @@ extension PhoneController {
             DispatchQueue.main.async { self.phoneMounted = mounted }
         }
     }
-    /// Selected rover profile; Rust owns its dimensions and drive parameters.
-    @Published private(set) var roverProfile = RoverProfiles.selected
     /// Runs on `controlQueue`. Every driving controller starts with the selected rover profile.
     private func makeController() throws -> MobileController {
         let controller = try MobileController(settings: defaultControlSettings())

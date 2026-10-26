@@ -427,6 +427,11 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
         observation?.record(component: "bluetooth", kind: "connection.disconnected", attributes: ["error_domain": failure?.domain ?? "none", "error_code": failure?.code ?? 0, "generation": policy.generation])
         terminal("Disconnected; reconnecting")
     }
+    func peripheral(_ p: CBPeripheral, didModifyServices invalidatedServices: [CBService]) {
+        guard current(p), invalidatedServices.contains(where: { $0.uuid == serviceID }) else { return }
+        // A rover that changed its service table mid-session must be re-admitted from scratch.
+        close("Rover services changed; reconnecting")
+    }
     func peripheral(_ p: CBPeripheral, didDiscoverServices error: Error?) {
         guard current(p) else { return }
         guard error == nil, let service = p.services?.first(where: { $0.uuid == serviceID }) else { close("Terra service unavailable"); return }
