@@ -41,6 +41,8 @@ mod contract;
 pub use contract::*;
 mod arbiter;
 pub use arbiter::*;
+mod task;
+pub use task::*;
 pub use terra_exploration::{
     Detection, EndReason, ExplorationConfig, ExplorationStatus, ExplorePhase, FindTargetsObjective,
     FrontierTarget, MissionObjective,

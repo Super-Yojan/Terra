@@ -21,7 +21,7 @@ Per-rover prefix: `terra/rover/<id>`. Requests are JSON, at most 2048 bytes, fin
 
 | Topic | Request/state |
 |---|---|
-| `autonomy` | `{"level":"teleop","token":"request-1"}`. Also `assisted_teleop`, `waypoint`, `supervised`, `explore`. An `explore` request may include `budget_seconds` or `budget_minutes`, not both. Example: `{"level":"explore","token":"explore-1","budget_seconds":180}`. |
+| `autonomy` | `{"level":"teleop","token":"request-1"}`. Also `assisted_teleop`, `waypoint`, `supervised`, `explore`, and `task` (L5, only while the phone advertises a model; may carry an inline `task` object). An `explore` request may include `budget_seconds` or `budget_minutes`, not both. Example: `{"level":"explore","token":"explore-1","budget_seconds":180}`. |
 | `autonomy/status` | Run ID, assigned/requested/effective level, active source, safety/reason, revision, last token/result/request_reason, supported levels, paused. Effective level is null during a hold. After an exploration run starts, `exploration` carries the same object as `exploration/status`. |
 | `exploration/status` | `phase` (`idle`, `running`, `ended`), `elapsed_seconds`, `remaining_seconds`, `budget_seconds`, `target` (`x`, `y`, `score` or null), `coverage_m2`, `explored_ratio`, `end_reason`, `blacklist_count`, `frontiers_attempted`. |
 | `teleop` | `{"linear":1,"angular":0,"operator_session_id":"session-1","sequence":1,"run_id":"run-1","authority_revision":1}`. Metadata is optional for legacy clients. ARGOS sends session/sequence plus run ID/authority revision on every packet, including zero. Paired session/sequence values reject reordered packets; run/authority metadata rejects delayed motion across restart or takeover. Receive lease 500 ms; bounded speed/yaw. |
@@ -33,6 +33,7 @@ Per-rover prefix: `terra/rover/<id>`. Requests are JSON, at most 2048 bytes, fin
 | `experiment/status` | Run ID, schema version, run-relative elapsed time, UTC sample, recording state. |
 | `mission/status` | Objective, phase, budget, boundaries, confirmed/required count and observed survivor locations. Hidden targets are excluded. |
 | `mission/report` | `{"survivor_id":1,"token":"report-1"}` confirms an observation belonging to that rover. Confirmation is reflected in mission status. |
+| `task` / `task/action` / `task/status` | L5 task autonomy: start a task, reply to or cancel it, and its status. See [TASK.md](TASK.md). |
 | `pose` | Phone direct pose: rover_id, sequence, x/y metres and yaw radians. Simulator also supplies exposure-aligned depth pose. |
 
 State is retained in application memory and republished periodically, not dependent on Zenoh storage/history. Simulator status is emitted on transitions and at 5 Hz; the loopback phone service republishes at 10 Hz. Fleet takeover/stop use per-rover commands and receipts; they are not atomic. A network publication is not an acknowledgement. No automatic replay on reconnect.
@@ -55,3 +56,7 @@ Cells are row-major: index `row * width + column`, columns increase world +X, ro
 ## L4 target-search extension
 
 The additive `target_search` level and versioned `/search`, `/search/action`, `/search/status`, `/search/report` and `/search/report/ack` topics are documented in [TARGET_SEARCH.md](TARGET_SEARCH.md). The existing `supervised` mode retains its proposal approval semantics. Capability advertising requires a registered, fresh detector; physical recognition remains unavailable until an adapter is supplied and validated.
+
+## L5 task extension
+
+The `task` level hands waypoint choice to the phone's language model. Waypoints are validated with A* and driven on the L3 route; the model never produces motion. See [TASK.md](TASK.md).

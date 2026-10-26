@@ -26,6 +26,8 @@ mod pose_quality;
 mod publication;
 mod search;
 pub use search::{MobileSearchRequest, MobileSearchSnapshot, MobileTargetObservation};
+mod task;
+pub use task::MobileTaskQuery;
 mod frames;
 mod mapping;
 mod transport;
@@ -686,6 +688,9 @@ impl MobileController {
                     serde_json::to_string(exploration).unwrap(),
                 );
             }
+            if let Some(task) = &output.task {
+                d.publish("task/status", serde_json::to_string(task).unwrap());
+            }
             if let Some((grid, _, sequence)) = map.as_ref() {
                 match map_publication {
                     Some(publication::Publication::Full) => {
@@ -740,6 +745,7 @@ impl MobileController {
             "proposal": wire_proposal,
             "exploration": output.exploration,
             "search": output.search,
+            "task": output.task,
             "pending_reports": output.pending_reports,
             "twist": output.twist,
         })
@@ -769,6 +775,7 @@ impl MobileController {
                 "run_id": brain.run_id,
                 "exploration": output.exploration,
             "search": output.search,
+                "task": output.task,
                 "events": output.events,
             }));
         }

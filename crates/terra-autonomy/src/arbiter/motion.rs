@@ -248,11 +248,16 @@ impl AutonomyArbiter {
                         "explore"
                     } else if self.level == Level::TargetSearch {
                         "target_search"
+                    } else if self.level == Level::Task {
+                        "task"
                     } else {
                         "waypoint"
                     };
                 }
-                if self.level == Level::Waypoint && out.status.state == GoalState::Active {
+                // L5 task waypoints use the same A* route as L3.
+                if matches!(self.level, Level::Waypoint | Level::Task)
+                    && out.status.state == GoalState::Active
+                {
                     self.waypoint_route_intent(
                         input,
                         planning_map.unwrap(),
@@ -261,7 +266,7 @@ impl AutonomyArbiter {
                         decision,
                     )
                 } else {
-                    if self.level == Level::Waypoint {
+                    if matches!(self.level, Level::Waypoint | Level::Task) {
                         self.global_route.clear();
                         self.route_goal = None;
                         self.route_reaches_goal = false;
