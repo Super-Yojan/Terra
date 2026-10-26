@@ -470,24 +470,20 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
             guard let self else { return }
             if let error { self.controlQueue.async { if self.sensorEpochMatches(epoch) { self.handleTrackingFailure(error) } }; return }
             guard let data else { return }
-            let acceleration: AxisSample
-            let gyro: AxisSample
-            do {
-                acceleration = try deviceVectorToBody(x: data.userAcceleration.x, y: data.userAcceleration.y, z: data.userAcceleration.z)
-                gyro = try deviceVectorToBody(x: data.rotationRate.x, y: data.rotationRate.y, z: data.rotationRate.z)
-            } catch {
-                self.controlQueue.async { if self.sensorEpochMatches(epoch) { self.fail(error) } }
-                return
-            }
+            let ua = data.userAcceleration, rate = data.rotationRate
+            guard [ua.x, ua.y, ua.z, rate.x, rate.y, rate.z].allSatisfy(\.isFinite) else { return }
             // Core Motion user acceleration is in g. Android linear acceleration is already m/s².
-            let sample = ImuReading(timestamp: data.timestamp, accelerationForward: acceleration.x * 9.80665, accelerationLeft: acceleration.y * 9.80665, accelerationUp: acceleration.z * 9.80665, gyroRoll: gyro.x, gyroPitch: gyro.y, gyroYaw: gyro.z)
+            let deviceAcceleration = SIMD3(Float(ua.x), Float(ua.y), Float(ua.z)) * 9.80665
+            let deviceRate = SIMD3(Float(rate.x), Float(rate.y), Float(rate.z))
             self.controlQueue.async {
                 guard self.mode == .phone, self.sensorEpochMatches(epoch) else { return }
                 do {
-                    let a = self.mountCalibration.correction.act(SIMD3(Float(sample.accelerationForward), Float(sample.accelerationLeft), Float(sample.accelerationUp)))
-                    let g = self.mountCalibration.correction.act(SIMD3(Float(sample.gyroRoll), Float(sample.gyroPitch), Float(sample.gyroYaw)))
-                    try self.controller?.pushImu(sample: ImuReading(timestamp: sample.timestamp, accelerationForward: Double(a.x), accelerationLeft: Double(a.y), accelerationUp: Double(a.z), gyroRoll: Double(g.x), gyroPitch: Double(g.y), gyroYaw: Double(g.z)))
-                } catch { self.fail(error, context: "IMU sample at \(sample.timestamp)") }
+                    // Upright, rear-camera-forward mount, the same mapping ARKit poses use.
+                    let toBody = self.mountCalibration.deviceToBody
+                    let a = toBody.act(deviceAcceleration)
+                    let g = toBody.act(deviceRate)
+                    try self.controller?.pushImu(sample: ImuReading(timestamp: data.timestamp, accelerationForward: Double(a.x), accelerationLeft: Double(a.y), accelerationUp: Double(a.z), gyroRoll: Double(g.x), gyroPitch: Double(g.y), gyroYaw: Double(g.z)))
+                } catch { self.fail(error, context: "IMU sample at \(data.timestamp)") }
             }
         }
         phoneTrackingActive = true
