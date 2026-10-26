@@ -324,16 +324,23 @@ impl MobileOccupancyMap {
                 z: p[2] as f64,
             })
             .collect();
-        let map = self.map.lock().map_err(|_| ControllerError::Internal)?;
+        // Build outside the lock: the depth update shares it on the control queue.
+        let resolution = self
+            .map
+            .lock()
+            .map_err(|_| ControllerError::Internal)?
+            .config()
+            .resolution;
         let surface = FloorSurface::build(
             &samples,
             camera_x,
             camera_y,
             camera_z,
             FLOOR_HALF_EXTENT,
-            map.config().resolution,
+            resolution,
         );
         let cells = surface.as_ref().map_or(0, |s| s.trusted_cells() as u32);
+        let map = self.map.lock().map_err(|_| ControllerError::Internal)?;
         map.set_floor_surface(surface.map(Arc::new));
         Ok(cells)
     }
