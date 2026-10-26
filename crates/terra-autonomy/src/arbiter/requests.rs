@@ -204,6 +204,9 @@ impl AutonomyArbiter {
         self.turning_identity = None;
         self.maneuver.clear();
         self.maneuver_goal = None;
+        // An unfinished L4 look-around must not keep spinning under the next level.
+        self.explore_scan = None;
+        self.scan_turning = None;
         if let Some(search) = self.search.as_mut() {
             search.cancel("authority_cleared");
         }
