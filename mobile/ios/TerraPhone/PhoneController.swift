@@ -220,8 +220,11 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
     private var lastLocalTarget = (forward: 0.0, yaw: 0.0)
     private var lastCloudTime = -Double.infinity
     private var lastFloorTime = -Double.infinity
-    // Control-queue state; the mesh walk itself runs on floorQueue.
+    // Control-queue state; the mesh walk itself runs on floorQueue. The epoch
+    // changes whenever the map or ground offset resets, so a walk that was in
+    // flight then is dropped instead of installing a floor at the old offset.
     private var floorUpdateInFlight = false
+    private var floorEpoch = 0
     private let floorQueue = DispatchQueue(label: "terra.floor-mesh", qos: .utility)
     private var tick = 0
     // Publication identity must survive prepare/preserveRuntime and UI tick resets.
@@ -425,6 +428,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
         controlQueue.async {
             do {
                 self.occupancyMap = try MobileOccupancyMap(settings: self.occupancySettings)
+                self.floorEpoch &+= 1
                 if let map = self.occupancyMap { try self.controller?.attachOccupancyMap(map: map) }
                 self.mapGroundOffset = nil; self.groundPolicy.reset()
                 self.lastMapTime = -Double.infinity
@@ -570,6 +574,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
         // L5 is offered only when the phone can run a model.
         try self.controller?.setTaskModel(name: mode == .phone ? taskModel?.model.name : nil)
         self.occupancyMap = try MobileOccupancyMap(settings: self.occupancySettings)
+        self.floorEpoch &+= 1
         if let map = self.occupancyMap { try self.controller?.attachOccupancyMap(map: map) }
         mapGroundOffset = nil; groundPolicy.reset(); lastMapTime = -Double.infinity
         DispatchQueue.main.async { self.occupancy = nil; self.mapPose = .zero; self.mapStatus = mode == .simulation ? "Simulated depth · 10 Hz" : (ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) ? "Waiting for scene depth" : "Scene depth unavailable on this device") }
@@ -987,7 +992,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
     }
     func clearMap() {
         controlQueue.async {
-            do { try self.occupancyMap?.clear(); self.lastMapTime = -Double.infinity
+            do { try self.occupancyMap?.clear(); self.lastMapTime = -Double.infinity; self.floorEpoch &+= 1
                 DispatchQueue.main.async { self.occupancy = nil } }
             catch { DispatchQueue.main.async { self.mapStatus = error.localizedDescription } }
         }
@@ -1028,7 +1033,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
         if mapGroundOffset == nil, mountCalibration.isPlausible {
             mapGroundOffset = groundPolicy.mount(clearance: mountCalibration.cameraHeight, cameraHeight: Double(position.z))
             guard mapGroundOffset != nil else { return }
-            try? occupancyMap?.clear(); lastFloorTime = -Double.infinity
+            try? occupancyMap?.clear(); lastFloorTime = -Double.infinity; floorEpoch &+= 1
         }
         if mapGroundOffset == nil {
             let floors = frame.anchors.compactMap { $0 as? ARPlaneAnchor }.filter {
@@ -1047,7 +1052,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
             mapGroundOffset = groundPolicy.observe(height: height, cameraHeight: Double(position.z), area: area, now: frame.timestamp, upZ: Double(bodyUp.z))
             // The level-band map reports its own "finding floor" status meanwhile.
             guard mapGroundOffset != nil else { return }
-            try? occupancyMap?.clear(); lastFloorTime = -Double.infinity
+            try? occupancyMap?.clear(); lastFloorTime = -Double.infinity; floorEpoch &+= 1
         }
     }
     private func publishPhoneCloud(frame: ARFrame, position: SIMD3<Float>) {
@@ -1106,15 +1111,16 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
             floorUpdateInFlight = true
             let lift = mapGroundOffset ?? 0
             let anchors = frame.anchors.compactMap { $0 as? ARMeshAnchor }
-            let worldFromAR = self.worldFromAR
+            let worldFromAR = self.worldFromAR, epoch = floorEpoch
             // The mesh walk can exceed 100 ms; on the control queue it stalled VIO
             // and IMU once a second, which tripped SensorNotReady holds.
             floorQueue.async { [weak self] in
                 let xyz = Self.collectFloorSamples(anchors: anchors, worldFromAR: worldFromAR, lift: Float(lift))
-                let cells = try? map.updateFloorSurface(cameraX: Double(position.x), cameraY: Double(position.y), cameraZ: Double(position.z) + lift, xyz: xyz)
                 self?.controlQueue.async {
                     guard let self else { return }
                     self.floorUpdateInFlight = false
+                    guard self.floorEpoch == epoch else { return }
+                    let cells = try? map.updateFloorSurface(cameraX: Double(position.x), cameraY: Double(position.y), cameraZ: Double(position.z) + lift, xyz: xyz)
                     self.observation.recordChanged(component: "mapping", kind: "mapping.floor_mesh", attributes: ["available": (cells ?? 0) > 0])
                 }
             }
