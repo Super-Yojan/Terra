@@ -237,6 +237,8 @@ struct ControllerDetailView: View {
                         .font(.footnote).foregroundStyle(.secondary)
                     Toggle("Measurements reviewed", isOn: $calibration.reviewed)
                     Button("Save measured mount calibration") { brain.saveMountCalibration(calibration) }
+                    Text("Saving stops the controller, which disconnects Bluetooth and ARGOS. Start phone sensors again before the turn passes.")
+                        .font(.footnote).foregroundStyle(.secondary)
                     Text("After saving, manually rotate the rover at least 90° in both directions around the rover reference point. Confirm ARKit tracking remains normal and the camera arc agrees with the measured offset; record the result in the calibration checklist.")
                         .font(.footnote).foregroundStyle(.secondary)
                     Button("Start offset turn pass") { brain.beginAutomaticOffsetFit() }

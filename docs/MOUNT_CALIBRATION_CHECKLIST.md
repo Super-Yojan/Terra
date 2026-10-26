@@ -13,7 +13,7 @@ the rover turns.
 - [ ] Measure rear camera optical-center height from ground plane.
 - [ ] Measure camera roll, pitch, and yaw relative to rover axes 
       if needed, or else 0, in degrees.
-- [ ] Enter measurements in Settings → Phone mounting. Stop tracking before saving. Its automatic turn fit replaces the starting
+- [ ] Enter measurements in Settings → Debug tools → Controller & simulation → Phone mounting. Saving stops the controller (Bluetooth and ARGOS disconnect); tap **Start phone sensors** before the turn passes. Its automatic turn fit replaces the starting
       forward/left offsets after the two turn passes agree.
 - [ ] Corrections are applied through the app relative to upright rear-camera-forward mounting:
       rover +X forward, +Y left, +Z up; roll X, pitch Y, yaw Z.
@@ -39,7 +39,7 @@ the rover turns.
    pass. Rejected fits require repeating the turns with a steady pivot and
    reliable tracking.
 6. Review the reported forward/left offset and pass RMS errors. Tap
-   **Use fitted offset**, stop tracking, then **Save measured mount calibration**. The fit
+   **Use fitted offset**, turn **Measurements reviewed** back on, then **Save measured mount calibration** (saving stops the controller). The fit
    does not estimate camera height or mount-angle corrections; those remain
    measured inputs. Record the result and reviewer.
 

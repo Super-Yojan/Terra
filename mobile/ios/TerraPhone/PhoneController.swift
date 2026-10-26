@@ -890,7 +890,17 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
         TerraLog.tracking.notice("L4 detector: \(value, privacy: .public)")
         DispatchQueue.main.async { self.personDetectorStatus = value }
     }
+    /// Mount measurements feed the live IMU and VIO path, so saving stops the
+    /// controller first. stop() queues the switch to .stopped on the serial
+    /// control queue ahead of the save below.
     func saveMountCalibration(_ value: MountCalibration) {
+        guard value.isPlausible else {
+            calibrationStatus = "Calibration not saved: \(CalibrationSaveError.invalidValues.localizedDescription)"; return
+        }
+        guard !offsetFitInProgress else {
+            calibrationStatus = "Calibration not saved: finish the turn pass first."; return
+        }
+        stop()
         controlQueue.async {
             do {
                 guard value.isPlausible else { throw CalibrationSaveError.invalidValues }
@@ -2260,5 +2270,5 @@ extension PhoneController {
 
 private enum CalibrationSaveError: LocalizedError {
     case invalidValues, stopFirst
-    var errorDescription: String? { self == .stopFirst ? "Stop tracking before saving mount measurements." : "Check the measured values and camera height." }
+    var errorDescription: String? { self == .stopFirst ? "Stop the controller before saving mount measurements." : "Check the measured values and camera height." }
 }
