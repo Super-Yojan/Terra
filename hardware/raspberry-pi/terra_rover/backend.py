@@ -1,5 +1,6 @@
 """Output adapters. Importing this module never imports the hardware library."""
 from copy import deepcopy
+import errno
 from importlib import import_module, metadata
 import math
 import traceback
@@ -9,6 +10,7 @@ from .layout import normalize_layout, validate_layout
 from .drive_relay import OutputBatch
 
 KINDS = ['dc_motor', 'bidirectional_esc', 'unidirectional_esc', 'positional_servo']
+PWM_PORTS = tuple(f'P{i}' for i in range(12))
 MOTOR_PINS = {'M0': ['P11', 'P10'], 'M1': ['P9', 'P8'],
               'M2': ['P6', 'P7'], 'M3': ['P4', 'P5']}
 
@@ -19,6 +21,28 @@ class BackendError(RuntimeError):
 
 class BackendValidationError(BackendError):
     """Rejected before any hardware resource or output is changed."""
+
+_OWNED_CLASSES = {}
+
+def _disarm_destructor(leg):
+    """Stop a vendor PWM from disabling its channel when garbage collected.
+
+    fusion_hat.pwm.PWM.__del__ writes enable=0. Channels are global kernel
+    state, so a stale or orphaned object (an earlier backend, a retained
+    traceback, another configure) can disable a channel this backend is
+    driving. The adapter closes channels explicitly instead."""
+    cls = type(leg)
+    if getattr(cls, '_terra_owned', False) or not hasattr(cls, '__del__'): return
+    owned = _OWNED_CLASSES.get(cls)
+    if owned is None:
+        owned = _OWNED_CLASSES[cls] = type(cls.__name__, (cls,), dict(
+            __del__=lambda self: None, _terra_owned=True, __module__=cls.__module__))
+    try: leg.__class__ = owned
+    except TypeError: pass
+
+def _channel_disabled(exc):
+    # The Fusion HAT driver rejects duty_cycle writes to a disabled channel with EINVAL.
+    return isinstance(exc, OSError) and exc.errno == errno.EINVAL
 
 def _forget_exception_owners(exc):
     """Release vendor frames/partial constructor owners before resource transfer."""
@@ -81,6 +105,15 @@ def _mapped(a, value):
     low, center, high = ((c['reverse_us'], c['neutral_us'], c['forward_us'])
                          if kind == 'bidirectional_esc' else (c['min_us'], c['center_us'], c['max_us']))
     return round(center + value * (high - center if value >= 0 else center - low))
+
+def _reenabling(write, legs):
+    """Run a duty write; if a channel was disabled outside this backend,
+    re-enable it once and retry. ESC writes already re-enable every time."""
+    try: return write()
+    except OSError as exc:
+        if not _channel_disabled(exc) or not legs: raise
+    for leg in legs: leg.enable(True)
+    return write()
 
 class _Adapter:
     def __init__(self, caps):
@@ -151,7 +184,7 @@ class _Adapter:
             if a['kind'] == 'dc_motor' and a['port'] in self._outputs:
                 output = self._outputs[a['port']]
                 for leg in ('pwm_a', 'pwm_b'):
-                    try: getattr(output, leg).pulse_width_percent(0)
+                    try: _reenabling(lambda: getattr(output, leg).pulse_width_percent(0), (getattr(output, leg),))
                     except Exception as exc: failures.append(f'{a["port"]}/{leg}: {exc}')
         return failures
 
@@ -184,7 +217,7 @@ class _Adapter:
         if failures: raise BackendError(None, 'close', '; '.join(failures))
 
 class FusionHatBackend(_Adapter):
-    def __init__(self, pwm_ports=(), *, supported_library_versions=('1.14.0',),
+    def __init__(self, pwm_ports=PWM_PORTS, *, supported_library_versions=('1.14.0',),
                  motor_factory=None, pwm_factory=None, library_version=None, occupied_resources=()):
         self._versions = tuple(supported_library_versions)
         self._motor_factory, self._pwm_factory = motor_factory, pwm_factory
@@ -224,13 +257,16 @@ class FusionHatBackend(_Adapter):
     def _open(self, a):
         if a['kind'] == 'dc_motor':
             output = self._motor_factory(a['port'], freq=100, min=0, max=100, is_reversed=False)
+            legs = (output.pwm_a, output.pwm_b)
         else:
             output = self._pwm_factory(int(a['port'][1:]), freq=50)
+            legs = (output,)
+        for leg in legs: _disarm_destructor(leg)
         self._outputs[a['port']] = output
 
     def _write(self, a, value):
         output = self._outputs[a['port']]
-        if a['kind'] == 'dc_motor': output.power(value)
+        if a['kind'] == 'dc_motor': _reenabling(lambda: output.power(value), (output.pwm_a, output.pwm_b))
         elif value is None: output.enable(False)
         else:
             output.pulse_width(value)

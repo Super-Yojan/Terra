@@ -1,11 +1,19 @@
-"""Consume new actuator efforts once per output loop; otherwise send neutral."""
+"""Hold the latest actuator efforts for a short lease; then send neutral."""
 from copy import deepcopy
 from dataclasses import dataclass
 import logging
+import time
 
 from .layout import normalize_layout, validate_layout, validate_structure
 from .observability import record_event
 from .protocol import ProtocolError, decode_drive, encode_drive, validate_drive
+
+# How long one drive command keeps the outputs moving. The phone streams at
+# 20 Hz (every 50 ms) and the output loop also runs every 50 ms, so a lease of
+# a single loop turned every late Bluetooth packet into a stop and made the
+# rover jitter. 250 ms matches the Zenoh cmd_vel lease. An explicit neutral
+# command, disconnect, fault or configuration change still stops at once.
+DRIVE_COMMAND_TIMEOUT_SECONDS = 0.25
 
 
 @dataclass(frozen=True)
@@ -28,6 +36,7 @@ class DriveRelay:
         self.subscribed = False
         self.fault = None
         self.values = None
+        self.received_at = None
         self.reason = 'boot'
 
     def configure(self, layout):
@@ -47,6 +56,7 @@ class DriveRelay:
             record_event('relay', 'motion.stop', {'reason': reason,
                          'previous_active': self.output_active})
         self.values = None
+        self.received_at = None
         self.output_active = False
         self.reason = reason
 
@@ -54,7 +64,7 @@ class DriveRelay:
         self.subscribed = bool(subscribed)
         if not subscribed: self.stop('status_unsubscribed')
 
-    def accept(self, values):
+    def accept(self, values, now=None):
         accepted = False
         if self.connected and self.layout is not None and self.fault is None:
             try:
@@ -64,6 +74,7 @@ class DriveRelay:
                 pass
             else:
                 self.values = values
+                self.received_at = time.monotonic() if now is None else now
                 self.reason = 'drive'
                 accepted = True
         if not accepted: self.stop('rejected_command')
@@ -72,11 +83,14 @@ class DriveRelay:
                       'stop_reason': self.reason, 'fault': self.fault})
         return accepted
 
-    def output(self):
+    def output(self, now=None):
         entries = (self.layout or {'actuators': []})['actuators']
         commands = {a['id']: OutputCommand(a['id'], None if a['safe']['type'] == 'disabled' else a['safe'].get('value', 0.0))
                     for a in entries}
-        values, self.values = self.values, None
+        now = time.monotonic() if now is None else now
+        values = self.values
+        if values is not None and now - self.received_at > DRIVE_COMMAND_TIMEOUT_SECONDS:
+            values = self.values = self.received_at = None
         if values is not None and self.connected and self.fault is None:
             commands.update((v.id, OutputCommand(v.id, v.normalized)) for v in values)
             self.output_active = any(c.value not in (None, 0) for c in commands.values())

@@ -274,7 +274,7 @@ class BlePeripheral:
                     with self.lock: self.configuring = False
             if drive is not None and drive[0] == self.generation:
                 self.relay.accept(drive[1])
-            # output() consumes this loop's efforts. Without new input it returns neutral.
+            # output() holds the latest efforts for DRIVE_COMMAND_TIMEOUT_SECONDS, then returns neutral.
             if self.relay.layout is not None: self._apply_output()
             status = self.store.status()
             status.update(type='status', generation=self.generation)

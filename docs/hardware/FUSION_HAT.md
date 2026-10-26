@@ -42,9 +42,8 @@ Servos map around center_us, with configured position or disabled safe policy.
 ## Physical resources and deployment inputs
 
 M0 uses P11/P10, M1 P9/P8, M2 P6/P7, M3 P4/P5. Each motor uses 100 Hz.
-The CLI and packaged service advertise PWM channels P0–P11 by default.
-Use `--pwm-ports` or `TERRA_PWM_PORTS` to restrict the list to your board and wiring;
-an explicit empty list disables PWM capabilities while retaining M0–M3. Advertising
+The CLI and packaged service always advertise M0–M3 and PWM channels P0–P11;
+the saved layout decides which are opened. Advertising
 a channel does not verify its physical connector or wiring. Pulse outputs use 50 Hz. Timer groups
 are channel integer divided by four: P0–P3, P4–P7, P8–P11. Mixed motor/pulse use
 within one timer group is rejected even when channels do not overlap. Direct aliases
@@ -63,8 +62,7 @@ current input, including failure/open states. A stale file is unsafe: supervisio
 and electrical fail-open wiring belong to deployment. Gate is separate from BLE
 and must not be a simulated software enable in hardware mode.
 
-The service CLI exposes `--pwm-ports` and `--gate-file` and constructs
-FusionHatBackend(pwm_ports=..., gate_reader=file_gate_reader(...)). Layout changes require disarmed service state and physical gate open. Reconfigure
+The service CLI constructs FusionHatBackend() with every channel available. Layout changes require disarmed service state and physical gate open. Reconfigure
 safes and explicitly closes old PWM resources before opening new owners; rollback
 reopens the previous layout at safe outputs after failure. Service owns disarmed enforcement.
 Apply errors attempt safe output independently on every channel and return

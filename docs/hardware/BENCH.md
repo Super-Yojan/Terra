@@ -55,8 +55,8 @@ itself cause movement; choose it with linkage and travel constraints in mind.
 
 1. Inventory exposed connectors and all resource owners. M0 aliases P11/P10,
    M1 P9/P8, M2 P6/P7, M3 P4/P5; motors use 100 Hz. PWM timer groups are P0–P3,
-   P4–P7, P8–P11. Reject aliases and mixed 100/50 Hz users of a group. Confirm
-   `--pwm-ports` against physical connectors rather than the numeric channel range.
+   P4–P7, P8–P11. Reject aliases and mixed 100/50 Hz users of a group. Map layout
+   actuators to physical connectors rather than the numeric channel range.
 2. With cutoff open and service disarmed, read capabilities and layout. Replace
    `SELECT_*` markers in [examples](https://github.com/Super-Yojan/Terra/tree/main/crates/terra-actuators/presets) and use
    the current active revision. Stage with a fresh numeric request ID, then commit
