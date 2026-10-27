@@ -82,16 +82,21 @@ fn stale_pause_requires_explicit_resume_and_distinct_arrival() {
     assert!(c.tick(5., evidence()).is_none());
     c.resume(5., evidence()).unwrap();
     assert!(c.tick(5., evidence()).is_some());
-    sensors(&mut c, 6., 0.001);
-    assert!(c.tick(6., evidence()).is_none());
-    assert_eq!(c.phase(), "confirming_arrival");
-    c.tick(6.1, evidence());
-    assert_ne!(c.phase(), "arrived");
-    sensors(&mut c, 7., 0.001);
-    c.tick(7., evidence());
-    sensors(&mut c, 8., 0.001);
-    c.tick(8., evidence());
-    assert_eq!(c.phase(), "arrived");
+    // A 111 m jump is rejected by the smoothed position until three fixes agree,
+    // then three distinct fixes inside the radius confirm arrival.
+    let mut arrived_at = None;
+    for i in 0..10 {
+        let t = 6. + i as f64;
+        sensors(&mut c, t, 0.001);
+        c.tick(t, evidence());
+        c.tick(t + 0.1, evidence());
+        if c.phase() == "arrived" {
+            arrived_at = Some(i);
+            break;
+        }
+    }
+    let fixes = arrived_at.expect("arrives") + 1;
+    assert!(fixes >= 3, "arrived after {fixes} fixes");
 }
 #[test]
 fn invalid_samples_and_hardware_fail_closed() {
@@ -426,7 +431,7 @@ fn vio_loss_pauses_without_encoders_and_recovery_does_not_resume() {
 }
 
 #[test]
-fn default_radius_accepts_ten_metre_gps_but_not_worse() {
+fn three_metre_default_radius_still_accepts_ten_metre_gps_but_not_worse() {
     let mut c = OutdoorController::default();
     sensors(&mut c, 1., 0.);
     c.gps(
@@ -439,8 +444,8 @@ fn default_radius_accepts_ten_metre_gps_but_not_worse() {
         1.1,
     )
     .unwrap();
-    assert_eq!(c.radius, 10.);
-    assert!(c.readiness(1.1, evidence(), c.radius).is_none());
+    assert_eq!(c.radius, 3.);
+    assert!(c.readiness(1.1, evidence()).is_none());
     c.gps(
         GpsFix {
             timestamp: 1.2,
@@ -451,10 +456,7 @@ fn default_radius_accepts_ten_metre_gps_but_not_worse() {
         1.2,
     )
     .unwrap();
-    assert_eq!(
-        c.readiness(1.2, evidence(), c.radius),
-        Some("gps_uncertain")
-    );
+    assert_eq!(c.readiness(1.2, evidence()), Some("gps_uncertain"));
 }
 
 fn gps_only(c: &mut OutdoorController, t: f64) {
@@ -489,20 +491,14 @@ fn temporary_heading_limit_keeps_accuracy_and_freshness_gates() {
     gps_only(&mut c, 1.1);
     c.observe_pose(evidence().pose, 1.1);
     compass(&mut c, 1.1, 0., 35.);
-    assert_eq!(c.readiness(1.1, evidence(), c.radius), None);
+    assert_eq!(c.readiness(1.1, evidence()), None);
     // Without fresh VIO the fused heading cannot be carried forward.
-    assert_eq!(
-        c.readiness(3.2, evidence(), c.radius),
-        Some("heading_uncertain")
-    );
+    assert_eq!(c.readiness(3.2, evidence()), Some("heading_uncertain"));
     let mut c = OutdoorController::default();
     gps_only(&mut c, 3.3);
     c.observe_pose(evidence().pose, 3.3);
     compass(&mut c, 3.3, 0., 35.1);
-    assert_eq!(
-        c.readiness(3.3, evidence(), c.radius),
-        Some("heading_uncertain")
-    );
+    assert_eq!(c.readiness(3.3, evidence()), Some("heading_uncertain"));
 }
 #[test]
 fn compass_alone_never_claims_better_than_its_accuracy() {
@@ -516,10 +512,7 @@ fn compass_alone_never_claims_better_than_its_accuracy() {
     let s = heading_status(&c, 10.9);
     assert!(s["heading_accuracy_deg"].as_f64().unwrap() >= 48.);
     assert_eq!(s["heading_source"], "compass");
-    assert_eq!(
-        c.readiness(10.9, evidence(), c.radius),
-        Some("heading_uncertain")
-    );
+    assert_eq!(c.readiness(10.9, evidence()), Some("heading_uncertain"));
 }
 /// Drive along local direction `travel` (radians) at 1 m/s while facing `yaw`.
 fn drive(c: &mut OutdoorController, from: f64, to: f64, travel: f64, yaw: f64) {
@@ -556,10 +549,7 @@ fn gps_course_locks_heading_and_vio_carries_it() {
     drive(&mut c, 0., 3., 0.3, 0.3);
     gps_only(&mut c, 3.);
     compass(&mut c, 3., 140., 48.);
-    assert_eq!(
-        c.readiness(3., evidence(), c.radius),
-        Some("heading_uncertain")
-    );
+    assert_eq!(c.readiness(3., evidence()), Some("heading_uncertain"));
     for _ in 0..12 {
         course(&mut c, 3., 90.);
     }
@@ -587,7 +577,7 @@ fn gps_course_locks_heading_and_vio_carries_it() {
     let expected = 90. - 1_f64.to_degrees();
     assert!((s["heading_deg"].as_f64().unwrap() - expected).abs() < 1.);
     assert!(s["heading_accuracy_deg"].as_f64().unwrap() < 5.);
-    assert_eq!(c.readiness(8., evidence(), c.radius), None);
+    assert_eq!(c.readiness(8., evidence()), None);
 }
 #[test]
 fn gps_course_handles_reversing() {

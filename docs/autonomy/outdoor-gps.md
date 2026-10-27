@@ -16,7 +16,7 @@ Source selection uses `navigation/source` with schema_version 1, source (`local`
 or `outdoor_gps`), token, run_id and navigation_revision. It requires fresh disarmed
 hardware, no pending hardware request and no active mission. Acceptance increments
 the navigation revision. An optional arrival_radius_m configures the default in
-2–20 m; the default is 5 m. Selection never arms the hardware.
+2–20 m; the default is 3 m. Selection never arms the hardware.
 
 Outdoor `goal` JSON preserves frame `wgs84`, latitude, longitude and token and adds
 run_id, navigation_revision and arrival_radius_m. ARGOS binds these to the reviewed
@@ -25,7 +25,7 @@ bindings and queued outdoor goals older than 0.5 s. The radius is immutable for 
 mission. Local goal JSON and cancellation (`{"cancel":true}`) are unchanged.
 
 Admission requires one of the levels in `goal_levels` (see below), ready armed hardware and fresh phone VIO motion feedback, healthy local
-pose and fresh occupancy (L2 direct does not need the map), GPS age ≤3 s and accuracy ≤10 m and ≤arrival radius,
+pose and fresh occupancy (L2 direct does not need the map), GPS age ≤3 s and accuracy ≤10 m (it no longer has to fit inside the arrival radius),
 and true-heading age ≤2 s with accuracy ≤30 degrees. Goals beyond 500 m are rejected.
 Wheel encoders are not required. L3 uses the phone's VIO/IMU velocity estimate and
 requires a differential motor layout. Both direct wheel-effort routes and compatible
@@ -84,7 +84,10 @@ away is rejected; three rejected fixes in a row re-anchor on the newest fix. A
 local frame jump (pose step over 1 m or a gap over 2 s) or travel without a
 heading drops the estimate until the next fix. Guidance and `destination_local`
 use this smoothed position, so a single GPS jump does not swing the target.
-Arrival still counts raw fixes inside the radius.
+Arrival and `remaining_m` also use it: three distinct fixes whose smoothed
+position is inside the radius confirm arrival. Before 2026-10-27 the default
+radius was 10 m and raw fixes had to fit inside it; the first field test stopped
+about 4 m short of the goal.
 
 Status adds `destination_local` (`{x, y}` in the local frame) and `anchor`
 (`sigma_m`, `reanchors`, `innovation_m`).
