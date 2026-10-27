@@ -234,6 +234,12 @@ impl HeadingFusion {
         self.estimate.map(|e| (e.offset - bearing).to_radians())
     }
 
+    /// True bearing, in degrees clockwise from north, of local yaw `yaw` radians.
+    pub fn bearing_of_local_yaw(&self, yaw: f64) -> Option<f64> {
+        self.estimate
+            .map(|e| (e.offset - yaw.to_degrees()).rem_euclid(360.))
+    }
+
     /// Fused rover true heading, one-sigma accuracy and pose age at `now`.
     pub fn heading(&self, now: f64) -> Option<(f64, f64, f64)> {
         let e = self.estimate?;

@@ -49,7 +49,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
     @Published private(set) var waypointStatus = "No goal"
     @Published private(set) var waypointDistance = 0.0
     private var zenoh: MobileZenohClient?
-    @Published private(set) var personDetectorStatus = "Requires LiDAR, camera tracking and scene depth"
+    @Published private(set) var objectDetectorStatus = "Requires LiDAR, camera tracking and scene depth"
     @Published private(set) var searchAvailable=false
     @Published private(set) var searchPhase=""
     @Published private(set) var searchReportText=""
@@ -137,7 +137,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
         didSet { let latched = dashboardEmergencyStop; DispatchQueue.main.async { self.emergencyStopLatched = latched } }
     }
     @Published private(set) var emergencyStopLatched = false
-    private let personDetector = PersonSearchDetector()
+    private let objectDetector = ObjectSearchDetector()
     /// On-phone language model for L5 tasks; nil when this phone has none.
     private let taskModel = TaskModelRunner.onDevice()
     private var detectorHealth = "not started"
@@ -779,7 +779,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
             guard self.sensorEpochMatches(trackingEpoch), self.phoneTrackingActive else { return }
             self.phoneTrackingStatus = tracked ? (self.fleetTrackingManaged ? "Tracking active · managed by ARGOS in every mode" : "Phone tracking active") : "Tracking initializing · keep the phone steady"
         }
-        updatePersonSearch(frame: frame, tracked: tracked, epoch: trackingEpoch)
+        updateObjectSearch(frame: frame, tracked: tracked, epoch: trackingEpoch)
         let transform = frame.camera.transform
         phoneHeadingReferenceYaw = PhoneMountGeometry.headingReferenceYaw(
             worldFromCamera: worldFromAR * simd_float3x3(simd_quatf(transform)),
@@ -845,15 +845,21 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
             else { DispatchQueue.main.async { self.mapStatus = "Tracking lost · map paused" } }
         } catch { fail(error, context: "AR frame at \(frame.timestamp)") }
     }
-    private func updatePersonSearch(frame: ARFrame, tracked: Bool, epoch: Int) {
+    private func updateObjectSearch(frame: ARFrame, tracked: Bool, epoch: Int) {
         guard let controller else { return }
+        let version = ObjectSearchDetector.version
         let ready = tracked && frame.sceneDepth?.confidenceMap != nil
         guard ready else {
-            try? controller.registerSearchDetector(classes: [], version: "apple-vision-person-depth-v1", timestamp: frame.timestamp)
+            try? controller.registerSearchDetector(classes: [], version: version, timestamp: frame.timestamp)
             setDetectorHealth(tracked ? "LiDAR scene depth unavailable" : "tracking unavailable")
             return
         }
-        personDetector.submit(frame: frame, worldFromAR: worldFromAR) { [weak self] result in
+        if let reason = objectDetector.unavailableReason {
+            try? controller.registerSearchDetector(classes: [], version: version, timestamp: frame.timestamp)
+            setDetectorHealth(reason)
+            return
+        }
+        objectDetector.submit(frame: frame, worldFromAR: worldFromAR) { [weak self] result in
             guard let self else { return }
             self.controlQueue.async {
                 guard self.sensorEpochMatches(epoch), self.mode == .phone, self.localizationTracked,
@@ -862,27 +868,35 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
                 do {
                     switch result {
                     case .failure(let error):
-                        try controller.registerSearchDetector(classes: [], version: "apple-vision-person-depth-v1", timestamp: now)
+                        try controller.registerSearchDetector(classes: [], version: version, timestamp: now)
                         self.setDetectorHealth("failed: \(error)")
                     case .success(let frame):
                         guard now >= frame.timestamp, now-frame.timestamp < 0.5 else {
-                            try controller.registerSearchDetector(classes: [], version: "apple-vision-person-depth-v1", timestamp: now)
+                            try controller.registerSearchDetector(classes: [], version: version, timestamp: now)
                             self.setDetectorHealth("inference frame stale")
                             return
                         }
-                        try controller.registerSearchDetector(classes: ["person"], version: "apple-vision-person-depth-v1", timestamp: frame.timestamp)
-                        self.setDetectorHealth("person detector ready")
-                        if frame.rejected > 0 { TerraLog.tracking.debug("Person observations rejected: \(frame.rejected); confidence or measured depth unavailable") }
+                        try controller.registerSearchDetector(classes: ObjectSearchDetector.classes, version: version, timestamp: frame.timestamp)
+                        self.setDetectorHealth("bucket detector ready")
+                        if frame.rejected > 0 { TerraLog.tracking.debug("Object boxes rejected: \(frame.rejected); unknown class or measured depth unavailable") }
+                        // Every box goes to the object map, which the dashboard shows as markers.
+                        for d in frame.detections {
+                            do {
+                                try controller.pushObjectDetection(d: MobileObjectDetection(className: d.className, color: d.color,
+                                    confidence: d.confidence, frameId: frame.frameID, worldX: Double(d.world.x), worldY: Double(d.world.y),
+                                    receivedAt: frame.timestamp), timestamp: now)
+                            } catch { TerraLog.tracking.debug("Object detection rejected: \(String(describing: error), privacy: .public)") }
+                        }
                         guard let search = controller.targetSearchSnapshot(timestamp: now), ["searching", "confirming"].contains(search.phase) else { return }
-                        // One observation per camera frame; never let separate people become duplicate frame evidence.
-                        if let person = frame.detections.max(by: { $0.confidence < $1.confidence }) {
+                        // One observation per camera frame; never let separate buckets become duplicate frame evidence.
+                        if let best = frame.detections.filter({ $0.className == search.targetClass }).max(by: { $0.confidence < $1.confidence }) {
                             try controller.pushTargetObservation(o: MobileTargetObservation(runId: search.runId, searchId: search.searchId,
-                                frameId: frame.frameID, targetClass: "person", confidence: person.confidence,
-                                worldX: Double(person.world.x), worldY: Double(person.world.y), receivedAt: frame.timestamp,
-                                evidenceId: "person-\(frame.frameID)"), timestamp: now)
+                                frameId: frame.frameID, targetClass: search.targetClass, confidence: best.confidence,
+                                worldX: Double(best.world.x), worldY: Double(best.world.y), receivedAt: frame.timestamp,
+                                evidenceId: "\(search.targetClass)-\(frame.frameID)"), timestamp: now)
                         }
                     }
-                } catch { TerraLog.tracking.notice("Person observation or capability rejected: \(String(describing: error), privacy: .public)") }
+                } catch { TerraLog.tracking.notice("Object observation or capability rejected: \(String(describing: error), privacy: .public)") }
             }
         }
     }
@@ -890,7 +904,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
         guard detectorHealth != value else { return }
         detectorHealth = value
         TerraLog.tracking.notice("L4 detector: \(value, privacy: .public)")
-        DispatchQueue.main.async { self.personDetectorStatus = value }
+        DispatchQueue.main.async { self.objectDetectorStatus = value }
     }
     /// Mount measurements feed the live IMU and VIO path, so saving stops the
     /// controller first. stop() queues the switch to .stopped on the serial

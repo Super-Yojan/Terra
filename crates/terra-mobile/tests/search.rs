@@ -217,3 +217,24 @@ fn offline_detector_loss_still_requires_attention() {
     assert_eq!(root["search"]["phase"], "needs_attention");
     assert!(!c.accepted_onboard_mission());
 }
+/// Bucket detections enter the object map; bad classes and low confidence are refused.
+#[test]
+fn object_detections_are_validated() {
+    let c = MobileController::new(default_control_settings()).unwrap();
+    let d = |class: &str, confidence: f64, frame: u64| MobileObjectDetection {
+        class_name: class.into(),
+        color: Some("orange".into()),
+        confidence,
+        frame_id: frame,
+        world_x: 1.,
+        world_y: 2.,
+        received_at: 1.,
+    };
+    c.push_object_detection(d("bucket", 0.9, 1), 1.).unwrap();
+    c.push_object_detection(d("ball", 0.7, 1), 1.).unwrap();
+    assert!(
+        c.push_object_detection(d("orange bucket", 0.9, 2), 1.)
+            .is_err()
+    );
+    assert!(c.push_object_detection(d("bucket", 0.2, 2), 1.).is_err());
+}

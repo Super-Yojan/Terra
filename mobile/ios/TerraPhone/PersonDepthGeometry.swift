@@ -12,6 +12,23 @@ struct PersonDepthGeometry {
         case .left: return SIMD2(y, x)
         }
     }
+    /// Orientation that makes the raw landscape camera image upright, from world up
+    /// expressed in camera axes (`camera.transform.columns.0.y`, `columns.1.y`). It follows
+    /// the real mount (Terra holds the phone landscape) and ignores the UI orientation lock.
+    /// `nil` when the camera looks almost straight up or down.
+    static func orientation(upX: Float, upY: Float) -> PersonImageOrientation? {
+        guard upX.isFinite, upY.isFinite, max(abs(upX), abs(upY)) > 0.3 else { return nil }
+        if abs(upY) >= abs(upX) { return upY > 0 ? .up : .down }
+        return upX < 0 ? .right : .left
+    }
+    /// A model-input pixel (top-left origin) of a centred letterbox (Vision `.scaleFit`)
+    /// to Vision's normalized, bottom-left-origin coordinates of the oriented image.
+    static func visionPoint(modelX: Float, modelY: Float, input: Float, imageWidth: Float, imageHeight: Float) -> SIMD2<Float> {
+        let scale = input / max(imageWidth, imageHeight)
+        let w = imageWidth*scale, h = imageHeight*scale
+        let u = (modelX - (input-w)/2)/w, v = (modelY - (input-h)/2)/h
+        return SIMD2(min(1, max(0, u)), min(1, max(0, 1-v)))
+    }
     static func worldPoint(pixel: SIMD2<Float>, depth: Float, intrinsics: simd_float3x3,
                            cameraTransform: simd_float4x4, worldFromAR: simd_float3x3) -> SIMD3<Float>? {
         guard depth.isFinite, depth > 0, depth <= 20, pixel.x.isFinite, pixel.y.isFinite,

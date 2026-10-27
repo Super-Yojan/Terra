@@ -191,6 +191,8 @@ pub struct Runtime {
     pub autonomy_brief: String,
     pub navigation: navigation::State,
     pub outdoor: terra_autonomy::outdoor::OutdoorController,
+    /// Buckets and balls seen this run, in the local frame.
+    pub objects: terra_autonomy::objects::ObjectMap,
     pub outdoor_tokens: VecDeque<String>,
     pub outdoor_goal_tokens: VecDeque<String>,
     pub hardware_observation: Option<(Value, f64)>,
@@ -249,6 +251,7 @@ impl Runtime {
             autonomy_brief: String::new(),
             navigation,
             outdoor,
+            objects: Default::default(),
             outdoor_tokens: Default::default(),
             outdoor_goal_tokens: Default::default(),
             hardware_observation: None,
@@ -291,6 +294,7 @@ impl Runtime {
         self.sensor_held = false;
         self.outdoor.cancel();
         self.outdoor.invalidate_sensors();
+        self.objects.clear();
         self.outdoor.selected = false;
         self.outdoor.revision = self.outdoor.revision.saturating_add(1);
         self.autonomy = AutonomyArbiter::default();
@@ -319,6 +323,20 @@ impl Runtime {
         self.autonomy_brief.clear();
         self.grid.clear();
         Ok(())
+    }
+    /// Add one detector sighting in the local frame. Adds latitude and longitude
+    /// when the outdoor GPS fix and heading are good enough.
+    pub fn observe_object(
+        &mut self,
+        mut sighting: terra_autonomy::objects::ObjectSighting,
+        now: f64,
+    ) -> Result<(), RuntimeError> {
+        sighting.geo = self.pose.and_then(|(pose, t)| {
+            (now - t <= 0.35)
+                .then(|| self.outdoor.geolocate(now, pose, sighting.x, sighting.y))
+                .flatten()
+        });
+        self.objects.observe(sighting).map_err(invalid)
     }
     pub fn configuration_identity(&self) -> String {
         let mut config = self.configuration.clone();

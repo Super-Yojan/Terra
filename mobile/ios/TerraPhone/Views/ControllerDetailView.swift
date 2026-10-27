@@ -33,7 +33,7 @@ struct ControllerDetailView: View {
     @AppStorage("waypointToken") private var waypointToken = "gmu-north"
     @AppStorage("exploreBudgetSeconds") private var exploreSeconds = "120"
     @State private var entryNote = ""
-    @State private var searchClass = "person"
+    @State private var searchClass = "bucket"
     @State private var searchMinX = "-20"
     @State private var searchMinY = "-20"
     @State private var searchMaxX = "20"
@@ -135,7 +135,7 @@ struct ControllerDetailView: View {
                             brain.startTargetSearch(targetClass:searchClass,minX:a,minY:b,maxX:c,maxY:d,budget:t)
                         }.disabled(brain.autonomyLevel != "target_search" || !brain.searchTerminal)
                     }else {Text("L4 people search requires a LiDAR phone with live camera tracking and scene depth.").font(.caption).foregroundStyle(.secondary)}
-                    Text(brain.personDetectorStatus).font(.caption).foregroundStyle(.secondary)
+                    Text(brain.objectDetectorStatus).font(.caption).foregroundStyle(.secondary)
                     if brain.autonomyLevel == "waypoint_direct" { Text("L2 follows directly without obstacle avoidance.").font(.caption) }
                     if !brain.searchPhase.isEmpty {Text(brain.searchPhase.replacingOccurrences(of:"_",with:" ").capitalized)}
                     if !brain.searchReportText.isEmpty {Text(brain.searchReportText).textSelection(.enabled)}
