@@ -310,7 +310,7 @@ mod tests {
         let mut estimator = VelocityEstimator::new(EstimatorConfig::default()).unwrap();
         estimator.push_imu(imu(1.0, 0.0)).unwrap();
         estimator.push_vio(vio(1.0, 1.0)).unwrap();
-        assert_eq!(estimator.estimate(1.2).health, Health::StaleImu);
+        assert_eq!(estimator.estimate(1.6).health, Health::StaleImu);
         assert_eq!(
             estimator.push_imu(imu(0.9, 0.0)),
             Err(InputError::OutOfOrder)

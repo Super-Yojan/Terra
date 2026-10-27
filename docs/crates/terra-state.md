@@ -20,7 +20,7 @@ flowchart LR
 
 | Input | Default |
 | --- | --- |
-| IMU | 0.1 s |
+| IMU | 0.5 s |
 | VIO | 0.35 s |
 
 `vio_timeout` must be at most 2 s.

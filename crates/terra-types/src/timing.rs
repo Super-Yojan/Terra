@@ -25,8 +25,9 @@ pub const PLANNER_TRACE_FRESHNESS_SECONDS: f64 = 0.5;
 pub const HARDWARE_FRESHNESS_SECONDS: f64 = 0.5;
 /// Execution-time admission age for settings and other control requests.
 pub const CONTROL_REQUEST_FRESHNESS_SECONDS: f64 = 0.5;
-/// IMU and VIO estimator defaults, retained from the phone baseline.
-pub const IMU_FRESHNESS_SECONDS: f64 = 0.1;
+/// IMU and VIO estimator defaults. The IMU limit was 0.1 s; the 2026-10-27 sensor timing
+/// runs saw a Debug build push it past that while iOS delivered every sample within 3 ms.
+pub const IMU_FRESHNESS_SECONDS: f64 = 0.5;
 pub const VIO_FRESHNESS_SECONDS: f64 = 0.35;
 
 // PLANNING: frequency and prediction, rather than mission expiry.

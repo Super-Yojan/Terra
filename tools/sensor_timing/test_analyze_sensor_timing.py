@@ -69,6 +69,10 @@ def simulate(seconds=5.0, queue_stall=0.0, ios_batch=0.0, sensor_gap=0.0, bare=T
 
 
 class Attribution(unittest.TestCase):
+    # The synthetic stalls are sized against the old 0.1 s gate.
+    def setUp(self):
+        ast.IMU_FRESHNESS = 0.1
+
     def test_clean_run_has_no_stale_ticks(self):
         s = simulate()
         self.assertEqual(s["stale_imu"]["stale_ticks"], 0)
