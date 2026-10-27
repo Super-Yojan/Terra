@@ -46,6 +46,12 @@ fn pose(c: &MobileController, t: f64, x: f64, y: f64, yaw: f64) {
     })
     .unwrap();
 }
+/// Compass heading for local yaw, in [0, 360). `rem_euclid` can return 360.0
+/// for a tiny negative angle, which Terra rejects.
+fn true_heading(yaw: f64) -> f64 {
+    let h = (-yaw.to_degrees()).rem_euclid(360.);
+    if h >= 360. { 0. } else { h }
+}
 /// GPS at the true position (offset by `noise_north` metres) and the true heading.
 fn geo(c: &MobileController, t: f64, x: f64, y: f64, yaw: f64, noise_north: f64) {
     c.push_gps(
@@ -53,7 +59,7 @@ fn geo(c: &MobileController, t: f64, x: f64, y: f64, yaw: f64, noise_north: f64)
             timestamp: t,
             latitude: (x + noise_north) / M_PER_DEG,
             longitude: -y / M_PER_DEG,
-            accuracy: 2.,
+            accuracy: noise_north.abs().max(2.),
         },
         t,
     )
@@ -61,7 +67,7 @@ fn geo(c: &MobileController, t: f64, x: f64, y: f64, yaw: f64, noise_north: f64)
     c.push_heading(
         HeadingFix {
             timestamp: t,
-            true_heading: (-yaw.to_degrees()).rem_euclid(360.),
+            true_heading: true_heading(yaw),
             accuracy: 3.,
         },
         t,
@@ -104,6 +110,8 @@ struct Sim {
     pose: (f64, f64, f64),
     /// Free half-width of the map, or `None` to stop sending maps.
     free: Option<f64>,
+    /// GPS error in metres north, flipping sign on every fix.
+    noise: f64,
 }
 impl Sim {
     fn new(level: &str, free: Option<f64>) -> Self {
@@ -116,6 +124,7 @@ impl Sim {
             t: 1.,
             pose: (0., 0., 0.),
             free,
+            noise: 0.,
         };
         sim.sense(true);
         hardware(&sim.c, false);
@@ -142,7 +151,12 @@ impl Sim {
         let (x, y, yaw) = self.pose;
         pose(&self.c, self.t, x, y, yaw);
         if gps {
-            geo(&self.c, self.t, x, y, yaw, 0.);
+            let sign = if (self.t.round() as i64) % 2 == 0 {
+                1.
+            } else {
+                -1.
+            };
+            geo(&self.c, self.t, x, y, yaw, sign * self.noise);
         }
         if let Some(free) = self.free {
             map(&self.c, self.t, free);
@@ -166,7 +180,7 @@ impl Sim {
                 .push_heading(
                     HeadingFix {
                         timestamp: self.t,
-                        true_heading: (-yaw.to_degrees()).rem_euclid(360.),
+                        true_heading: true_heading(yaw),
                         accuracy: 3.,
                     },
                     self.t,
@@ -204,6 +218,22 @@ fn l2_direct_drives_to_a_gps_goal_without_a_map() {
     assert!((x - 6.).hypot(y - 2.) <= 2.5, "stopped at ({x:.2}, {y:.2})");
     assert_eq!(s["outdoor"]["goal_levels"][0], "waypoint_direct");
     assert!(s["outdoor"]["anchor"]["sigma_m"].as_f64().unwrap() <= 2.);
+}
+
+#[test]
+fn l2_arrives_inside_three_metres_with_noisy_five_metre_gps() {
+    // The field test stopped 4 m short under the old 10 m default radius. With
+    // the 3 m default and the smoothed position, ±5 m fixes still land close.
+    let mut sim = Sim::new("waypoint_direct", Some(10.));
+    sim.free = None;
+    sim.noise = 5.;
+    sim.goal(10., 0., 3.);
+    let arrived = sim.run_until(90., |s| s["outdoor"]["phase"] == "arrived");
+    let s = status(&sim.c);
+    assert!(arrived, "{}", s["outdoor"]);
+    let (x, y, _) = sim.pose;
+    assert!((x - 10.).hypot(y) <= 3.5, "stopped at ({x:.2}, {y:.2})");
+    assert!(s["outdoor"]["remaining_m"].as_f64().unwrap() <= 3.);
 }
 
 #[test]
