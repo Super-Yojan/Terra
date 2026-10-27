@@ -349,6 +349,14 @@ impl Explorer {
             reason: format!("label={}", detection.label),
         });
     }
+    /// Drop the current frontier so the next tick chooses again, for example after
+    /// the scorer changed. The frontier is not blacklisted.
+    pub fn reselect(&mut self) {
+        self.target = None;
+        self.blocked_since = None;
+        self.best_distance = None;
+        self.progress_since = None;
+    }
     /// End an active run, freezing elapsed time at its last tick; idle and ended runs are unchanged.
     pub fn stop(&mut self, reason: EndReason) {
         if self.phase != ExplorePhase::Running {

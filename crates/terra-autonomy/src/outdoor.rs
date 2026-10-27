@@ -1,8 +1,15 @@
 //! Geographic mission state, independent of the local pose and occupancy frame.
 use serde_json::{Value, json};
 use terra_navigation::Pose;
+mod anchor;
 mod heading;
+pub use anchor::GeoAnchor;
 pub use heading::{CourseFix, HeadingFusion, Source as HeadingSource};
+/// Autonomy levels that accept a geographic destination, as wire names.
+/// L2 and L3 follow it directly; L4 explore and L5 task plan toward it on the local map.
+pub const GOAL_LEVELS: [&str; 4] = ["waypoint_direct", "waypoint", "explore", "task"];
+/// Guidance lookahead along the destination bearing, in metres.
+pub const LOOKAHEAD_M: f64 = 3.;
 #[derive(Clone, Copy, Debug)]
 pub struct GpsFix {
     pub timestamp: f64,
@@ -44,6 +51,7 @@ pub struct OutdoorController {
     gps_time: Option<f64>,
     heading_time: Option<f64>,
     heading: HeadingFusion,
+    anchor: GeoAnchor,
     mission: Option<Mission>,
     phase: &'static str,
     hold: Option<&'static str>,
@@ -63,6 +71,7 @@ impl Default for OutdoorController {
             gps_time: None,
             heading_time: None,
             heading: HeadingFusion::default(),
+            anchor: GeoAnchor::default(),
             mission: None,
             phase: "idle",
             hold: None,
@@ -96,6 +105,7 @@ impl OutdoorController {
     pub fn invalidate_sensors(&mut self) {
         self.gps = None;
         self.heading.reset();
+        self.anchor.reset();
         self.pause("tracking_lost");
     }
     pub fn phase(&self) -> &str {
@@ -129,6 +139,7 @@ impl OutdoorController {
         }
         self.gps_time = Some(s.timestamp);
         self.gps = Some(s);
+        self.anchor.fix(s.latitude, s.longitude, s.accuracy);
         Ok(())
     }
     pub fn heading(&mut self, s: impl Into<HeadingFix>, now: f64) -> Result<(), &'static str> {
@@ -156,8 +167,32 @@ impl OutdoorController {
         self.heading.heading(now)
     }
     /// Local VIO pose that carries the fused heading between corrections.
+    /// The same pose carries the smoothed geographic position between GPS fixes.
     pub fn observe_pose(&mut self, pose: Pose, t: f64) {
         self.heading.observe_pose(pose, t);
+        let east = self.heading.local_yaw(90.).zip(
+            self.heading
+                .heading(t)
+                .map(|(_, accuracy, _)| accuracy.to_radians()),
+        );
+        self.anchor.observe_pose(pose, t, east);
+    }
+    /// Rover position for guidance: the smoothed anchor, else the newest fix.
+    fn guidance_position(&self) -> Option<(f64, f64)> {
+        self.anchor
+            .position()
+            .map(|(lat, lon, _)| (lat, lon))
+            .or(self.gps.map(|g| (g.latitude, g.longitude)))
+    }
+    /// The active destination in the local frame, re-anchored on every pose and fix.
+    /// `None` without a mission, a position or a heading.
+    pub fn destination_local(&self, pose: Pose) -> Option<(f64, f64)> {
+        // Kept through arrival so L5 sees it is there; withdrawn while paused.
+        let m = self.mission.as_ref().filter(|_| self.phase != "paused")?;
+        let (lat, lon) = self.guidance_position()?;
+        let (distance, bearing) = distance_bearing(lat, lon, m.latitude, m.longitude);
+        let yaw = self.heading.local_yaw(bearing)?;
+        Some((pose.x + distance * yaw.cos(), pose.y + distance * yaw.sin()))
     }
     pub fn readiness(&self, now: f64, e: Evidence, radius: f64) -> Option<&'static str> {
         if self.gps.is_none_or(|g| !fresh(now, g.timestamp, 3.)) {
@@ -275,8 +310,7 @@ impl OutdoorController {
         }
         let g = self.gps?;
         let m = self.mission.as_mut()?;
-        let (distance, bearing) =
-            distance_bearing(g.latitude, g.longitude, m.latitude, m.longitude);
+        let (distance, _) = distance_bearing(g.latitude, g.longitude, m.latitude, m.longitude);
         self.remaining = Some(distance);
         if distance <= m.radius {
             if m.last_fix != Some(g.timestamp) {
@@ -293,14 +327,18 @@ impl OutdoorController {
         }
         m.count = 0;
         m.last_fix = Some(g.timestamp);
+        let (to_lat, to_lon) = (m.latitude, m.longitude);
         self.phase = "planning";
         if self.last_guidance.is_some_and(|t| now - t < 0.5) {
             return None;
         }
         self.last_guidance = Some(now);
+        // Steer from the smoothed position so a GPS jump does not swing the target.
+        let (lat, lon) = self.guidance_position()?;
+        let (distance, bearing) = distance_bearing(lat, lon, to_lat, to_lon);
         // Local yaw is counter-clockwise; true bearing is clockwise.
         let yaw = self.heading.local_yaw(bearing)?;
-        let lookahead = distance.min(3.);
+        let lookahead = distance.min(LOOKAHEAD_M);
         Some((
             e.pose.x + lookahead * yaw.cos(),
             e.pose.y + lookahead * yaw.sin(),
@@ -318,7 +356,9 @@ impl OutdoorController {
    "heading_age_s":heading.map(|h|h.2),"heading_accuracy_deg":heading.map(|h|h.1),"heading_deg":heading.map(|h|h.0),
    "heading_source":self.heading.source().map(|s|s.name()),"heading_correction_age_s":self.heading.correction_age(now),
    "destination":self.mission.as_ref().map(|m|json!({"latitude":m.latitude,"longitude":m.longitude})),
-   "remaining_m":self.remaining,"token":self.token,"result":self.result,
+   "remaining_m":self.remaining,"token":self.token,"result":self.result,"goal_levels":GOAL_LEVELS,
+   "destination_local":self.destination_local(e.pose).map(|(x,y)|json!({"x":x,"y":y})),
+   "anchor":self.anchor.position().map(|(_,_,sigma)|json!({"sigma_m":sigma,"reanchors":self.anchor.reanchors,"innovation_m":self.anchor.last_innovation})),
    "mission_token":self.mission.as_ref().map(|m|&m.token)})
     }
     pub fn mission_status(&self) -> Option<terra_waypoint::WaypointStatus> {

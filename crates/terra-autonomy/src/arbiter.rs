@@ -163,6 +163,11 @@ pub struct AutonomyArbiter {
     task_model: Option<String>,
     task_landmarks: Vec<crate::task::TaskLandmark>,
     next_task_query: u64,
+    /// GPS destination in the local frame, refreshed by the host each tick.
+    /// Explore biases its frontiers toward it; the L5 prompt lists it as G1.
+    outdoor_destination: Option<(f64, f64)>,
+    /// Destination the explorer's scorer currently pulls toward.
+    explore_bias: Option<(f64, f64)>,
 }
 impl Default for AutonomyArbiter {
     fn default() -> Self {
@@ -223,6 +228,8 @@ impl Default for AutonomyArbiter {
             task_model: None,
             task_landmarks: Vec::new(),
             next_task_query: 0,
+            outdoor_destination: None,
+            explore_bias: None,
         }
     }
 }

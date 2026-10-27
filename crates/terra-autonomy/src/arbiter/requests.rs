@@ -71,9 +71,35 @@ impl AutonomyArbiter {
         self.event("mission_paused", None, "router_loss_paused");
     }
 
-    /// Outdoor guidance is admitted only by the L3 authority path.
+    /// Levels that may hold a GPS destination: L2, L3, L4 explore and L5 task.
+    /// Target search keeps its own operator-drawn bounds.
     pub fn outdoor_authority(&self) -> bool {
-        self.level == Level::Waypoint && !self.stopped && !self.paused
+        matches!(
+            self.level,
+            Level::WaypointDirect | Level::Waypoint | Level::Explore | Level::Task
+        ) && !self.stopped
+            && !self.paused
+    }
+    /// L4 explore and L5 task plan toward the destination themselves.
+    pub fn reads_outdoor_destination(&self) -> bool {
+        matches!(self.level, Level::Explore | Level::Task)
+    }
+    /// Whether this level holds without a fresh occupancy map. L2 direct does not use it.
+    pub fn needs_map(&self) -> bool {
+        !matches!(self.level, Level::Teleop | Level::WaypointDirect)
+    }
+    /// Local-frame GPS destination for explore and task, or `None` to clear it.
+    pub fn set_outdoor_destination(&mut self, destination: Option<(f64, f64)>) {
+        self.outdoor_destination = destination.filter(|(x, y)| x.is_finite() && y.is_finite());
+    }
+    pub fn outdoor_destination(&self) -> Option<(f64, f64)> {
+        self.outdoor_destination
+    }
+    /// GPS arrival ends an explore run toward a destination.
+    pub fn finish_explore_at_destination(&mut self) {
+        if self.level == Level::Explore && self.explorer.is_running() {
+            self.explorer.stop(EndReason::ObjectiveComplete);
+        }
     }
     pub fn has_active_goal(&self, pose: Pose) -> bool {
         self.follower.step(pose.x, pose.y, pose.yaw).status.state == GoalState::Active

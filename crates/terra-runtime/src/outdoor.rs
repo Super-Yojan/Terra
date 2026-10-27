@@ -13,9 +13,11 @@ pub fn evidence(b: &Runtime, now: f64) -> Evidence {
     Evidence {
         pose: b.pose.unwrap_or_default().0,
         pose_ready: pose_quality::ready(b, now),
-        map_ready: b.map.as_ref().is_some_and(|(_, t, _)| {
-            now.is_finite() && (0.0..=b.autonomy.map_freshness_timeout()).contains(&(now - t))
-        }),
+        // L2 direct drives without the occupancy map, so a stale map never holds it.
+        map_ready: !b.autonomy.needs_map()
+            || b.map.as_ref().is_some_and(|(_, t, _)| {
+                now.is_finite() && (0.0..=b.autonomy.map_freshness_timeout()).contains(&(now - t))
+            }),
         hardware_ready: h.is_some_and(|h| h["ready"] == true && h["fault"].is_null()),
         authority: b.autonomy.outdoor_authority(),
     }
@@ -141,6 +143,13 @@ pub fn goal(b: &mut Runtime, g: &terra_waypoint::GoalCommand, now: f64, radius: 
         b.outdoor_goal_tokens.pop_front();
     }
     b.outdoor_goal_tokens.push_back(token.clone());
+    if b.autonomy.reads_outdoor_destination() {
+        // L4 explore and L5 task keep their own follower and read the destination each tick.
+        b.autonomy
+            .set_outdoor_destination(b.outdoor.destination_local(e.pose));
+        b.autonomy.replan_task_for_destination();
+        return true;
+    }
     let target = b.outdoor.tick(now, e).unwrap_or((e.pose.x, e.pose.y));
     let local = GoalCommand::Local {
         x: target.0,
@@ -156,16 +165,25 @@ pub fn goal(b: &mut Runtime, g: &terra_waypoint::GoalCommand, now: f64, radius: 
 }
 pub fn update(b: &mut Runtime, now: f64) -> bool {
     if !b.outdoor.selected {
+        b.autonomy.set_outdoor_destination(None);
         return true;
     }
     let e = evidence(b, now);
-    if let Some((x, y)) = b.outdoor.tick(now, e) {
-        b.autonomy.update_guidance(x, y);
-    }
-    // Explore owns the follower in the local frame. The tick above has already
-    // paused any outdoor mission for lost authority; it waits for an explicit resume.
-    if b.autonomy.is_exploring() {
+    let guidance = b.outdoor.tick(now, e);
+    if b.autonomy.reads_outdoor_destination() {
+        // Explore and task own the follower in the local frame and plan toward the
+        // destination on the occupancy map. A paused mission only withdraws the
+        // destination: the level keeps working locally until an explicit resume.
+        b.autonomy
+            .set_outdoor_destination(b.outdoor.destination_local(e.pose));
+        if b.outdoor.phase() == "arrived" {
+            b.autonomy.finish_explore_at_destination();
+        }
         return true;
+    }
+    b.autonomy.set_outdoor_destination(None);
+    if let Some((x, y)) = guidance {
+        b.autonomy.update_guidance(x, y);
     }
     if b.outdoor.phase() != "planning" {
         // Never retain a moving local target through a pause or arrival confirmation.
