@@ -10,7 +10,6 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
     @Published private(set) var connectionGeneration: UInt64 = 0
     @Published private(set) var outputActive = false
     @Published private(set) var status = "Disconnected"
-    @Published private(set) var peripheralsJSON = "[]"
     @Published private(set) var statusJSON = "{}"
     @Published private(set) var capabilitiesJSON = "{}"
     @Published private(set) var layoutIndexJSON = "{}"
@@ -35,7 +34,7 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
     } }
     func startDiscovery(generation: UInt64) { queue.async {
         self.automationGeneration = generation
-        self.cancelAutomaticSelection(); self.scanningRequested = true
+        self.scanningRequested = true
         self.found.removeAll(); self.advertisedNames.removeAll()
         self.startRequestedScan()
     } }
@@ -51,9 +50,6 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
     private let queue = DispatchQueue(label: "terra.bluetooth")
     private var central: CBCentralManager!
     private var scanningRequested = false
-    private var automaticSelection: ((UUID) -> Void)?
-    private var preferredRover: UUID?
-    private var discoveryWindow: DispatchWorkItem?
     private var advertisedNames: [UUID: String] = [:]
     private var found: [UUID: CBPeripheral] = [:]
     private var peripheral: CBPeripheral?
@@ -126,30 +122,10 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
         if let bytes = try? JSONSerialization.data(withJSONObject: rows) { try? bytes.write(to: url, options: .atomic) }
         #endif
     }
-    func scan() { queue.async {
-        self.cancelAutomaticSelection()
-        self.scanningRequested = true
-        self.startRequestedScan()
-    } }
-    func scanForAutomaticConnection(preferred: UUID?, onSelect: @escaping (UUID) -> Void) {
-        queue.async {
-            guard self.peripheral == nil, self.automaticSelection == nil else { return }
-            self.found.removeAll(); self.advertisedNames.removeAll()
-            DispatchQueue.main.async { self.peripheralsJSON = "[]" }
-            self.preferredRover = preferred
-            self.automaticSelection = onSelect
-            self.scanningRequested = true
-            self.startRequestedScan()
-        }
-    }
     func cancelAutomaticConnection() { queue.async {
-        self.cancelAutomaticSelection()
         self.scanningRequested = false
         self.central.stopScan()
     } }
-    private func cancelAutomaticSelection() {
-        discoveryWindow?.cancel(); discoveryWindow = nil; automaticSelection = nil
-    }
     private func startRequestedScan() {
         guard scanningRequested else { return }
         guard central.state == .poweredOn else {
@@ -157,32 +133,18 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
             return
         }
         central.scanForPeripherals(withServices: [serviceID], options: [CBCentralManagerScanOptionAllowDuplicatesKey: true])
-        publish(automaticSelection == nil ? "Scanning" : "Searching for your rover…")
+        publish("Scanning")
     }
-    private func selectAutomaticRover() {
-        guard let selection = automaticSelection else { return }
-        if let id = TerraAutoConnectionPolicy.select(candidates: Array(found.keys), preferred: preferredRover) {
-            cancelAutomaticSelection(); scanningRequested = false; central.stopScan()
-            selection(id)
-        } else if preferredRover == nil, found.count > 1 {
-            cancelAutomaticSelection(); scanningRequested = false; central.stopScan()
-            publish("Multiple rovers found · choose one in Robots")
-        }
-    }
-    func connect(identifier: UUID) { queue.async {
-        self.deferredIdentifier = identifier
-        self.connectDeferredIfPossible()
-    } }
     private func connectDeferredIfPossible() {
         guard peripheral == nil, retiring == nil, let identifier = deferredIdentifier else { return }
         deferredIdentifier = nil
         guard let selected = found[identifier] else { publish("Scan and select the rover again"); return }
         clear(); peripheral = selected; callbackGeneration = policy.generation
         attemptStarted = now
-        selected.delegate = self; scanningRequested = false; cancelAutomaticSelection(); central.stopScan(); central.connect(selected); publish("Connecting")
+        selected.delegate = self; scanningRequested = false; central.stopScan(); central.connect(selected); publish("Connecting")
     }
     func disconnect() { queue.async {
-        self.cancelAutomaticSelection(); self.scanningRequested = false; self.central.stopScan()
+        self.scanningRequested = false; self.central.stopScan()
         self.deferredIdentifier = nil; self.suppressCloseEvent = true; self.close("Disconnected"); self.suppressCloseEvent = false
     } }
     private func clear() {
@@ -402,21 +364,7 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
         let displayName = pairing ? String(localName.dropLast(5)) : (localName.isEmpty ? p.name ?? "Terra rover" : localName)
         let generation = automationGeneration
         DispatchQueue.main.async { self.onDiscovery?(.init(identifier: p.identifier, name: displayName, pairing: pairing), generation) }
-        if automaticSelection != nil {
-            if preferredRover == p.identifier {
-                selectAutomaticRover()
-            } else if discoveryWindow == nil {
-                // Collect nearby candidates before selecting a first-time rover.
-                let window = DispatchWorkItem { [weak self] in
-                    self?.discoveryWindow = nil; self?.selectAutomaticRover()
-                }
-                discoveryWindow = window
-                queue.asyncAfter(deadline: .now() + 2, execute: window)
-            }
-        }
         advertisedNames[p.identifier] = localName.isEmpty ? p.name ?? "Terra peripheral" : localName
-        let items = found.values.map { ["identifier": $0.identifier.uuidString, "name": advertisedNames[$0.identifier] ?? $0.name ?? "Terra peripheral"] }
-        if let data = try? JSONSerialization.data(withJSONObject: items) { DispatchQueue.main.async { self.peripheralsJSON = String(decoding: data, as: UTF8.self) } }
     }
     func centralManager(_ central: CBCentralManager, didConnect p: CBPeripheral) { guard current(p) else { return }; p.discoverServices([serviceID]) }
     func centralManager(_ central: CBCentralManager, didFailToConnect p: CBPeripheral, error: Error?) { if retiring === p { p.delegate = nil; retiring = nil; connectDeferredIfPossible(); return }; guard current(p) else { return }; terminal("Connection failed; reconnect explicitly") }

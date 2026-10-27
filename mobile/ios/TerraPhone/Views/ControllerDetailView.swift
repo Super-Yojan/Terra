@@ -39,7 +39,6 @@ struct ControllerDetailView: View {
     @State private var searchMaxX = "20"
     @State private var searchMaxY = "20"
     @State private var searchBudget = "600"
-    private let waypointReach = 49.0
     var body: some View {
         Form {
                 if brain.lastStopDiagnostic.message != nil {
@@ -290,6 +289,6 @@ struct ControllerDetailView: View {
             return
         }
         entryNote = ""
-        brain.engageWaypoint(originLatitude: originLatitude, originLongitude: originLongitude, latitude: latitude, longitude: longitude, token: waypointToken, halfExtent: waypointReach)
+        brain.engageWaypoint(originLatitude: originLatitude, originLongitude: originLongitude, latitude: latitude, longitude: longitude, token: waypointToken)
     }
 }

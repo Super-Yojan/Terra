@@ -45,11 +45,6 @@ enum DriveJoystickSafety {
 
 /// Route only the arbiter-selected manual intent, never an unvalidated network payload.
 enum TerraFleetManualDrive {
-    static func retainsOnboardMission(_ json: String) -> Bool {
-        guard let root = (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any],
-              let policy = root["connectivity"] as? [String: Any] else { return false }
-        return policy["accepted_onboard_mission"] as? Bool == true
-    }
     static func requiresAutonomousControl(_ json: String) -> Bool {
         guard let root = (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any],
               let status = root["status"] as? [String: Any] else { return false }
@@ -68,11 +63,6 @@ enum TerraFleetManualDrive {
               let quality = root["pose_quality"] as? [String: Any], quality["degraded"] as? Bool == false,
               let age = quality["pose_age_s"] as? Double, age.isFinite, (0...0.35).contains(age) else { return false }
         return true
-    }
-    static func localWaypointActive(_ json: String) -> Bool {
-        guard let root = (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any],
-              let status = root["status"] as? [String: Any], let goal = root["goal"] as? [String: Any] else { return false }
-        return ["waypoint", "waypoint_direct"].contains(status["requested_level"] as? String ?? "") && goal["state"] as? String == "active"
     }
     static func isFullyManual(_ json: String) -> Bool {
         guard let root = (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any],

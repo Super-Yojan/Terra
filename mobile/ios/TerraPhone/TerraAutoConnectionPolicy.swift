@@ -50,14 +50,6 @@ struct TerraSavedRovers {
     }
 }
 
-/// Discovery never establishes ownership. Only a remembered rover reconnects silently.
-enum TerraAutoConnectionPolicy {
-    static func select(candidates: [UUID], preferred: UUID?) -> UUID? {
-        guard let preferred, candidates.contains(preferred) else { return nil }
-        return preferred
-    }
-}
-
 struct TerraDiscoveredRover: Identifiable, Equatable {
     let identifier: UUID
     let name: String

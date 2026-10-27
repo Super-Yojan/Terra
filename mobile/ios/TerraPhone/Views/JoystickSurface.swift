@@ -28,7 +28,7 @@ struct JoystickSurface: View {
         }
     }
     private var thumb: some View {
-        Circle().fill(Color(red: 0.09, green: 0.23, blue: 0.17))
+        Circle().fill(TerraStyle.buttonForest)
             .frame(width: 78, height: 78)
             .overlay {
                 Image(systemName: "plus").font(.title2.weight(.medium)).foregroundStyle(.white.opacity(0.8))

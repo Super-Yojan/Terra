@@ -66,10 +66,4 @@ struct MountCalibration: Codable {
         )))
         return correction * nominal
     }
-
-    /// Optical camera axes are right/down/forward; device axes are right/up/toward screen.
-    var opticalCameraToBody: simd_quatf {
-        let opticalToDevice = simd_quatf(angle: .pi, axis: SIMD3(1, 0, 0))
-        return deviceToBody * opticalToDevice
-    }
 }

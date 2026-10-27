@@ -34,7 +34,6 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
     /// re-applied to every new map.
     private var classificationDebugEnabled = false
     private let plant = SimulatedPlant()
-    private let velocityFilter = PoseVelocityFilter()
     private var mapGroundOffset: Double?
     private var groundPolicy = PhoneGroundPolicy()
     private var lastMapTime = -Double.infinity
@@ -64,8 +63,6 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
     @Published private(set) var proposedGoal:UInt64?
     private var proposalRun=""
     @Published private(set) var proposalText=""
-    private var goalLatched = false
-    private var remotePose: (x: Double, y: Double, yaw: Double)?
     private var phonePose: (x: Double, y: Double, yaw: Double)?
     private enum Mode { case stopped, simulation, phone, remote, bluetoothManual }
     let bluetooth = BluetoothLink()
@@ -109,11 +106,9 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
     @Published private(set) var capabilitiesJSON = "{}"
     @Published private(set) var committedLayoutJSON = "{}"
     @Published private(set) var configurationStatus = "No staged layout"
-    @Published private(set) var discoveredRovers: [RoverPeripheral] = []
     @Published private(set) var servoPositions: [UInt8: Double] = [:]
     @Published private(set) var feedbackCompatible = false
     @Published private(set) var vioControlCompatible = false
-    @Published private(set) var acknowledgedCommitRevision: UInt32?
     private var requestedHardwareFeedback: UUID?
     private var feedbackConnectionSawUnready = false
     private var subscriptions = Set<AnyCancellable>()
@@ -137,7 +132,11 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
     private var nextRequest: UInt32 = max(1000, UInt32(clamping: UserDefaults.standard.integer(forKey: "hardwareConfigurationRequestID")))
     private var sensorEpoch = 0
     private let sensorEpochLock = NSLock()
-    private var dashboardEmergencyStop = false
+    /// Operator or router e-stop latch. Survives stop() and restarts; only an explicit reset clears it.
+    private var dashboardEmergencyStop = false {
+        didSet { let latched = dashboardEmergencyStop; DispatchQueue.main.async { self.emergencyStopLatched = latched } }
+    }
+    @Published private(set) var emergencyStopLatched = false
     private let personDetector = PersonSearchDetector()
     /// On-phone language model for L5 tasks; nil when this phone has none.
     private let taskModel = TaskModelRunner.onDevice()
@@ -235,15 +234,9 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
     // Publication identity must survive prepare/preserveRuntime and UI tick resets.
     private var occupancyPublicationRevision: UInt64 = 0
     private var simulatedTime = 0.0
-    private var simulatedForward = 0.0
-    private var simulatedYawRate = 0.0
-    private var simulatedYaw = 0.0
-    private var simulatedAcceleration = 0.0
     private var previousPosition: SIMD3<Float>?
     private var previousPoseTime: Double?
     private var filteredVelocity = SIMD3<Float>.zero
-    // Upright, rear camera forward; Core Motion and ARCamera use different sensor axes.
-    private let phoneToBody = PhoneMountGeometry.phoneToBody
     // ARKit world +Y up -> robotics world +Z up, preserving right handedness.
     private let worldFromAR = simd_float3x3(columns: (SIMD3(0, -1, 0), SIMD3(0, 0, 1), SIMD3(-1, 0, 0)))
     override init() {
@@ -270,7 +263,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
     func setTarget(forward: Double, yaw: Double) {
         controlQueue.async { self.target = self.dashboardEmergencyStop ? (0, 0) : (forward, yaw) }
     }
-    func engageWaypoint(originLatitude: Double, originLongitude: Double, latitude: Double, longitude: Double, token: String, halfExtent: Double) {
+    func engageWaypoint(originLatitude: Double, originLongitude: Double, latitude: Double, longitude: Double, token: String) {
         let token = token.trimmingCharacters(in: .whitespacesAndNewlines)
         controlQueue.async {
             let vioWaypoint = TerraFleetManualDrive.requiresVioControl(self.controller?.autonomyStatus() ?? "{}")
@@ -291,15 +284,12 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
                 let values:[String:Any]=["frame":"wgs84","latitude":latitude,"longitude":longitude,"token":token.isEmpty ? UUID().uuidString:token]
                 let payload=String(decoding:try JSONSerialization.data(withJSONObject:values),as:UTF8.self)
                 if self.mode == .remote {try self.zenoh?.sendAction(kind:"goal",payload:payload)}else{try self.controller?.autonomyRequest(kind:"goal",payload:payload,timestamp:now)}
-                let accepted=true
-                self.goalLatched = accepted
                 DispatchQueue.main.async {
-                    self.waypointActive = accepted
+                    self.waypointActive = true
                     self.waypointDistance = 0
-                    self.waypointStatus = accepted ? "Goal latched · waiting for a pose" : "That point is outside \(Int(halfExtent)) m of the origin"
+                    self.waypointStatus = "Goal sent · waiting for a pose"
                 }
             } catch {
-                self.goalLatched = false
                 DispatchQueue.main.async { self.waypointActive = false; self.waypointStatus = error.localizedDescription }
             }
         }
@@ -308,7 +298,6 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
         controlQueue.async {
             let now=self.mode == .simulation ? self.simulatedTime:CACurrentMediaTime()
             if self.mode == .remote {try? self.zenoh?.sendAction(kind:"goal",payload:"{\"cancel\":true}")}else{try? self.controller?.autonomyRequest(kind:"goal",payload:"{\"cancel\":true}",timestamp:now)}
-            self.goalLatched = false
             DispatchQueue.main.async {
                 self.waypointActive = false
                 self.waypointDistance = 0
@@ -327,7 +316,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
         }
     }
     /// Dashboard transport is independent of the Simulator-only Bevy hardware link.
-    func connectDashboard(endpoint: String, prefix: String, roverID: String) {
+    private func connectDashboard(endpoint: String, prefix: String, roverID: String) {
         observation.setContext(roverID: roverID)
         controller?.setObservabilityRover(roverId: roverID)
         observation.record(component: "router", kind: "connection.requested", attributes: [:])
@@ -404,7 +393,6 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
             self.closeFpv(publish: true)
             self.target = (0, 0); self.revokeHardwareMotion(reason: "operator disconnected dashboard")
             try? self.controller?.disconnectDashboard()
-            self.goalLatched = false
             DispatchQueue.main.async {
                 self.dashboardConnecting = false; self.dashboardConnected = false
                 self.dashboardStatus = "Disconnected · remote intent cleared"
@@ -532,11 +520,9 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
             self.mode = .stopped
             self.isCollectingOffsetFit = false; self.offsetFitSamples.removeAll(); self.firstTurnFit = nil
             DispatchQueue.main.async { self.offsetFitInProgress = false }
-            self.dashboardEmergencyStop = false
             self.bleActive = false; self.bleReady = false; self.bleFeedback = false; self.feedbackTrackingHealthy = false; self.target = (0, 0); self.servoTargets = [:]
             self.zenoh?.disconnect(); self.zenoh = nil
-            self.goalLatched = false
-            self.remotePose = nil; self.phonePose = nil
+            self.phonePose = nil
             try? self.controller?.reset()
             self.controller = nil
             DispatchQueue.main.async {
@@ -586,7 +572,8 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
         self.mode = mode
         phoneStartedAt = ProcessInfo.processInfo.systemUptime
         target = (0, 0)
-        tick = 0; simulatedTime = 0; simulatedForward = 0; simulatedYawRate = 0; simulatedYaw = 0; simulatedAcceleration = 0
+        tick = 0; simulatedTime = 0
+        if mode == .simulation { try plant.reset() }
         previousPosition = nil; previousPoseTime = nil; filteredVelocity = .zero
         DispatchQueue.main.async { self.localizationReport = nil }
         localizationTrackingReason = nil
@@ -601,7 +588,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
         self.timer = timer
         timer.resume()
     }
-    private func serviceManualDashboard(now: TimeInterval) {
+    private func serviceManualDashboard() {
         drainFpvSignaling()
         guard let controller else { return }
         let attempt = dashboardAttemptToken()
@@ -639,7 +626,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
                 }
                 syncRustLayout(controller)
                 let output = try controller.step(timestamp: now)
-                if tick % 10 == 0 { serviceManualDashboard(now: now); updateAuthority() }
+                if tick % 10 == 0 { serviceManualDashboard(); updateAuthority() }
                 tick += 1
                 if tick % 5 == 0 {
                     let command = DriveJoystickCommand(forward: (output.leftEffort + output.rightEffort) / 2, yaw: (output.rightEffort - output.leftEffort) / 2)
@@ -651,7 +638,6 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
         if mode == .remote, let zenoh {
             do {
                 if let frame = zenoh.takeDepth() {
-                    remotePose = (frame.bodyX, frame.bodyY, frame.bodyYaw)
                     self.integrateRemoteDepth(frame)
                 }
                 let command = target
@@ -1453,9 +1439,10 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
         bluetooth.stopOutput(); bluetooth.disconnect(); bleActive = false
         mode = .stopped; timer?.cancel(); timer = nil; try? controller?.reset()
         zenoh?.disconnect(); zenoh = nil
-        goalLatched = false
-        remotePose = nil; phonePose = nil
+        phonePose = nil
+        sensorEpochLock.lock(); sensorEpoch += 1; sensorEpochLock.unlock()
         DispatchQueue.main.async {
+            self.hardwareActive = false; self.hardwareFeedback = false; self.phoneTrackingActive = false
             self.waypointActive = false; self.waypointDistance = 0; self.waypointStatus = "No goal"
             self.motion.stopDeviceMotionUpdates(); self.session.pause()
             self.status = detail; self.leftEffort = 0; self.rightEffort = 0
@@ -1464,12 +1451,6 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
             self.dashboardConnecting = false; self.dashboardConnected = false; self.dashboardStatus = "Disconnected · controller stopped"
         }
     }
-}
-
-struct RoverPeripheral: Identifiable, Decodable {
-    let identifier: String
-    let name: String
-    var id: String { identifier }
 }
 
 extension PhoneController {
@@ -1508,7 +1489,6 @@ extension PhoneController {
             configurationGeneration = bluetooth.connectionGeneration
             controlQueue.async { self.target = (0, 0); self.resetServoTargets(); self.bluetooth.stopOutput() }
             actuatorEditor.invalidate(generation: configurationGeneration); editorRequest = nil; retryableEditorRequest = nil; hasRetryableActuatorRequest = false; presetUpload = nil; removeAfterBegin = nil; resetFaultRequest = nil
-            acknowledgedCommitRevision = nil
             configurationStatus = "Connection changed · stage draft again"
         }
         observation.recordChanged(component: "bluetooth", kind: "hardware.state", attributes: ["status": bluetooth.status, "ready": bluetooth.isReady, "output_active": bluetooth.outputActive])
@@ -1529,7 +1509,6 @@ extension PhoneController {
         hardwareOutputActive = bluetooth.outputActive
         if let fault = hardwareFault { retainStopReason("Pi output fault: \(fault)") }
         capabilitiesJSON = bluetooth.capabilitiesJSON; committedLayoutJSON = bluetooth.driveProfileJSON
-        discoveredRovers = (try? JSONDecoder().decode([RoverPeripheral].self, from: Data(bluetooth.peripheralsJSON.utf8))) ?? []
         feedbackCompatible = (try? ActuatorDriveProfileSet.decode(json: committedLayoutJSON).supportsFeedback) ?? false
         vioControlCompatible = (try? ActuatorDriveProfileSet.decode(json: committedLayoutJSON).supportsVioControl) ?? false
         let layout = committedLayoutJSON
@@ -1577,7 +1556,6 @@ extension PhoneController {
         dashboardConnecting = false
         bluetooth.cancelAutomaticConnection()
     }
-    func scanBluetooth() { retryAutomaticConnection() }
     func retryAutomaticConnection() {
         cancelAutoConnection(); autoConnectHardware()
     }
@@ -1757,7 +1735,7 @@ extension PhoneController {
         invalidateDashboardAttempt()
         controlQueue.async {
             self.closeFpv(publish: true)
-            try? self.controller?.disconnectDashboard(); self.goalLatched = false
+            try? self.controller?.disconnectDashboard()
         }
         dashboardConnected = false; dashboardConnecting = false
         dashboardStatus = "Disconnected"
@@ -1804,7 +1782,7 @@ extension PhoneController {
             phoneTrackingStatus = "Tracking starts after ARGOS connects"
         }
     }
-    func setHardwareFeedback(enabled: Bool) {
+    private func setHardwareFeedback(enabled: Bool) {
         if enabled {
             guard bluetooth.connectedIdentifier != nil else { return }
             guard feedbackCompatible, hardwareReady, ARWorldTrackingConfiguration.isSupported,
@@ -1828,7 +1806,7 @@ extension PhoneController {
             source = "Bluetooth · normalized manual effort"
         }
     }
-    func startBluetooth(identifier: UUID, feedback: Bool) {
+    private func startBluetooth(identifier: UUID, feedback: Bool) {
         let connectionGeneration = connectionPolicy.generation
         stop()
         requestedHardwareFeedback = feedback ? identifier : nil
@@ -2097,7 +2075,7 @@ extension PhoneController {
             }
         case "commit_layout_edit":
             guard let revision = payload["revision"] as? UInt32 else { return }
-            acknowledgedCommitRevision = revision; actuatorEditor = ActuatorPaginationState()
+            actuatorEditor = ActuatorPaginationState()
             stopHardware(); bluetooth.refreshConfigurationIndex()
         case "discard_layout_edit":
             presetUpload = nil
