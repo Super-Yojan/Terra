@@ -24,6 +24,16 @@ struct ClassificationDebugView: View {
             } footer: {
                 Text("Drag to orbit, pinch to zoom. The white dot is the phone; up is world up. Mesh floor cells are what ARKit classified as floor.")
             }
+            Section {
+                LabeledContent("ARKit floor mesh", value: below(frame?.meshFloorZ))
+                LabeledContent("Lowest depth returns", value: below(frame?.lowReturnZ))
+                LabeledContent("Classifier ground plane", value: frame.map { $0.groundZ == nil ? "not locked" : below($0.groundZ) } ?? "–")
+                if let mismatch { Text(mismatch).font(.footnote).foregroundStyle(.orange) }
+            } header: {
+                Text("Height below the phone")
+            } footer: {
+                Text("Point the camera at open floor. All three should agree within a few centimetres; obstacles start 0.15 m above the classifier ground.")
+            }
             Section("Labels") {
                 ForEach(PointLabelStyle.all, id: \.byte) { style in
                     LabeledContent {
@@ -83,6 +93,21 @@ struct ClassificationDebugView: View {
         let age = now.timeIntervalSince(lastFrameAt)
         let status = age > 2 ? String(format: "%@ · no new frame for %.0f s", mode, age) : mode
         return "\(status) · \(framesReceived) frames"
+    }
+    /// How far below the phone a world height is, as text.
+    private func below(_ z: Double?) -> String {
+        guard let z, let frame, frame.camera.count == 3 else { return "–" }
+        return String(format: "%.2f m", frame.camera[2] - z)
+    }
+    private var mismatch: String? {
+        guard let frame, let mesh = frame.meshFloorZ else { return nil }
+        if let low = frame.lowReturnZ, abs(mesh - low) > 0.15 {
+            return String(format: "Mesh floor and depth floor differ by %.2f m.", mesh - low)
+        }
+        if let ground = frame.groundZ, abs(mesh - ground) > 0.08 {
+            return String(format: "Classifier ground is %.2f m %@ the mesh floor; check the mount height or restart sensors.", abs(ground - mesh), ground > mesh ? "above" : "below")
+        }
+        return nil
     }
     private func count(_ frame: ClassifiedFrame, _ byte: UInt8) -> String {
         Int(byte) < frame.counts.count ? "\(frame.counts[Int(byte)])" : "0"
