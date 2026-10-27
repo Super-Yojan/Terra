@@ -12,7 +12,7 @@ struct ClassificationDebugView: View {
     @State private var showOutOfRange = false
     @State private var showFloorCells = true
     @State private var fineDetail = false
-    private let poll = Timer.publish(every: 0.5, on: .main, in: .common).autoconnect()
+    @State private var framesReceived = 0
 
     var body: some View {
         Form {
@@ -56,13 +56,19 @@ struct ClassificationDebugView: View {
             }
         }
         .navigationTitle("3D classification")
-        .onAppear { brain.setClassificationDebug(true) }
         .onDisappear { brain.setClassificationDebug(false) }
-        .onReceive(poll) { tick in
-            now = tick
-            brain.takeClassifiedFrame(stride: fineDetail ? 2 : 4) { next in
-                guard let next else { return }
-                frame = next; lastFrameAt = Date()
+        // Poll from a task tied to the page's lifetime. A Timer.publish stored on
+        // the view is rebuilt every time the controller publishes (10 Hz), so its
+        // 0.5 s tick never arrived and the page stayed on "Waiting for depth frames".
+        .task {
+            brain.setClassificationDebug(true)
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                now = Date()
+                brain.takeClassifiedFrame(stride: fineDetail ? 2 : 4) { next in
+                    guard let next else { return }
+                    frame = next; lastFrameAt = Date(); framesReceived += 1
+                }
             }
         }
     }
@@ -75,7 +81,8 @@ struct ClassificationDebugView: View {
             ? "Ground plane: floor locked, obstacles are 0.15–2 m above it"
             : "Level band: floor not locked yet, every return in the band is an obstacle"
         let age = now.timeIntervalSince(lastFrameAt)
-        return age > 2 ? String(format: "%@ · no new frame for %.0f s", mode, age) : mode
+        let status = age > 2 ? String(format: "%@ · no new frame for %.0f s", mode, age) : mode
+        return "\(status) · \(framesReceived) frames"
     }
     private func count(_ frame: ClassifiedFrame, _ byte: UInt8) -> String {
         Int(byte) < frame.counts.count ? "\(frame.counts[Int(byte)])" : "0"
