@@ -18,7 +18,9 @@
 //! # Ok::<(), terra_mapping::MapError>(())
 //! ```
 
+mod barrier;
 mod floor;
+pub use barrier::{BARRIER_HEIGHT_MARGIN, BARRIER_MIN_FACES, BarrierSurface};
 pub use floor::{FLOOR_BELOW_CAMERA, FLOOR_OUTLIER, FloorSurface};
 use std::sync::Arc;
 pub use terra_types::point_capture::PointLabel;
@@ -161,6 +163,7 @@ pub struct LocalOccupancyMap {
     observed: Vec<bool>,
     last_timestamp: Option<f64>,
     floor: Option<Arc<FloorSurface>>,
+    barrier: Option<Arc<BarrierSurface>>,
 }
 impl LocalOccupancyMap {
     /// Allocate an unknown grid centered on world `(0, 0)`.
@@ -181,15 +184,17 @@ impl LocalOccupancyMap {
             observed: vec![false; n],
             last_timestamp: None,
             floor: None,
+            barrier: None,
         })
     }
-    /// Erase observations, timestamp history and the floor surface while
+    /// Erase observations, timestamp history and the mesh surfaces while
     /// retaining geometry and origin.
     pub fn clear(&mut self) {
         self.evidence.fill(0.0);
         self.observed.fill(false);
         self.last_timestamp = None;
         self.floor = None;
+        self.barrier = None;
     }
     /// Replace the mesh floor that vetoes obstacle returns; `None` turns the veto off.
     /// See [`PointLabel::FloorVeto`].
@@ -199,6 +204,15 @@ impl LocalOccupancyMap {
     /// The floor surface integration currently consults.
     pub fn floor_surface(&self) -> Option<Arc<FloorSurface>> {
         self.floor.clone()
+    }
+    /// Replace the mesh walls, windows and doors that stop rays; `None` turns
+    /// them off. See [`PointLabel::Barrier`].
+    pub fn set_barrier_surface(&mut self, barrier: Option<Arc<BarrierSurface>>) {
+        self.barrier = barrier;
+    }
+    /// The barrier surface integration currently consults.
+    pub fn barrier_surface(&self) -> Option<Arc<BarrierSurface>> {
+        self.barrier.clone()
     }
     /// The limits this map was built with.
     pub fn config(&self) -> MapConfig {
@@ -343,9 +357,11 @@ impl LocalOccupancyMap {
     }
     /// Integrate one frame with either classifier. Sampled returns labelled
     /// [`PointLabel::Free`] or [`PointLabel::FloorVeto`] clear their endpoint,
-    /// [`PointLabel::Obstacle`] marks it occupied, and every other label adds no
-    /// evidence. The floor surface set by [`Self::set_floor_surface`] decides
-    /// the veto. [`label_depth_with_floor`] applies the same rules to every pixel.
+    /// [`PointLabel::Obstacle`] and [`PointLabel::Barrier`] mark it occupied,
+    /// and every other label adds no evidence. The floor surface set by
+    /// [`Self::set_floor_surface`] decides the veto and the barrier surface set
+    /// by [`Self::set_barrier_surface`] where rays stop. [`label_depth_with_mesh`]
+    /// applies the same rules to every pixel.
     ///
     /// # Errors
     ///
@@ -366,7 +382,10 @@ impl LocalOccupancyMap {
             return Err(MapError::InvalidTime);
         }
         let q = validate_frame(intrinsics, pose, depth)?;
-        let floor = self.floor.clone();
+        let mesh = Mesh {
+            floor: self.floor.as_deref(),
+            barrier: self.barrier.as_deref(),
+        };
         let start = self.cell(pose.position);
         if self.index(start.0, start.1).is_none() {
             return Err(MapError::InvalidPose);
@@ -378,13 +397,13 @@ impl LocalOccupancyMap {
             for u in (0..intrinsics.width).step_by(self.config.pixel_stride as usize) {
                 let z = depth[(v * intrinsics.width + u) as usize] as f64;
                 let Some((endpoint, label)) =
-                    rules.classify(intrinsics, q, pose.position, u, v, z, floor.as_deref())
+                    rules.classify(intrinsics, q, pose.position, u, v, z, mesh)
                 else {
                     continue;
                 };
                 let hit = match label {
                     PointLabel::Free | PointLabel::FloorVeto => false,
-                    PointLabel::Obstacle => true,
+                    PointLabel::Obstacle | PointLabel::Barrier => true,
                     _ => continue,
                 };
                 let end = self.cell(endpoint);
@@ -532,7 +551,7 @@ impl Rules {
         u: u32,
         v: u32,
         z: f64,
-        floor: Option<&FloorSurface>,
+        mesh: Mesh,
     ) -> Option<(Vector3, PointLabel)> {
         if !z.is_finite() || z <= 0.0 {
             return None;
@@ -573,8 +592,21 @@ impl Rules {
             }
             Self::Band { .. } => PointLabel::Obstacle,
         };
-        if label == PointLabel::Obstacle && floor.is_some_and(|f| self.on_floor(f, endpoint)) {
-            return Some((endpoint, PointLabel::FloorVeto));
+        let label = if label == PointLabel::Obstacle
+            && mesh.floor.is_some_and(|f| self.on_floor(f, endpoint))
+        {
+            PointLabel::FloorVeto
+        } else {
+            label
+        };
+        // Glass passes LiDAR: a return seen through mesh wall, window or door
+        // stops there instead of clearing the pane's cells.
+        if matches!(
+            label,
+            PointLabel::Free | PointLabel::FloorVeto | PointLabel::Obstacle
+        ) && let Some(at) = mesh.barrier.and_then(|b| b.crossing(origin, endpoint))
+        {
+            return Some((at, PointLabel::Barrier));
         }
         Some((endpoint, label))
     }
@@ -642,11 +674,17 @@ pub struct LabeledPoint {
     /// What the mapper does with this return.
     pub label: PointLabel,
 }
-/// Label every pixel of a depth frame without a floor surface; see
-/// [`label_depth_with_floor`].
+/// Mesh surfaces a frame is classified against.
+#[derive(Clone, Copy, Default)]
+struct Mesh<'a> {
+    floor: Option<&'a FloorSurface>,
+    barrier: Option<&'a BarrierSurface>,
+}
+/// Label every pixel of a depth frame without mesh surfaces; see
+/// [`label_depth_with_mesh`].
 ///
 /// # Errors
-/// As [`label_depth_with_floor`].
+/// As [`label_depth_with_mesh`].
 pub fn label_depth(
     config: &MapConfig,
     intrinsics: CameraIntrinsics,
@@ -654,11 +692,26 @@ pub fn label_depth(
     depth: &[f32],
     classifier: DepthClassifier,
 ) -> Result<Vec<LabeledPoint>, MapError> {
-    label_depth_with_floor(config, intrinsics, pose, depth, classifier, None)
+    label_depth_with_mesh(config, intrinsics, pose, depth, classifier, None, None)
+}
+/// [`label_depth_with_mesh`] with a floor surface and no barrier surface.
+///
+/// # Errors
+/// As [`label_depth_with_mesh`].
+pub fn label_depth_with_floor(
+    config: &MapConfig,
+    intrinsics: CameraIntrinsics,
+    pose: CameraPose,
+    depth: &[f32],
+    classifier: DepthClassifier,
+    floor: Option<&FloorSurface>,
+) -> Result<Vec<LabeledPoint>, MapError> {
+    label_depth_with_mesh(config, intrinsics, pose, depth, classifier, floor, None)
 }
 /// Label every pixel of a depth frame with exactly the rules
 /// [`LocalOccupancyMap::integrate_classified`] applies to its sampled pixels,
-/// including the floor veto when `floor` is the surface the map consulted.
+/// including the floor veto and barrier stops when `floor` and `barrier` are
+/// the surfaces the map consulted.
 ///
 /// Ignores `config.pixel_stride` and the grid window: every pixel is returned,
 /// row-major from the top-left, including returns that would fall off the grid.
@@ -668,13 +721,14 @@ pub fn label_depth(
 /// [`MapError::InvalidConfig`], [`MapError::InvalidFrame`],
 /// [`MapError::InvalidPose`], [`MapError::InvalidGroundPlane`] or
 /// [`MapError::InvalidBand`], as for integration. Time is not checked.
-pub fn label_depth_with_floor(
+pub fn label_depth_with_mesh(
     config: &MapConfig,
     intrinsics: CameraIntrinsics,
     pose: CameraPose,
     depth: &[f32],
     classifier: DepthClassifier,
     floor: Option<&FloorSurface>,
+    barrier: Option<&BarrierSurface>,
 ) -> Result<Vec<LabeledPoint>, MapError> {
     validate_config(config)?;
     let rules = Rules::new(config, classifier)?;
@@ -689,7 +743,15 @@ pub fn label_depth_with_floor(
         for u in 0..intrinsics.width {
             let z = depth[(v * intrinsics.width + u) as usize] as f64;
             let (position, label) = rules
-                .classify(intrinsics, q, pose.position, u, v, z, floor)
+                .classify(
+                    intrinsics,
+                    q,
+                    pose.position,
+                    u,
+                    v,
+                    z,
+                    Mesh { floor, barrier },
+                )
                 .unwrap_or((none, PointLabel::NoReturn));
             points.push(LabeledPoint { position, label });
         }
@@ -713,6 +775,8 @@ pub struct DepthCapture {
     pub depth: Vec<f32>,
     /// Mesh floor the map consulted for this frame, if any.
     pub floor: Option<Arc<FloorSurface>>,
+    /// Mesh barrier the map consulted for this frame, if any.
+    pub barrier: Option<Arc<BarrierSurface>>,
 }
 impl DepthCapture {
     /// Label every pixel; see [`label_depth`].
@@ -720,13 +784,14 @@ impl DepthCapture {
     /// # Errors
     /// As [`label_depth`]; a frame the map accepted does not fail.
     pub fn label(&self) -> Result<Vec<LabeledPoint>, MapError> {
-        label_depth_with_floor(
+        label_depth_with_mesh(
             &self.config,
             self.intrinsics,
             self.pose,
             &self.depth,
             self.classifier,
             self.floor.as_deref(),
+            self.barrier.as_deref(),
         )
     }
 }
@@ -1284,5 +1349,66 @@ mod tests {
             ),
             Err(MapError::InvalidGroundPlane)
         );
+    }
+
+    /// Glass in the mesh: faces along x = 1.3 m, z 0..1 m, 0.1 m cells.
+    fn glass() -> Arc<BarrierSurface> {
+        let samples: Vec<Vector3> = (0..50)
+            .map(|i| Vector3 {
+                x: 1.3,
+                y: (i % 10) as f64 * 0.05,
+                z: (i / 10) as f64 * 0.25,
+            })
+            .collect();
+        Arc::new(BarrierSurface::build(&samples, 0.0, 0.0, 5.0, 0.1).unwrap())
+    }
+    /// LiDAR sees a wall behind glass. The pane stops the ray: its cell turns
+    /// occupied and nothing beyond it is cleared or marked.
+    #[test]
+    fn barrier_stops_ray_seen_through_glass() {
+        let (mut map, intrinsics, pose) = setup();
+        map.set_barrier_surface(Some(glass()));
+        for t in 0..4 {
+            map.integrate_depth(t as f64, intrinsics, pose, &[2.0])
+                .unwrap();
+        }
+        let s = map.snapshot();
+        assert!(s.occupancy[10 * 20 + 11] < 50);
+        assert!(s.occupancy[10 * 20 + 12] > 90);
+        assert_eq!(s.occupancy[10 * 20 + 13], -1);
+        assert_eq!(s.occupancy[10 * 20 + 14], -1);
+        let barrier = map.barrier_surface();
+        let labels = label_depth_with_mesh(
+            &map.config,
+            intrinsics,
+            pose,
+            &[2.0],
+            DepthClassifier::GroundPlane(GroundPlane::default()),
+            None,
+            barrier.as_deref(),
+        )
+        .unwrap();
+        assert_eq!(labels[0].label, PointLabel::Barrier);
+        assert!((labels[0].position.x - 1.3).abs() < 0.1);
+    }
+    /// A return off the pane itself keeps its label, and clearing the map
+    /// drops the barrier surface.
+    #[test]
+    fn barrier_keeps_return_off_the_pane_and_clears() {
+        let (mut map, intrinsics, pose) = setup();
+        map.set_barrier_surface(Some(glass()));
+        let labels = label_depth_with_mesh(
+            &map.config,
+            intrinsics,
+            pose,
+            &[1.05],
+            DepthClassifier::GroundPlane(GroundPlane::default()),
+            None,
+            map.barrier_surface().as_deref(),
+        )
+        .unwrap();
+        assert_eq!(labels[0].label, PointLabel::Obstacle);
+        map.clear();
+        assert!(map.barrier_surface().is_none());
     }
 }

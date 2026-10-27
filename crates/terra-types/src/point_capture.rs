@@ -71,10 +71,14 @@ pub enum PointLabel {
     /// Would be an obstacle, but lands on surface ARKit's mesh classifies as
     /// floor: clears its ray and endpoint like [`Self::Free`].
     FloorVeto = 6,
+    /// The ray passed a surface ARKit's mesh classifies as wall, window or
+    /// door before its return, as through glass: the point is moved to that
+    /// surface and marks it occupied.
+    Barrier = 7,
 }
 impl PointLabel {
     /// Every label, in wire order.
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
         Self::Free,
         Self::Obstacle,
         Self::Overhead,
@@ -82,6 +86,7 @@ impl PointLabel {
         Self::OutsideBand,
         Self::NoReturn,
         Self::FloorVeto,
+        Self::Barrier,
     ];
     /// Decode a wire byte.
     pub fn from_u8(value: u8) -> Option<Self> {
@@ -97,6 +102,7 @@ impl PointLabel {
             Self::OutsideBand => "outside_band",
             Self::NoReturn => "no_return",
             Self::FloorVeto => "floor_veto",
+            Self::Barrier => "barrier",
         }
     }
 }

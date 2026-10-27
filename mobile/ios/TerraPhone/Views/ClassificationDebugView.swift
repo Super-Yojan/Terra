@@ -22,7 +22,7 @@ struct ClassificationDebugView: View {
                     .listRowInsets(EdgeInsets())
                 Text(summary).font(.footnote).foregroundStyle(.secondary)
             } footer: {
-                Text("Drag to orbit, pinch to zoom. The white dot is the phone; up is world up. Mesh floor cells are what ARKit classified as floor.")
+                Text("Drag to orbit, pinch to zoom. The white dot is the phone; up is world up. Mesh floor cells are what ARKit classified as floor; wall cells are wall, window or door, and stop rays (point a glass door here to check ARKit sees it).")
             }
             Section {
                 LabeledContent("ARKit floor mesh", value: below(frame?.meshFloorZ))
@@ -51,10 +51,17 @@ struct ClassificationDebugView: View {
                         Image(systemName: "square.fill").foregroundStyle(Color(PointLabelStyle.floorCell))
                     }
                 }
+                LabeledContent {
+                    Text(frame.map { "\($0.barrierCells.count / 3)" } ?? "–").monospacedDigit()
+                } label: {
+                    Label { Text("Mesh wall/window/door cells") } icon: {
+                        Image(systemName: "square.fill").foregroundStyle(Color(PointLabelStyle.barrierCell))
+                    }
+                }
             }
             Section("View") {
                 Toggle("Show out-of-range returns", isOn: $showOutOfRange)
-                Toggle("Show mesh floor cells", isOn: $showFloorCells)
+                Toggle("Show mesh floor and wall cells", isOn: $showFloorCells)
                 Toggle("Finer points (slower)", isOn: $fineDetail)
             }
             Section("Phone sensors") {
@@ -121,12 +128,14 @@ enum PointLabelStyle {
     static let all: [Entry] = [
         Entry(byte: 1, name: "Obstacle", color: rgb(218, 54, 51)),
         Entry(byte: 6, name: "Floor veto (ARKit floor)", color: rgb(32, 178, 170)),
+        Entry(byte: 7, name: "Stopped at wall/window/door", color: rgb(255, 127, 14)),
         Entry(byte: 0, name: "Free", color: rgb(46, 160, 67)),
         Entry(byte: 2, name: "Overhead", color: rgb(56, 132, 244)),
         Entry(byte: 4, name: "Outside band", color: rgb(230, 180, 34)),
         Entry(byte: 3, name: "Out of range", color: rgb(140, 140, 140)),
     ]
     static let floorCell = rgb(148, 103, 189)
+    static let barrierCell = rgb(240, 200, 120)
     static func rgba(_ byte: UInt8) -> SIMD4<Float> {
         let color = all.first { $0.byte == byte }?.color ?? .white
         var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
@@ -147,12 +156,14 @@ struct ClassifiedCloudView: UIViewRepresentable {
     final class Coordinator {
         let cloud = SCNNode()
         let floor = SCNNode()
+        let barrier = SCNNode()
         var shown: (Double, Bool, Bool)?
     }
     func makeCoordinator() -> Coordinator { Coordinator() }
     func makeUIView(context: Context) -> SCNView {
         let scene = SCNScene()
         scene.rootNode.addChildNode(context.coordinator.floor)
+        scene.rootNode.addChildNode(context.coordinator.barrier)
         scene.rootNode.addChildNode(context.coordinator.cloud)
         let phone = SCNNode(geometry: SCNSphere(radius: 0.04))
         phone.geometry?.firstMaterial?.diffuse.contents = UIColor.white
@@ -177,7 +188,7 @@ struct ClassifiedCloudView: UIViewRepresentable {
     func updateUIView(_ view: SCNView, context: Context) {
         let coordinator = context.coordinator
         guard let frame, frame.camera.count == 3 else {
-            coordinator.cloud.geometry = nil; coordinator.floor.geometry = nil; coordinator.shown = nil
+            coordinator.cloud.geometry = nil; coordinator.floor.geometry = nil; coordinator.barrier.geometry = nil; coordinator.shown = nil
             return
         }
         // The parent redraws whenever the controller publishes; rebuild only on change.
@@ -193,15 +204,20 @@ struct ClassifiedCloudView: UIViewRepresentable {
         }
         coordinator.cloud.geometry = Self.points(points, colors: colors, size: 4)
         if showFloorCells {
-            let cells = stride(from: 0, to: frame.floorCells.count - 2, by: 3).map {
-                SIMD3(frame.floorCells[$0], frame.floorCells[$0 + 1], frame.floorCells[$0 + 2]) - origin
-            }
-            let c = PointLabelStyle.floorCell.cgColor.components ?? [1, 1, 1, 1]
-            let colour = SIMD4(Float(c[0]), Float(c[1]), Float(c[2]), 0.35)
-            coordinator.floor.geometry = Self.points(cells, colors: Array(repeating: colour, count: cells.count), size: 7)
+            coordinator.floor.geometry = Self.cells(frame.floorCells, origin: origin, color: PointLabelStyle.floorCell)
+            coordinator.barrier.geometry = Self.cells(frame.barrierCells, origin: origin, color: PointLabelStyle.barrierCell)
         } else {
             coordinator.floor.geometry = nil
+            coordinator.barrier.geometry = nil
         }
+    }
+    /// Translucent squares at mesh cell centres given as x y z triples.
+    private static func cells(_ xyz: [Float], origin: SIMD3<Float>, color: UIColor) -> SCNGeometry? {
+        let cells = stride(from: 0, to: xyz.count - 2, by: 3).map { SIMD3(xyz[$0], xyz[$0 + 1], xyz[$0 + 2]) - origin }
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        color.getRed(&r, green: &g, blue: &b, alpha: &a)
+        let colour = SIMD4(Float(r), Float(g), Float(b), 0.35)
+        return points(cells, colors: Array(repeating: colour, count: cells.count), size: 7)
     }
     /// Terra world is Z-up; SceneKit is Y-up.
     private static func sceneVector(_ p: SIMD3<Float>) -> SCNVector3 { SCNVector3(p.x, p.z, -p.y) }

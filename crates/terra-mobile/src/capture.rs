@@ -241,6 +241,7 @@ pub(crate) fn decimate(
             .map(|(u, v)| depth.depth[(v * stride * k.width + u * stride) as usize])
             .collect(),
         floor: depth.floor.clone(),
+        barrier: depth.barrier.clone(),
     }
 }
 

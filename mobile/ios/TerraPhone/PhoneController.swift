@@ -1125,13 +1125,15 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
             // The mesh walk can exceed 100 ms; on the control queue it stalled VIO
             // and IMU once a second, which tripped SensorNotReady holds.
             floorQueue.async { [weak self] in
-                let xyz = Self.collectFloorSamples(anchors: anchors, worldFromAR: worldFromAR, lift: Float(lift))
+                let samples = Self.collectMeshSamples(anchors: anchors, worldFromAR: worldFromAR, lift: Float(lift))
                 self?.controlQueue.async {
                     guard let self else { return }
                     self.floorUpdateInFlight = false
                     guard self.floorEpoch == epoch else { return }
-                    let cells = try? map.updateFloorSurface(cameraX: Double(position.x), cameraY: Double(position.y), cameraZ: Double(position.z) + lift, xyz: xyz)
+                    let cells = try? map.updateFloorSurface(cameraX: Double(position.x), cameraY: Double(position.y), cameraZ: Double(position.z) + lift, xyz: samples.floor)
                     self.observation.recordChanged(component: "mapping", kind: "mapping.floor_mesh", attributes: ["available": (cells ?? 0) > 0])
+                    let barriers = try? map.updateBarrierSurface(cameraX: Double(position.x), cameraY: Double(position.y), xyz: samples.barrier)
+                    self.observation.recordChanged(component: "mapping", kind: "mapping.barrier_mesh", attributes: ["available": (barriers ?? 0) > 0])
                 }
             }
         }
@@ -1205,11 +1207,14 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
             }
         } catch { observation.recordChanged(component: "mapping", kind: "mapping.health", attributes: ["reason": "integration_failed", "error": error.localizedDescription]); DispatchQueue.main.async { self.mapStatus = "Map: " + error.localizedDescription } }
     }
-    /// Centres of mesh faces ARKit classifies as floor, as world x, y, z triples
-    /// lifted by the same ground offset as depth frames. Rust decides what they veto.
-    private static func collectFloorSamples(anchors: [ARMeshAnchor], worldFromAR: simd_float3x3, lift: Float) -> [Float] {
-        var xyz: [Float] = []
+    /// Centres of mesh faces ARKit classifies as floor, and as wall, window or
+    /// door, as world x, y, z triples lifted by the same ground offset as depth
+    /// frames. Rust decides what floor vetoes and where barriers stop rays.
+    private static func collectMeshSamples(anchors: [ARMeshAnchor], worldFromAR: simd_float3x3, lift: Float) -> (floor: [Float], barrier: [Float]) {
+        var floor: [Float] = [], barrier: [Float] = []
         let floorClass = UInt8(ARMeshClassification.floor.rawValue)
+        let barrierClasses = Set([ARMeshClassification.wall, .window, .door].map { UInt8($0.rawValue) })
+        let cap = 300_000
         for anchor in anchors {
             let geometry = anchor.geometry
             let faces = geometry.faces, vertices = geometry.vertices
@@ -1218,7 +1223,9 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
             let faceBase = faces.buffer.contents(), vertexBase = vertices.buffer.contents(), classBase = classes.buffer.contents()
             let transform = anchor.transform
             for face in 0..<faces.count {
-                guard classBase.load(fromByteOffset: classes.offset + classes.stride * face, as: UInt8.self) == floorClass else { continue }
+                let kind = classBase.load(fromByteOffset: classes.offset + classes.stride * face, as: UInt8.self)
+                let isFloor = kind == floorClass, isBarrier = barrierClasses.contains(kind)
+                guard (isFloor && floor.count < cap) || (isBarrier && barrier.count < cap) else { continue }
                 var centre = SIMD3<Float>(repeating: 0)
                 for corner in 0..<3 {
                     let at = (face * 3 + corner) * faces.bytesPerIndex
@@ -1228,11 +1235,11 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
                 }
                 let ar = transform * SIMD4(centre / 3, 1)
                 let p = worldFromAR * SIMD3(ar.x, ar.y, ar.z)
-                xyz.append(contentsOf: [p.x, p.y, p.z + lift])
-                if xyz.count >= 300_000 { return xyz }
+                if isFloor { floor.append(contentsOf: [p.x, p.y, p.z + lift]) } else { barrier.append(contentsOf: [p.x, p.y, p.z + lift]) }
+                if floor.count >= cap && barrier.count >= cap { return (floor, barrier) }
             }
         }
-        return xyz
+        return (floor, barrier)
     }
     /// Half-height of the level depth band used before the floor is found, degrees.
     private static let horizonBandHalfAngleDegrees = 10.0
