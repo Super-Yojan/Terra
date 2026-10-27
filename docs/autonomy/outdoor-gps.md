@@ -69,7 +69,6 @@ final destination; the level decides how to get there.
 | L4 explore | Frontiers are scored toward the destination; GPS arrival ends the run (`objective_complete`) | Local occupancy map |
 | L5 task | The prompt lists it as `G1`; G1 resolves to the reachable seen point closest to it. A new destination drops the outstanding query and asks again | Local occupancy map |
 
-A mission can start at any of these levels and survives switching between them.
 At L4/L5 a paused mission (stale GPS, heading uncertain) withdraws the destination
 but the level keeps working in the local frame until an explicit Resume. At L2/L3
 a paused mission holds motion, as before.
