@@ -274,6 +274,8 @@ decision is one of:\n\
 - \"ask_operator\": put a short question in \"question\". The rover waits for the answer.\n\
 - \"done\": the task is finished. Say why in \"rationale\".\n\
 - \"fail\": the task cannot be done. Say why in \"rationale\".\n\
+If a GPS DESTINATION (G1) is listed, it is the operator's final goal: work toward it, through G1 itself \
+or frontiers on its side, unless the task says otherwise.\n\
 After the waypoints are reached, blocked or abandoned you are asked again with the outcome in HISTORY."
         .into()
 }
@@ -593,6 +595,7 @@ pub(crate) fn summarize(
     pose: Pose,
     radius: f64,
     landmarks: &[TaskLandmark],
+    destination: Option<(f64, f64)>,
     now: f64,
 ) -> MapSummary {
     let mut text = String::new();
@@ -727,6 +730,32 @@ Legend: '#' obstacle, '.' free, '?' unknown or partly seen, 'R' rover. Up is +y,
             }
         ));
         targets.push(TaskTarget { id, approach });
+    }
+
+    // The operator's GPS goal, re-anchored into the local frame on every step.
+    if let Some((x, y)) = destination.filter(|(x, y)| x.is_finite() && y.is_finite()) {
+        // The reachable seen cell closest to the goal: the way to make progress toward it.
+        let approach = reach
+            .as_ref()
+            .and_then(|r| r.nearest_goal(map, x, y, f64::from(u16::MAX)));
+        text.push_str(
+            "\nGPS DESTINATION (the operator's final goal from GPS; it may lie beyond the map):\n",
+        );
+        text.push_str(&format!("  G1 at {}", describe(x, y, None)));
+        match approach {
+            Some([ax, ay]) if (ax - x).hypot(ay - y) <= radius + 1. => {
+                text.push_str(", reachable\n")
+            }
+            Some([ax, ay]) => text.push_str(&format!(
+                ", not reachable yet; G1 drives to the closest seen point, {:.1} m short of it\n",
+                (ax - x).hypot(ay - y)
+            )),
+            None => text.push_str(", no reachable free space toward it\n"),
+        }
+        targets.push(TaskTarget {
+            id: "G1".into(),
+            approach,
+        });
     }
     MapSummary { text, targets }
 }
@@ -1123,7 +1152,7 @@ mod tests {
             y: 5.,
             yaw: 0.,
         };
-        let summary = summarize(&map, pose, 0.4, &[], 0.);
+        let summary = summarize(&map, pose, 0.4, &[], None, 0.);
         assert!(summary.text.contains("F1"), "{}", summary.text);
         assert!(summary.text.contains("O1"), "{}", summary.text);
         assert!(summary.text.contains('R'));
@@ -1188,7 +1217,7 @@ mod tests {
             y: 5.,
             yaw: std::f64::consts::FRAC_PI_2,
         };
-        let summary = summarize(&map, pose, 0.4, &[], 0.);
+        let summary = summarize(&map, pose, 0.4, &[], None, 0.);
         let mut history = VecDeque::new();
         for i in 0..10 {
             push_history(&mut history, i, "arrived", format!("entry {i}"));

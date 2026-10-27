@@ -165,6 +165,27 @@ impl AutonomyArbiter {
             self.task_landmarks.remove(0);
         }
     }
+    /// A new GPS destination arrived: ask the model again so its next plan sees G1.
+    /// A query already sent is dropped and its late answer ignored. A question
+    /// waiting on the operator is left alone.
+    pub fn replan_task_for_destination(&mut self) {
+        if self.level != Level::Task {
+            return;
+        }
+        let Some(task) = self.task.as_mut() else {
+            return;
+        };
+        if task.phase.terminal() || task.phase == TaskPhase::WaitingOperator {
+            return;
+        }
+        task.pending = None;
+        task.outstanding = None;
+        task.answer = None;
+        task.note("operator", "new GPS destination G1".into());
+        task.replan("gps_destination");
+        self.follower.cancel();
+        self.last_plan = None;
+    }
     /// Current or last task, if one has started since the level was selected.
     pub fn task_status(&self, now: f64) -> Option<TaskStatus> {
         self.task
@@ -525,7 +546,14 @@ impl AutonomyArbiter {
             } else if let Some(map) = fresh_map {
                 task.steps += 1;
                 self.next_task_query += 1;
-                let summary = summarize(map, pose, radius, &self.task_landmarks, now);
+                let summary = summarize(
+                    map,
+                    pose,
+                    radius,
+                    &self.task_landmarks,
+                    self.outdoor_destination,
+                    now,
+                );
                 let elapsed = now - task.started_at;
                 let prompt = step_prompt(
                     &task.spec.instruction,

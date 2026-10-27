@@ -43,6 +43,7 @@ impl AutonomyArbiter {
     /// `Some` when exploration itself is holding or finished. `None` when the follower should move.
     pub(super) fn drive_explore(&mut self, input: &ArbiterInput<'_>) -> Option<&'static str> {
         self.explorer.set_footprint(self.planner.config.radius);
+        self.update_explore_bias();
         self.explore_scan = None;
         let preview = self
             .follower
@@ -146,6 +147,49 @@ impl AutonomyArbiter {
         }
     }
 }
+impl AutonomyArbiter {
+    /// Pull frontier choice toward the GPS destination while one is set. The bias
+    /// moves only when the destination shifts by more than a metre, so GPS noise
+    /// does not reshuffle frontiers every tick. A new destination, or one that
+    /// moved several metres, drops the frontier chosen for the old one.
+    fn update_explore_bias(&mut self) {
+        let wanted = self.outdoor_destination;
+        let shift = match (wanted, self.explore_bias) {
+            (Some(a), Some(b)) => (a.0 - b.0).hypot(a.1 - b.1),
+            (None, None) => 0.,
+            _ => f64::INFINITY,
+        };
+        if shift <= 1. {
+            return;
+        }
+        if shift > 3. && wanted.is_some() {
+            self.explorer.reselect();
+        }
+        self.explore_bias = wanted;
+        match wanted {
+            Some((x, y)) => self
+                .explorer
+                .set_scorer(Box::new(TowardDestination { x, y })),
+            None => self
+                .explorer
+                .set_scorer(Box::new(terra_exploration::InformationGainScorer)),
+        }
+    }
+}
+
+/// Frontier score for explore with a GPS destination: some new information,
+/// but mostly a short drive that ends close to the destination.
+pub(crate) struct TowardDestination {
+    pub x: f64,
+    pub y: f64,
+}
+impl terra_exploration::GoalScorer for TowardDestination {
+    fn score(&self, c: &terra_exploration::FrontierCandidate) -> f64 {
+        let to_goal = (c.x - self.x).hypot(c.y - self.y);
+        f64::from(c.information_gain).sqrt() / (1. + c.distance_m + 3. * to_goal)
+    }
+}
+
 fn sustained(since: &mut Option<f64>, now: f64, timeout: f64) -> bool {
     if !now.is_finite() {
         return false;
