@@ -296,8 +296,8 @@ struct Brain {
     capture: Option<capture::Capture>,
     last_tick: f64,
     actuators: Option<actuators::ActiveLayout>,
-    /// Object-map revision last sent on the `objects` topic.
-    objects_published: Option<u64>,
+    /// Object-map revision and body for the `objects` topic.
+    objects_published: Option<(u64, String)>,
 }
 impl std::ops::Deref for Brain {
     type Target = terra_runtime::Runtime;
@@ -678,15 +678,19 @@ impl MobileController {
         };
         let quality = pose_quality::value(&brain, timestamp);
         let mut map_full_rejected = false;
-        let objects = brain
-            .dashboard
-            .as_ref()
-            .map(|d| d.rover_id)
-            .filter(|_| brain.objects_published != Some(brain.objects.revision))
-            .map(|rover| {
-                brain.objects_published = Some(brain.objects.revision);
-                brain.objects.telemetry(rover, &brain.run_id).to_string()
-            });
+        // Telemetry expires after 500 ms, so the cached body is resent every
+        // step and only re-serialized when the object map changes.
+        if let Some(rover) = brain.dashboard.as_ref().map(|d| d.rover_id)
+            && brain
+                .objects_published
+                .as_ref()
+                .is_none_or(|(revision, _)| *revision != brain.objects.revision)
+        {
+            brain.objects_published = Some((
+                brain.objects.revision,
+                brain.objects.telemetry(rover, &brain.run_id).to_string(),
+            ));
+        }
         if let Some(d) = brain.dashboard.as_ref() {
             d.publish("experiment/status",serde_json::json!({
                 "run_id": brain.run_id,
@@ -717,8 +721,8 @@ impl MobileController {
                     .map(|r| serde_json::to_string(r).unwrap())
                     .collect(),
             );
-            if let Some(objects) = objects {
-                d.publish("objects", objects);
+            if let Some((_, objects)) = &brain.objects_published {
+                d.publish("objects", objects.clone());
             }
             d.publish("goal/status", serde_json::to_string(&output.goal).unwrap());
             d.publish(
