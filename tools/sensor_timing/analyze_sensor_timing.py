@@ -195,7 +195,7 @@ def summarise(rec: Recording) -> dict:
     out = {"file": rec.path.name, "condition": rec.condition, "build": rec.meta.get("build"),
            "model": rec.meta.get("model"), "os": rec.meta.get("os"), "streams": {}}
     for name, rows in rec.rows.items():
-        if name in ("tick", "meta"):
+        if name in ("tick", "meta", "battery"):
             continue
         out["streams"][name] = stream_stats(rows)
         if name == "ar":
@@ -209,6 +209,9 @@ def summarise(rec: Recording) -> dict:
     meta = rec.rows.get("meta", [])
     out["thermal_max"] = max((r[A] for r in meta), default=NAN)
     out["low_power"] = any(r[B] == 1 for r in meta)
+    battery = [r for r in rec.rows.get("battery", []) if r[A] >= 0]
+    out["battery_start"] = battery[0][A] if battery else NAN
+    out["battery_end"] = battery[-1][A] if battery else NAN
     return out
 
 
@@ -258,7 +261,8 @@ def report(summaries: list[dict]) -> str:
         if "duration_s" in s["streams"].get("block", {}):
             p = s["streams"]["block"]["duration_s"]
             out.append(f"Floor+barrier apply on terra.control: p50 {ms(p['p50'])} ms, max {ms(p['max'])} ms")
-        out.append(f"Thermal state max {s['thermal_max']}, low power {s['low_power']}")
+        out.append(f"Thermal state max {s['thermal_max']}, low power {s['low_power']}, battery {s['battery_start']:.0%} → {s['battery_end']:.0%}"
+                   if math.isfinite(s["battery_start"]) else f"Thermal state max {s['thermal_max']}, low power {s['low_power']}")
     return "\n".join(out)
 
 
