@@ -50,6 +50,16 @@ impl MappingState {
     pub fn floor_surface(&self) -> Option<std::sync::Arc<FloorSurface>> {
         self.0.lock().ok()?.floor_surface()
     }
+    /// Install the mesh walls, windows and doors that stop rays; see
+    /// [`LocalOccupancyMap::set_barrier_surface`].
+    pub fn set_barrier_surface(&self, barrier: Option<std::sync::Arc<BarrierSurface>>) {
+        if let Ok(mut map) = self.0.lock() {
+            map.set_barrier_surface(barrier);
+        }
+    }
+    pub fn barrier_surface(&self) -> Option<std::sync::Arc<BarrierSurface>> {
+        self.0.lock().ok()?.barrier_surface()
+    }
     /// Start keeping a copy of each accepted depth frame. Copies cost a full
     /// depth image per frame, so they are made only while armed.
     pub fn arm_capture(&self) {
@@ -120,10 +130,10 @@ impl MappingState {
         pixels: &[f32],
         classifier: DepthClassifier,
     ) -> Result<(), MapError> {
-        let floor = {
+        let (floor, barrier) = {
             let mut map = self.0.lock().map_err(|_| MapError::InvalidFrame)?;
             map.integrate_classified(t, k, c, pixels, classifier)?;
-            map.floor_surface()
+            (map.floor_surface(), map.barrier_surface())
         };
         let copy = || DepthCapture {
             timestamp: t,
@@ -133,6 +143,7 @@ impl MappingState {
             config: self.1,
             depth: pixels.to_vec(),
             floor: floor.clone(),
+            barrier: barrier.clone(),
         };
         for slot in [&self.2, &self.3] {
             if let Ok(mut slot) = slot.lock()

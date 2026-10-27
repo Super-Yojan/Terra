@@ -2,8 +2,8 @@
 use crate::{ControllerError, MobileController};
 use std::sync::{Arc, Mutex};
 use terra_mapping::{
-    CameraIntrinsics, CameraPose, DepthClassifier, FloorSurface, GroundPlane, HorizonBand,
-    MapConfig, MapError, PointLabel,
+    BarrierSurface, CameraIntrinsics, CameraPose, DepthClassifier, FloorSurface, GroundPlane,
+    HorizonBand, MapConfig, MapError, PointLabel,
 };
 use terra_types::{Quaternion, Vector3};
 #[derive(Clone, uniffi::Record)]
@@ -127,6 +127,8 @@ pub struct ClassifiedFrame {
     pub counts: Vec<u32>,
     /// World x y z centres of trusted mesh-floor cells.
     pub floor_cells: Vec<f32>,
+    /// World x y z centres of mesh wall, window and door cells that stop rays.
+    pub barrier_cells: Vec<f32>,
 }
 /// Half-side of the square of floor samples kept around the camera, metres.
 const FLOOR_HALF_EXTENT: f64 = 6.0;
@@ -363,6 +365,51 @@ impl MobileOccupancyMap {
         map.set_floor_surface(surface.map(Arc::new));
         Ok(cells)
     }
+    /// Replace the mesh barrier with world-metre `xyz` centres of faces ARKit
+    /// classifies as wall, window or door, in the same world frame (and
+    /// offset) as depth frames. Samples within 6 m of the camera count. Rays
+    /// that pass a barrier cell stop there and mark it occupied, so glass the
+    /// LiDAR sees through is not cleared. An update with no usable sample
+    /// turns barriers off. Returns the number of barrier cells.
+    ///
+    /// # Errors
+    /// As [`Self::update_floor_surface`].
+    pub fn update_barrier_surface(
+        &self,
+        camera_x: f64,
+        camera_y: f64,
+        xyz: Vec<f32>,
+    ) -> Result<u32, ControllerError> {
+        if !xyz.len().is_multiple_of(3)
+            || xyz.len() > MAX_FLOOR_VALUES
+            || ![camera_x, camera_y].iter().all(|v| v.is_finite())
+        {
+            return Err(ControllerError::InvalidInput {
+                message: "barrier samples must be finite xyz triples, at most 100,000 points"
+                    .into(),
+            });
+        }
+        let samples: Vec<Vector3> = xyz
+            .chunks_exact(3)
+            .map(|p| Vector3 {
+                x: p[0] as f64,
+                y: p[1] as f64,
+                z: p[2] as f64,
+            })
+            .collect();
+        let resolution = self
+            .map
+            .lock()
+            .map_err(|_| ControllerError::Internal)?
+            .config()
+            .resolution;
+        let surface =
+            BarrierSurface::build(&samples, camera_x, camera_y, FLOOR_HALF_EXTENT, resolution);
+        let cells = surface.as_ref().map_or(0, |s| s.cells() as u32);
+        let map = self.map.lock().map_err(|_| ControllerError::Internal)?;
+        map.set_barrier_surface(surface.map(Arc::new));
+        Ok(cells)
+    }
     /// Keep (or stop keeping) a copy of each integrated depth frame for
     /// [`Self::take_classified_frame`]. Independent of dashboard captures.
     pub fn set_classification_debug(&self, enabled: bool) {
@@ -411,6 +458,15 @@ impl MobileOccupancyMap {
                 .floor
                 .map(|f| {
                     f.trusted_centres()
+                        .into_iter()
+                        .flat_map(|p| [p.x as f32, p.y as f32, p.z as f32])
+                        .collect()
+                })
+                .unwrap_or_default(),
+            barrier_cells: capture
+                .barrier
+                .map(|b| {
+                    b.cell_centres()
                         .into_iter()
                         .flat_map(|p| [p.x as f32, p.y as f32, p.z as f32])
                         .collect()
