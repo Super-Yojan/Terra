@@ -31,11 +31,13 @@ pub use search::{
 mod task;
 pub use task::MobileTaskQuery;
 mod frames;
+mod gate;
 mod mapping;
 mod mount;
 mod transport;
 mod waypoint;
 pub use frames::*;
+pub use gate::*;
 pub use mapping::*;
 pub use mount::*;
 pub use transport::*;
