@@ -361,7 +361,7 @@ impl AutonomyArbiter {
             let (planned, mut trace) = self.planner.plan_with_turning(
                 planning_map.unwrap(),
                 input.pose,
-                input.measured,
+                window_centre(self.commanded, input.measured),
                 intent,
                 timing::PLANNER_STEP_SECONDS,
                 &self.turning,
@@ -407,7 +407,7 @@ impl AutonomyArbiter {
                     planner.plan_with_turning(
                         planning_map.unwrap(),
                         input.pose,
-                        input.measured,
+                        window_centre(self.commanded, input.measured),
                         intent,
                         timing::PLANNER_STEP_SECONDS,
                         &self.turning,
@@ -417,7 +417,7 @@ impl AutonomyArbiter {
                     planner.plan_with_trace(
                         planning_map.unwrap(),
                         input.pose,
-                        input.measured,
+                        window_centre(self.commanded, input.measured),
                         intent,
                         timing::PLANNER_STEP_SECONDS,
                     )
@@ -563,5 +563,23 @@ impl AutonomyArbiter {
             decision.route_failure = Some(decision.route_failure.unwrap_or("route_no_path"));
             Twist::default()
         }
+    }
+}
+
+/// Velocity the local planner's window grows from, per axis: the measured
+/// value when the rover is already going faster the same way, otherwise the
+/// last command. A stalled wheel reads zero, and centring on it alone kept
+/// L3 at 0.1 m/s, inside the motor deadband, after every hold.
+fn window_centre(commanded: Twist, measured: Twist) -> Twist {
+    let pick = |c: f64, m: f64| {
+        if c * m >= 0. && m.abs() > c.abs() {
+            m
+        } else {
+            c
+        }
+    };
+    Twist {
+        linear: pick(commanded.linear, measured.linear),
+        angular: pick(commanded.angular, measured.angular),
     }
 }
