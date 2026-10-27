@@ -1177,18 +1177,26 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
             let anchors = frame.anchors.compactMap { $0 as? ARMeshAnchor }
             let worldFromAR = self.worldFromAR, epoch = floorEpoch, frameTime = frame.timestamp
             // The mesh walk can exceed 100 ms; on the control queue it stalled VIO
-            // and IMU once a second, which tripped SensorNotReady holds.
+            // and IMU once a second, which tripped SensorNotReady holds. Handing
+            // up to 600,000 floats to Rust is also slow (UniFFI encodes them one
+            // by one), so that runs here too. The map has its own lock.
             floorQueue.async { [weak self] in
                 let samples = Self.collectMeshSamples(anchors: anchors, worldFromAR: worldFromAR, lift: Float(lift))
+                let cells = try? map.updateFloorSurface(cameraX: Double(position.x), cameraY: Double(position.y), cameraZ: Double(position.z) + lift, xyz: samples.floor)
+                let barriers = try? map.updateBarrierSurface(cameraX: Double(position.x), cameraY: Double(position.y), xyz: samples.barrier)
                 self?.controlQueue.async {
                     guard let self else { return }
                     let applyStarted = CACurrentMediaTime()
                     defer { SensorTimingProbe.shared.record(.block, sensor: frameTime, queue: applyStarted, done: CACurrentMediaTime(), a: 1, b: Double(samples.floor.count + samples.barrier.count)) }
                     self.floorUpdateInFlight = false
-                    guard self.floorEpoch == epoch else { return }
-                    let cells = try? map.updateFloorSurface(cameraX: Double(position.x), cameraY: Double(position.y), cameraZ: Double(position.z) + lift, xyz: samples.floor)
+                    // A map or ground reset happened meanwhile: these samples use the
+                    // old height frame, so turn the floor veto and barriers off again.
+                    guard self.floorEpoch == epoch else {
+                        _ = try? map.updateFloorSurface(cameraX: Double(position.x), cameraY: Double(position.y), cameraZ: Double(position.z), xyz: [])
+                        _ = try? map.updateBarrierSurface(cameraX: Double(position.x), cameraY: Double(position.y), xyz: [])
+                        return
+                    }
                     self.observation.recordChanged(component: "mapping", kind: "mapping.floor_mesh", attributes: ["available": (cells ?? 0) > 0])
-                    let barriers = try? map.updateBarrierSurface(cameraX: Double(position.x), cameraY: Double(position.y), xyz: samples.barrier)
                     self.observation.recordChanged(component: "mapping", kind: "mapping.barrier_mesh", attributes: ["available": (barriers ?? 0) > 0])
                 }
             }
