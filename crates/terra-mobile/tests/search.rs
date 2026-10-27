@@ -237,4 +237,9 @@ fn object_detections_are_validated() {
             .is_err()
     );
     assert!(c.push_object_detection(d("bucket", 0.2, 2), 1.).is_err());
+    let map: serde_json::Value = serde_json::from_str(&c.object_map_json()).unwrap();
+    assert_eq!(map["objects"].as_array().unwrap().len(), 2);
+    c.clear_object_map().unwrap();
+    let map: serde_json::Value = serde_json::from_str(&c.object_map_json()).unwrap();
+    assert!(map["objects"].as_array().unwrap().is_empty());
 }

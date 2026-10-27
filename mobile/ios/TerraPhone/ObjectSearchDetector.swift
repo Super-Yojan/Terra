@@ -2,10 +2,32 @@ import ARKit
 import CoreML
 import Vision
 import ImageIO
+import CoreImage
 
 /// One YOLO box placed in the world frame. `className` is `bucket` or `ball`; `color` is
 /// the rest of the model label (`blue`, `orange`) or nil.
 struct ObjectSearchDetection { let className: String; let color: String?; let confidence: Double; let world: SIMD3<Float> }
+/// One raw model box for the debug page, before the object-map threshold.
+struct ObjectDebugBox: Identifiable {
+    let id: Int
+    /// Vision-normalized rectangle of the upright image, bottom-left origin.
+    let box: CGRect
+    let className: String
+    let color: String?
+    let confidence: Float
+    /// LiDAR depth of the box centre region, metres; nil when too few confident samples agree.
+    let depth: Float?
+}
+/// What the model saw on one frame, kept only while the debug page is open.
+struct ObjectDebugFrame {
+    let timestamp: Double
+    /// Upright camera image as the model received it, before the letterbox.
+    let image: CGImage?
+    let boxes: [ObjectDebugBox]
+    let inferenceMilliseconds: Double
+    let orientation: String
+    let imageSize: CGSize
+}
 struct ObjectSearchFrame {
     let timestamp: Double
     let frameID: UInt64
@@ -30,9 +52,24 @@ final class ObjectSearchDetector {
     private var labels: [Int: (String, String?)] = [:]
     private var inputSize: Float = 640
     private var loadError: String?
+    private var debugEnabled = false
+    private var latestDebug: ObjectDebugFrame?
+    private let imageContext = CIContext()
+    /// Boxes shown on the debug page start this low so near-misses are visible.
+    static let debugMinimumConfidence: Float = 0.1
 
     init() { queue.async { [self] in load() } }
 
+    /// Keep a debug snapshot of every inference (costs one image render per frame).
+    func setDebug(_ enabled: Bool) {
+        lock.lock(); debugEnabled = enabled; if !enabled { latestDebug = nil }; lock.unlock()
+    }
+    /// Newest debug snapshot since the last call, or nil when none is new.
+    func takeDebugFrame() -> ObjectDebugFrame? {
+        lock.lock(); defer { lock.unlock() }
+        let frame = latestDebug; latestDebug = nil
+        return frame
+    }
     /// Nil when the model is loaded; otherwise why it is not.
     var unavailableReason: String? {
         lock.lock(); defer { lock.unlock() }
@@ -93,7 +130,7 @@ final class ObjectSearchDetector {
                 completion: @escaping (Result<ObjectSearchFrame, Error>) -> Void) {
         lock.lock()
         guard let model, let id = gate.begin(timestamp: frame.timestamp) else { lock.unlock(); return }
-        let labels = self.labels, inputSize = self.inputSize
+        let labels = self.labels, inputSize = self.inputSize, debug = debugEnabled
         lock.unlock()
         let capturedImage = frame.capturedImage, sceneDepth = frame.sceneDepth, camera = frame.camera, timestamp = frame.timestamp
         // Orientation comes from gravity, not UIDevice: Terra mounts the phone landscape and the
@@ -112,13 +149,15 @@ final class ObjectSearchDetector {
                 switch orientation { case .up: imageOrientation = .up; case .right: imageOrientation = .right; case .down: imageOrientation = .down; case .left: imageOrientation = .left }
                 let request = VNCoreMLRequest(model: model)
                 request.imageCropAndScaleOption = .scaleFit
+                let started = CACurrentMediaTime()
                 try VNImageRequestHandler(cvPixelBuffer: capturedImage, orientation: imageOrientation).perform([request])
+                let inferenceMilliseconds = (CACurrentMediaTime() - started) * 1000
                 guard let output = (request.results?.first as? VNCoreMLFeatureValueObservation)?.featureValue.multiArrayValue,
                       output.shape.count == 3, output.shape[2].intValue >= 6 else { throw DetectorError.unexpectedOutput }
                 // The upright image is portrait for .left/.right and landscape for .up/.down.
                 let rawWidth = Float(CVPixelBufferGetWidth(capturedImage)), rawHeight = Float(CVPixelBufferGetHeight(capturedImage))
                 let (uprightWidth, uprightHeight) = orientation == .up || orientation == .down ? (rawWidth, rawHeight) : (rawHeight, rawWidth)
-                var detections: [ObjectSearchDetection] = [], rejected = 0
+                var detections: [ObjectSearchDetection] = [], rejected = 0, debugBoxes: [ObjectDebugBox] = []
                 CVPixelBufferLockBaseAddress(depth.depthMap, .readOnly)
                 CVPixelBufferLockBaseAddress(confidenceMap, .readOnly)
                 defer {
@@ -137,7 +176,7 @@ final class ObjectSearchDetector {
                 for row in 0..<output.shape[1].intValue {
                     func value(_ k: Int) -> Float { output[[0, row, k] as [NSNumber]].floatValue }
                     let score = value(4)
-                    guard score >= Self.minimumConfidence, value(5).isFinite else { continue }
+                    guard score >= (debug ? Self.debugMinimumConfidence : Self.minimumConfidence), value(5).isFinite else { continue }
                     guard let label = labels[Int(value(5).rounded())] else { rejected += 1; continue }
                     let a = vision(value(0), value(1)), b = vision(value(2), value(3))
                     let box = CGRect(x: CGFloat(min(a.x, b.x)), y: CGFloat(min(a.y, b.y)), width: CGFloat(abs(b.x-a.x)), height: CGFloat(abs(b.y-a.y)))
@@ -155,10 +194,26 @@ final class ObjectSearchDetector {
                     } }
                     let raw = PersonDepthGeometry.rawPoint(x: Float(box.midX), y: Float(box.midY), orientation: orientation)
                     let pixel = raw * SIMD2(Float(camera.imageResolution.width), Float(camera.imageResolution.height))
+                    if debug {
+                        debugBoxes.append(ObjectDebugBox(id: row, box: box, className: label.0, color: label.1,
+                                                         confidence: score, depth: PersonDepthGeometry.measuredDepth(samples)))
+                    }
+                    guard score >= Self.minimumConfidence else { continue }
                     guard let measured = PersonDepthGeometry.measuredDepth(samples),
                           let world = PersonDepthGeometry.worldPoint(pixel: pixel, depth: measured, intrinsics: camera.intrinsics,
                                                                     cameraTransform: camera.transform, worldFromAR: worldFromAR) else { rejected += 1; continue }
                     detections.append(ObjectSearchDetection(className: label.0, color: label.1, confidence: Double(score), world: world))
+                }
+                if debug {
+                    // Downscaled upright image, the same view the model letterboxed.
+                    let upright = CIImage(cvPixelBuffer: capturedImage).oriented(imageOrientation)
+                    let scale = 640 / max(upright.extent.width, upright.extent.height)
+                    let small = upright.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+                    let image = imageContext.createCGImage(small, from: small.extent)
+                    let snapshot = ObjectDebugFrame(timestamp: timestamp, image: image, boxes: debugBoxes,
+                                                    inferenceMilliseconds: inferenceMilliseconds, orientation: "\(orientation)",
+                                                    imageSize: CGSize(width: CGFloat(uprightWidth), height: CGFloat(uprightHeight)))
+                    lock.lock(); if debugEnabled { latestDebug = snapshot }; lock.unlock()
                 }
                 completion(.success(ObjectSearchFrame(timestamp: timestamp, frameID: id, detections: detections, rejected: rejected)))
             } catch { completion(.failure(error)) }

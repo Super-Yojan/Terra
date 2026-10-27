@@ -997,6 +997,21 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
     }
     /// Ask the mapper for labelled frames (or stop). Works in phone mode with no
     /// rover connected, so classification can be checked off the robot.
+    /// Object detection debug page: keep the model's input image and every raw box.
+    func setObjectDetectionDebug(_ enabled: Bool) { objectDetector.setDebug(enabled) }
+    /// Newest detector snapshot since the last call, on the main queue (nil when none is new).
+    func takeObjectDebugFrame(_ deliver: @escaping (ObjectDebugFrame?) -> Void) {
+        let frame = objectDetector.takeDebugFrame()
+        DispatchQueue.main.async { deliver(frame) }
+    }
+    /// The run's object map as JSON (the `objects` topic body), on the main queue.
+    func objectMapJSON(_ deliver: @escaping (String) -> Void) {
+        controlQueue.async {
+            let json = self.controller?.objectMapJson() ?? ""
+            DispatchQueue.main.async { deliver(json) }
+        }
+    }
+    func clearObjectMap() { controlQueue.async { try? self.controller?.clearObjectMap() } }
     func setClassificationDebug(_ enabled: Bool) {
         controlQueue.async {
             self.classificationDebugEnabled = enabled
