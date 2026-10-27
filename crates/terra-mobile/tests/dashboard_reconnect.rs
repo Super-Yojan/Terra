@@ -346,3 +346,35 @@ fn exploration_failed_transport_tick_preserves_budget_without_sensor_failure() {
     assert_eq!(status(&c)["exploration"]["end_reason"], "budget_expired");
     assert!(!c.accepted_onboard_mission());
 }
+
+/// A one-tick sensor hold stays readable: the status names what went stale
+/// and how old the pose was, for a few seconds after the hold clears.
+#[test]
+fn sensor_hold_reports_its_cause_after_it_clears() {
+    let c = MobileController::new(default_control_settings()).unwrap();
+    fresh_local(&c, 1.);
+    c.autonomy_request(
+        "autonomy".into(),
+        r#"{"level":"waypoint","token":"mode"}"#.into(),
+        1.,
+    )
+    .unwrap();
+    c.step(1.).unwrap();
+    assert!(status(&c)["status"].get("sensor_hold").is_none());
+    c.step(1.5).unwrap();
+    let held = status(&c)["status"].clone();
+    assert_eq!(held["reason"], "sensor_unhealthy");
+    let cause = held["sensor_hold"]["cause"].as_str().unwrap().to_string();
+    assert!(cause.starts_with("stale_"), "{cause}");
+    assert!((held["sensor_hold"]["pose_age_s"].as_f64().unwrap() - 0.5).abs() < 1e-9);
+    assert_eq!(held["sensor_hold"]["count"], 1);
+    fresh_local(&c, 2.);
+    c.step(2.).unwrap();
+    let after = status(&c)["status"].clone();
+    assert_ne!(after["reason"], "sensor_unhealthy");
+    assert_eq!(after["sensor_hold"]["cause"], cause.as_str());
+    assert!((after["sensor_hold"]["age_s"].as_f64().unwrap() - 0.5).abs() < 1e-9);
+    fresh_local(&c, 12.);
+    c.step(12.).unwrap();
+    assert!(status(&c)["status"].get("sensor_hold").is_none());
+}
