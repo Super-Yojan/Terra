@@ -58,7 +58,7 @@ All timestamps are seconds on the same monotonic clock. IMU and VIO samples must
 
 The estimator anchors velocity to VIO and integrates IMU only between fresh VIO updates.
 It is not a visual odometry implementation or a full bias-estimating filter.
-The default IMU timeout is 100 ms and VIO timeout 350 ms; the target timeout is 500 ms.
+The default IMU timeout is 500 ms and VIO timeout 350 ms; the target timeout is 500 ms.
 Missing, stale, invalid or untracked inputs yield zero motor effort.
 The controller accepts forward velocity and yaw rate, limits targets, mixes the two PI outputs into wheel efforts, preserves their ratio on saturation, and uses back-calculation anti-windup.
 

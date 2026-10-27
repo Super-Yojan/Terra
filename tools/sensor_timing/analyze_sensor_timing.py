@@ -21,7 +21,7 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
-IMU_FRESHNESS = 0.1  # terra-types timing::IMU_FRESHNESS_SECONDS
+IMU_FRESHNESS = 0.5  # terra-types timing::IMU_FRESHNESS_SECONDS (0.1 before 2026-10-27)
 VIO_FRESHNESS = 0.35  # timing::VIO_FRESHNESS_SECONDS
 TURNING_MAX_STEP = 0.1  # timing::TURNING_MAX_STEP_SECONDS
 NAN = float("nan")
@@ -300,7 +300,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("csv", nargs="+", type=Path)
     parser.add_argument("--json", type=Path, help="write the full summary here")
     parser.add_argument("--plot", type=Path, help="write one timeline PNG per file into this folder")
+    parser.add_argument("--imu-gate", type=float, default=0.5,
+                        help="stale_imu limit in seconds (0.1 for builds before 2026-10-27)")
     args = parser.parse_args(argv)
+    globals()["IMU_FRESHNESS"] = args.imu_gate
     recs = [load(p) for p in args.csv]
     summaries = [summarise(r) for r in recs]
     print(report(summaries))
