@@ -186,6 +186,9 @@ pub struct Runtime {
     pub sequence: u64,
     pub rover_id: Option<u64>,
     pub autonomy_json: String,
+    /// The few status fields the phone's control loop reads every tick,
+    /// so it never parses the full status (planner trace included) at 100 Hz.
+    pub autonomy_brief: String,
     pub navigation: navigation::State,
     pub outdoor: terra_autonomy::outdoor::OutdoorController,
     pub outdoor_tokens: VecDeque<String>,
@@ -243,6 +246,7 @@ impl Runtime {
             sequence: 0,
             rover_id: None,
             autonomy_json: String::new(),
+            autonomy_brief: String::new(),
             navigation,
             outdoor,
             outdoor_tokens: Default::default(),
@@ -312,6 +316,7 @@ impl Runtime {
         self.local_manual = None;
         self.last_snapshot = RuntimeSnapshot { value: json!({}) };
         self.autonomy_json.clear();
+        self.autonomy_brief.clear();
         self.grid.clear();
         Ok(())
     }

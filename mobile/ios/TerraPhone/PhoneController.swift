@@ -273,7 +273,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
     func engageWaypoint(originLatitude: Double, originLongitude: Double, latitude: Double, longitude: Double, token: String, halfExtent: Double) {
         let token = token.trimmingCharacters(in: .whitespacesAndNewlines)
         controlQueue.async {
-            let vioWaypoint = TerraFleetManualDrive.requiresVioControl(self.controller?.autonomyStatus() ?? "{}")
+            let vioWaypoint = TerraFleetManualDrive.requiresVioControl(self.controller?.autonomyBrief() ?? "{}")
             let vioLayout = (try? ActuatorDriveProfileSet.decode(json: self.bleLayout).supportsVioControl) == true
             guard self.mode != .stopped, !self.bleActive || self.bleFeedback || (vioWaypoint && self.mode == .phone && vioLayout) else {
                 DispatchQueue.main.async {
@@ -608,7 +608,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
         // Preserve the AR/controller clock when switching to manual hardware.
         // Do not repeatedly detach/reset authority once the router is disconnected.
 
-        if TerraManualRouterSafety.emergencyStopped(statusJSON: controller.autonomyStatus()), !dashboardEmergencyStop {
+        if TerraManualRouterSafety.emergencyStopped(statusJSON: controller.autonomyBrief()), !dashboardEmergencyStop {
             observation.recordSafetyRequest(reset: false, source: "router_authority", route: "bluetooth")
             dashboardEmergencyStop = true; target = (0, 0); resetServoTargets()
             bluetooth.stopOutput()
@@ -706,7 +706,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
                 simulatedTime += 0.01
             }
             tick += 1
-            let autonomy = controller.autonomyStatus()
+            let autonomy = controller.autonomyBrief()
             let fullyManual = TerraFleetManualDrive.isFullyManual(autonomy)
             let vioWaypoint = TerraFleetManualDrive.requiresAutonomousControl(autonomy)
             let vioCompatible = (try? ActuatorDriveProfileSet.decode(json: bleLayout).supportsVioControl) == true
@@ -844,8 +844,8 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
             filteredVelocity = .zero
             if bleActive {
                 feedbackTrackingHealthy = false
-                let fullyManual = TerraFleetManualDrive.isFullyManual(controller.autonomyStatus())
-                if DriveJoystickSafety.trackingLossRequiresStop(feedback: bleFeedback || TerraFleetManualDrive.requiresVioControl(controller.autonomyStatus()), fullyManual: fullyManual) {
+                let fullyManual = TerraFleetManualDrive.isFullyManual(controller.autonomyBrief())
+                if DriveJoystickSafety.trackingLossRequiresStop(feedback: bleFeedback || TerraFleetManualDrive.requiresVioControl(controller.autonomyBrief()), fullyManual: fullyManual) {
                     pauseHardwareMotion(reason: localizationTrackingReason ?? "Camera tracking lost in tracking-dependent mode")
                 }
             }
@@ -1351,7 +1351,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
         }
         observation.recordChanged(component: "router", kind: "connection.state", attributes: ["status": controller?.dashboardStatus() ?? "unavailable"])
         if let controller {
-            let vioReady = mode == .phone && TerraFleetManualDrive.vioReady(controller.autonomyStatus())
+            let vioReady = mode == .phone && TerraFleetManualDrive.vioReady(controller.autonomyBrief())
             DispatchQueue.main.async {
                 let remote = (try? JSONSerialization.jsonObject(with: Data(self.bluetooth.statusJSON.utf8))) as? [String: Any] ?? [:]
                 var state: [String: Any] = ["schema_version": 1, "ready": self.hardwareReady,

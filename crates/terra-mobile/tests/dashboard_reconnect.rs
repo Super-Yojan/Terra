@@ -378,3 +378,33 @@ fn sensor_hold_reports_its_cause_after_it_clears() {
     c.step(12.).unwrap();
     assert!(status(&c)["status"].get("sensor_hold").is_none());
 }
+
+/// The per-tick brief keeps the fields the Swift loop reads and drops the
+/// L3 planner trace, which made the full status about 30 KB.
+#[test]
+fn autonomy_brief_is_small_and_matches_the_full_status() {
+    let c = MobileController::new(default_control_settings()).unwrap();
+    fresh_local(&c, 1.);
+    c.autonomy_request(
+        "autonomy".into(),
+        r#"{"level":"waypoint","token":"mode"}"#.into(),
+        1.,
+    )
+    .unwrap();
+    c.step(1.).unwrap();
+    let full = status(&c);
+    let brief: serde_json::Value = serde_json::from_str(&c.autonomy_brief()).unwrap();
+    for key in [
+        "run_id",
+        "requested_level",
+        "effective_level",
+        "safety",
+        "reason",
+    ] {
+        assert_eq!(brief["status"][key], full["status"][key], "{key}");
+    }
+    assert_eq!(brief["pose_quality"], full["pose_quality"]);
+    assert_eq!(brief["goal"]["state"], full["goal"]["state"]);
+    assert!(brief["status"].get("planner_trace").is_none());
+    assert!(c.autonomy_brief().len() < 1024);
+}
