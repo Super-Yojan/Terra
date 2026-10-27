@@ -611,7 +611,11 @@ impl MobileController {
             {
                 outdoor_status["hold_reason"] = serde_json::json!("route_blocked");
             }
-            if !outdoor_motion && output.status.safety != "emergency_stop" {
+            // Explore keeps its own hold reason: the outdoor mission does not gate it.
+            if !outdoor_motion
+                && output.status.safety != "emergency_stop"
+                && !brain.autonomy.is_exploring()
+            {
                 output.status.reason = outdoor_status["hold_reason"]
                     .as_str()
                     .unwrap_or(brain.outdoor.phase())

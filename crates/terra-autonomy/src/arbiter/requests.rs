@@ -104,6 +104,11 @@ impl AutonomyArbiter {
         self.level == Level::Teleop
     }
 
+    /// L4 frontier exploration plans and drives in the local map frame only.
+    pub fn is_exploring(&self) -> bool {
+        self.level == Level::Explore
+    }
+
     /// Check live authority/goal state, including commands accepted earlier in this tick.
     pub fn navigation_configuration_allowed(
         &self,
