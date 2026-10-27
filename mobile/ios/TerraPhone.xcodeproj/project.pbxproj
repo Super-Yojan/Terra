@@ -14,7 +14,7 @@
 		1DEE8F75CDA61D4F9594BCB6 /* FleetConnectionSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 48EBDF0CFE543A6304242A8B /* FleetConnectionSettings.swift */; };
 		24894F900F7490AA19DE55B3 /* PersonDepthGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = DB887F7AD412C1F04EDC079D /* PersonDepthGeometry.swift */; };
 		2A76E570455AA88AE9F27D16 /* PhoneFrameOrder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 948E9284D4E99774F72ADCB8 /* PhoneFrameOrder.swift */; };
-		37C8F681B8564FABEA922179 /* PersonSearchDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50BE71F885C99967A195ECC8 /* PersonSearchDetector.swift */; };
+		37C8F681B8564FABEA922179 /* ObjectSearchDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50BE71F885C99967A195ECC8 /* ObjectSearchDetector.swift */; };
 		7A5C0E12D2B34F6A8C9D0E1F /* TaskModelRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A5C0E11D2B34F6A8C9D0E1F /* TaskModelRunner.swift */; };
 		3DF9E05C49FEB1A06432E1A7 /* TerraLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 25948E386E416BE1611442F7 /* TerraLog.swift */; };
 		4114E38BEE246A763559F11E /* MountCalibration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D2EB8FAB5C424C195564DB7 /* MountCalibration.swift */; };
@@ -31,6 +31,7 @@
 		7DF4152879F6895ADFBAD61E /* TerraBevySessionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 763C867BB9779625BBC8706D /* TerraBevySessionStore.swift */; };
 		836ABE039025B23DE742B338 /* TerraDebugTools.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9BC2EE52CB19C0C8A6F9709C /* TerraDebugTools.swift */; };
 		C1A55D3B0000000000000001 /* ClassificationDebugView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1A55D3B0000000000000002 /* ClassificationDebugView.swift */; };
+		0BD0E7EC0000000000000001 /* ObjectDetectionDebugView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0BD0E7EC0000000000000002 /* ObjectDetectionDebugView.swift */; };
 		86E1E1E57236DEEBBBCE648E /* JoystickPad.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB9E97733E0A85302873CDBB /* JoystickPad.swift */; };
 		92B31E59B86ACCACCD2A1F18 /* TerraDestination.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9DE1936CC09E26932C0F66FE /* TerraDestination.swift */; };
 		A10B0B5E0000000000000001 /* TerraObservation.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10B0B5E0000000000000002 /* TerraObservation.swift */; };
@@ -87,7 +88,7 @@
 		40F2DDDC1E0A2ABA4F09C11F /* ARKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = ARKit.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS18.0.sdk/System/Library/Frameworks/ARKit.framework; sourceTree = DEVELOPER_DIR; };
 		48EBDF0CFE543A6304242A8B /* FleetConnectionSettings.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = FleetConnectionSettings.swift; sourceTree = "<group>"; };
 		4DB3F3D968483A1FD1080BEB /* TerraPhone.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = TerraPhone.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		50BE71F885C99967A195ECC8 /* PersonSearchDetector.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = PersonSearchDetector.swift; sourceTree = "<group>"; };
+		50BE71F885C99967A195ECC8 /* ObjectSearchDetector.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ObjectSearchDetector.swift; sourceTree = "<group>"; };
 		7A5C0E11D2B34F6A8C9D0E1F /* TaskModelRunner.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TaskModelRunner.swift; sourceTree = "<group>"; };
 		543C3C67B32982AE4FA32C81 /* Info.plist */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		5695D4ADB6DDDB9AD9ECC1EB /* TerraPhoneApp.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TerraPhoneApp.swift; sourceTree = "<group>"; };
@@ -105,6 +106,7 @@
 		948E9284D4E99774F72ADCB8 /* PhoneFrameOrder.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = PhoneFrameOrder.swift; sourceTree = "<group>"; };
 		9BC2EE52CB19C0C8A6F9709C /* TerraDebugTools.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TerraDebugTools.swift; sourceTree = "<group>"; };
 		C1A55D3B0000000000000002 /* ClassificationDebugView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ClassificationDebugView.swift; sourceTree = "<group>"; };
+		0BD0E7EC0000000000000002 /* ObjectDetectionDebugView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ObjectDetectionDebugView.swift; sourceTree = "<group>"; };
 		9C2FA04187CC39D929F3A531 /* PhoneController.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = PhoneController.swift; sourceTree = "<group>"; };
 		9DE1936CC09E26932C0F66FE /* TerraDestination.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TerraDestination.swift; sourceTree = "<group>"; };
 		A10B0B5E0000000000000002 /* TerraObservation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerraObservation.swift; sourceTree = "<group>"; };
@@ -193,6 +195,7 @@
 				D7A1546BE87BB04B342BA5B7 /* TerraConnectionHome.swift */,
 				9BC2EE52CB19C0C8A6F9709C /* TerraDebugTools.swift */,
 				C1A55D3B0000000000000002 /* ClassificationDebugView.swift */,
+				0BD0E7EC0000000000000002 /* ObjectDetectionDebugView.swift */,
 				6A28F21C23959A63436B7478 /* TerraMark.swift */,
 				34A9FC490286537DEFD58E55 /* TerraSettingsView.swift */,
 				8B42D733D17017ED54DF9E3E /* View+TerraPairingConsent.swift */,
@@ -252,7 +255,7 @@
 				5C11A546598F9DA3655EF0C0 /* ActuatorPagination.swift */,
 				58BEF209DEE2945A7D96965A /* BluetoothFragmentAssembler.swift */,
 				DB887F7AD412C1F04EDC079D /* PersonDepthGeometry.swift */,
-				50BE71F885C99967A195ECC8 /* PersonSearchDetector.swift */,
+				50BE71F885C99967A195ECC8 /* ObjectSearchDetector.swift */,
 				7A5C0E11D2B34F6A8C9D0E1F /* TaskModelRunner.swift */,
 				F9F7CE3FE9E7E9C9734B9A85 /* PhoneMountGeometry.swift */,
 				C2AC19B9778E4A6CD3D5E1BA /* RotationOffsetFit.swift */,
@@ -370,6 +373,7 @@
 				B14E9049EF9188CE566261ED /* TerraConnectionHome.swift in Sources */,
 				836ABE039025B23DE742B338 /* TerraDebugTools.swift in Sources */,
 				C1A55D3B0000000000000001 /* ClassificationDebugView.swift in Sources */,
+				0BD0E7EC0000000000000001 /* ObjectDetectionDebugView.swift in Sources */,
 				B2DEC1E533F50F154A2BE904 /* TerraMark.swift in Sources */,
 				DA478E86F4EDAF2B321B8859 /* TerraSettingsView.swift in Sources */,
 				014E5986C12CC878354BE533 /* View+TerraPairingConsent.swift in Sources */,
@@ -385,7 +389,7 @@
 				06793BBE2D9E7876A63D0C2A /* ActuatorPagination.swift in Sources */,
 				F0EA40F2756462AED7DD4EE2 /* BluetoothFragmentAssembler.swift in Sources */,
 				24894F900F7490AA19DE55B3 /* PersonDepthGeometry.swift in Sources */,
-				37C8F681B8564FABEA922179 /* PersonSearchDetector.swift in Sources */,
+				37C8F681B8564FABEA922179 /* ObjectSearchDetector.swift in Sources */,
 				7A5C0E12D2B34F6A8C9D0E1F /* TaskModelRunner.swift in Sources */,
 				CD7A9A2C8F638D6DB8443AE7 /* PhoneMountGeometry.swift in Sources */,
 				D637CFC5BD62A44FA1709F52 /* RotationOffsetFit.swift in Sources */,

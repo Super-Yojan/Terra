@@ -30,6 +30,19 @@ import simd
   precondition(gate.begin(timestamp: 0.5) == nil)
   precondition(gate.begin(timestamp: .nan) == nil)
   precondition(gate.begin(timestamp: 1.3) == 2)
+  // Portrait (home button down) puts world up along camera -X; Terra's landscape mount along ±Y.
+  precondition(PersonDepthGeometry.orientation(upX: -1, upY: 0) == .right)
+  precondition(PersonDepthGeometry.orientation(upX: 1, upY: 0.1) == .left)
+  precondition(PersonDepthGeometry.orientation(upX: 0.2, upY: 0.9) == .up)
+  precondition(PersonDepthGeometry.orientation(upX: 0, upY: -1) == .down)
+  precondition(PersonDepthGeometry.orientation(upX: 0.1, upY: 0.1) == nil)
+  // 1920x1440 landscape letterboxed into 640: 640x480 content, 80 px bars top and bottom.
+  let top = PersonDepthGeometry.visionPoint(modelX: 0, modelY: 80, input: 640, imageWidth: 1920, imageHeight: 1440)
+  precondition(simd_length(top - SIMD2(0, 1)) < 0.00001)
+  let centre = PersonDepthGeometry.visionPoint(modelX: 320, modelY: 320, input: 640, imageWidth: 1440, imageHeight: 1920)
+  precondition(simd_length(centre - SIMD2(0.5, 0.5)) < 0.00001)
+  let corner = PersonDepthGeometry.visionPoint(modelX: 560, modelY: 640, input: 640, imageWidth: 1440, imageHeight: 1920)
+  precondition(simd_length(corner - SIMD2(1, 0)) < 0.00001)
   print("Person depth: projection, camera orientation, measured depth and frame transform passed")
  }
 }

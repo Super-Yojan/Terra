@@ -101,6 +101,17 @@ pub fn distance_bearing(lat: f64, lon: f64, to_lat: f64, to_lon: f64) -> (f64, f
         .rem_euclid(360.);
     (2. * 6_371_000. * h.sqrt().asin(), bearing)
 }
+/// Point `distance` metres from (`lat`, `lon`) along true bearing `bearing` radians.
+pub fn destination(lat: f64, lon: f64, distance: f64, bearing: f64) -> (f64, f64) {
+    let (a, l) = (lat.to_radians(), lon.to_radians());
+    let d = distance / 6_371_000.;
+    let b = (a.sin() * d.cos() + a.cos() * d.sin() * bearing.cos()).asin();
+    let m = l + (bearing.sin() * d.sin() * a.cos()).atan2(d.cos() - a.sin() * b.sin());
+    (
+        b.to_degrees(),
+        (m.to_degrees() + 540.).rem_euclid(360.) - 180.,
+    )
+}
 impl OutdoorController {
     pub fn invalidate_sensors(&mut self) {
         self.gps = None;
@@ -193,6 +204,30 @@ impl OutdoorController {
         let (distance, bearing) = distance_bearing(lat, lon, m.latitude, m.longitude);
         let yaw = self.heading.local_yaw(bearing)?;
         Some((pose.x + distance * yaw.cos(), pose.y + distance * yaw.sin()))
+    }
+    /// Latitude, longitude and rough one-sigma accuracy in metres of local point
+    /// (`x`, `y`) seen from rover pose `from`. `None` unless the GPS fix is fresh
+    /// and within 10 m and the fused heading is fresh and within 35°.
+    pub fn geolocate(&self, now: f64, from: Pose, x: f64, y: f64) -> Option<(f64, f64, f64)> {
+        let g = self
+            .gps
+            .filter(|g| fresh(now, g.timestamp, 3.) && g.accuracy <= 10.)?;
+        let (_, heading_accuracy, age) = self.heading.heading(now)?;
+        if !(0.0..=2.).contains(&age) || heading_accuracy > 35. {
+            return None;
+        }
+        let (dx, dy) = (x - from.x, y - from.y);
+        let distance = dx.hypot(dy);
+        if !distance.is_finite() || distance > 20. {
+            return None;
+        }
+        let bearing = self
+            .heading
+            .bearing_of_local_yaw(dy.atan2(dx))?
+            .to_radians();
+        let (lat, lon) = destination(g.latitude, g.longitude, distance, bearing);
+        let accuracy = g.accuracy + distance * heading_accuracy.to_radians().sin();
+        coordinates(lat, lon).then_some((lat, lon, accuracy))
     }
     pub fn readiness(&self, now: f64, e: Evidence, radius: f64) -> Option<&'static str> {
         if self.gps.is_none_or(|g| !fresh(now, g.timestamp, 3.)) {
