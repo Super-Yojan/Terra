@@ -12,6 +12,7 @@ struct TerraDebugTools: View {
                 NavigationLink("Manual drive") { ControllerDetailView(brain: brain, destination: .drive) }
                 NavigationLink("Controller & simulation") { ControllerDetailView(brain: brain, destination: .settings) }
                 NavigationLink("Map inspection") { ControllerDetailView(brain: brain, destination: .live) }
+                NavigationLink("3D classification") { ClassificationDebugView(brain: brain) }
                 NavigationLink("Waypoint & autonomy tools") { ControllerDetailView(brain: brain, destination: .missions) }
             }
         }.navigationTitle("Debug tools")

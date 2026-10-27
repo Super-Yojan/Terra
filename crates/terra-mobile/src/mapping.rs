@@ -2,7 +2,8 @@
 use crate::{ControllerError, MobileController};
 use std::sync::{Arc, Mutex};
 use terra_mapping::{
-    CameraIntrinsics, CameraPose, FloorSurface, GroundPlane, HorizonBand, MapConfig, MapError,
+    CameraIntrinsics, CameraPose, DepthClassifier, FloorSurface, GroundPlane, HorizonBand,
+    MapConfig, MapError, PointLabel,
 };
 use terra_types::{Quaternion, Vector3};
 #[derive(Clone, uniffi::Record)]
@@ -108,6 +109,24 @@ pub struct FloorEstimate {
     pub height: f64,
     /// Area of the trusted floor cells counted, square metres.
     pub area: f64,
+}
+/// One depth frame labelled by the mapper, for the phone's classification view.
+#[derive(Clone, uniffi::Record)]
+pub struct ClassifiedFrame {
+    /// Depth exposure time, seconds.
+    pub timestamp: f64,
+    /// Camera origin in world metres, x y z.
+    pub camera: Vec<f64>,
+    /// `ground_plane` once the floor is locked, `horizon_band` before.
+    pub classifier: String,
+    /// World x y z triples, metres, for every pixel with a return.
+    pub points: Vec<f32>,
+    /// One [`terra_types::point_capture::PointLabel`] wire byte per point.
+    pub labels: Vec<u8>,
+    /// Pixels per label, indexed by wire byte, including no-return pixels.
+    pub counts: Vec<u32>,
+    /// World x y z centres of trusted mesh-floor cells.
+    pub floor_cells: Vec<f32>,
 }
 /// Half-side of the square of floor samples kept around the camera, metres.
 const FLOOR_HALF_EXTENT: f64 = 6.0;
@@ -343,6 +362,61 @@ impl MobileOccupancyMap {
         let map = self.map.lock().map_err(|_| ControllerError::Internal)?;
         map.set_floor_surface(surface.map(Arc::new));
         Ok(cells)
+    }
+    /// Keep (or stop keeping) a copy of each integrated depth frame for
+    /// [`Self::take_classified_frame`]. Independent of dashboard captures.
+    pub fn set_classification_debug(&self, enabled: bool) {
+        if let Ok(map) = self.map.lock() {
+            map.set_debug_capture(enabled);
+        }
+    }
+    /// Label the newest integrated frame since the last call with exactly the
+    /// rules the grid used, keeping every `stride`-th pixel (1..=8). `None`
+    /// when debugging is off or no new frame arrived.
+    pub fn take_classified_frame(&self, stride: u32) -> Option<ClassifiedFrame> {
+        let capture = self.map.lock().ok()?.take_debug_capture()?;
+        let capture = if stride > 1 {
+            crate::capture::decimate(&capture, stride.min(8))
+        } else {
+            capture
+        };
+        let labelled = capture.label().ok()?;
+        let mut counts = vec![0_u32; PointLabel::ALL.len()];
+        let mut points = Vec::new();
+        let mut labels = Vec::new();
+        for p in labelled {
+            counts[p.label as usize] += 1;
+            if p.label != PointLabel::NoReturn {
+                points.extend([
+                    p.position.x as f32,
+                    p.position.y as f32,
+                    p.position.z as f32,
+                ]);
+                labels.push(p.label as u8);
+            }
+        }
+        let c = capture.pose.position;
+        Some(ClassifiedFrame {
+            timestamp: capture.timestamp,
+            camera: vec![c.x, c.y, c.z],
+            classifier: match capture.classifier {
+                DepthClassifier::GroundPlane(_) => "ground_plane",
+                DepthClassifier::HorizonBand(_) => "horizon_band",
+            }
+            .into(),
+            points,
+            labels,
+            counts,
+            floor_cells: capture
+                .floor
+                .map(|f| {
+                    f.trusted_centres()
+                        .into_iter()
+                        .flat_map(|p| [p.x as f32, p.y as f32, p.z as f32])
+                        .collect()
+                })
+                .unwrap_or_default(),
+        })
     }
     /// Median mesh floor height within `radius` metres of world `(x, y)` and
     /// the area it covers, or `None` without trusted floor there.
