@@ -152,8 +152,11 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
     private let arFrameQueue = DispatchQueue(label: "terra.ar-frames", qos: .userInteractive, autoreleaseFrequency: .workItem)
     private let arFrameLock = NSLock()
     private var pendingARFrame: ARFrame?
+    private var pendingARFrameDelivered = Double.nan
     private var arFrameScheduled = false
     private var droppedARFrames = 0
+    /// Newest IMU and VIO stamps handed to Rust; control queue only. For SensorTimingProbe ticks.
+    private var timingLastImu = Double.nan, timingLastVio = Double.nan, timingVioPushedAt = Double.nan
     private let fpvVideo = FpvVideoCall()
     /// Read from the AR frame queue as well as the control queue.
     private var fpvRunning: Bool {
@@ -470,6 +473,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
         session.run(configuration, options: [.resetTracking, .removeExistingAnchors])
         motion.deviceMotionUpdateInterval = 0.01
         motion.startDeviceMotionUpdates(using: .xArbitraryZVertical, to: motionQueue) { [weak self] data, error in
+            let delivered = CACurrentMediaTime()
             guard let self else { return }
             if let error { self.controlQueue.async { if self.sensorEpochMatches(epoch) { self.handleTrackingFailure(error) } }; return }
             guard let data else { return }
@@ -479,6 +483,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
             let deviceAcceleration = SIMD3(Float(ua.x), Float(ua.y), Float(ua.z)) * 9.80665
             let deviceRate = SIMD3(Float(rate.x), Float(rate.y), Float(rate.z))
             self.controlQueue.async {
+                let dequeued = CACurrentMediaTime()
                 guard self.mode == .phone, self.sensorEpochMatches(epoch) else { return }
                 do {
                     // Upright, rear-camera-forward mount, the same mapping ARKit poses use.
@@ -486,6 +491,8 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
                     let a = toBody.act(deviceAcceleration)
                     let g = toBody.act(deviceRate)
                     try self.controller?.pushImu(sample: ImuReading(timestamp: data.timestamp, accelerationForward: Double(a.x), accelerationLeft: Double(a.y), accelerationUp: Double(a.z), gyroRoll: Double(g.x), gyroPitch: Double(g.y), gyroYaw: Double(g.z)))
+                    self.timingLastImu = data.timestamp
+                    SensorTimingProbe.shared.record(.imu, sensor: data.timestamp, os: delivered, queue: dequeued, done: CACurrentMediaTime())
                 } catch { self.fail(error, context: "IMU sample at \(data.timestamp)") }
             }
         }
@@ -671,6 +678,9 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
             try controller.setActuationMode(feedback: !direct)
             syncRustLayout(controller)
             let output = try controller.step(timestamp: now)
+            if mode == .phone {
+                SensorTimingProbe.shared.record(.tick, sensor: timingLastImu, queue: now, done: CACurrentMediaTime(), a: timingLastVio, b: output.safety == .active ? 1 : 0)
+            }
             if tick % 5 == 0 { drainFpvSignaling() }
             if tick % 10 == 0 && controller.dashboardStatus() == "failed" {
                 self.closeFpv(publish: false)
@@ -724,6 +734,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
     /// Runs on `arFrameQueue`. ARKit stops delivering camera images once the delegate holds
     /// too many frames, so keep at most one waiting and one being processed.
     func session(_ session: ARSession, didUpdate frame: ARFrame) {
+        let delivered = CACurrentMediaTime()
         if fpvRunning && readSharedCamera() {
             fpvVideo.consume(pixelBuffer: frame.capturedImage, timestamp: frame.timestamp)
         }
@@ -731,6 +742,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
         if pendingARFrame != nil { droppedARFrames += 1 }
         let dropped = droppedARFrames
         pendingARFrame = frame
+        pendingARFrameDelivered = delivered
         let schedule = !arFrameScheduled
         arFrameScheduled = true
         arFrameLock.unlock()
@@ -743,11 +755,17 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
     private func drainARFrame() {
         arFrameLock.lock()
         let frame = pendingARFrame
+        let delivered = pendingARFrameDelivered, dropped = droppedARFrames
         pendingARFrame = nil
         if frame == nil { arFrameScheduled = false }
         arFrameLock.unlock()
         guard let frame else { return }
+        let started = CACurrentMediaTime()
+        timingVioPushedAt = .nan
         autoreleasepool { processARFrame(frame) }
+        if mode == .phone {
+            SensorTimingProbe.shared.record(.ar, sensor: frame.timestamp, os: delivered, queue: started, done: timingVioPushedAt, a: CACurrentMediaTime(), b: Double(dropped))
+        }
         controlQueue.async { self.drainARFrame() }
     }
     private func processARFrame(_ frame: ARFrame) {
@@ -841,6 +859,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
         phonePose = (Double(roverPosition.x), Double(roverPosition.y), atan2(Double(bodyForward.y), Double(bodyForward.x)))
         do {
             try controller.pushVio(sample: VioReading(timestamp: frame.timestamp, positionX: Double(roverPosition.x), positionY: Double(roverPosition.y), positionZ: Double(roverPosition.z), quaternionX: Double(q.x), quaternionY: Double(q.y), quaternionZ: Double(q.z), quaternionW: Double(q.w), velocityX: Double(filteredVelocity.x), velocityY: Double(filteredVelocity.y), velocityZ: Double(filteredVelocity.z), tracked: tracked && velocityReady))
+            timingLastVio = frame.timestamp; timingVioPushedAt = CACurrentMediaTime()
             if tracked { updatePhoneGround(frame: frame, position: position, bodyUp: orientation.act(SIMD3(0, 0, 1))); updatePhoneMap(frame: frame, position: position, roverPosition: roverPosition, bodyOrientation: orientation); publishPhoneCloud(frame: frame, position: position) }
             else { DispatchQueue.main.async { self.mapStatus = "Tracking lost · map paused" } }
         } catch { fail(error, context: "AR frame at \(frame.timestamp)") }
@@ -860,11 +879,17 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
             return
         }
         objectDetector.submit(frame: frame, worldFromAR: worldFromAR) { [weak self] result in
+            let delivered = CACurrentMediaTime()
             guard let self else { return }
             self.controlQueue.async {
                 guard self.sensorEpochMatches(epoch), self.mode == .phone, self.localizationTracked,
                       let controller = self.controller else { return }
                 let now = CACurrentMediaTime()
+                defer {
+                    if case .success(let frame) = result {
+                        SensorTimingProbe.shared.record(.detector, sensor: frame.timestamp, os: delivered, queue: now, done: CACurrentMediaTime(), a: Double(frame.detections.count))
+                    }
+                }
                 do {
                     switch result {
                     case .failure(let error):
@@ -1150,7 +1175,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
             floorUpdateInFlight = true
             let lift = mapGroundOffset ?? 0
             let anchors = frame.anchors.compactMap { $0 as? ARMeshAnchor }
-            let worldFromAR = self.worldFromAR, epoch = floorEpoch
+            let worldFromAR = self.worldFromAR, epoch = floorEpoch, frameTime = frame.timestamp
             // The mesh walk can exceed 100 ms; on the control queue it stalled VIO
             // and IMU once a second, which tripped SensorNotReady holds. Handing
             // up to 600,000 floats to Rust is also slow (UniFFI encodes them one
@@ -1161,6 +1186,8 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
                 let barriers = try? map.updateBarrierSurface(cameraX: Double(position.x), cameraY: Double(position.y), xyz: samples.barrier)
                 self?.controlQueue.async {
                     guard let self else { return }
+                    let applyStarted = CACurrentMediaTime()
+                    defer { SensorTimingProbe.shared.record(.block, sensor: frameTime, queue: applyStarted, done: CACurrentMediaTime(), a: 1, b: Double(samples.floor.count + samples.barrier.count)) }
                     self.floorUpdateInFlight = false
                     // A map or ground reset happened meanwhile: these samples use the
                     // old height frame, so turn the floor veto and barriers off again.
@@ -2156,10 +2183,18 @@ extension PhoneController {
     }
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         guard let fix = locations.last else { return }
-        controlQueue.async { if self.mode == .phone { self.locationFix = fix } }
+        let delivered = CACurrentMediaTime(), sensed = SensorTimingProbe.mediaTime(of: fix.timestamp)
+        controlQueue.async {
+            SensorTimingProbe.shared.record(.gps, sensor: sensed, os: delivered, queue: CACurrentMediaTime(), a: fix.horizontalAccuracy, b: fix.speed)
+            if self.mode == .phone { self.locationFix = fix }
+        }
     }
     func locationManager(_ manager: CLLocationManager, didUpdateHeading heading: CLHeading) {
-        controlQueue.async { if self.mode == .phone { self.locationHeading = heading } }
+        let delivered = CACurrentMediaTime(), sensed = SensorTimingProbe.mediaTime(of: heading.timestamp)
+        controlQueue.async {
+            SensorTimingProbe.shared.record(.heading, sensor: sensed, os: delivered, queue: CACurrentMediaTime(), a: heading.headingAccuracy)
+            if self.mode == .phone { self.locationHeading = heading }
+        }
     }
     func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
         let detail = error.localizedDescription

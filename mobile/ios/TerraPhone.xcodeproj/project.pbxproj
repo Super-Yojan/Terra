@@ -31,6 +31,8 @@
 		7A5C0E12D2B34F6A8C9D0E1F /* TaskModelRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A5C0E11D2B34F6A8C9D0E1F /* TaskModelRunner.swift */; };
 		7DF4152879F6895ADFBAD61E /* TerraBevySessionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 763C867BB9779625BBC8706D /* TerraBevySessionStore.swift */; };
 		836ABE039025B23DE742B338 /* TerraDebugTools.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9BC2EE52CB19C0C8A6F9709C /* TerraDebugTools.swift */; };
+		5E7A1A900000000000000001 /* SensorTimingProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E7A1A900000000000000002 /* SensorTimingProbe.swift */; };
+		5E7A1A900000000000000003 /* SensorTimingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E7A1A900000000000000004 /* SensorTimingView.swift */; };
 		86E1E1E57236DEEBBBCE648E /* JoystickPad.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB9E97733E0A85302873CDBB /* JoystickPad.swift */; };
 		92B31E59B86ACCACCD2A1F18 /* TerraDestination.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9DE1936CC09E26932C0F66FE /* TerraDestination.swift */; };
 		A10B0B5E0000000000000001 /* TerraObservation.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10B0B5E0000000000000002 /* TerraObservation.swift */; };
@@ -106,6 +108,8 @@
 		93A5245F123BA9089B07AC8D /* CoreMotion.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreMotion.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS18.0.sdk/System/Library/Frameworks/CoreMotion.framework; sourceTree = DEVELOPER_DIR; };
 		948E9284D4E99774F72ADCB8 /* PhoneFrameOrder.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = PhoneFrameOrder.swift; sourceTree = "<group>"; };
 		9BC2EE52CB19C0C8A6F9709C /* TerraDebugTools.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TerraDebugTools.swift; sourceTree = "<group>"; };
+		5E7A1A900000000000000002 /* SensorTimingProbe.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SensorTimingProbe.swift; sourceTree = "<group>"; };
+		5E7A1A900000000000000004 /* SensorTimingView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SensorTimingView.swift; sourceTree = "<group>"; };
 		9C2FA04187CC39D929F3A531 /* PhoneController.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = PhoneController.swift; sourceTree = "<group>"; };
 		9DE1936CC09E26932C0F66FE /* TerraDestination.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TerraDestination.swift; sourceTree = "<group>"; };
 		A10B0B5E0000000000000002 /* TerraObservation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerraObservation.swift; sourceTree = "<group>"; };
@@ -196,6 +200,7 @@
 				9BC2EE52CB19C0C8A6F9709C /* TerraDebugTools.swift */,
 				C1A55D3B0000000000000002 /* ClassificationDebugView.swift */,
 				0BD0E7EC0000000000000002 /* ObjectDetectionDebugView.swift */,
+				5E7A1A900000000000000004 /* SensorTimingView.swift */,
 				6A28F21C23959A63436B7478 /* TerraMark.swift */,
 				34A9FC490286537DEFD58E55 /* TerraSettingsView.swift */,
 				8B42D733D17017ED54DF9E3E /* View+TerraPairingConsent.swift */,
@@ -249,6 +254,7 @@
 				2F8B011E9994CB657937B755 /* TerraHomeSheet.swift */,
 				C4D93BE22AB9B98C9B52E714 /* TerraStyle.swift */,
 				25948E386E416BE1611442F7 /* TerraLog.swift */,
+				5E7A1A900000000000000002 /* SensorTimingProbe.swift */,
 				A10B0B5E0000000000000004 /* PhoneObservationCapture.swift */,
 				A10B0B5E0000000000000002 /* TerraObservation.swift */,
 				D04DB8926762D65151B5C411 /* ActuatorDriveProfile.swift */,
@@ -374,6 +380,8 @@
 				836ABE039025B23DE742B338 /* TerraDebugTools.swift in Sources */,
 				C1A55D3B0000000000000001 /* ClassificationDebugView.swift in Sources */,
 				0BD0E7EC0000000000000001 /* ObjectDetectionDebugView.swift in Sources */,
+				5E7A1A900000000000000003 /* SensorTimingView.swift in Sources */,
+				5E7A1A900000000000000001 /* SensorTimingProbe.swift in Sources */,
 				B2DEC1E533F50F154A2BE904 /* TerraMark.swift in Sources */,
 				DA478E86F4EDAF2B321B8859 /* TerraSettingsView.swift in Sources */,
 				014E5986C12CC878354BE533 /* View+TerraPairingConsent.swift in Sources */,
