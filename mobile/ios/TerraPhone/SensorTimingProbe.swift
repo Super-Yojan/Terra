@@ -2,6 +2,7 @@ import ARKit
 import CoreMotion
 import Foundation
 import QuartzCore
+import UIKit
 
 /// Per-sample hop timing for the iPhone sensor feasibility experiment.
 ///
@@ -25,9 +26,10 @@ import QuartzCore
 /// | bare_imu   | CMDeviceMotion stamp   | bare handler entry    |                        |                     |                          |                |
 /// | bare_ar    | ARFrame stamp          | bare delegate entry   |                        |                     |                          |                |
 /// | meta       | flush time             |                       |                        |                     | thermal state 0–3        | low power 0/1  |
+/// | battery    | start or change time   |                       |                        |                     | level 0–1 (−1 unknown)   | state 0–3      |
 final class SensorTimingProbe: @unchecked Sendable {
     static let shared = SensorTimingProbe()
-    enum Stream: String { case imu, ar, detector, gps, heading, tick, block, bare_imu, bare_ar, meta }
+    enum Stream: String { case imu, ar, detector, gps, heading, tick, block, bare_imu, bare_ar, meta, battery }
 
     private struct Row {
         var stream: Stream, seq: UInt64
@@ -103,6 +105,23 @@ final class SensorTimingProbe: @unchecked Sendable {
         timer.setEventHandler { [weak self] in self?.flush() }
         timer.resume()
         flushTimer = timer
+        // Battery is a UIDevice (main-thread) property: one row now, then one per change.
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            UIDevice.current.isBatteryMonitoringEnabled = true
+            self.recordBattery()
+            guard self.batteryObservers.isEmpty else { return }
+            for name in [UIDevice.batteryLevelDidChangeNotification, UIDevice.batteryStateDidChangeNotification] {
+                self.batteryObservers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in self?.recordBattery() })
+            }
+        }
+    }
+
+    /// Main thread only.
+    private var batteryObservers: [NSObjectProtocol] = []
+    private func recordBattery() {
+        let device = UIDevice.current
+        record(.battery, sensor: CACurrentMediaTime(), a: Double(device.batteryLevel), b: Double(device.batteryState.rawValue))
     }
 
     func stop() {
