@@ -127,6 +127,10 @@ pub struct AutonomyArbiter {
     events: Vec<DecisionEvent>,
     reset: bool,
     last_plan: Option<(f64, Twist, &'static str)>,
+    /// Last motion allowed, zero after a hold. Centres the local planner's
+    /// velocity window: a measured speed that sits in the motor deadband
+    /// would otherwise pin every command near zero.
+    commanded: Twist,
     planner_trace: Option<(f64, terra_navigation::PlannerTrace)>,
     global_route: Vec<[f64; 2]>,
     route_goal: Option<(u64, f64, f64)>,
@@ -191,6 +195,7 @@ impl Default for AutonomyArbiter {
             events: Vec::new(),
             reset: true,
             last_plan: None,
+            commanded: Twist::default(),
             planner_trace: None,
             global_route: Vec::new(),
             route_goal: None,
@@ -322,6 +327,11 @@ impl AutonomyArbiter {
 
         // 5. Update search state and turn every remaining hold into zero motion.
         let search = self.finish_holds(&input, valid_time, &mut decision);
+        self.commanded = if decision.held {
+            Twist::default()
+        } else {
+            decision.twist
+        };
 
         // 6. Publish both the requested intent and the motion actually allowed.
         let status = self.status_for_tick(&input, valid_time, &decision);
@@ -355,6 +365,7 @@ impl AutonomyArbiter {
         if self.turning_identity.as_ref() != Some(&identity) {
             self.turning.reset();
             self.last_plan = None;
+            self.commanded = Twist::default();
             self.maneuver.clear();
             self.turning_identity = Some(identity);
         }

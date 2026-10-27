@@ -776,6 +776,18 @@ impl MobileController {
             "twist": output.twist,
         })
         .to_string();
+        brain.autonomy_brief = serde_json::json!({
+            "status": {
+                "run_id": output.status.run_id,
+                "requested_level": output.status.requested_level,
+                "effective_level": output.status.effective_level,
+                "safety": output.status.safety,
+                "reason": output.status.reason,
+            },
+            "pose_quality": quality,
+            "goal": {"state": output.goal.state},
+        })
+        .to_string();
         for event in &output.events {
             self.observation.event(
                 "autonomy",

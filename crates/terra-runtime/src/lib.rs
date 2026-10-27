@@ -186,6 +186,9 @@ pub struct Runtime {
     pub sequence: u64,
     pub rover_id: Option<u64>,
     pub autonomy_json: String,
+    /// The few status fields the phone's control loop reads every tick,
+    /// so it never parses the full status (planner trace included) at 100 Hz.
+    pub autonomy_brief: String,
     pub navigation: navigation::State,
     pub outdoor: terra_autonomy::outdoor::OutdoorController,
     pub outdoor_tokens: VecDeque<String>,
@@ -204,7 +207,13 @@ pub struct Runtime {
     last_step: Option<f64>,
     local_manual: Option<(f64, f64)>,
     last_snapshot: RuntimeSnapshot,
+    /// Latest `sensor_unhealthy` hold and when it happened.
+    sensor_hold: Option<(f64, terra_autonomy::SensorHold)>,
+    sensor_holds: u64,
+    sensor_held: bool,
 }
+/// How long a `sensor_unhealthy` hold stays in the status after it clears.
+const SENSOR_HOLD_DISPLAY_SECONDS: f64 = 10.;
 impl Runtime {
     pub fn new(config: RuntimeConfig, run_id: String) -> Result<Self, RuntimeError> {
         if run_id.is_empty()
@@ -237,6 +246,7 @@ impl Runtime {
             sequence: 0,
             rover_id: None,
             autonomy_json: String::new(),
+            autonomy_brief: String::new(),
             navigation,
             outdoor,
             outdoor_tokens: Default::default(),
@@ -257,6 +267,9 @@ impl Runtime {
             events: vec![],
             last_step: None,
             local_manual: None,
+            sensor_hold: None,
+            sensor_holds: 0,
+            sensor_held: false,
             last_snapshot: RuntimeSnapshot { value: json!({}) },
         })
     }
@@ -273,6 +286,9 @@ impl Runtime {
         self.events.clear();
         self.controller.reset();
         self.sequence = 0;
+        self.sensor_hold = None;
+        self.sensor_holds = 0;
+        self.sensor_held = false;
         self.outdoor.cancel();
         self.outdoor.invalidate_sensors();
         self.outdoor.selected = false;
@@ -300,6 +316,7 @@ impl Runtime {
         self.local_manual = None;
         self.last_snapshot = RuntimeSnapshot { value: json!({}) };
         self.autonomy_json.clear();
+        self.autonomy_brief.clear();
         self.grid.clear();
         Ok(())
     }
@@ -575,6 +592,30 @@ impl Runtime {
         self.events
             .push(json!({"kind":if connected{"connection.established"}else{"connection.lost"}}));
     }
+    /// Name the cause of a `sensor_unhealthy` hold in the status, and log
+    /// each new hold, so holds of a single tick are not silent.
+    fn note_sensor_hold(&mut self, output: &mut ArbiterOutput, now: f64, outdoor_motion: bool) {
+        if output.status.reason == "sensor_unhealthy" {
+            let hold = pose_quality::hold(self, now, outdoor_motion);
+            if !self.sensor_held {
+                self.sensor_holds += 1;
+                self.events.push(json!({"kind":"autonomy.sensor_hold","cause":hold.cause,"pose_age_s":hold.pose_age_s,"imu_age_s":hold.imu_age_s,"count":self.sensor_holds}));
+            }
+            self.sensor_held = true;
+            self.sensor_hold = Some((now, hold));
+        } else {
+            self.sensor_held = false;
+        }
+        output.status.sensor_hold = self
+            .sensor_hold
+            .as_ref()
+            .filter(|(at, _)| now - at <= SENSOR_HOLD_DISPLAY_SECONDS)
+            .map(|(at, hold)| terra_autonomy::SensorHold {
+                age_s: now - at,
+                count: self.sensor_holds,
+                ..hold.clone()
+            });
+    }
     pub fn step(&mut self, now: f64) -> Result<RuntimeOutput, RuntimeError> {
         if !now.is_finite() || now < 0.0 || self.last_step.is_some_and(|last| now < last) {
             return Err(invalid("invalid control time"));
@@ -618,6 +659,7 @@ impl Runtime {
             },
             healthy,
         });
+        self.note_sensor_hold(&mut output, now, outdoor_motion);
         let outdoor_status = self
             .outdoor
             .status(now, outdoor::evidence(self, now), &self.run_id);
