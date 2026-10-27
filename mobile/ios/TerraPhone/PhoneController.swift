@@ -266,7 +266,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
     func engageWaypoint(originLatitude: Double, originLongitude: Double, latitude: Double, longitude: Double, token: String) {
         let token = token.trimmingCharacters(in: .whitespacesAndNewlines)
         controlQueue.async {
-            let vioWaypoint = TerraFleetManualDrive.requiresVioControl(self.controller?.autonomyStatus() ?? "{}")
+            let vioWaypoint = TerraFleetManualDrive.requiresVioControl(self.controller?.autonomyBrief() ?? "{}")
             let vioLayout = (try? ActuatorDriveProfileSet.decode(json: self.bleLayout).supportsVioControl) == true
             guard self.mode != .stopped, !self.bleActive || self.bleFeedback || (vioWaypoint && self.mode == .phone && vioLayout) else {
                 DispatchQueue.main.async {
@@ -595,7 +595,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
         // Preserve the AR/controller clock when switching to manual hardware.
         // Do not repeatedly detach/reset authority once the router is disconnected.
 
-        if TerraManualRouterSafety.emergencyStopped(statusJSON: controller.autonomyStatus()), !dashboardEmergencyStop {
+        if TerraManualRouterSafety.emergencyStopped(statusJSON: controller.autonomyBrief()), !dashboardEmergencyStop {
             observation.recordSafetyRequest(reset: false, source: "router_authority", route: "bluetooth")
             dashboardEmergencyStop = true; target = (0, 0); resetServoTargets()
             bluetooth.stopOutput()
@@ -692,7 +692,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
                 simulatedTime += 0.01
             }
             tick += 1
-            let autonomy = controller.autonomyStatus()
+            let autonomy = controller.autonomyBrief()
             let fullyManual = TerraFleetManualDrive.isFullyManual(autonomy)
             let vioWaypoint = TerraFleetManualDrive.requiresAutonomousControl(autonomy)
             let vioCompatible = (try? ActuatorDriveProfileSet.decode(json: bleLayout).supportsVioControl) == true
@@ -830,8 +830,8 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
             filteredVelocity = .zero
             if bleActive {
                 feedbackTrackingHealthy = false
-                let fullyManual = TerraFleetManualDrive.isFullyManual(controller.autonomyStatus())
-                if DriveJoystickSafety.trackingLossRequiresStop(feedback: bleFeedback || TerraFleetManualDrive.requiresVioControl(controller.autonomyStatus()), fullyManual: fullyManual) {
+                let fullyManual = TerraFleetManualDrive.isFullyManual(controller.autonomyBrief())
+                if DriveJoystickSafety.trackingLossRequiresStop(feedback: bleFeedback || TerraFleetManualDrive.requiresVioControl(controller.autonomyBrief()), fullyManual: fullyManual) {
                     pauseHardwareMotion(reason: localizationTrackingReason ?? "Camera tracking lost in tracking-dependent mode")
                 }
             }
@@ -1246,11 +1246,17 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
         let maxRange = cameraHeight / tan(halfAngle * .pi / 180)
         do {
             try map.recenter(x: Double(roverPosition.x), y: Double(roverPosition.y))
-            try map.integrateDepthInHorizonBand(frame: MappingDepthFrame(timestamp: frame.timestamp, width: UInt32(width), height: UInt32(height), fx: Double(k.columns.0.x) * sx, fy: Double(k.columns.1.y) * sy, cx: (Double(k.columns.2.x) + 0.5) * sx - 0.5, cy: (Double(k.columns.2.y) + 0.5) * sy - 0.5, cameraX: Double(position.x), cameraY: Double(position.y), cameraZ: Double(position.z), quaternionX: Double(q.x), quaternionY: Double(q.y), quaternionZ: Double(q.z), quaternionW: Double(q.w), depthMetres: values), halfAngleDegrees: halfAngle, maxRange: maxRange)
+            try map.integrateDepthInHorizonBand(frame: MappingDepthFrame(timestamp: frame.timestamp, width: UInt32(width), height: UInt32(height), fx: Double(k.columns.0.x) * sx, fy: Double(k.columns.1.y) * sy, cx: (Double(k.columns.2.x) + 0.5) * sx - 0.5, cy: (Double(k.columns.2.y) + 0.5) * sy - 0.5, cameraX: Double(position.x), cameraY: Double(position.y), cameraZ: Double(position.z) + (mapGroundOffset ?? 0), quaternionX: Double(q.x), quaternionY: Double(q.y), quaternionZ: Double(q.z), quaternionW: Double(q.w), depthMetres: values), halfAngleDegrees: halfAngle, maxRange: maxRange)
             lastMapTime = frame.timestamp
             observation.recordChanged(component: "mapping", kind: "mapping.health", attributes: ["reason": "accepted_horizon_band"])
             let forward = bodyOrientation.act(SIMD3<Float>(1, 0, 0))
-            try publishMap(x: Double(roverPosition.x), y: Double(roverPosition.y), yaw: atan2(Double(forward.y), Double(forward.x)), status: String(format: "ARKit scene depth · level band ±%.0f° to %.1f m · finding floor · 10 Hz", halfAngle, maxRange))
+            // With a floor offset already known, the band means the ground plane refused
+            // the body's up axis (over 60° from vertical): name the tilt so a bad mount
+            // roll/pitch is visible instead of looking like "floor not found".
+            let up = bodyOrientation.act(SIMD3<Float>(0, 0, 1))
+            let tilt = acos(Double(max(-1, min(1, up.z / max(simd_length(up), 1e-6))))) * 180 / .pi
+            let reason = mapGroundOffset == nil ? "finding floor" : String(format: "floor known but body tilted %.0f° · check mount roll/pitch", tilt)
+            try publishMap(x: Double(roverPosition.x), y: Double(roverPosition.y), yaw: atan2(Double(forward.y), Double(forward.x)), status: String(format: "ARKit scene depth · level band ±%.0f° to %.1f m · %@ · 10 Hz", halfAngle, maxRange, reason))
         } catch { observation.recordChanged(component: "mapping", kind: "mapping.health", attributes: ["reason": "integration_failed", "error": error.localizedDescription]); DispatchQueue.main.async { self.mapStatus = "Map: " + error.localizedDescription } }
     }
     private func handleTrackingFailure(_ error: Error) {
@@ -1331,7 +1337,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
         }
         observation.recordChanged(component: "router", kind: "connection.state", attributes: ["status": controller?.dashboardStatus() ?? "unavailable"])
         if let controller {
-            let vioReady = mode == .phone && TerraFleetManualDrive.vioReady(controller.autonomyStatus())
+            let vioReady = mode == .phone && TerraFleetManualDrive.vioReady(controller.autonomyBrief())
             DispatchQueue.main.async {
                 let remote = (try? JSONSerialization.jsonObject(with: Data(self.bluetooth.statusJSON.utf8))) as? [String: Any] ?? [:]
                 var state: [String: Any] = ["schema_version": 1, "ready": self.hardwareReady,

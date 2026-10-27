@@ -112,6 +112,9 @@ fn classification_debug_reports_labels_and_floor_cells() {
         .unwrap();
     let frame = map.take_classified_frame(1).unwrap();
     assert_eq!(frame.classifier, "horizon_band");
+    assert_eq!(frame.ground_z, None);
+    assert!((frame.mesh_floor_z.unwrap() - 0.38).abs() < 1e-5);
+    assert!((frame.low_return_z.unwrap() - 0.5).abs() < 1e-5);
     assert_eq!(frame.labels, vec![6]);
     assert_eq!(frame.counts[6], 1);
     assert_eq!(frame.points.len(), 3);
@@ -123,4 +126,26 @@ fn classification_debug_reports_labels_and_floor_cells() {
     map.integrate_depth_in_horizon_band(level_frame(2.0), 10.0, 3.4)
         .unwrap();
     assert!(map.take_classified_frame(1).is_none());
+}
+
+/// The view reports where the classifier puts the ground under the camera, so
+/// a wrong mount height shows up against the mesh floor.
+#[test]
+fn classification_debug_reports_ground_height() {
+    let map = map();
+    map.set_classification_debug(true);
+    map.integrate_depth_with_ground_plane(
+        level_frame(0.0),
+        terra_mobile::MappingGroundPlane {
+            normal_x: 0.0,
+            normal_y: 0.0,
+            normal_z: 1.0,
+            offset: 0.1,
+        },
+    )
+    .unwrap();
+    let frame = map.take_classified_frame(1).unwrap();
+    assert_eq!(frame.classifier, "ground_plane");
+    assert!((frame.ground_z.unwrap() - 0.1).abs() < 1e-9);
+    assert_eq!(frame.mesh_floor_z, None);
 }

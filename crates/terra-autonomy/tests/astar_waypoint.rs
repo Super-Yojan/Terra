@@ -415,3 +415,56 @@ fn rolling_pitch(config: &MapConfig, pose: Pose) -> MapSnapshot {
         occupancy,
     }
 }
+
+/// A wheel stalled in the motor deadband reads zero speed. The planner's
+/// window must still grow from its own last command, or L3 never gets past
+/// 0.1 m/s.
+#[test]
+fn stalled_measured_speed_does_not_pin_waypoint_speed() {
+    let map = MapSnapshot {
+        width: 120,
+        height: 80,
+        resolution: 0.1,
+        origin_x: 0.,
+        origin_y: 0.,
+        occupancy: vec![0; 120 * 80],
+    };
+    let mut arbiter = AutonomyArbiter::default();
+    arbiter.planner.config.radius = 0.2;
+    arbiter.set_level(LevelRequest {
+        level: Level::Waypoint,
+        token: "stall".into(),
+        budget_seconds: None,
+        budget_minutes: None,
+    });
+    assert!(arbiter.accept_goal(
+        &GoalCommand::Local {
+            x: 10.,
+            y: 4.,
+            yaw: None,
+            token: Some("goal".into()),
+        },
+        20.,
+    ));
+    let pose = Pose {
+        x: 2.,
+        y: 4.,
+        yaw: 0.,
+    };
+    let mut linear = 0.;
+    for tick in 1..=8 {
+        let now = tick as f64 * 0.1;
+        let out = arbiter.step(ArbiterInput {
+            now,
+            pose,
+            pose_time: now,
+            map: Some(&map),
+            map_time: Some(now),
+            map_revision: 1,
+            measured: Twist::default(),
+            healthy: true,
+        });
+        linear = out.twist.linear;
+    }
+    assert!(linear > 0.4, "{linear}");
+}

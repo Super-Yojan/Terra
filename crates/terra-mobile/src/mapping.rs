@@ -127,6 +127,15 @@ pub struct ClassifiedFrame {
     pub counts: Vec<u32>,
     /// World x y z centres of trusted mesh-floor cells.
     pub floor_cells: Vec<f32>,
+    /// World height of the classifier's ground plane under the camera, metres;
+    /// `None` in horizon-band mode. Obstacles start 0.15 m above it.
+    pub ground_z: Option<f64>,
+    /// Median mesh-floor height within 1.5 m of the camera, metres, when ARKit
+    /// has classified floor there. Should match `ground_z` within a few cm.
+    pub mesh_floor_z: Option<f64>,
+    /// 10th-percentile height of this frame's depth returns, metres: the floor
+    /// when the camera sees it. Compare with `mesh_floor_z` to spot a frame mismatch.
+    pub low_return_z: Option<f64>,
 }
 /// Half-side of the square of floor samples kept around the camera, metres.
 const FLOOR_HALF_EXTENT: f64 = 6.0;
@@ -396,6 +405,22 @@ impl MobileOccupancyMap {
             }
         }
         let c = capture.pose.position;
+        let ground_z = match capture.classifier {
+            DepthClassifier::GroundPlane(g) if g.normal.z.abs() > 1e-9 => {
+                Some((g.offset - g.normal.x * c.x - g.normal.y * c.y) / g.normal.z)
+            }
+            _ => None,
+        };
+        let mut heights: Vec<f32> = points.chunks_exact(3).map(|p| p[2]).collect();
+        let low_return_z = (!heights.is_empty()).then(|| {
+            let at = heights.len() / 10;
+            *heights.select_nth_unstable_by(at, f32::total_cmp).1 as f64
+        });
+        let mesh_floor_z = capture
+            .floor
+            .as_ref()
+            .and_then(|f| f.estimate(c.x, c.y, 1.5))
+            .map(|(height, _)| height);
         Some(ClassifiedFrame {
             timestamp: capture.timestamp,
             camera: vec![c.x, c.y, c.z],
@@ -416,6 +441,9 @@ impl MobileOccupancyMap {
                         .collect()
                 })
                 .unwrap_or_default(),
+            ground_z,
+            mesh_floor_z,
+            low_return_z,
         })
     }
     /// Median mesh floor height within `radius` metres of world `(x, y)` and

@@ -682,6 +682,17 @@ impl MobileController {
             .map(|b| b.autonomy_json.clone())
             .unwrap_or_default()
     }
+    /// The same JSON shape as [`Self::autonomy_status`] cut to
+    /// `status.{run_id, requested_level, effective_level, safety, reason}`,
+    /// `pose_quality` and `goal.state`. In L3 the full status carries the
+    /// planner trace (about 30 KB); parsing that several times per 100 Hz
+    /// tick backed up the control queue until IMU samples went stale.
+    pub fn autonomy_brief(&self) -> String {
+        self.brain
+            .lock()
+            .map(|b| b.autonomy_brief.clone())
+            .unwrap_or_default()
+    }
     /// Create a bounded run recorder at `path` and start a new run identity.
     /// Resets autonomy, velocity control, and run timing while retaining navigation
     /// geometry. `run_id` must be a valid token. Returns `InvalidInput` for invalid

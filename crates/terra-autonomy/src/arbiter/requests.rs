@@ -201,6 +201,7 @@ impl AutonomyArbiter {
     }
     pub(super) fn clear(&mut self) {
         self.turning.reset();
+        self.commanded = Twist::default();
         self.turning_identity = None;
         self.maneuver.clear();
         self.maneuver_goal = None;

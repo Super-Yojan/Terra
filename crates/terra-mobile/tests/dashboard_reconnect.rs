@@ -346,3 +346,65 @@ fn exploration_failed_transport_tick_preserves_budget_without_sensor_failure() {
     assert_eq!(status(&c)["exploration"]["end_reason"], "budget_expired");
     assert!(!c.accepted_onboard_mission());
 }
+
+/// A one-tick sensor hold stays readable: the status names what went stale
+/// and how old the pose was, for a few seconds after the hold clears.
+#[test]
+fn sensor_hold_reports_its_cause_after_it_clears() {
+    let c = MobileController::new(default_control_settings()).unwrap();
+    fresh_local(&c, 1.);
+    c.autonomy_request(
+        "autonomy".into(),
+        r#"{"level":"waypoint","token":"mode"}"#.into(),
+        1.,
+    )
+    .unwrap();
+    c.step(1.).unwrap();
+    assert!(status(&c)["status"].get("sensor_hold").is_none());
+    c.step(1.5).unwrap();
+    let held = status(&c)["status"].clone();
+    assert_eq!(held["reason"], "sensor_unhealthy");
+    let cause = held["sensor_hold"]["cause"].as_str().unwrap().to_string();
+    assert!(cause.starts_with("stale_"), "{cause}");
+    assert!((held["sensor_hold"]["pose_age_s"].as_f64().unwrap() - 0.5).abs() < 1e-9);
+    assert_eq!(held["sensor_hold"]["count"], 1);
+    fresh_local(&c, 2.);
+    c.step(2.).unwrap();
+    let after = status(&c)["status"].clone();
+    assert_ne!(after["reason"], "sensor_unhealthy");
+    assert_eq!(after["sensor_hold"]["cause"], cause.as_str());
+    assert!((after["sensor_hold"]["age_s"].as_f64().unwrap() - 0.5).abs() < 1e-9);
+    fresh_local(&c, 12.);
+    c.step(12.).unwrap();
+    assert!(status(&c)["status"].get("sensor_hold").is_none());
+}
+
+/// The per-tick brief keeps the fields the Swift loop reads and drops the
+/// L3 planner trace, which made the full status about 30 KB.
+#[test]
+fn autonomy_brief_is_small_and_matches_the_full_status() {
+    let c = MobileController::new(default_control_settings()).unwrap();
+    fresh_local(&c, 1.);
+    c.autonomy_request(
+        "autonomy".into(),
+        r#"{"level":"waypoint","token":"mode"}"#.into(),
+        1.,
+    )
+    .unwrap();
+    c.step(1.).unwrap();
+    let full = status(&c);
+    let brief: serde_json::Value = serde_json::from_str(&c.autonomy_brief()).unwrap();
+    for key in [
+        "run_id",
+        "requested_level",
+        "effective_level",
+        "safety",
+        "reason",
+    ] {
+        assert_eq!(brief["status"][key], full["status"][key], "{key}");
+    }
+    assert_eq!(brief["pose_quality"], full["pose_quality"]);
+    assert_eq!(brief["goal"]["state"], full["goal"]["state"]);
+    assert!(brief["status"].get("planner_trace").is_none());
+    assert!(c.autonomy_brief().len() < 1024);
+}

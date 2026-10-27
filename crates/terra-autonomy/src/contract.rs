@@ -196,6 +196,24 @@ pub struct AutonomyStatus {
     /// Present once an L5 task has started, including after it ends.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task: Option<crate::TaskStatus>,
+    /// The latest `sensor_unhealthy` hold, set by the runtime and kept for a
+    /// few seconds so a hold of one tick can still be read on a dashboard.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sensor_hold: Option<SensorHold>,
+}
+/// What tripped a `sensor_unhealthy` hold.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct SensorHold {
+    /// Machine-readable cause, such as `stale_vio`, `pose_stale` or `recording_failed`.
+    pub cause: String,
+    /// Pose age at the hold in seconds, when a pose existed.
+    pub pose_age_s: Option<f64>,
+    /// IMU age at the hold in seconds, when an IMU sample existed.
+    pub imu_age_s: Option<f64>,
+    /// Seconds since the hold, on the control clock.
+    pub age_s: f64,
+    /// Holds seen in this run.
+    pub count: u64,
 }
 /// Return whether `s` is 1–64 ASCII letters, digits, or characters from `._:-`.
 pub fn valid_token(s: &str) -> bool {
