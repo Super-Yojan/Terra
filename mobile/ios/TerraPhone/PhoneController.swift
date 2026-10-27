@@ -1260,11 +1260,17 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
         let maxRange = cameraHeight / tan(halfAngle * .pi / 180)
         do {
             try map.recenter(x: Double(roverPosition.x), y: Double(roverPosition.y))
-            try map.integrateDepthInHorizonBand(frame: MappingDepthFrame(timestamp: frame.timestamp, width: UInt32(width), height: UInt32(height), fx: Double(k.columns.0.x) * sx, fy: Double(k.columns.1.y) * sy, cx: (Double(k.columns.2.x) + 0.5) * sx - 0.5, cy: (Double(k.columns.2.y) + 0.5) * sy - 0.5, cameraX: Double(position.x), cameraY: Double(position.y), cameraZ: Double(position.z), quaternionX: Double(q.x), quaternionY: Double(q.y), quaternionZ: Double(q.z), quaternionW: Double(q.w), depthMetres: values), halfAngleDegrees: halfAngle, maxRange: maxRange)
+            try map.integrateDepthInHorizonBand(frame: MappingDepthFrame(timestamp: frame.timestamp, width: UInt32(width), height: UInt32(height), fx: Double(k.columns.0.x) * sx, fy: Double(k.columns.1.y) * sy, cx: (Double(k.columns.2.x) + 0.5) * sx - 0.5, cy: (Double(k.columns.2.y) + 0.5) * sy - 0.5, cameraX: Double(position.x), cameraY: Double(position.y), cameraZ: Double(position.z) + (mapGroundOffset ?? 0), quaternionX: Double(q.x), quaternionY: Double(q.y), quaternionZ: Double(q.z), quaternionW: Double(q.w), depthMetres: values), halfAngleDegrees: halfAngle, maxRange: maxRange)
             lastMapTime = frame.timestamp
             observation.recordChanged(component: "mapping", kind: "mapping.health", attributes: ["reason": "accepted_horizon_band"])
             let forward = bodyOrientation.act(SIMD3<Float>(1, 0, 0))
-            try publishMap(x: Double(roverPosition.x), y: Double(roverPosition.y), yaw: atan2(Double(forward.y), Double(forward.x)), status: String(format: "ARKit scene depth · level band ±%.0f° to %.1f m · finding floor · 10 Hz", halfAngle, maxRange))
+            // With a floor offset already known, the band means the ground plane refused
+            // the body's up axis (over 60° from vertical): name the tilt so a bad mount
+            // roll/pitch is visible instead of looking like "floor not found".
+            let up = bodyOrientation.act(SIMD3<Float>(0, 0, 1))
+            let tilt = acos(Double(max(-1, min(1, up.z / max(simd_length(up), 1e-6))))) * 180 / .pi
+            let reason = mapGroundOffset == nil ? "finding floor" : String(format: "floor known but body tilted %.0f° · check mount roll/pitch", tilt)
+            try publishMap(x: Double(roverPosition.x), y: Double(roverPosition.y), yaw: atan2(Double(forward.y), Double(forward.x)), status: String(format: "ARKit scene depth · level band ±%.0f° to %.1f m · %@ · 10 Hz", halfAngle, maxRange, reason))
         } catch { observation.recordChanged(component: "mapping", kind: "mapping.health", attributes: ["reason": "integration_failed", "error": error.localizedDescription]); DispatchQueue.main.async { self.mapStatus = "Map: " + error.localizedDescription } }
     }
     private func handleTrackingFailure(_ error: Error) {

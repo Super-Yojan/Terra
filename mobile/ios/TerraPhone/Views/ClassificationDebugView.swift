@@ -89,7 +89,7 @@ struct ClassificationDebugView: View {
         }
         let mode = frame.classifier == "ground_plane"
             ? "Ground plane: floor locked, obstacles are 0.15–2 m above it"
-            : "Level band: floor not locked yet, every return in the band is an obstacle"
+            : "Level band: no usable ground plane (reason under Phone sensors), every return in the band is an obstacle"
         let age = now.timeIntervalSince(lastFrameAt)
         let status = age > 2 ? String(format: "%@ · no new frame for %.0f s", mode, age) : mode
         return "\(status) · \(framesReceived) frames"
