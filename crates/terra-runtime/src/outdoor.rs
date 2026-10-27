@@ -162,6 +162,11 @@ pub fn update(b: &mut Runtime, now: f64) -> bool {
     if let Some((x, y)) = b.outdoor.tick(now, e) {
         b.autonomy.update_guidance(x, y);
     }
+    // Explore owns the follower in the local frame. The tick above has already
+    // paused any outdoor mission for lost authority; it waits for an explicit resume.
+    if b.autonomy.is_exploring() {
+        return true;
+    }
     if b.outdoor.phase() != "planning" {
         // Never retain a moving local target through a pause or arrival confirmation.
         // With recovered sensors, an idle follower permits an explicit mission resume.

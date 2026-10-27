@@ -136,6 +136,16 @@ impl Runtime {
     }
     fn dispatch_action(&mut self, kind: &str, bytes: &[u8], now: f64, at: f64) -> bool {
         match kind {
+            "autonomy"
+                if serde_json::from_slice::<Value>(bytes)
+                    .is_ok_and(|v| v.get("assigned_level").is_some()) =>
+            {
+                terra_autonomy::decode_assignment(bytes).is_some_and(|r| {
+                    let token = r.token.clone();
+                    self.autonomy.assign_level(r);
+                    self.autonomy.request_receipt() == Some((token.as_str(), true))
+                })
+            }
             "autonomy" => terra_autonomy::decode_level_with_task(&bytes)
                 .map(|(r, task)| {
                     let token = r.token.clone();

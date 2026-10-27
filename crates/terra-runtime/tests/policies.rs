@@ -486,3 +486,39 @@ fn attached_map_policy_changes_configuration_identity() {
     );
     assert_ne!(original, r.configuration_identity());
 }
+
+#[test]
+fn assigned_study_level_rejects_other_levels_but_keeps_takeover() {
+    let mut r = runtime(ActuationMode::DirectEffort);
+    let mut t = 0.0;
+    let mut send = |r: &mut Runtime, v: serde_json::Value| {
+        t += 0.01;
+        sensors(r, t);
+        remote(r, "autonomy", v, t);
+        r.step(t).unwrap().autonomy.status
+    };
+    let s = send(&mut r, json!({"level":"waypoint","token":"pre"}));
+    assert_eq!(s.requested_level, terra_autonomy::Level::Waypoint);
+    // Assigning L4 while at L3 drops the rover to L0.
+    let s = send(
+        &mut r,
+        json!({"assigned_level":"explore","token":"assign-l4"}),
+    );
+    assert_eq!(s.assigned_level, Some(terra_autonomy::Level::Explore));
+    assert_eq!(s.requested_level, terra_autonomy::Level::Teleop);
+    assert_eq!(s.result.as_deref(), Some("accepted"));
+    let s = send(&mut r, json!({"level":"waypoint","token":"l3"}));
+    assert_eq!(s.request_reason.as_deref(), Some("level_not_assigned"));
+    assert_eq!(s.requested_level, terra_autonomy::Level::Teleop);
+    let s = send(
+        &mut r,
+        json!({"level":"explore","token":"l4","budget_seconds":60}),
+    );
+    assert_eq!(s.requested_level, terra_autonomy::Level::Explore);
+    let s = send(&mut r, json!({"level":"teleop","token":"takeover"}));
+    assert_eq!(s.requested_level, terra_autonomy::Level::Teleop);
+    let s = send(&mut r, json!({"assigned_level":null,"token":"clear"}));
+    assert_eq!(s.assigned_level, None);
+    let s = send(&mut r, json!({"level":"waypoint","token":"free"}));
+    assert_eq!(s.requested_level, terra_autonomy::Level::Waypoint);
+}

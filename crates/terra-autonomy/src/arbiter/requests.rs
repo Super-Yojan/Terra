@@ -104,6 +104,11 @@ impl AutonomyArbiter {
         self.level == Level::Teleop
     }
 
+    /// L4 frontier exploration plans and drives in the local map frame only.
+    pub fn is_exploring(&self) -> bool {
+        self.level == Level::Explore
+    }
+
     /// Check live authority/goal state, including commands accepted earlier in this tick.
     pub fn navigation_configuration_allowed(
         &self,
@@ -237,6 +242,41 @@ impl AutonomyArbiter {
     /// Apply a token-correlated authority request, clearing old intent on acceptance.
     ///
     /// Invalid tokens are ignored. Budget and detector rejections are exposed through status receipts and decision events.
+    /// Whether the assigned study condition lets an operator select `level`.
+    /// L0 takeover is always allowed; an assigned L4 also allows target search.
+    pub fn level_permitted(&self, level: Level) -> bool {
+        match self.assigned_level {
+            None => true,
+            Some(assigned) => {
+                level == Level::Teleop
+                    || level == assigned
+                    || (assigned == Level::Explore && level == Level::TargetSearch)
+            }
+        }
+    }
+    /// Set or clear the study condition. A current level outside the new
+    /// condition drops to L0, as an operator takeover would.
+    pub fn assign_level(&mut self, r: AssignmentRequest) {
+        let fp = format!("assign:{:?}", r.assigned_level);
+        if !valid_token(&r.token) || self.duplicate(&r.token, &fp) {
+            return;
+        }
+        self.assigned_level = r.assigned_level;
+        if !self.level_permitted(self.level) {
+            let token = format!("assign-l0-{}", self.revision);
+            self.set_level(LevelRequest::new(Level::Teleop, token));
+        }
+        self.acknowledge(
+            r.token,
+            fp,
+            true,
+            if r.assigned_level.is_some() {
+                "level_assigned"
+            } else {
+                "assignment_cleared"
+            },
+        );
+    }
     pub fn set_level(&mut self, r: LevelRequest) {
         self.set_level_with_task(r, None);
     }
@@ -247,6 +287,10 @@ impl AutonomyArbiter {
             r.level, r.budget_seconds, r.budget_minutes, task
         );
         if !valid_token(&r.token) || self.duplicate(&r.token, &fp) {
+            return;
+        }
+        if !self.level_permitted(r.level) {
+            self.acknowledge(r.token, fp, false, "level_not_assigned");
             return;
         }
         if r.level == Level::TargetSearch && self.detector_classes.is_empty() {

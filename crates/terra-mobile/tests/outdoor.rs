@@ -816,3 +816,100 @@ fn manual_takeover_drives_while_an_outdoor_mission_is_paused() {
         "the mission still needs an explicit resume"
     );
 }
+fn local_sensors_at(c: &terra_mobile::MobileController, t: f64, x: f64, y: f64, yaw: f64) {
+    c.push_imu(terra_mobile::ImuReading {
+        timestamp: t,
+        acceleration_forward: 0.,
+        acceleration_left: 0.,
+        acceleration_up: 0.,
+        gyro_roll: 0.,
+        gyro_pitch: 0.,
+        gyro_yaw: 0.,
+    })
+    .unwrap();
+    // ARKit world frame: x right, y up, z back; rover x forward is -z, y left is -x.
+    let (s, c2) = ((yaw / 2.).sin(), (yaw / 2.).cos());
+    c.push_vio(terra_mobile::VioReading {
+        timestamp: t,
+        position_x: -y,
+        position_y: 0.,
+        position_z: -x,
+        quaternion_x: 0.,
+        quaternion_y: s,
+        quaternion_z: 0.,
+        quaternion_w: c2,
+        velocity_x: 0.,
+        velocity_y: 0.,
+        velocity_z: 0.,
+        tracked: true,
+    })
+    .unwrap();
+}
+/// Drive a point rover through `seconds` of explore and return its final status.
+fn explore_run(gps: bool, seconds: f64) -> serde_json::Value {
+    let c = terra_mobile::MobileController::new(terra_mobile::default_control_settings()).unwrap();
+    c.enable_outdoor_gps().unwrap();
+    let mut pose = (0., 0., 0.);
+    let observe = |t: f64, pose: (f64, f64, f64)| {
+        local_sensors_at(&c, t, pose.0, pose.1, pose.2);
+        let mut cells = vec![-1; 6400];
+        for y in 24..56 {
+            for x in 24..56 {
+                cells[y * 80 + x] = 0;
+            }
+        }
+        c.autonomy_map(
+            terra_mobile::OccupancyGrid {
+                width: 80,
+                height: 80,
+                resolution: 0.25,
+                origin_x: -10.,
+                origin_y: -10.,
+                occupancy: cells,
+            },
+            t,
+            1,
+        )
+        .unwrap();
+    };
+    observe(1., pose);
+    hardware(&c, false);
+    c.step(1.).unwrap();
+    if gps {
+        let run = state(&c)["status"]["run_id"].clone();
+        c.autonomy_request("navigation/source".into(),serde_json::json!({"schema_version":1,"source":"outdoor_gps","token":"select","run_id":run,"navigation_revision":0}).to_string(),1.).unwrap();
+    }
+    hardware(&c, true);
+    c.autonomy_request(
+        "autonomy".into(),
+        r#"{"level":"explore","budget_seconds":120,"token":"explore"}"#.into(),
+        1.,
+    )
+    .unwrap();
+    let dt = 0.05;
+    let mut t = 1.;
+    while t < 1. + seconds {
+        t += dt;
+        observe(t, pose);
+        let out = c.step(t).unwrap();
+        pose.2 += out.target_yaw_rate * dt;
+        pose.0 += out.target_forward * pose.2.cos() * dt;
+        pose.1 += out.target_forward * pose.2.sin() * dt;
+    }
+    state(&c)
+}
+#[test]
+fn explore_runs_in_the_local_frame_while_outdoor_gps_is_selected() {
+    // Before the fix the outdoor idle phase cancelled explore's goal every tick,
+    // so arrival never registered and the rover drove past its frontier.
+    let local = explore_run(false, 30.);
+    let gps = explore_run(true, 30.);
+    assert_eq!(gps["outdoor"]["source"], "outdoor_gps");
+    assert_eq!(gps["exploration"]["phase"], "running", "{gps}");
+    assert!(local["exploration"]["frontiers_attempted"].as_u64() > Some(1));
+    assert!(
+        gps["exploration"]["frontiers_attempted"].as_u64() > Some(1),
+        "{}",
+        gps["exploration"]
+    );
+}
