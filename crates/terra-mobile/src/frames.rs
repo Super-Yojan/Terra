@@ -226,9 +226,49 @@ pub struct PoseVelocityFilter {
     state: Mutex<VelocityFilter>,
 }
 
-struct VelocityFilter {
+pub(crate) struct VelocityFilter {
     previous: Option<(Vector3, f64)>,
     filtered: Vector3,
+}
+
+impl VelocityFilter {
+    pub(crate) const fn new() -> Self {
+        Self {
+            previous: None,
+            filtered: Vector3::ZERO,
+        }
+    }
+
+    /// Forget history, as tracking loss does.
+    pub(crate) fn clear(&mut self) {
+        self.previous = None;
+        self.filtered = Vector3::ZERO;
+    }
+
+    /// One tracked, finite position. `None` until two samples land inside 200 ms.
+    pub(crate) fn push(&mut self, position: Vector3, timestamp: f64) -> Option<Vector3> {
+        let mut ready = None;
+        if let Some((last, previous_time)) = self.previous {
+            let dt = timestamp - previous_time;
+            if dt > 0.0 && dt < 0.2 {
+                let raw = Vector3 {
+                    x: (position.x - last.x) / dt,
+                    y: (position.y - last.y) / dt,
+                    z: (position.z - last.z) / dt,
+                };
+                let alpha = dt / (0.03 + dt);
+                let delta = Vector3 {
+                    x: raw.x - self.filtered.x,
+                    y: raw.y - self.filtered.y,
+                    z: raw.z - self.filtered.z,
+                };
+                self.filtered = self.filtered.plus(delta.scaled(alpha));
+                ready = Some(self.filtered);
+            }
+        }
+        self.previous = Some((position, timestamp));
+        ready
+    }
 }
 
 #[uniffi::export]
@@ -237,18 +277,14 @@ impl PoseVelocityFilter {
     /// Construct an empty velocity filter; the first tracked sample establishes a baseline.
     pub fn new() -> Arc<Self> {
         Arc::new(Self {
-            state: Mutex::new(VelocityFilter {
-                previous: None,
-                filtered: Vector3::ZERO,
-            }),
+            state: Mutex::new(VelocityFilter::new()),
         })
     }
 
     /// Discard pose history and filtered velocity. Returns `Internal` for a poisoned mutex.
     pub fn reset(&self) -> Result<(), ControllerError> {
         let mut state = self.state.lock().map_err(|_| ControllerError::Internal)?;
-        state.previous = None;
-        state.filtered = Vector3::ZERO;
+        state.clear();
         Ok(())
     }
 
@@ -267,40 +303,20 @@ impl PoseVelocityFilter {
     ) -> Result<Option<AxisSample>, ControllerError> {
         let mut state = self.state.lock().map_err(|_| ControllerError::Internal)?;
         if !tracked {
-            state.previous = None;
-            state.filtered = Vector3::ZERO;
+            state.clear();
             return Ok(None);
         }
         finite3(x, y, z)?;
         if !timestamp.is_finite() {
             return Err(InputError::NonFinite.into());
         }
-        let position = Vector3 { x, y, z };
-        let mut ready = None;
-        if let Some((last, previous_time)) = state.previous {
-            let dt = timestamp - previous_time;
-            if dt > 0.0 && dt < 0.2 {
-                let raw = Vector3 {
-                    x: (position.x - last.x) / dt,
-                    y: (position.y - last.y) / dt,
-                    z: (position.z - last.z) / dt,
-                };
-                let alpha = dt / (0.03 + dt);
-                let delta = Vector3 {
-                    x: raw.x - state.filtered.x,
-                    y: raw.y - state.filtered.y,
-                    z: raw.z - state.filtered.z,
-                };
-                state.filtered = state.filtered.plus(delta.scaled(alpha));
-                ready = Some(AxisSample {
-                    x: state.filtered.x,
-                    y: state.filtered.y,
-                    z: state.filtered.z,
-                });
-            }
-        }
-        state.previous = Some((position, timestamp));
-        Ok(ready)
+        Ok(state
+            .push(Vector3 { x, y, z }, timestamp)
+            .map(|v| AxisSample {
+                x: v.x,
+                y: v.y,
+                z: v.z,
+            }))
     }
 }
 
@@ -539,12 +555,12 @@ fn phone_to_body() -> Quaternion {
 
 /// ARKit / ARCore world (+Y up) into robotics (+Z up), right-handed.
 /// Columns of the matrix are the images of the Y-up basis.
-fn yup_to_zup() -> Quaternion {
+pub(crate) fn yup_to_zup() -> Quaternion {
     // m rows: [0, 0, -1], [-1, 0, 0], [0, 1, 0]
     quaternion_from_matrix([[0.0, 0.0, -1.0], [-1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
 }
 
-fn yup_point_to_zup(point: Vector3) -> Vector3 {
+pub(crate) fn yup_point_to_zup(point: Vector3) -> Vector3 {
     Vector3 {
         x: -point.z,
         y: -point.x,
@@ -570,7 +586,7 @@ const OPTICAL_TO_BODY: Quaternion = Quaternion {
     w: 0.5,
 };
 
-fn quaternion_from_matrix(m: [[f64; 3]; 3]) -> Quaternion {
+pub(crate) fn quaternion_from_matrix(m: [[f64; 3]; 3]) -> Quaternion {
     let (m00, m01, m02) = (m[0][0], m[0][1], m[0][2]);
     let (m10, m11, m12) = (m[1][0], m[1][1], m[1][2]);
     let (m20, m21, m22) = (m[2][0], m[2][1], m[2][2]);

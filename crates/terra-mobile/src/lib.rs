@@ -32,10 +32,12 @@ mod task;
 pub use task::MobileTaskQuery;
 mod frames;
 mod mapping;
+mod mount;
 mod transport;
 mod waypoint;
 pub use frames::*;
 pub use mapping::*;
+pub use mount::*;
 pub use transport::*;
 pub use waypoint::*;
 
