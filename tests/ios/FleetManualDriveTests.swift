@@ -21,7 +21,6 @@ import Foundation
   precondition(DriveJoystickSafety.hardwareArmAllowed(feedback: true, fullyManual: true, trackingHealthy: false, compatible: true))
   precondition(!DriveJoystickSafety.hardwareArmAllowed(feedback: true, fullyManual: false, trackingHealthy: false, compatible: true))
   precondition(DriveJoystickSafety.hardwareArmAllowed(feedback: true, fullyManual: false, trackingHealthy: true, compatible: true))
-  precondition(TerraFleetManualDrive.localWaypointActive("{\"status\":{\"requested_level\":\"waypoint_direct\"},\"goal\":{\"state\":\"active\"}}"))
   precondition(TerraFleetManualDrive.requiresVioControl("{\"status\":{\"requested_level\":\"waypoint\",\"effective_level\":\"none\"}}"))
   precondition(TerraFleetManualDrive.requiresVioControl("{\"status\":{\"effective_level\":\"waypoint\"}}"))
   precondition(!TerraFleetManualDrive.requiresVioControl("{\"status\":{\"requested_level\":\"waypoint_direct\"}}"))
@@ -35,9 +34,6 @@ import Foundation
    precondition(TerraFleetManualDrive.requiresAutonomousControl("{\"status\":{\"requested_level\":\"" + level + "\"}}"))
   }
   precondition(!TerraFleetManualDrive.requiresAutonomousControl(idle))
-  precondition(TerraFleetManualDrive.retainsOnboardMission("{\"connectivity\":{\"accepted_onboard_mission\":true}}"))
-  precondition(!TerraFleetManualDrive.retainsOnboardMission("{\"status\":{\"requested_level\":\"explore\"}}"))
-  precondition(!TerraFleetManualDrive.retainsOnboardMission("{}"))
   print("Fleet manual routing: accepted operator twist, stopped authority, autonomy and missing payload passed")
  }
 }

@@ -68,7 +68,8 @@ swiftc mobile/ios/TerraPhone/TerraAutoConnectionPolicy.swift \
 
 Fleet settings are validated and applied together when you tap Save. Cancel discards
 the draft. Fleet Retry leaves the rover Bluetooth link connected. Home exposes
-Emergency Stop while authenticated, and connection detail sheets provide Disconnect
+Emergency Stop while authenticated. The stop stays latched across Stop, app
+backgrounding and reconnects; Home then shows Reset Emergency Stop until you reset it. Connection detail sheets provide Disconnect
 and Forget rover. Forget changes the phone's remembered rover without erasing the
 rover's owner record.
 

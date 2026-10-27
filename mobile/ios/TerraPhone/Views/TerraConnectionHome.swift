@@ -72,11 +72,14 @@ struct TerraConnectionHome: View {
             statusRow(name: brain.roverDisplayName, status: roverStatus, symbol: "sensor.tag.radiowaves.forward", busy: roverBusy)
             RoverModelView().frame(height: 160)
                 .clipShape(RoundedRectangle(cornerRadius: 16))
-            if facts.configurationAvailable,
-               let layout = try? JSONDecoder().decode(ActuatorLayoutDraft.self, from: Data(brain.committedLayoutJSON.utf8)) {
-                Text(layout.actuators.isEmpty ? "No actuators configured" : layout.actuators.map { $0.name }.joined(separator: " · "))
+            // Names come from the rover's layout index; the committed drive profiles carry no names.
+            if facts.configurationAvailable, !brain.actuatorEditor.entries.isEmpty {
+                Text(brain.actuatorEditor.entries.map(\.name).joined(separator: " · "))
                     .font(.footnote).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+            } else if facts.configurationAvailable, (try? ActuatorDriveProfileSet.decode(json: brain.committedLayoutJSON))?.actuators.isEmpty == true {
+                Text("No actuators configured")
+                    .font(.footnote).foregroundStyle(.secondary)
             }
             Text(roverExplanation).font(.subheadline).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             switch facts.roverState {

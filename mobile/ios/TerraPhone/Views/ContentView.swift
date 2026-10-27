@@ -14,7 +14,12 @@ struct ContentView: View {
                             Image(systemName: "gearshape").font(.title2)
                                 .frame(width: 44, height: 44)
                         }.accessibilityLabel("Settings").buttonStyle(.bordered)
-                        if brain.connectionFacts.authenticated {
+                        if brain.emergencyStopLatched {
+                            Button { brain.emergencyStop(reset: true) } label: {
+                                Label("Reset Emergency Stop", systemImage: "arrow.counterclockwise.circle.fill")
+                                    .font(.headline).frame(maxWidth: .infinity, minHeight: 44)
+                            }.buttonStyle(.bordered).tint(.orange)
+                        } else if brain.connectionFacts.authenticated {
                             Button(role: .destructive) { brain.emergencyStop() } label: {
                                 Label("Emergency Stop", systemImage: "stop.circle.fill")
                                     .font(.headline).frame(maxWidth: .infinity, minHeight: 44)

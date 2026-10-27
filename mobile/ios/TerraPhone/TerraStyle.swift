@@ -9,5 +9,4 @@ enum TerraStyle {
     })
     static let buttonForest = Color(red: 0.09, green: 0.23, blue: 0.17)
     static let background = Color(uiColor: .systemGroupedBackground)
-    static let surface = Color(uiColor: .secondarySystemGroupedBackground)
 }
