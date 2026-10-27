@@ -117,6 +117,20 @@ impl FloorSurface {
         let area = near.len() as f64 * self.resolution * self.resolution;
         median(&mut near).map(|h| (h as f64, area))
     }
+    /// World centres of the trusted cells, at their floor height.
+    pub fn trusted_centres(&self) -> Vec<Vector3> {
+        let side = self.side as usize;
+        (0..side * side)
+            .filter_map(|i| {
+                let h = self.heights[i];
+                h.is_finite().then(|| Vector3 {
+                    x: self.origin_x + ((i % side) as f64 + 0.5) * self.resolution,
+                    y: self.origin_y + ((i / side) as f64 + 0.5) * self.resolution,
+                    z: h as f64,
+                })
+            })
+            .collect()
+    }
     /// Number of cells holding trusted floor.
     pub fn trusted_cells(&self) -> usize {
         self.heights.iter().filter(|h| h.is_finite()).count()
@@ -152,6 +166,13 @@ mod tests {
         assert_eq!(s.height_at(2.15, 2.15), None);
         assert_eq!(s.height_at(5.0, 5.0), None);
         assert_eq!(s.trusted_cells(), 400);
+        let centres = s.trusted_centres();
+        assert_eq!(centres.len(), 400);
+        assert!(
+            centres
+                .iter()
+                .all(|c| c.z == 0.0 && (-1.0..1.0).contains(&c.x))
+        );
     }
     #[test]
     fn ignores_samples_near_or_above_the_camera() {

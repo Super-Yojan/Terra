@@ -1,15 +1,9 @@
 name: Raspberry Pi executable
 
 on:
+  push:
+    tags: ["rover-v*"]
   workflow_dispatch:
-  pull_request:
-    paths:
-      - 'hardware/raspberry-pi/**'
-      - 'packaging/rover/**'
-      - 'packaging/terra-rover.service'
-      - 'scripts/build-rover.sh'
-      - 'docs/hardware/INSTALL.md'
-      - '.github/workflows/rover-binary.yml'
 
 permissions:
   contents: read

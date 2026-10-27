@@ -96,3 +96,31 @@ fn malformed_floor_updates_are_rejected() {
             .is_err()
     );
 }
+
+/// The phone's classification view sees each frame with the labels the grid
+/// used, plus the mesh floor cells, and only while it asked for them.
+#[test]
+fn classification_debug_reports_labels_and_floor_cells() {
+    let map = map();
+    map.update_floor_surface(0.25, 0.25, 0.5, floor(1.0, -1.0, 20, 0.38))
+        .unwrap();
+    map.integrate_depth_in_horizon_band(level_frame(0.0), 10.0, 3.4)
+        .unwrap();
+    assert!(map.take_classified_frame(1).is_none(), "off by default");
+    map.set_classification_debug(true);
+    map.integrate_depth_in_horizon_band(level_frame(1.0), 10.0, 3.4)
+        .unwrap();
+    let frame = map.take_classified_frame(1).unwrap();
+    assert_eq!(frame.classifier, "horizon_band");
+    assert_eq!(frame.labels, vec![6]);
+    assert_eq!(frame.counts[6], 1);
+    assert_eq!(frame.points.len(), 3);
+    assert!((frame.points[0] - 2.25).abs() < 1e-5);
+    assert_eq!(frame.camera, vec![0.25, 0.25, 0.5]);
+    assert!(!frame.floor_cells.is_empty() && frame.floor_cells.len().is_multiple_of(3));
+    assert!(map.take_classified_frame(1).is_none(), "each frame once");
+    map.set_classification_debug(false);
+    map.integrate_depth_in_horizon_band(level_frame(2.0), 10.0, 3.4)
+        .unwrap();
+    assert!(map.take_classified_frame(1).is_none());
+}

@@ -63,13 +63,17 @@ impl RoverProfile {
     /// terra-mini (four DC motors on the Fusion HAT): 7 in (0.178 m) square
     /// over the wheels, 1 in wheels, so a 6 in (0.152 m) track. Speed,
     /// deadband and spin effort are estimates until measured on the rover.
+    ///
+    /// No extra clearance: routing already pads the half diagonal by half a
+    /// 0.1 m cell, and any more closes 0.4 m gaps, which made indoor routes
+    /// appear and vanish as one edge cell flipped.
     pub fn terra_mini() -> Self {
         Self {
             name: "terra_mini".into(),
             length: 0.178,
             width: 0.178,
             track_width: 0.152,
-            clearance: 0.1,
+            clearance: 0.,
             max_linear: 0.4,
             max_angular: 1.5,
             min_turn_radius: 0.15,
@@ -204,5 +208,33 @@ mod tests {
         bad = mini;
         bad.top_speed = f64::NAN;
         assert!(!bad.valid());
+    }
+
+    /// terra-mini routes through a 0.4 m gap, four free 0.1 m cells wide.
+    #[test]
+    fn terra_mini_routes_through_a_four_cell_gap() {
+        let nav = RoverProfile::terra_mini().navigation(&Default::default());
+        let (width, height) = (40usize, 12usize);
+        let mut occupancy = vec![0i8; width * height];
+        for col in 0..width {
+            for row in [3, 8] {
+                occupancy[row * width + col] = 100;
+            }
+        }
+        let map = terra_mapping::MapSnapshot {
+            width: width as u32,
+            height: height as u32,
+            resolution: 0.1,
+            origin_x: 0.,
+            origin_y: 0.,
+            occupancy,
+        };
+        let pose = terra_navigation::Pose {
+            x: 0.55,
+            y: 0.6,
+            ..Default::default()
+        };
+        let route = terra_navigation::astar_route(&map, pose, nav.planner().radius, 3.45, 0.6);
+        assert!(route.is_ok(), "{route:?}");
     }
 }

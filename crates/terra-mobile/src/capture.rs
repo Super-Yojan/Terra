@@ -215,7 +215,10 @@ fn encode(
 /// Keep every `stride`-th pixel across and down. Pixel `(u, v)` of the result
 /// is pixel `(stride·u, stride·v)` of the source, so dividing the focal lengths
 /// and principal point by `stride` keeps every ray exactly where it was.
-fn decimate(depth: &terra_mapping::DepthCapture, stride: u32) -> terra_mapping::DepthCapture {
+pub(crate) fn decimate(
+    depth: &terra_mapping::DepthCapture,
+    stride: u32,
+) -> terra_mapping::DepthCapture {
     let k = depth.intrinsics;
     let width = k.width.div_ceil(stride);
     let height = k.height.div_ceil(stride);
