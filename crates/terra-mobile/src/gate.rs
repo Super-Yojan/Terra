@@ -42,6 +42,16 @@ pub struct AutonomyBrief {
     pub pose_age_s: Option<f64>,
     /// `goal.state`, e.g. `active`; empty when none.
     pub goal_state: String,
+    /// L0: see [`Self::fully_manual`].
+    pub manual: bool,
+    /// See [`Self::autonomous`].
+    pub autonomous_level: bool,
+    /// See [`Self::requires_vio`].
+    pub vio_level: bool,
+    /// See [`Self::vio_ready`].
+    pub pose_fresh: bool,
+    /// See [`Self::emergency_stopped`].
+    pub router_emergency_stop: bool,
 }
 
 impl AutonomyBrief {
@@ -51,7 +61,7 @@ impl AutonomyBrief {
         let status = &root["status"];
         let quality = &root["pose_quality"];
         let text = |v: &serde_json::Value| v.as_str().unwrap_or_default().to_owned();
-        Self {
+        let mut brief = Self {
             requested_level: text(&status["requested_level"]),
             effective_level: status["effective_level"].as_str().map(str::to_owned),
             safety: text(&status["safety"]),
@@ -59,7 +69,14 @@ impl AutonomyBrief {
             pose_degraded: quality["degraded"].as_bool() != Some(false),
             pose_age_s: quality["pose_age_s"].as_f64(),
             goal_state: text(&root["goal"]["state"]),
-        }
+            ..Self::default()
+        };
+        brief.manual = brief.fully_manual();
+        brief.autonomous_level = brief.autonomous();
+        brief.vio_level = brief.requires_vio();
+        brief.pose_fresh = brief.vio_ready();
+        brief.router_emergency_stop = brief.emergency_stopped();
+        brief
     }
 
     /// L0: the requested level (or, without one, the effective level) is teleop.
@@ -84,6 +101,11 @@ impl AutonomyBrief {
                 .effective_level
                 .as_deref()
                 .is_some_and(|level| VIO_LEVELS.contains(&level))
+    }
+
+    /// The router latched an emergency stop (what sensor-free manual drive must obey).
+    pub fn emergency_stopped(&self) -> bool {
+        self.safety == "emergency_stop"
     }
 
     /// Pose is not degraded and at most 0.35 s old.
@@ -465,6 +487,10 @@ mod tests {
         let held =
             AutonomyBrief::parse(r#"{"status":{"requested_level":"task","effective_level":null}}"#);
         assert!(held.requires_vio() && held.pose_degraded && !held.vio_ready());
+        assert!(
+            AutonomyBrief::parse(r#"{"status":{"safety":"emergency_stop"}}"#).emergency_stopped()
+        );
+        assert!(!AutonomyBrief::parse(r#"{"status":{"safety":"hold"}}"#).emergency_stopped());
         assert_eq!(
             AutonomyBrief::parse(""),
             AutonomyBrief {
