@@ -97,7 +97,8 @@ pub struct ArbiterOutput {
 pub struct AutonomyArbiter {
     /// Local collision-aware planner and its current configuration.
     pub planner: LocalPlanner,
-    /// Optional externally assigned authority for display.
+    /// Study condition: operator requests outside it are rejected (see
+    /// [`AutonomyArbiter::level_permitted`]). Set with an [`AssignmentRequest`].
     pub assigned_level: Option<Level>,
     map_freshness_timeout_seconds: f64,
     level: Level,

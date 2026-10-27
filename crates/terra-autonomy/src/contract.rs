@@ -39,6 +39,19 @@ pub struct LevelRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub budget_minutes: Option<f64>,
 }
+/// Study condition on the `autonomy` topic: `{"assigned_level": <level> | null, "token"}`.
+///
+/// While a level is assigned, operator requests for any other level are
+/// rejected (`level_not_assigned`). L0 takeover stays allowed, and an assigned
+/// `explore` also allows `target_search` (L4 is explore plus search).
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct AssignmentRequest {
+    /// Condition level, or `None` to clear the assignment.
+    pub assigned_level: Option<Level>,
+    /// Request correlation token; command tokens use 1–64 ASCII letters, digits, or `._:-`.
+    pub token: String,
+}
 impl LevelRequest {
     /// Create an authority request with no explicit budget; token validation is deferred to decoding or arbitration.
     pub fn new(level: Level, token: impl Into<String>) -> Self {
@@ -166,7 +179,8 @@ pub struct AutonomyStatus {
     pub planner_trace: Option<terra_navigation::PlannerTrace>,
     /// Run identifier used to correlate commands and telemetry.
     pub run_id: String,
-    /// Optional externally assigned authority for display.
+    /// Study condition: operator requests outside it are rejected (see
+    /// [`crate::AutonomyArbiter::level_permitted`]). Set with an [`AssignmentRequest`].
     pub assigned_level: Option<Level>,
     /// Operator-selected authority, even while safety holds motion.
     pub requested_level: Level,
@@ -226,6 +240,14 @@ fn decode<T: serde::de::DeserializeOwned>(b: &[u8]) -> Option<T> {
         return None;
     }
     serde_json::from_slice(b).ok()
+}
+/// Decode an [`AssignmentRequest`]; `assigned_level` must be present (null clears).
+pub fn decode_assignment(b: &[u8]) -> Option<AssignmentRequest> {
+    let value: serde_json::Value = decode(b)?;
+    value.get("assigned_level")?;
+    serde_json::from_value::<AssignmentRequest>(value)
+        .ok()
+        .filter(|r| valid_token(&r.token))
 }
 /// Decode at most 2048 bytes of strict JSON; return `None` for invalid tokens, budgets, fields, or syntax.
 pub fn decode_level(b: &[u8]) -> Option<LevelRequest> {
