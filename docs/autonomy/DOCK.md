@@ -1,10 +1,11 @@
 # Bucket dock and dump gate
 
-!!! tip "TL;DR"
-    Close to a confirmed bucket, `dock` lines the dump outlet up over it using live YOLO + depth
-    sightings, stops, and reports `aligned`. At L0–L3 the operator approves the dump in ARGOS; at
-    L4–L5 an aligned dock that saw the bucket on its last check dumps on its own. The gate is a
-    servo that Rust opens for `gate_open_seconds` and closes on every hold.
+> [!TIP]
+> **TL;DR**
+> Close to a confirmed bucket, `dock` lines the dump outlet up over it using live YOLO + depth
+> sightings, stops, and reports `aligned`. At L0–L3 the operator approves the dump in ARGOS; at
+> L4–L5 an aligned dock whose line-up the camera confirmed dumps on its own. The gate is a
+> servo that Rust opens for `gate_open_seconds` and closes on every hold.
 
 ```mermaid
 stateDiagram-v2

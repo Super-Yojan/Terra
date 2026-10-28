@@ -1,8 +1,9 @@
 # Terra Bluetooth Actuator Layouts Implementation Plan
 
-!!! tip "TL;DR"
-    Design note for layout JSON and GATT.
-    Implementation landed later. This page keeps the original plan.
+> [!TIP]
+> **TL;DR**
+> Design note for layout JSON and GATT.
+> Implementation landed later. This page keeps the original plan.
 
 ![Phone to HAT path the plan specified.](../../assets/pi-stack.svg)
 

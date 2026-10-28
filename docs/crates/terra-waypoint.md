@@ -1,9 +1,10 @@
 # terra-waypoint
 
-!!! tip "TL;DR"
-    One goal in. One body twist out.
-    Metres are +x north and +y west.
-    Phone and Zorvane call this same follower.
+> [!TIP]
+> **TL;DR**
+> One goal in. One body twist out.
+> Metres are +x north and +y west.
+> Phone and Zorvane call this same follower.
 
 ```mermaid
 flowchart LR

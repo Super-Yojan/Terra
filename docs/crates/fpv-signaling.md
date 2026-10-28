@@ -1,8 +1,9 @@
 # fpv-signaling
 
-!!! tip "TL;DR"
-    Shared FPV signaling for the phone and ARGOS.
-    Six JSON topics, one session machine, no Zenoh and no video.
+> [!TIP]
+> **TL;DR**
+> Shared FPV signaling for the phone and ARGOS.
+> Six JSON topics, one session machine, no Zenoh and no video.
 
 The crate is `crates/fpv-signaling`. TerraPhone reaches it through `MobileController`. The dashboard should construct `SignalingSession::dashboard()` and play the video itself.
 

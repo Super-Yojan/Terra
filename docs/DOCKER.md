@@ -1,8 +1,9 @@
 # Simulator image
 
-!!! tip "TL;DR"
-    The Bevy container moved to [Zorvane](https://super-yojan.dev/Zorvane/).
-    This repo’s container builds the Pi executable.
+> [!TIP]
+> **TL;DR**
+> The Bevy container moved to [Zorvane](https://super-yojan.dev/Zorvane/).
+> This repo’s container builds the Pi executable.
 
 ```mermaid
 flowchart LR

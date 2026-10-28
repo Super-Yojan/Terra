@@ -1,15 +1,16 @@
 # Simulator and a physical iPhone
 
-!!! tip "TL;DR"
-    Compile-time split. Not a setting.
-    Simulator: Zenoh to Zorvane.
-    iPhone: Bluetooth. Saved Zenoh keys are deleted.
+> [!TIP]
+> **TL;DR**
+> Compile-time split. Not a setting.
+> Simulator: Zenoh to Zorvane.
+> iPhone: Bluetooth. Saved Zenoh keys are deleted.
 
-![Simulator wireframe: endpoint, rover id, Connect](../assets/phone-simulator.svg){ width="260" }
+![Simulator wireframe: endpoint, rover id, Connect](../assets/phone-simulator.svg)
 
 *Placeholder. Labels match the `#if targetEnvironment(simulator)` section in `ContentView`.*
 
-![iPhone wireframe: Bluetooth, no Bevy section](../assets/phone-iphone.svg){ width="260" }
+![iPhone wireframe: Bluetooth, no Bevy section](../assets/phone-iphone.svg)
 
 *Placeholder. `TerraPhoneApp` calls `discardOnDevice()` at launch.*
 

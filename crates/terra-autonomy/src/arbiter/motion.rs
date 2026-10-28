@@ -214,7 +214,16 @@ impl AutonomyArbiter {
     ) -> (Twist, f64) {
         let mut guidance_heading =
             (decision.goal.y - input.pose.y).atan2(decision.goal.x - input.pose.x);
+        let agent_twist = self.task_agent_twist(input.now);
         let intent = match self.level {
+            // An approved MCP agent drives like assisted teleop: the planner checks every command.
+            Level::Task if agent_twist.is_some() => {
+                decision.source = "task_agent_drive";
+                self.global_route.clear();
+                self.route_goal = None;
+                self.route_reaches_goal = false;
+                agent_twist.unwrap_or_default()
+            }
             Level::Teleop | Level::AssistedTeleop => self
                 .operator
                 .as_ref()

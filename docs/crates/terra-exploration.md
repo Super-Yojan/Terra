@@ -1,9 +1,10 @@
 # terra-exploration
 
-!!! tip "TL;DR"
-    Explores until a time budget ends.
-    Picks frontiers. Does not touch motors.
-    The arbiter still drives through the local planner.
+> [!TIP]
+> **TL;DR**
+> Explores until a time budget ends.
+> Picks frontiers. Does not touch motors.
+> The arbiter still drives through the local planner.
 
 ![Observed grid the frontier search reads](../assets/occupancy.svg)
 

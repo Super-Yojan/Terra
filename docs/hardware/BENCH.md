@@ -1,9 +1,10 @@
 # Optional future Bluetooth actuator bench
 
-!!! tip "TL;DR"
-    Not performed.
-    Wheels up. Independent cutoff. Separate authorization.
-    Do not treat this page as a pass.
+> [!TIP]
+> **TL;DR**
+> Not performed.
+> Wheels up. Independent cutoff. Separate authorization.
+> Do not treat this page as a pass.
 
 ![Axes for the wheels-up check.](../assets/body-axes.svg)
 

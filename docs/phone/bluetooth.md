@@ -1,16 +1,17 @@
 # Bluetooth pairing
 
-!!! tip "TL;DR"
-    Physical phone only. Android uses the same USR hold.
-    Hold the Fusion HAT USR button for 3 seconds.
-    Name looks like `terra-XXXXXX`.
-    Pairing does not arm the motors.
+> [!TIP]
+> **TL;DR**
+> Physical phone only. Android uses the same USR hold.
+> Hold the Fusion HAT USR button for 3 seconds.
+> Name looks like `terra-XXXXXX`.
+> Pairing does not arm the motors.
 
 ![Four pairing steps](../assets/pairing.svg)
 
 *LED: slow blink while waiting, fast while enrolling, three flashes when saved, then solid.*
 
-![iPhone wireframe of Discover, configure and arm](../assets/phone-iphone.svg){ width="240" }
+![iPhone wireframe of Discover, configure and arm](../assets/phone-iphone.svg)
 
 *Placeholder of the device section. Radio sessions are still unverified. See [evidence](../hardware/evidence/README.md).*
 

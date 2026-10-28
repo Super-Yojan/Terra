@@ -164,6 +164,8 @@ pub struct AutonomyArbiter {
     task: Option<task::TaskRun>,
     /// Name of the host's language model; `task` is offered only while set.
     task_model: Option<String>,
+    /// Name of an MCP agent attached to the rover's tools; also offers `task`.
+    task_agent: Option<String>,
     task_landmarks: Vec<crate::task::TaskLandmark>,
     next_task_query: u64,
     /// GPS destination in the local frame, refreshed by the host each tick.
@@ -235,6 +237,7 @@ impl Default for AutonomyArbiter {
             scan_turning: None,
             task: None,
             task_model: None,
+            task_agent: None,
             task_landmarks: Vec::new(),
             next_task_query: 0,
             outdoor_destination: None,
@@ -248,12 +251,14 @@ impl Default for AutonomyArbiter {
     }
 }
 
+mod agent;
 mod dock;
 mod exploration;
 mod motion;
 mod requests;
 mod search_requests;
 mod status;
+pub use agent::AgentOutcome;
 mod task;
 
 /// Working result for one tick. Kept private so external code uses ArbiterOutput.

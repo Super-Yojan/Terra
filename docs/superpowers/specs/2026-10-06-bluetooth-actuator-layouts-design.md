@@ -1,8 +1,9 @@
 # Terra Bluetooth actuator layouts
 
-!!! tip "TL;DR"
-    Spec for portable layouts and the Fusion HAT map.
-    Presets with `SELECT_*` markers are drafts.
+> [!TIP]
+> **TL;DR**
+> Spec for portable layouts and the Fusion HAT map.
+> Presets with `SELECT_*` markers are drafts.
 
 ![Where a committed layout is applied.](../../assets/pi-stack.svg)
 
@@ -67,7 +68,6 @@ Custom layouts can use manual effort mode without claiming closed-loop velocity 
 Commands carry normalized actuator values, never chassis velocity targets.
 Servo position is distinguished from motor effort by the committed layout.
 
-
 Example presets: terra-mini assigns M2/M3 to left effort and M0/M1 to right effort; an ESC template lets the user choose exposed PWM ports and calibration. Presets start disarmed with conservative effort limits. No automatic ESC endpoint calibration or assumed bidirectional ESC behavior.
 
 ```mermaid
@@ -113,7 +113,6 @@ Arming holds ESCs at neutral/stop for the configured interval and reports arming
 Subsequent fresh drive frames activate outputs.
 Disarm and emergency stop invalidate pending motion; emergency stop remains latched until an explicit reset while disarmed.
 
-
 Frames may exceed the minimum ATT payload.
 Use application fragmentation on all writes/replies: message ID u16, fragment index u8, count u8, followed by bytes.
 Maximum logical drive size is 96 bytes; maximum JSON configuration/reply size is 16 KiB.
@@ -132,7 +131,6 @@ flowchart LR
 
 *Physical path. Arming is still a separate step.*
 
-
 Configuration/control JSON uses schema version 1 and request IDs.
 Operations: capabilities, read layout, stage layout, commit layout, reset fault, and reset emergency stop.
 All replies include request ID, result, active revision, and structured validation errors.
@@ -141,7 +139,6 @@ Commit revalidates resources, initializes safe outputs, atomically persists the 
 Phone routing is saved with the layout so another phone can reproduce it.
 Drive remains inhibited until the phone reads the committed revision.
 No partial configuration is applied.
-
 
 Status at 10 Hz and on transitions includes session, revision, last accepted sequence, armed/arming state, hardware gate, watchdog, emergency stop, fault, and command age. Battery is nullable with an explicit unavailable reason until supported measurement is implemented. Notifications report applied service state, not proof that a physical wheel moved. GATT write completion alone is not an actuator acknowledgement.
 
@@ -156,7 +153,6 @@ Watchdog expiry disarms, and fresh commands alone cannot rearm.
 Disconnect, open hardware gate, stop, malformed active drive frame, and backend fault request safe outputs immediately on the next motor tick.
 Configuration traffic and notifications never refresh drive freshness.
 
-
 The phone stops on background, tracking loss in feedback mode, explicit stop, mode switch, and connection loss.
 Each reconnect creates a fresh session and requires configuration synchronization and explicit arming; targets reset to safe values.
 The hardware gate must be able to cut propulsion power independently of Python.
@@ -164,7 +160,6 @@ Without a configured/readable gate, real-hardware arming is blocked; mock mode s
 ESC neutral is distinct from physically removing motor power.
 A Python watchdog cannot cover OS/process hangs or power loss; the 210 ms bound applies to a running service and excludes device I/O stalls.
 Require an external cutoff and document the actual hardware timing during bench verification.
-
 
 ## Verification and acceptance
 

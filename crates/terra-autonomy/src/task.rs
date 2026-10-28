@@ -44,6 +44,15 @@ pub const TASK_MAX_CONSECUTIVE_FAILURES: u32 = 3;
 pub const TASK_LANDMARK_MAX_AGE_SECONDS: f64 = 120.;
 /// Free point snapped to observed, clear space within this distance.
 pub const TASK_SNAP_RADIUS: f64 = 0.5;
+/// Longest raw-drive grant an operator can approve, in seconds.
+pub const TASK_DRIVE_MAX_GRANT_SECONDS: f64 = 60.;
+/// A drive request the operator has not answered expires after this many seconds.
+pub const TASK_DRIVE_REQUEST_SECONDS: f64 = 60.;
+/// Longest single `drive` command, in seconds. The agent repeats it to keep moving.
+pub const TASK_DRIVE_COMMAND_SECONDS: f64 = 1.;
+/// Speed caps for agent drive, in m/s and rad/s. The planner can only lower them.
+pub const TASK_DRIVE_MAX_LINEAR: f64 = 0.5;
+pub const TASK_DRIVE_MAX_ANGULAR: f64 = 1.;
 /// History entries kept in status; the prompt shows the most recent six.
 const HISTORY_LIMIT: usize = 12;
 const PROMPT_HISTORY: usize = 6;
@@ -65,6 +74,20 @@ pub struct TaskSpec {
     /// Model calls allowed, 1–100. Default 20.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_steps: Option<u32>,
+    /// Who decides: the built-in model loop (default) or an MCP agent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<TaskAgent>,
+}
+
+/// Who answers an L5 task.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskAgent {
+    /// Rust writes a prompt each step and the phone's model replies with JSON.
+    #[default]
+    Builtin,
+    /// An agent calls the rover's MCP tools. Every call is checked like a model reply.
+    Mcp,
 }
 
 impl TaskSpec {
@@ -84,6 +107,9 @@ impl TaskSpec {
     }
     pub fn steps(&self) -> u32 {
         self.max_steps.unwrap_or(TASK_DEFAULT_MAX_STEPS)
+    }
+    pub fn agent(&self) -> TaskAgent {
+        self.agent.unwrap_or_default()
     }
 }
 
@@ -108,6 +134,10 @@ pub enum TaskActionKind {
     Cancel,
     /// Answer the model's question, or add guidance, then plan again.
     Reply,
+    /// Approve the agent's pending raw-drive request for the seconds it asked.
+    ApproveDrive,
+    /// Refuse the pending raw-drive request, or end a running grant.
+    DenyDrive,
 }
 
 /// `task/action` topic.
@@ -153,7 +183,7 @@ pub fn decode_task_action(b: &[u8]) -> Option<TaskAction> {
             && a.run_id.as_ref().is_none_or(|s| valid_token(s))
             && match a.action {
                 TaskActionKind::Reply => a.text.as_deref().is_some_and(valid_text),
-                TaskActionKind::Cancel => a.text.as_deref().is_none_or(valid_text),
+                _ => a.text.as_deref().is_none_or(valid_text),
             }
     })
 }
@@ -242,6 +272,24 @@ pub struct TaskStatus {
     pub rationale: Option<String>,
     pub last_error: Option<String>,
     pub history: Vec<TaskHistoryEntry>,
+    /// Who answers this task.
+    #[serde(default)]
+    pub agent: TaskAgent,
+    /// Raw-drive request waiting for the operator.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drive_request: Option<TaskDriveRequest>,
+    /// Seconds left on an approved raw-drive grant.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drive_remaining_seconds: Option<f64>,
+}
+
+/// An agent's request to drive the rover directly, shown to the operator.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct TaskDriveRequest {
+    pub reason: String,
+    /// Grant length asked for, at most 60 s.
+    pub seconds: f64,
+    pub waiting_seconds: f64,
 }
 
 /// One request for the model. The host answers with the same `query_id`.
@@ -779,8 +827,9 @@ pub(crate) enum ParsedDecision {
     },
 }
 
+/// A waypoint as a model or agent names it: a map id from the summary, or a point.
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) enum RequestedWaypoint {
+pub enum RequestedWaypoint {
     Target(String),
     Point(f64, f64),
 }
@@ -816,7 +865,7 @@ fn has_motor_key(value: &serde_json::Value) -> bool {
 }
 
 /// First balanced `{...}` in `text`, skipping braces inside strings.
-pub(crate) fn extract_json_object(text: &str) -> Option<&str> {
+pub fn extract_json_object(text: &str) -> Option<&str> {
     let start = text.find('{')?;
     let bytes = text.as_bytes();
     let (mut depth, mut in_string, mut escaped) = (0usize, false, false);

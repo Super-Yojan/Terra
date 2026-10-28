@@ -142,6 +142,8 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
     private let objectDetector = ObjectSearchDetector()
     /// On-phone language model for L5 tasks; nil when this phone has none.
     private let taskModel = TaskModelRunner.onDevice()
+    /// Qwen 3.5 2B as the on-phone MCP agent for L5 tasks; loads on the first phone start.
+    private let taskAgent = TaskAgentRunner()
     private var detectorHealth = "not started"
     private var feedbackTrackingHealthy = false
     private var phoneFrameOrder = PhoneFrameOrder()
@@ -573,6 +575,15 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
         if mode == .phone { try self.controller?.resetOutdoorFrame() }
         // L5 is offered only when the phone can run a model.
         try self.controller?.setTaskModel(name: mode == .phone ? taskModel?.model.name : nil)
+        try self.controller?.setTaskAgent(name: mode == .phone ? taskAgent.model?.name : nil, inProcess: true)
+        if mode == .phone && taskAgent.model == nil {
+            taskAgent.load { [weak self] name in
+                self?.controlQueue.async {
+                    guard let self, self.mode == .phone else { return }
+                    try? self.controller?.setTaskAgent(name: name, inProcess: true)
+                }
+            }
+        }
         self.occupancyMap = try MobileOccupancyMap(settings: self.occupancySettings)
         self.floorEpoch &+= 1
         if let map = self.occupancyMap { try self.controller?.attachOccupancyMap(map: map); map.setClassificationDebug(enabled: classificationDebugEnabled) }
@@ -731,7 +742,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
                 routeHardware(left: output.leftEffort, right: output.rightEffort, now: ProcessInfo.processInfo.systemUptime, manualTarget: command, rustFrame: output.actuatorFrame)
             }
             if tick % 10 == 0 { publish(output);updateAuthority() }
-            if tick % 10 == 0, mode == .phone { taskModel?.service(controller) }
+            if tick % 10 == 0, mode == .phone { taskModel?.service(controller); taskAgent.service(controller) }
             if mode == .phone { publishLocalization(controller) }
         } catch { fail(error, context: "Control update in \(mode) at \(now)") }
     }
@@ -739,6 +750,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
     /// too many frames, so keep at most one waiting and one being processed.
     func session(_ session: ARSession, didUpdate frame: ARFrame) {
         let delivered = CACurrentMediaTime()
+        if mode == .phone { taskAgent.offer(pixelBuffer: frame.capturedImage, timestamp: frame.timestamp) }
         if fpvRunning && readSharedCamera() {
             fpvVideo.consume(pixelBuffer: frame.capturedImage, timestamp: frame.timestamp)
         }

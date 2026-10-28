@@ -1,9 +1,10 @@
 # terra-experiment
 
-!!! tip "TL;DR"
-    One JSON object per line.
-    A complete file and a finished mission are different facts.
-    Near miss: closer than 0.3 m, clear above 0.4 m.
+> [!TIP]
+> **TL;DR**
+> One JSON object per line.
+> A complete file and a finished mission are different facts.
+> Near miss: closer than 0.3 m, clear above 0.4 m.
 
 ```mermaid
 flowchart LR

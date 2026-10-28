@@ -1,9 +1,10 @@
 # Getting started
 
-!!! tip "TL;DR"
-    Linux: `cargo test --locked --workspace`.
-    Mac: `./scripts/build-ios.sh`, then Xcode.
-    World: Zorvane, `cargo run -p zorvane`.
+> [!TIP]
+> **TL;DR**
+> Linux: `cargo test --locked --workspace`.
+> Mac: `./scripts/build-ios.sh`, then Xcode.
+> World: Zorvane, `cargo run -p zorvane`.
 
 ```mermaid
 flowchart LR
@@ -30,7 +31,7 @@ The ignored transport test needs local TCP. `software_bench_sequence` does not p
 
 ## Phone
 
-![Placeholder of the home screen sections](assets/phone-home.svg){ width="260" }
+![Placeholder of the home screen sections](assets/phone-home.svg)
 
 *Wireframe only. Build on a Mac with the iOS 17 SDK.*
 
@@ -44,7 +45,7 @@ Details: [Building in Xcode](phone/build.md).
 
 ## World and Pi
 
-![Generated splash shipped with TerraPhone](assets/mountain-splash.jpg){ width="320" }
+![Generated splash shipped with TerraPhone](assets/mountain-splash.jpg)
 
 *Splash art, not a photo of a bench rover.*
 
@@ -60,9 +61,13 @@ Pi install: [Install on a Pi](hardware/INSTALL.md). The [bench](hardware/BENCH.m
 
 ## This site
 
+The site is Astro, set up like the Zorvane and ARGOS docs. Every Markdown file in `docs/` is a page; the menu and the overview are in `docs/src/consts.ts`.
+
 ```sh
-pip install -r docs/requirements.txt
-mkdocs build --strict
+cd docs
+npm ci
+npm run dev     # http://localhost:4321/Terra/
+npm run build   # writes docs/dist
 ```
 
 API docs land at [`/api/`](https://super-yojan.dev/Terra/api/) from `cargo doc --no-deps --locked --workspace`.

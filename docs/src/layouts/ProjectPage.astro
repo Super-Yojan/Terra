@@ -1,0 +1,296 @@
+---
+import BaseLayout from "./BaseLayout.astro";
+
+interface Link {
+    href: string;
+    label: string;
+}
+
+interface Props {
+    title: string;
+    description: string;
+    lede: string;
+    figureLabel: string;
+    figureAlt: string;
+    /** Real screenshot. */
+    poster: string;
+    posterWidth?: number;
+    posterHeight?: number;
+    /** Short caption under the figure. */
+    figureNote?: string;
+    backHref?: string;
+    backLabel?: string;
+    primary: Link;
+    secondary?: Link;
+    aboutTitle: string;
+    sectionId: string;
+    sectionTitle: string;
+    sectionLede?: string;
+    links?: Link[];
+}
+
+const {
+    title,
+    description,
+    lede,
+    figureLabel,
+    figureAlt,
+    poster,
+    posterWidth = 1600,
+    posterHeight = 1000,
+    figureNote,
+    backHref = "https://super-yojan.dev/docs",
+    backLabel = "All docs",
+    primary,
+    secondary,
+    aboutTitle,
+    sectionId,
+    sectionTitle,
+    sectionLede,
+    links = [],
+} = Astro.props;
+---
+
+<BaseLayout title={title} description={description}>
+    <header class="project-hero shell">
+        <div class="hero-copy">
+            <a href={backHref} class="link-wipe back">← {backLabel}</a>
+            <h1 class="t-headline">
+                <span class="reveal-line"><span>{title}</span></span>
+            </h1>
+            <p class="t-lede rise" data-delay="160">{lede}</p>
+            <div class="hero-actions rise" data-delay="280">
+                <a class="pill-btn pill-btn-dark" href={primary.href}>{primary.label}</a>
+                {
+                    secondary && (
+                        <a class="pill-btn pill-btn-ghost" href={secondary.href}>
+                            {secondary.label}
+                        </a>
+                    )
+                }
+            </div>
+        </div>
+
+        <figure class="stage rise" data-delay="160">
+            <div class="stage-media is-photo">
+                <img src={poster} alt={figureAlt} width={posterWidth} height={posterHeight} />
+            </div>
+            <figcaption class="stage-cap">
+                <span class="visually-hidden">{figureLabel}. {figureAlt}</span>
+                {figureNote && <span class="orbit-hint t-label">{figureNote}</span>}
+            </figcaption>
+        </figure>
+    </header>
+
+    <section class="shell about">
+        <h2 class="about-title">{aboutTitle}</h2>
+        <div class="about-grid">
+            <div class="prose">
+                <slot name="prose" />
+            </div>
+            <dl class="facts">
+                <slot name="facts" />
+            </dl>
+        </div>
+    </section>
+
+    <section class="shell quick" id={sectionId}>
+        <div class="quick-head">
+            <h2 class="about-title">{sectionTitle}</h2>
+            {sectionLede && <p class="t-lede">{sectionLede}</p>}
+        </div>
+        <ol class="steps">
+            <slot name="steps" />
+        </ol>
+        {
+            links.length > 0 && (
+                <p class="quick-foot">
+                    {links.map((link) => (
+                        <a class="link-wipe" href={link.href}>
+                            {link.label}
+                        </a>
+                    ))}
+                </p>
+            )
+        }
+    </section>
+
+    <slot />
+</BaseLayout>
+
+<style>
+    .project-hero {
+        display: grid;
+        grid-template-columns: minmax(0, 0.86fr) minmax(0, 1.14fr);
+        column-gap: clamp(24px, 4vw, 72px);
+        align-items: stretch;
+        min-height: 100svh;
+        padding-top: 96px;
+        padding-bottom: 40px;
+    }
+    .hero-copy {
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        min-width: 0;
+    }
+    .back { margin-bottom: 28px; }
+
+    .project-hero :global(.t-lede) {
+        max-width: 32ch;
+        margin-top: 24px;
+    }
+
+    .stage {
+        position: relative;
+        margin: 0;
+        min-width: 0;
+        min-height: 0;
+        height: 100%;
+    }
+    .stage-media {
+        position: relative;
+        height: 100%;
+        min-height: 460px;
+        border: 0;
+        border-radius: 0;
+        background: transparent;
+        overflow: hidden;
+    }
+    .stage-media.is-photo {
+        filter: grayscale(1);
+    }
+    .stage-media img {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+    }
+    .stage-media img {
+        object-fit: contain;
+    }
+    .stage-cap {
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: 6px;
+        margin: 0;
+        padding: 0;
+        border: 0;
+        text-align: center;
+        pointer-events: none;
+    }
+    .orbit-hint:empty { display: none; }
+    .orbit-hint {
+        display: inline-block;
+        padding: 2px 8px;
+        background: var(--paper);
+    }
+
+    .hero-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        margin-top: 28px;
+    }
+
+    .about {
+        padding-bottom: var(--section);
+    }
+    .about-title {
+        max-width: 16ch;
+        font-size: clamp(28px, 4.4vw, 60px);
+        font-weight: 700;
+        line-height: 1.05;
+        letter-spacing: -0.05em;
+    }
+    .about-grid {
+        display: grid;
+        grid-template-columns: minmax(0, 1.4fr) minmax(16rem, 0.8fr);
+        gap: 64px;
+        align-items: start;
+        margin-top: 48px;
+        min-width: 0;
+    }
+    .facts {
+        margin: 0;
+        border-top: 1px solid var(--rule);
+    }
+    .facts :global(div) {
+        padding: 20px 0;
+        border-bottom: 1px solid var(--rule);
+    }
+    .facts :global(dd) {
+        margin: 8px 0 0;
+    }
+    .facts :global(code) {
+        font-family: var(--font-mono);
+        font-size: 0.9em;
+    }
+    .quick :global(.act) { font-weight: 500; }
+
+    .quick {
+        padding-bottom: var(--section);
+        scroll-margin-top: 112px;
+    }
+    .quick-head :global(.t-lede) {
+        max-width: 42ch;
+        margin-top: 28px;
+    }
+    .steps {
+        margin: 64px 0 0;
+        padding: 0;
+        list-style: none;
+        border-top: 1px solid var(--rule);
+    }
+    .steps > :global(li) {
+        display: grid;
+        grid-template-columns: 6rem minmax(0, 1fr);
+        gap: 32px;
+        padding: 48px 0;
+        border-bottom: 1px solid var(--rule);
+        min-width: 0;
+    }
+    .steps :global(.prose),
+    .steps :global(pre) {
+        min-width: 0;
+        max-width: 100%;
+    }
+    .steps :global(h3) { margin-top: 0; }
+    .steps :global(.release-note) {
+        max-width: 62ch;
+        margin-top: 8px;
+        padding-top: 20px;
+        border-top: 1px solid var(--teal-deep);
+    }
+    .steps :global(.release-note p:last-child) {
+        margin-top: 12px;
+        color: var(--graphite);
+    }
+    .quick-foot {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 16px 32px;
+        margin-top: 48px;
+    }
+
+    @media (max-width: 900px) {
+        .project-hero {
+            grid-template-columns: 1fr;
+            min-height: 0;
+            padding-top: 112px;
+            padding-bottom: 64px;
+            row-gap: 12px;
+        }
+        .hero-copy { justify-content: flex-start; }
+        .back { margin-bottom: 20px; }
+        .stage { height: auto; }
+        .stage-media {
+            height: auto;
+            min-height: 0;
+            aspect-ratio: 1;
+        }
+        .about-grid { grid-template-columns: 1fr; gap: 40px; }
+        .steps > :global(li) { grid-template-columns: 1fr; gap: 12px; }
+    }
+</style>

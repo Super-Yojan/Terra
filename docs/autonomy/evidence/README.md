@@ -1,8 +1,9 @@
 # Acceptance evidence
 
-!!! tip "TL;DR"
-    This file records what was reviewed.
-    It does not record a physical mission.
+> [!TIP]
+> **TL;DR**
+> This file records what was reviewed.
+> It does not record a physical mission.
 
 ![Authority levels the evidence is about.](../../assets/levels.svg)
 

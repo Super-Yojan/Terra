@@ -1,0 +1,29 @@
+---
+import { getCollection, render } from "astro:content";
+import DocPage from "../layouts/DocPage.astro";
+import { sectionOf, DESIGN_NOTES } from "../consts";
+
+export async function getStaticPaths() {
+    const docs = await getCollection("docs");
+    return docs.map((entry) => ({ params: { slug: entry.id }, props: { entry } }));
+}
+
+const { entry } = Astro.props;
+const { Content, remarkPluginFrontmatter: fm } = await render(entry);
+const current = `/${entry.id}`;
+const section = sectionOf(current);
+const kicker = section?.title ?? (entry.id.startsWith(DESIGN_NOTES.prefix) ? DESIGN_NOTES.title : "Terra");
+const source = `https://github.com/Super-Yojan/Terra/blob/main/docs/${entry.filePath?.replace(/^\.?\/?/, "")}`;
+---
+
+<DocPage
+    title={fm.title ?? entry.id}
+    description={fm.description}
+    section={section}
+    current={current}
+    kicker={kicker}
+    repoHref={source}
+    repoLabel="Source on GitHub"
+>
+    <Content />
+</DocPage>

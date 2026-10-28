@@ -1,0 +1,200 @@
+---
+import { getCollection } from "astro:content";
+import ProjectPage from "../layouts/ProjectPage.astro";
+import { href, link, sections, DESIGN_NOTES } from "../consts";
+
+const releases = "https://github.com/Super-Yojan/Terra/releases";
+
+// Design notes are dated plans and specs; list whatever is in the folder.
+const notes = (await getCollection("docs"))
+    .filter((e) => e.id.startsWith(DESIGN_NOTES.prefix))
+    .map((e) => {
+        const [, kind, name] = e.id.split("/");
+        const date = name.slice(0, 10);
+        const label = name.slice(11).replace(/-design$/, "").replace(/-/g, " ");
+        return { path: `/${e.id}`, label: `${label} (${kind === "specs" ? "spec" : "plan"}, ${date})`, date };
+    })
+    .sort((a, b) => a.date.localeCompare(b.date) || a.label.localeCompare(b.label));
+
+const groups = [...sections, { ...DESIGN_NOTES, path: undefined, pages: notes }];
+---
+
+<ProjectPage
+    title="Terra"
+    description="The rover body: Rust crates, TerraPhone, and the Raspberry Pi relay. ARGOS commands the fleet; Zorvane is the world."
+    lede="The rover body. An iPhone gathers the sensors, Rust runs control, and a Raspberry Pi drives the motors."
+    figureLabel="Fig. 01 — TerraPhone app icon"
+    figureAlt="TerraPhone app icon: a six-wheeled rover on a forest road."
+    poster={href("/media/terra-icon.png")}
+    posterWidth={480}
+    posterHeight={480}
+    figureNote="The rover artwork in the iOS app"
+    backHref="https://super-yojan.dev/docs"
+    primary={{ href: "#quick-start", label: "Get Started" }}
+    secondary={{ href: link("/hardware/FLASH_SD"), label: "Flash the SD card" }}
+    aboutTitle="One prefix, two phone links."
+    sectionId="quick-start"
+    sectionTitle="Quick start."
+    sectionLede="From a blank SD card to a rover on the ground. Each step links to the full guide."
+    links={[
+        { href: link("/getting-started"), label: "Getting started" },
+        { href: link("/architecture"), label: "Architecture" },
+        { href: link("/zenoh"), label: "Zenoh keys" },
+        { href: href("/api/"), label: "Rust API" },
+    ]}
+>
+    <Fragment slot="prose">
+        <p>
+            Terra is the rover body: the Rust crates, TerraPhone, and the Pi.
+            <a href="https://super-yojan.dev/ARGOS/">ARGOS</a> commands the
+            fleet. <a href="https://super-yojan.dev/Zorvane/">Zorvane</a> is
+            the world.
+        </p>
+        <p>
+            Every rover speaks Zenoh under one prefix, <code>terra/rover</code>.
+            The simulator and the Android emulator use Zenoh. A real iPhone
+            reaches the Pi over Bluetooth, and the Pi holds each drive command
+            for 250 ms before it returns every output to its safe value.
+        </p>
+        <p>
+            Tap-to-configure and a vehicle-description format are
+            <a href="https://github.com/Super-Yojan/Terra/issues/27">Terra #27</a>.
+            Radio sessions and the physical bench have not been run; see the
+            <a href={link("/hardware/evidence")}>evidence</a>.
+        </p>
+    </Fragment>
+    <Fragment slot="facts">
+        <div>
+            <dt class="t-label">Workspace</dt>
+            <dd>Rust 2024, <code>0.1.0</code>, in <code>crates/</code></dd>
+        </div>
+        <div>
+            <dt class="t-label">Phone</dt>
+            <dd>TerraPhone, <code>mobile/ios</code> and <code>mobile/android</code></dd>
+        </div>
+        <div>
+            <dt class="t-label">Pi</dt>
+            <dd><code>terra-rover</code> <code>0.3.0</code>, Pi 4 or Pi 5</dd>
+        </div>
+        <div>
+            <dt class="t-label">Prefix</dt>
+            <dd><code>terra/rover/&lt;id&gt;/…</code></dd>
+        </div>
+        <div>
+            <dt class="t-label">Drive lease</dt>
+            <dd>250 ms, then zeros</dd>
+        </div>
+        <div>
+            <dt class="t-label">Autonomy</dt>
+            <dd>L0 manual to L5 task</dd>
+        </div>
+    </Fragment>
+    <Fragment slot="steps">
+        <li>
+            <p class="t-label">01</p>
+            <div class="prose">
+                <h3>Flash the SD card</h3>
+                <p>
+                    Open Raspberry Pi Imager on the Terra OS list, pick your
+                    Pi and <strong>Terra (64-bit)</strong>, set a login, Wi-Fi
+                    and SSH, and write. The card already has the Fusion HAT
+                    driver and <code>terra-rover</code>.
+                </p>
+                <p><a href={link("/hardware/FLASH_SD")}>Flash the SD card</a> has every screen.</p>
+            </div>
+        </li>
+        <li>
+            <p class="t-label">02</p>
+            <div class="prose">
+                <h3>Build TerraPhone</h3>
+                <p>
+                    On a Mac, run <code>./scripts/build-ios.sh</code>, then
+                    open the project in Xcode. Android builds from
+                    <code>mobile/android</code>.
+                </p>
+                <p>
+                    <a href={link("/phone/build")}>Building in Xcode</a> and
+                    <a href={link("/MOBILE_ANDROID")}>Android</a>.
+                </p>
+            </div>
+        </li>
+        <li>
+            <p class="t-label">03</p>
+            <div class="prose">
+                <h3>Pair and calibrate</h3>
+                <p>
+                    Hold the Fusion HAT <strong>USR</strong> button for three
+                    seconds and accept <strong>Connect</strong> in TerraPhone.
+                    Calibrate the mount before the wheels touch the ground.
+                </p>
+                <p>
+                    <a href={link("/hardware/INSTALL")}>Install on a Pi</a> and
+                    <a href={link("/MOUNT_CALIBRATION_CHECKLIST")}>Mount calibration</a>.
+                </p>
+            </div>
+        </li>
+        <li>
+            <p class="t-label">04</p>
+            <div class="prose">
+                <h3>Drive in the simulator</h3>
+                <p>
+                    Run the world from Zorvane with <code>cargo run -p zorvane</code>
+                    and point the iOS Simulator or ARGOS at
+                    <code>tcp/127.0.0.1:7447</code>.
+                </p>
+                <p><a href={link("/simulation")}>Simulation</a> covers the link.</p>
+            </div>
+        </li>
+    </Fragment>
+
+    <section class="shell guides" id="guides">
+        <h2 class="about-title">Every guide.</h2>
+        <div class="guide-grid">
+            {
+                groups.map((g) => (
+                    <div class="guide-group">
+                        <h3 class="t-label">
+                            {g.path ? <a href={link(g.path)}>{g.title}</a> : g.title}
+                        </h3>
+                        <p class="guide-blurb">{g.blurb}</p>
+                        <ul>
+                            {g.pages.map((p) => (
+                                <li>
+                                    <a class="link-wipe" href={link(p.path)}>
+                                        {p.label}
+                                    </a>
+                                </li>
+                            ))}
+                        </ul>
+                    </div>
+                ))
+            }
+        </div>
+    </section>
+</ProjectPage>
+
+<style>
+    .guides {
+        padding-top: 96px;
+        padding-bottom: 128px;
+        border-top: 1px solid var(--rule);
+    }
+    .guide-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+        gap: 48px 40px;
+        margin-top: 48px;
+    }
+    .guide-group h3 a { color: inherit; }
+    .guide-blurb {
+        margin-top: 12px;
+        color: var(--graphite);
+    }
+    .guide-group ul {
+        display: grid;
+        gap: 8px;
+        margin-top: 16px;
+        padding: 0;
+        list-style: none;
+    }
+</style>

@@ -1,9 +1,10 @@
 # Autonomy contract, version 1
 
-!!! tip "TL;DR"
-    Prefix `terra/rover/<id>`.
-    JSON requests, at most 2048 bytes.
-    Unknown fields are rejected.
+> [!TIP]
+> **TL;DR**
+> Prefix `terra/rover/<id>`.
+> JSON requests, at most 2048 bytes.
+> Unknown fields are rejected.
 
 ![Level names on the autonomy key.](../assets/levels.svg)
 
@@ -34,7 +35,7 @@ Per-rover prefix: `terra/rover/<id>`. Requests are JSON, at most 2048 bytes, fin
 | `experiment/status` | Run ID, schema version, run-relative elapsed time, UTC sample, recording state. |
 | `mission/status` | Objective, phase, budget, boundaries, confirmed/required count and observed survivor locations. Hidden targets are excluded. |
 | `mission/report` | `{"survivor_id":1,"token":"report-1"}` confirms an observation belonging to that rover. Confirmation is reflected in mission status. |
-| `task` / `task/action` / `task/status` | L5 task autonomy: start a task, reply to or cancel it, and its status. See [TASK.md](TASK.md). |
+| `task` / `task/action` / `task/status` | L5 task autonomy: start a task, reply to or cancel it, approve or deny an MCP agent's raw drive, and its status. See [TASK.md](TASK.md). |
 | `dock` | Bucket dock: `{"action":"start","object_id":4}`, `{"action":"dump","dock_id":1}` or `{"action":"cancel"}`, plus `token`. Status is `dock` inside `autonomy/status`. See [DOCK.md](DOCK.md). |
 | `pose` | Phone direct pose: rover_id, sequence, x/y metres and yaw radians. Simulator also supplies exposure-aligned depth pose. |
 
@@ -47,7 +48,6 @@ Reset never restores an old goal/lease.
 Planner footprint defaults to a 0.65 m circumscribed radius for the simulated 0.9 × 0.8 m chassis, 2 m/s and 2 rad/s caps, 1 m/s² acceleration/braking, 2 rad/s² yaw acceleration, and 2 s rollout.
 Planning runs at up to 10 Hz while the motor loop remains independent.
 These configuration values require physical calibration before real robot trials.
-
 
 ## Observed occupancy telemetry
 

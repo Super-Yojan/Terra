@@ -1,9 +1,10 @@
 # Bluetooth peripheral
 
-!!! tip "TL;DR"
-    Customer path: hold USR, find `terra-XXXXXX`, accept the prompt.
-    Developer path: numeric comparison, service stopped.
-    Radio behavior is specified here and not yet measured on hardware.
+> [!TIP]
+> **TL;DR**
+> Customer path: hold USR, find `terra-XXXXXX`, accept the prompt.
+> Developer path: numeric comparison, service stopped.
+> Radio behavior is specified here and not yet measured on hardware.
 
 ![Enrollment. Motors stay off.](../assets/pairing.svg)
 
@@ -145,7 +146,6 @@ After disconnect read/admit again and obtain the new session from status before 
 The first status read can precede worker admission; wait for status notification with a non-null session.
 Notifications are sent only while that admitted bonded owner remains the sole connected central.
 There is no fabricated Device1.Encrypted property: BlueZ enforces encrypt-read/encrypt-write ATT permissions.
-
 
 All writes and notifications use `[message_id:u16 LE,index:u8,count:u8,chunk...]`. Assemble independently by characteristic/message ID; clear on disconnect; expire at 100 ms. Status reads and reply reads return unfragmented JSON through ATT read/offset semantics. Notification fragment capacity defaults to minimum ATT value length 20 and learns `mtu-3` from authenticated read/write options. Documents requiring >255 fragments cannot notify at that MTU; retrieve the full last reply via read instead. At MTU 23 the notification logical limit is 4080 bytes; a 16 KiB reply requires ATT capacity at least 69. Subscribe before requesting; use write-with-response and a fresh message ID per logical request.
 

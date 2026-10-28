@@ -1,9 +1,10 @@
 # Phone velocity controller
 
-!!! tip "TL;DR"
-    IMU plus VIO becomes left and right effort.
-    Simulator Zenoh and iPhone Bluetooth are different builds.
-    Zero effort coasts. It is not a brake.
+> [!TIP]
+> **TL;DR**
+> IMU plus VIO becomes left and right effort.
+> Simulator Zenoh and iPhone Bluetooth are different builds.
+> Zero effort coasts. It is not a brake.
 
 ![Wireframe of the controller this page describes. Not a Simulator capture.](assets/phone-home.svg)
 
@@ -62,7 +63,6 @@ The default IMU timeout is 500 ms and VIO timeout 350 ms; the target timeout is 
 Missing, stale, invalid or untracked inputs yield zero motor effort.
 The controller accepts forward velocity and yaw rate, limits targets, mixes the two PI outputs into wheel efforts, preserves their ratio on saturation, and uses back-calculation anti-windup.
 
-
 ## Mounting and tuning
 
 The starter app assumes the phone lies flat, screen upward, with its top edge pointing forward.
@@ -70,7 +70,6 @@ Core Motion phone axes are converted to rover axes; ARKit poses are converted in
 The app treats the sensor origin as the rover origin.
 Before physical motor integration, calibrate the mount rotation and sensor offset, account for offset-induced rotational velocity, and tune gains, feedforward, limits and sensor filtering for the actual rover.
 Defaults are tuned for the included simulated motor plant.
-
 
 Zero effort means coast, not a mechanical brake. The motor adapter, enable switch, and command watchdog are specified in [Motor adapter](#motor-adapter). Physical phone sensing and hardware actuation have not been validated on a rover.
 
@@ -149,7 +148,6 @@ flowchart LR
 
 *The phone shows effort. The Pi or Zorvane applies it.*
 
-
 That closed loop now runs in [Zorvane](https://super-yojan.dev/Zorvane/) (`cargo run -p zorvane`). Each rover gets its own estimator and controller. Avian velocity and orientation provide synthetic IMU and 20 Hz VIO feedback, while controller effort produces forces and yaw torque. This tests the control loop rather than calculating VIO from rendered images. `VelocitySimulationConfig` exposes sensor enable switches, sensor frequency, motor force and drag for experiments. Disabling its `enabled` field restores the existing ideal drive model. Fleet changes and Zenoh velocity commands on `terra/rover/<id>/cmd_vel` remain supported. `TERRA_*` variables still apply.
 
 ## iOS occupancy view
@@ -162,7 +160,6 @@ The blue marker indicates rover pose.
 Initial phone camera height is assumed to be 0.5 m over a flat ground reference; physical mounting and ground height require calibration.
 Phone depth comes from the rear camera's optical pose, independently of the rover-body mounting rotation.
 Stop preserves the map; starting either mode creates a new map.
-
 
 Bevy Zenoh mode uses the same grid. It does not subscribe to an occupancy topic. Each Zorvane depth packet carries the exposure-aligned optical camera pose and the rover body pose in the robotics frame (the same conversion Zorvane uses for its own per-rover map). The phone recenters on the body position, integrates axial depth through `MobileOccupancyMap`, and draws the body heading. Ground is robotics Z = 0, which is the world floor (Bevy Y = 0); the 0.5 m phone-height assumption is not used. Depth packets without an exposure pose are ignored. Body pose is sampled with the camera at exposure time, so the marker matches the depth frame rather than a later odometry estimate. There is still no published map snapshot for ARGOS or other operators.
 
@@ -232,7 +229,6 @@ flowchart LR
 ```
 
 *The phone shows effort. The Pi or Zorvane applies it.*
-
 
 The form supports up to sixteen independently named actuators with arbitrary
 unique IDs from 0–255. Choose output kinds and physical ports from the connected

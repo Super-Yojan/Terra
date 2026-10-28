@@ -1,9 +1,10 @@
 # terra-control
 
-!!! tip "TL;DR"
-    PI on forward speed and yaw rate.
-    Mix: left = linear − yaw, right = linear + yaw.
-    Target older than 0.5 s stops the output.
+> [!TIP]
+> **TL;DR**
+> PI on forward speed and yaw rate.
+> Mix: left = linear − yaw, right = linear + yaw.
+> Target older than 0.5 s stops the output.
 
 ```mermaid
 flowchart LR

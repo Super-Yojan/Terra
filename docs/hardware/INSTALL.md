@@ -1,9 +1,11 @@
 # Install Terra Rover on Raspberry Pi
 
-!!! tip "TL;DR"
-    64-bit Bookworm or newer.
-    The release is an ARM64 executable. No Python on the Pi.
-    Pair with the USR button. Pairing does not arm.
+> [!TIP]
+> **TL;DR**
+> 64-bit Bookworm or newer.
+> The release is an ARM64 executable. No Python on the Pi.
+> Pair with the USR button. The Pi relays drive commands and holds each one for 250 ms.
+> For a new card, [flash the Terra SD card image](FLASH_SD.md) instead. It already has this service.
 
 ![What the installer is aiming at.](../assets/pi-stack.svg)
 
@@ -16,7 +18,7 @@ flowchart LR
   Battery[Battery switch] -->|power cutoff| Hat
 ```
 
-*The battery switch is external. Connecting does not arm.*
+*The battery switch is external. The Pi only moves outputs while fresh drive commands arrive.*
 
 Target: **64-bit Raspberry Pi OS Bookworm or newer**, with systemd and Bluetooth.
 The release is a Nuitka-compiled ARM64 Linux executable. It includes the Python
@@ -40,9 +42,9 @@ and dependency checks. It also installs the release into a staged image and
 executes it in a clean Debian container with no Python installation. It exports:
 
 ```text
-hardware/raspberry-pi/dist/terra-rover-0.2.0-linux-arm64.tar.gz
-hardware/raspberry-pi/dist/terra-rover-0.2.0-linux-arm64.tar.gz.sha256
-hardware/raspberry-pi/dist/terra-rover-0.2.0-linux-arm64/
+hardware/raspberry-pi/dist/terra-rover-0.3.0-linux-arm64.tar.gz
+hardware/raspberry-pi/dist/terra-rover-0.3.0-linux-arm64.tar.gz.sha256
+hardware/raspberry-pi/dist/terra-rover-0.3.0-linux-arm64/
 ```
 
 Alternatively, compile directly on a Pi. This downloads the pinned compiler and
@@ -64,7 +66,7 @@ glibc; the Docker builder establishes the Bookworm baseline (glibc 2.36).
 
 A `rover-v<version>` tag publishes the arm64 archive and its checksum. The tag
 version is the `version` in `hardware/raspberry-pi/pyproject.toml` (currently
-0.2.0). Asset URLs follow this pattern:
+0.3.0). Asset URLs follow this pattern:
 
 ```text
 https://github.com/Super-Yojan/Terra/releases/download/rover-v<version>/terra-rover-<version>-linux-arm64.tar.gz
@@ -72,9 +74,9 @@ https://github.com/Super-Yojan/Terra/releases/download/rover-v<version>/terra-ro
 ```
 
 ```sh
-curl -fL -O https://github.com/Super-Yojan/Terra/releases/download/rover-v0.2.0/terra-rover-0.2.0-linux-arm64.tar.gz
-curl -fL -O https://github.com/Super-Yojan/Terra/releases/download/rover-v0.2.0/terra-rover-0.2.0-linux-arm64.tar.gz.sha256
-sha256sum -c terra-rover-0.2.0-linux-arm64.tar.gz.sha256
+curl -fL -O https://github.com/Super-Yojan/Terra/releases/download/rover-v0.3.0/terra-rover-0.3.0-linux-arm64.tar.gz
+curl -fL -O https://github.com/Super-Yojan/Terra/releases/download/rover-v0.3.0/terra-rover-0.3.0-linux-arm64.tar.gz.sha256
+sha256sum -c terra-rover-0.3.0-linux-arm64.tar.gz.sha256
 ```
 
 The `.sha256` file names the tarball in the same directory. `sha256sum -c` exits
@@ -85,9 +87,9 @@ non-zero if the archive does not match.
 Copy the archive and its `.sha256` file to the Pi, then run there:
 
 ```sh
-sha256sum -c terra-rover-0.2.0-linux-arm64.tar.gz.sha256
-tar -xzf terra-rover-0.2.0-linux-arm64.tar.gz
-cd terra-rover-0.2.0-linux-arm64
+sha256sum -c terra-rover-0.3.0-linux-arm64.tar.gz.sha256
+tar -xzf terra-rover-0.3.0-linux-arm64.tar.gz
+cd terra-rover-0.3.0-linux-arm64
 sudo apt install -y bluez dbus
 sudo ./install.sh
 terra-rover --help
@@ -107,15 +109,6 @@ reload the bus, or operate host services. The image builder must provision the
 `terra-rover` user/group, its `i2c`/`bluetooth` group memberships, and ownership of
 `/var/lib/terra-rover` before boot.
 
-```mermaid
-flowchart LR
-  Phone[iPhone] -->|GATT| Pi[terra-rover]
-  Pi --> Hat[Fusion HAT]
-  Battery[Battery switch] -->|power cutoff| Hat
-```
-
-*An optional Pi interlock can be configured separately.*
-
 ## Configure the hardware
 
 The Fusion HAT vendor's matching kernel module and device-tree overlay must
@@ -133,15 +126,22 @@ See [Fusion HAT deployment requirements](FUSION_HAT.md).
 The service always advertises every Fusion HAT channel, M0–M3 and P0–P11; the
 saved layout decides which ones are opened. A `TERRA_PWM_PORTS` line left in an
 existing `/etc/terra-rover/rover.env` is ignored. Shared
-pins and incompatible timer frequencies are still rejected when saving a layout. The default
-service uses the battery's external power cutoff and requires no Pi switch signal.
-Configuration requires disarm, and motion requires explicit arming and fresh
-commands. The Pi cannot measure the battery switch position.
+pins and incompatible timer frequencies are still rejected when saving a layout.
+The service uses the battery's external power cutoff and requires no Pi switch
+signal. The Pi cannot measure the battery switch position.
 
-For an optional Pi-connected interlock, add `--gate-file /path/to/gate` to the
-service command. Its producer must provide `0` for confirmed open/isolated and
-`1` for closed. Missing/unreadable state blocks configuration and motion in that
-explicit mode. The installer does not create a simulated gate file.
+## How the Pi relay stops
+
+Since 2026-10-23 the Pi is a plain relay. It has no arm step and no gate file of
+its own. The phone's Rust control loop decides when the rover may move, and the
+Pi passes each drive command to the Fusion HAT outputs.
+
+Each accepted drive command is held for 250 ms (`DRIVE_COMMAND_TIMEOUT_SECONDS`
+in `terra_rover/drive_relay.py`). The phone streams at 20 Hz, so one late
+Bluetooth packet does not stop the rover. If no new command arrives within
+250 ms, every output goes to its layout's safe value. A neutral command, a
+disconnect, a fault, a lost status subscription, or a layout change stops the
+outputs at once. Saving a layout always stops first.
 
 ## Pair the owner and run
 
@@ -156,7 +156,7 @@ service installed. No terminal or known phone Bluetooth address is needed:
    while the first phone is enrolling.
 4. Three LED flashes confirm the private owner record was saved. The rover
    automatically switches to its normal service and TerraPhone reconnects.
-   The LED stays on. Configure the actuator layout and arm explicitly when safe.
+   The LED stays on. Configure the actuator layout in TerraPhone before driving.
 
 Only one initial button hold is needed.
 The generated rover name persists across restarts.
@@ -169,16 +169,14 @@ In TerraPhone, **Choose rover or add rover** retains multiple paired rovers and
 lets the phone select one; switching always disconnects and disarms the old rover.
 First-owner enrollment uses Bluetooth Just Works: proximity plus the physical window authorizes the first phone, without numeric-code comparison or protection against an active nearby pairing attacker.
 Keep enrollment physically supervised.
-Pairing never arms or requires a gate file.
-Motor operation requires a valid layout and explicit arming.
-
+Pairing never moves an output.
+Motor operation requires a valid saved layout and fresh drive commands.
 
 The button and LED default to `/sys/class/fusion_hat/fusion_hat/button` and
 `/sys/class/fusion_hat/fusion_hat/led`. Override `--button-file` and `--led-file`
 only for a board whose kernel exposes different attributes.
 
-Developer terminal provisioning remains available with `--setup-owner`,
-`--expected-peer` and an explicitly open `--gate-file`; it uses numeric comparison.
+Developer terminal provisioning remains available with `--setup-owner`.
 Use it with the customer service stopped. Do not run two Bluetooth peripheral
 processes at once.
 
@@ -188,22 +186,19 @@ To run in the foreground instead, keep the service stopped and use:
 sudo -u terra-rover terra-rover
 ```
 
-For a mock backend on a Linux host with a Bluetooth radio, use
-`sudo -u terra-rover terra-rover --mock`. Its simulated gate defaults open; add
-`--mock-gate-closed` only for mock testing. Never run two peripheral processes at
-once. Physically isolate actuator power before stopping or replacing the service;
+Physically isolate actuator power before stopping or replacing the service;
 process exit cannot guarantee continuous ESC stop PWM.
 
 ```mermaid
 stateDiagram-v2
-  [*] --> EnableOpen
-  EnableOpen --> AwaitCommand: switch closes
-  AwaitCommand --> Live: fresh command
-  Live --> Watchdog: 200 ms
-  Watchdog --> EnableOpen: switch opens
+  [*] --> Idle
+  Idle --> Driving: drive command
+  Driving --> Driving: next command within 250 ms
+  Driving --> Idle: 250 ms with no command
+  Driving --> Idle: neutral, disconnect, fault or layout change
 ```
 
-*Watchdog coasts and drops enable. It does not brake.*
+*Idle writes each output's safe value. Zero effort coasts. It does not brake.*
 
 ## Upgrade or remove
 
@@ -244,28 +239,7 @@ flowchart LR
   Pi --> Hat[Fusion HAT]
 ```
 
-*Physical path. Arming is still a separate step.*
-
+*Physical path. The phone decides when to send drive commands.*
 
 References: [Nuitka standalone/onefile modes](https://nuitka.net/user-documentation/user-manual.html),
 [pinned Fusion HAT source](https://github.com/sunfounder/fusion-hat/tree/4bd1018ad5a70ee113160536f969cdadd9f22918).
-
-## Supervised bench mode without a physical interlock
-
-For a supervised rover that has no physical cutoff, `--bench-mode` is an explicit
-alternative to `--gate-file`, using the real Fusion HAT backend. It is never the
-installer default and cannot be combined with a physical gate or mock mode. The
-status reports `gate_mode=bench`; TerraPhone shows the absence of a physical
-power cutoff and offers **Enable Bench Control**, followed by a separate **Arm**.
-A valid saved layout, cleared fault/Stop, authenticated owner and disarmed state
-are required for enabling. Software enable never arms or persists across service
-restart, disconnect, Disarm or Stop. Release sends zero; the existing 200 ms rover
-watchdog and explicit arming remain active. Configuration requires bench control
-to be disabled. Software stop cannot isolate power if software or electronics fail.
-
-On rover2 the source runtime is installed at `/opt/terra-bench/venv`, with a
-systemd override at `/etc/systemd/system/terra-rover.service.d/bench-mode.conf`.
-The confirmed initial layout is M2/M3 left and M0/M1 right, revision 1; its effort
-limits are ±0.4 with maximum power fraction 0.5. Wheel direction still requires
-physical observation. The default service uses the external battery cutoff;
-physical-gate installations explicitly supply `--gate-file`.

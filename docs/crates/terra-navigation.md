@@ -1,10 +1,11 @@
 # terra-navigation
 
-!!! tip "TL;DR"
-    Plans only on cells the rover has seen.
-    Occupied means probability ≥ 65.
-    A frontier is a proposal. It does not move the rover by itself.
-    Autonomous runs live in terra-exploration.
+> [!TIP]
+> **TL;DR**
+> Plans only on cells the rover has seen.
+> Occupied means probability ≥ 65.
+> A frontier is a proposal. It does not move the rover by itself.
+> Autonomous runs live in terra-exploration.
 
 ![Observed grid the planner reads](../assets/occupancy.svg)
 

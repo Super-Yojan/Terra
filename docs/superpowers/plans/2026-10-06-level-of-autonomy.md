@@ -1,9 +1,10 @@
 # Terra Level-of-Autonomy Implementation Plan
 
-!!! tip "TL;DR"
-    Design note for the four levels.
-    The Bevy world now lives in Zorvane.
-    Unchecked boxes are not a claim that hardware passed.
+> [!TIP]
+> **TL;DR**
+> Design note for the four levels.
+> The Bevy world now lives in Zorvane.
+> Unchecked boxes are not a claim that hardware passed.
 
 ![Levels this plan introduced.](../../assets/levels.svg)
 
@@ -50,17 +51,14 @@ The research question is how much autonomy is needed to complete a mission under
 Use a disaster search-and-rescue scenario as the initial reference mission: search assigned sectors, locate simulated survivors, confirm/report their locations, and return safely within a time/resource budget.
 Battlefield-relevant conditions can inform terrain, visibility, communication loss, and operator load; weapon engagement is outside this dashboard/navigation scope.
 
-
 A mission definition records objectives, success/failure criteria, starting positions, search boundaries, survivor placements, traversability/hazards, visibility/depth availability, communication profile, rover count, time budget, and scenario seed/version.
 Use traversable corridors, rubble chokepoints, blocked routes, open search areas, and degraded visibility with reachable objectives.
 Separate the simulator's hidden ground truth from rover observations and operator-visible information; no planner or dashboard may discover survivors through ground-truth access.
 Define detection/confirmation rules and sensor range/occlusion explicitly before measuring search effectiveness.
 
-
 Each autonomy level serves a mission need: teleop for precise operator-directed movement, assisted teleop for maneuvering with obstacle support, waypoint for transit to operator-selected locations, and supervised exploration for searching unobserved space while the operator supervises priorities.
 Frontier exploration is a navigation policy, not survivor detection or mission completion.
 Add mission observations/reporting as a distinct simulator capability; it must not silently alter the navigation arbiter or expose hidden information.
-
 
 Compare two trial designs separately:
 
@@ -72,9 +70,7 @@ Record denominators and unavailable measurements.
 Predefine success and an acceptable safety/performance threshold before trials; report the lowest tested autonomy level meeting it per condition, with uncertainty, rather than claiming one universal required level.
 Interaction counts alone do not measure workload; add a separate validated workload measure if that is a thesis outcome.
 
-
 Add a mission configuration/manifest and deterministic search/report events in `simulator/src/mission.rs`, scenario fixtures under `tests/fixtures/missions`, and mission metadata/events in `terra-experiment`. Test reachable objectives, seeded reproducibility, occluded detection, duplicate reports, completion criteria, and separation of ground truth from telemetry. ARGOS displays the mission objective, progress, phase, constraints, and reported observations alongside autonomy controls. Mission machinery is a linked deliverable needed for the research study; it expands beyond the control-only acceptance criteria of Terra #17.
-
 
 ## Proposed behavior
 
@@ -110,7 +106,6 @@ flowchart LR
 
 *Stop dominates the tick.*
 
-
 Add `terra-navigation` for DWA and frontier selection, using existing `MapSnapshot` (-1 unknown, 0–100 occupancy). Keep planner configuration identical across platforms and levels during a run. Candidate sampling, tie-breaking, and scoring are deterministic.
 
 DWA samples reachable velocity pairs under acceleration limits, simulates swept robot footprints, and rejects collisions and trajectories that cannot brake safely within observed free space.
@@ -118,7 +113,6 @@ Include the current-to-zero braking trajectory.
 Assisted teleop minimizes departure from operator intent; waypoint modes score progress/heading plus clearance.
 Both share the same admissibility checker.
 Unknown/out-of-grid space is not certified free; include the robot's known present footprint as traversable so an unobserved current cell does not deadlock every plan.
-
 
 Proposed initial planning parameters for review, not empirically validated safety claims: 10 Hz replanning, 2 s rollout horizon, <=0.1 s rollout steps, map/pose freshness 0.5 s, occupancy >=65 considered blocked. Obtain footprint dimensions from the rover configuration. Record acceleration, braking, inflation, speed/yaw caps, map resolution, and every scoring weight in the run manifest. Calibrate stopping-distance and clearance margins before physical trials.
 
@@ -129,7 +123,6 @@ Emit one pending proposal at a time.
 Approval revalidates the proposal against current pose/map; stale, superseded, unreachable, or already-decided proposals cannot launch motion.
 Rejecting a frontier applies a configurable cooldown rather than proposing it continuously.
 No reachable frontier means hold with an explicit reason, not fabricate motion.
-
 
 A depthless phone cannot support honest assisted/waypoint/supervised planning: report the capability/input failure and hold those levels. Do not substitute simulator ground truth for depth-derived maps in experiment runs.
 
@@ -180,7 +173,6 @@ flowchart LR
 ```
 
 *Stop dominates the tick.*
-
 
 Compatibility: `/cmd_vel` remains a deprecated alias feeding the same leased operator inbox, subject to the selected level. It never bypasses the arbiter. `/teleop` is the new canonical key. Remove direct writes to motor intent from goal, keyboard, Swift, and transport callbacks. No automatic command replay on reconnect.
 
@@ -299,7 +291,6 @@ flowchart LR
 ```
 
 *Stop dominates the tick.*
-
 
 Execute the companion ARGOS plan for issue #4 after the shared contract is finalized. It covers native mode controls, per-rover/fleet takeover and emergency stop, held-key teleop with release/focus-loss stops, supervised proposals, and session log export. Gamepad support is optional; keyboard teleop is required.
 
