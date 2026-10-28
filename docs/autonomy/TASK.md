@@ -35,7 +35,7 @@ The model runs off the control queue. The 10 ms tick and the 20 Hz motor output 
 
 ## Starting a task
 
-The level is offered in `supported_levels` while the phone advertises a built-in model (`MobileController::set_task_model`) or an MCP agent (`MobileController::set_task_agent`). A task picks one with `"agent"`: `"builtin"` (the default) or `"mcp"`. A task for an answerer the phone does not have is rejected with `task_model_unavailable` or `task_agent_unavailable`.
+The level is offered in `supported_levels` while the phone advertises a built-in model (`MobileController::set_task_model`) or an MCP agent (`MobileController::set_task_agent`). A task picks one with `"agent"`: `"builtin"` (the default) or `"mcp"`. `autonomy/status.status.task_agents` lists the ones present. A task for an answerer the phone does not have is rejected with `task_model_unavailable` or `task_agent_unavailable`.
 
 One message selects L5 and gives the task:
 

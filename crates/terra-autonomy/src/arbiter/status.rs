@@ -75,6 +75,13 @@ impl AutonomyArbiter {
                 }
                 levels
             },
+            task_agents: [
+                (self.task_model.is_some(), crate::TaskAgent::Builtin),
+                (self.task_agent.is_some(), crate::TaskAgent::Mcp),
+            ]
+            .into_iter()
+            .filter_map(|(on, agent)| on.then_some(agent))
+            .collect(),
             paused: self.paused,
             exploration: self.exploration_report(input.now),
             task: self.task_status(input.now),

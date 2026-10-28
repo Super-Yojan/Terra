@@ -143,6 +143,7 @@ fn speaks_mcp_json_rpc() {
     let state: Value = serde_json::from_str(state["content"][0]["text"].as_str().unwrap()).unwrap();
     assert_eq!(state["task_phase"], "planning");
     assert_eq!(state["task_agent"], "mcp");
+    assert_eq!(status(&c)["status"]["task_agents"], json!(["mcp"]));
 }
 
 #[test]
