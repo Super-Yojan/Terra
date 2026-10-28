@@ -70,7 +70,7 @@ impl AutonomyArbiter {
                 {
                     levels.push(Level::TargetSearch);
                 }
-                if self.task_model.is_some() {
+                if self.task_model.is_some() || self.task_agent.is_some() {
                     levels.push(Level::Task);
                 }
                 levels

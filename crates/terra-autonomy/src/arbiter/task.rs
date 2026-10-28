@@ -24,7 +24,17 @@ pub(super) struct TaskRun {
     question: Option<String>,
     rationale: Option<String>,
     last_error: Option<String>,
-    history: VecDeque<TaskHistoryEntry>,
+    pub(super) history: VecDeque<TaskHistoryEntry>,
+    /// When the current planning wait began; an MCP agent that stays silent this long ends the task.
+    planning_since: Option<f64>,
+    /// Ids the agent was last shown, so `go_to` can name them.
+    pub(super) agent_targets: Vec<TaskTarget>,
+    /// Pending raw-drive request: reason, seconds asked, time asked.
+    pub(super) drive_request: Option<(String, f64, f64)>,
+    /// End of an operator-approved raw-drive grant.
+    pub(super) drive_until: Option<f64>,
+    /// Latest agent drive command and when it lapses.
+    pub(super) agent_twist: Option<(Twist, f64)>,
 }
 
 impl TaskRun {
@@ -48,7 +58,26 @@ impl TaskRun {
             rationale: None,
             last_error: None,
             history: VecDeque::new(),
+            planning_since: None,
+            agent_targets: Vec::new(),
+            drive_request: None,
+            drive_until: None,
+            agent_twist: None,
         }
+    }
+    pub(super) fn agent(&self) -> TaskAgent {
+        self.spec.agent()
+    }
+    pub(super) fn phase(&self) -> TaskPhase {
+        self.phase
+    }
+    pub(super) fn task_id(&self) -> &str {
+        &self.spec.task_id
+    }
+    pub(super) fn stop_driving(&mut self) {
+        self.drive_request = None;
+        self.drive_until = None;
+        self.agent_twist = None;
     }
     fn end(&mut self, phase: TaskPhase, reason: &str, now: f64) {
         if self.phase.terminal() {
@@ -61,19 +90,94 @@ impl TaskRun {
         self.outstanding = None;
         self.answer = None;
         self.plan.clear();
+        self.stop_driving();
     }
-    fn replan(&mut self, reason: &str) {
+    pub(super) fn replan(&mut self, reason: &str) {
         self.phase = TaskPhase::Planning;
         self.reason = reason.into();
         self.plan.clear();
         self.blocked_since = None;
         self.question = None;
+        self.planning_since = None;
     }
-    fn note(&mut self, kind: &str, text: String) {
+    /// Start driving a validated plan. Returns the waypoint names for the event log.
+    pub(super) fn follow(
+        &mut self,
+        plan: Vec<TaskWaypoint>,
+        note: Option<String>,
+        rationale: Option<String>,
+        now: f64,
+    ) -> String {
+        self.failures = 0;
+        self.rationale = rationale;
+        self.last_error = note.clone();
+        let names: Vec<_> = plan
+            .iter()
+            .map(|w| format!("{} ({:.1}, {:.1})", w.label, w.x, w.y))
+            .collect();
+        self.note(
+            "decision",
+            format!(
+                "go {}{}",
+                names.join(" then "),
+                note.map(|n| format!("; {n}")).unwrap_or_default()
+            ),
+        );
+        self.plan = plan.into();
+        self.phase = TaskPhase::Navigating;
+        self.reason = "driving_waypoint".into();
+        self.waypoint_started = now;
+        self.blocked_since = None;
+        self.planning_since = None;
+        self.agent_twist = None;
+        names.join(";")
+    }
+    pub(super) fn ask(&mut self, question: String, rationale: Option<String>) {
+        self.failures = 0;
+        self.rationale = rationale;
+        self.note("decision", format!("asked the operator: {question}"));
+        self.question = Some(question);
+        self.phase = TaskPhase::WaitingOperator;
+        self.reason = "awaiting_operator".into();
+        self.plan.clear();
+        self.agent_twist = None;
+    }
+    /// End on the decider's own word. Returns the end reason.
+    pub(super) fn conclude(
+        &mut self,
+        done: bool,
+        rationale: Option<String>,
+        now: f64,
+    ) -> &'static str {
+        let why = rationale.clone().unwrap_or_default();
+        self.note(
+            "decision",
+            if done {
+                format!("done: {why}")
+            } else {
+                format!("gave up: {why}")
+            },
+        );
+        self.rationale = rationale;
+        let (phase, reason) = if done {
+            (TaskPhase::Completed, "model_done")
+        } else {
+            (TaskPhase::Failed, "model_gave_up")
+        };
+        self.end(phase, reason, now);
+        reason
+    }
+    pub(super) fn steps_left(&self) -> bool {
+        self.steps < self.spec.steps()
+    }
+    pub(super) fn count_step(&mut self) {
+        self.steps += 1;
+    }
+    pub(super) fn note(&mut self, kind: &str, text: String) {
         push_history(&mut self.history, self.steps, kind, text);
     }
     /// Count a failed step and end the task after too many in a row.
-    fn failed_step(&mut self, kind: &str, why: String, now: f64) {
+    pub(super) fn failed_step(&mut self, kind: &str, why: String, now: f64) {
         self.failures += 1;
         self.last_error = Some(why.clone());
         self.note(kind, why);
@@ -83,7 +187,7 @@ impl TaskRun {
             self.replan("retrying_model");
         }
     }
-    fn status(&self, run_id: &str, model: Option<&str>, now: f64) -> TaskStatus {
+    pub(super) fn status(&self, run_id: &str, model: Option<&str>, now: f64) -> TaskStatus {
         let elapsed = (self.ended_at.unwrap_or(now) - self.started_at).max(0.);
         TaskStatus {
             run_id: run_id.into(),
@@ -109,6 +213,18 @@ impl TaskRun {
             rationale: self.rationale.clone(),
             last_error: self.last_error.clone(),
             history: self.history.iter().cloned().collect(),
+            agent: self.agent(),
+            drive_request: self.drive_request.as_ref().map(|(reason, seconds, at)| {
+                TaskDriveRequest {
+                    reason: reason.clone(),
+                    seconds: *seconds,
+                    waiting_seconds: (now - at).max(0.),
+                }
+            }),
+            drive_remaining_seconds: self
+                .drive_until
+                .map(|until| (until - now).max(0.))
+                .filter(|_| self.ended_at.is_none()),
         }
     }
 }
@@ -211,8 +327,8 @@ impl AutonomyArbiter {
             Some("wrong_run")
         } else if self.level != Level::Task || self.stopped {
             Some("authority_required")
-        } else if self.task_model.is_none() {
-            Some("task_model_unavailable")
+        } else if let Some(missing) = self.task_answerer_missing(&r.spec) {
+            Some(missing)
         } else if !now.is_finite() || now < 0. {
             Some("invalid_time")
         } else {
@@ -259,8 +375,11 @@ impl AutonomyArbiter {
             None => Some("no_task"),
             Some(t) if t.spec.task_id != a.task_id => Some("wrong_task"),
             Some(t) if t.phase.terminal() => Some("task_ended"),
-            Some(_) if a.action == TaskActionKind::Reply && self.stopped => {
+            Some(_) if a.action != TaskActionKind::Cancel && self.stopped => {
                 Some("authority_required")
+            }
+            Some(t) if a.action == TaskActionKind::ApproveDrive && t.drive_request.is_none() => {
+                Some("no_drive_request")
             }
             Some(_) => None,
         };
@@ -278,6 +397,25 @@ impl AutonomyArbiter {
                 task.replan("operator_reply");
                 task.failures = 0;
                 self.follower.cancel();
+            }
+            TaskActionKind::ApproveDrive => {
+                let task = self.task.as_mut().expect("checked above");
+                let (_, seconds, _) = task.drive_request.take().expect("checked above");
+                task.drive_until = Some(now + seconds);
+                task.note("operator", format!("approved raw drive for {seconds:.0} s"));
+            }
+            TaskActionKind::DenyDrive => {
+                let task = self.task.as_mut().expect("checked above");
+                let ended = task.drive_until.is_some();
+                task.stop_driving();
+                task.note(
+                    "operator",
+                    if ended {
+                        "ended the raw-drive grant".into()
+                    } else {
+                        "refused raw drive".into()
+                    },
+                );
             }
         }
         self.acknowledge(a.token.clone(), fp, true, "task_action");
@@ -396,58 +534,22 @@ impl AutonomyArbiter {
                         Some(map) => match resolve_plan(map, pose, radius, &targets, &waypoints) {
                             Err(why) => task.failed_step("invalid", why, now),
                             Ok((plan, note)) => {
-                                task.failures = 0;
-                                task.rationale = rationale;
-                                task.last_error = note.clone();
-                                let names: Vec<_> = plan
-                                    .iter()
-                                    .map(|w| format!("{} ({:.1}, {:.1})", w.label, w.x, w.y))
-                                    .collect();
-                                task.note(
-                                    "decision",
-                                    format!(
-                                        "go {}{}",
-                                        names.join(" then "),
-                                        note.map(|n| format!("; {n}")).unwrap_or_default()
-                                    ),
-                                );
-                                task.plan = plan.into();
-                                task.phase = TaskPhase::Navigating;
-                                task.reason = "driving_waypoint".into();
-                                task.waypoint_started = now;
-                                task.blocked_since = None;
-                                events.push(("task_plan", names.join(";")));
+                                let names = task.follow(plan, note, rationale, now);
+                                events.push(("task_plan", names));
                             }
                         },
                     },
                     Ok(ParsedDecision::AskOperator {
                         question,
                         rationale,
-                    }) => {
-                        task.failures = 0;
-                        task.rationale = rationale;
-                        task.note("decision", format!("asked the operator: {question}"));
-                        task.question = Some(question);
-                        task.phase = TaskPhase::WaitingOperator;
-                        task.reason = "awaiting_operator".into();
-                    }
+                    }) => task.ask(question, rationale),
                     Ok(ParsedDecision::Done { rationale }) => {
-                        task.note(
-                            "decision",
-                            format!("done: {}", rationale.clone().unwrap_or_default()),
-                        );
-                        task.rationale = rationale;
-                        task.end(TaskPhase::Completed, "model_done", now);
-                        events.push(("task_ended", "model_done".into()));
+                        let reason = task.conclude(true, rationale, now);
+                        events.push(("task_ended", reason.into()));
                     }
                     Ok(ParsedDecision::Fail { rationale }) => {
-                        task.note(
-                            "decision",
-                            format!("gave up: {}", rationale.clone().unwrap_or_default()),
-                        );
-                        task.rationale = rationale;
-                        task.end(TaskPhase::Failed, "model_gave_up", now);
-                        events.push(("task_ended", "model_gave_up".into()));
+                        let reason = task.conclude(false, rationale, now);
+                        events.push(("task_ended", reason.into()));
                     }
                 },
             }
@@ -539,7 +641,44 @@ impl AutonomyArbiter {
             }
         }
 
-        if task.phase == TaskPhase::Planning && task.outstanding.is_none() {
+        // Raw-drive requests and grants run on the task clock.
+        if task
+            .drive_request
+            .as_ref()
+            .is_some_and(|r| now - r.2 >= TASK_DRIVE_REQUEST_SECONDS)
+        {
+            task.drive_request = None;
+            task.note("drive", "drive request expired unanswered".into());
+        }
+        if task.drive_until.is_some_and(|until| now >= until) {
+            task.drive_until = None;
+            task.agent_twist = None;
+            task.note("drive", "drive grant ended".into());
+            events.push(("task_drive_grant_ended", "expired".into()));
+        }
+        if task.agent_twist.is_some_and(|(_, until)| now >= until) {
+            task.agent_twist = None;
+        }
+        let agent_driving = task.agent() == TaskAgent::Mcp
+            && task.phase == TaskPhase::Planning
+            && task.drive_until.is_some()
+            && task.agent_twist.is_some();
+
+        if task.agent() == TaskAgent::Mcp && task.phase == TaskPhase::Planning {
+            // The agent decides through tool calls; an agent that goes quiet ends the task.
+            let since = *task.planning_since.get_or_insert(now);
+            if agent_driving {
+                task.planning_since = Some(now);
+                task.reason = "agent_driving".into();
+            } else if now - since >= TASK_QUERY_TIMEOUT_SECONDS {
+                task.end(TaskPhase::Failed, "agent_timeout", now);
+                events.push(("task_ended", "agent_timeout".into()));
+            } else if task.drive_request.is_some() {
+                task.reason = "awaiting_drive_approval".into();
+            } else {
+                task.reason = "awaiting_agent".into();
+            }
+        } else if task.phase == TaskPhase::Planning && task.outstanding.is_none() {
             if task.steps >= task.spec.steps() {
                 task.end(TaskPhase::Failed, "step_limit", now);
                 events.push(("task_ended", "step_limit".into()));
@@ -589,8 +728,10 @@ impl AutonomyArbiter {
         };
         if phase != TaskPhase::Navigating {
             self.follower.cancel();
-            decision.held = true;
-            decision.reason = reason;
+            if !agent_driving {
+                decision.held = true;
+                decision.reason = reason;
+            }
         }
         decision.goal = self.follower.step(pose.x, pose.y, pose.yaw).status;
         for (kind, reason) in events {
@@ -640,6 +781,27 @@ impl AutonomyArbiter {
             self.planner_trace = None;
             self.event("task_waypoint_abandoned", None, why);
         }
+    }
+
+    /// Which answerer a task needs that the host has not attached, if any.
+    pub(super) fn task_answerer_missing(&self, spec: &TaskSpec) -> Option<&'static str> {
+        match spec.agent() {
+            TaskAgent::Builtin if self.task_model.is_none() => Some("task_model_unavailable"),
+            TaskAgent::Mcp if self.task_agent.is_none() => Some("task_agent_unavailable"),
+            _ => None,
+        }
+    }
+    /// Agent drive command for this tick, while a grant is active and the task waits on the agent.
+    pub(super) fn task_agent_twist(&self, now: f64) -> Option<Twist> {
+        let task = self.task.as_ref()?;
+        (self.level == Level::Task
+            && !self.stopped
+            && task.phase == TaskPhase::Planning
+            && task.drive_until.is_some_and(|until| now < until))
+        .then_some(())?;
+        task.agent_twist
+            .filter(|(_, until)| now < *until)
+            .map(|(t, _)| t)
     }
 
     pub(super) fn task_running(&self) -> bool {
