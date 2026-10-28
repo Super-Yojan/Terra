@@ -438,3 +438,90 @@ fn level_change_ends_the_look_around() {
     assert_ne!(direct.status.reason, "obstacle_blocked");
     assert!(direct.twist.linear > 0.);
 }
+/// The camera wedge at the start of a run, with an optional occupied wall across `x` metres.
+fn wedge_map(wall: Option<std::ops::Range<f64>>) -> MapSnapshot {
+    let (width, resolution) = (200usize, 0.1);
+    let mut occupancy = vec![-1i8; width * width];
+    for row in 0..width {
+        for column in 0..width {
+            let x = -10. + (column as f64 + 0.5) * resolution;
+            let y = -10. + (row as f64 + 0.5) * resolution;
+            if wall.as_ref().is_some_and(|wall| wall.contains(&x)) {
+                occupancy[row * width + column] = 100;
+            } else if x > 0.35 && x < 8. && y.abs() < x * 30f64.to_radians().tan() {
+                occupancy[row * width + column] = 0;
+            }
+        }
+    }
+    MapSnapshot {
+        width: width as u32,
+        height: width as u32,
+        resolution,
+        origin_x: -10.,
+        origin_y: -10.,
+        occupancy,
+    }
+}
+/// Drive the arbiter's commands on a unicycle for `ticks` steps of 0.1 s and return the poses.
+fn drive(
+    arbiter: &mut AutonomyArbiter,
+    map: &MapSnapshot,
+    ticks: usize,
+) -> Vec<(Pose, ArbiterOutput)> {
+    let mut pose = Pose::default();
+    let mut measured = Twist::default();
+    let mut out = Vec::new();
+    for tick in 0..ticks {
+        let mut input = input_at(0.1 * (tick + 1) as f64, pose, map);
+        input.measured = measured;
+        let step = arbiter.step(input);
+        measured = step.twist;
+        pose.yaw += step.twist.angular * 0.1;
+        pose.x += step.twist.linear * pose.yaw.cos() * 0.1;
+        pose.y += step.twist.linear * pose.yaw.sin() * 0.1;
+        out.push((pose, step));
+    }
+    out
+}
+/// Off by default the wedge only allows a look-around; through unknown space the rover drives out.
+#[test]
+fn through_unknown_drives_forward_from_the_camera_wedge() {
+    let map = wedge_map(None);
+    let mut cautious = AutonomyArbiter::default();
+    cautious.set_level(explore("cautious", 60.));
+    assert!(
+        drive(&mut cautious, &map, 10)
+            .iter()
+            .all(|(_, out)| out.twist.linear == 0.)
+    );
+    let mut optimistic = AutonomyArbiter::default();
+    optimistic.explorer.config_mut().through_unknown = true;
+    optimistic.set_level(explore("optimistic", 60.));
+    let run = drive(&mut optimistic, &map, 40);
+    let (end, _) = run.last().unwrap();
+    assert!(end.x > 0.3, "rover stayed at {end:?}");
+    assert!(
+        run.iter()
+            .any(|(_, out)| out.status.reason != "exploration_scan")
+    );
+}
+/// The local planner still stops for an observed wall while planning through unknown space.
+#[test]
+fn through_unknown_stops_short_of_an_occupied_wall() {
+    let wall = 1.6..1.8;
+    let map = wedge_map(Some(wall.clone()));
+    let mut arbiter = AutonomyArbiter::default();
+    arbiter.explorer.config_mut().through_unknown = true;
+    arbiter.set_level(explore("walled", 60.));
+    let radius = arbiter.planner.config.radius;
+    let run = drive(&mut arbiter, &map, 200);
+    for (pose, _) in &run {
+        assert!(
+            pose.x + radius < wall.start,
+            "footprint reached the wall at {pose:?}"
+        );
+    }
+    // It did drive toward the wall rather than holding at the start.
+    let farthest = run.iter().map(|(pose, _)| pose.x).fold(0., f64::max);
+    assert!(farthest > 0.1, "rover only reached x = {farthest}");
+}

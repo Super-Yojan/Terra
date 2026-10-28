@@ -381,3 +381,59 @@ fn a_fruitless_look_around_ends_with_no_frontiers() {
         ExploreAction::Finished(EndReason::NoFrontiersLeft)
     );
 }
+/// Through unknown space, the camera wedge alone yields a frontier straight ahead.
+#[test]
+fn through_unknown_finds_a_frontier_in_the_camera_wedge() {
+    let wedge = front_camera_wedge();
+    let pose = Pose::default();
+    let candidate =
+        select_frontier_through_unknown(&wedge, pose, 0.65, &[], 1., &InformationGainScorer)
+            .expect("a frontier through unknown space");
+    assert!(candidate.distance_m > 0.8);
+    assert!(candidate.information_gain > 0);
+    // The goal is a cell the camera saw as free, not a guess in unknown space.
+    let (column, row) = terra_navigation::grid_cell(&wedge, candidate.x, candidate.y).unwrap();
+    assert_eq!(wedge.occupancy[row * 200 + column], 0);
+    // The explorer seeks it instead of turning in place.
+    let mut explorer = Explorer::default();
+    explorer.config_mut().through_unknown = true;
+    assert!(explorer.start(60., "optimistic"));
+    assert!(matches!(
+        explorer.step(at(0., 0., &wedge)),
+        ExploreAction::Seek { .. }
+    ));
+}
+/// Occupied cells still block: no frontier is chosen beyond or against a wall.
+#[test]
+fn through_unknown_never_passes_an_occupied_wall() {
+    let mut walled = front_camera_wedge();
+    for row in 0..200 {
+        for column in 0..200 {
+            let x = -10. + (column as f64 + 0.5) * 0.1;
+            if (1.5..1.7).contains(&x) {
+                walled.occupancy[row * 200 + column] = 100;
+            }
+        }
+    }
+    let chosen = select_frontier_through_unknown(
+        &walled,
+        Pose::default(),
+        0.65,
+        &[],
+        1.,
+        &InformationGainScorer,
+    );
+    assert!(chosen.is_none_or(|c| c.x + 0.65 < 1.5), "{chosen:?}");
+    // Unknown cells become free; observed cells and the grid stay as they were.
+    let passable = terra_navigation::unknown_as_free(&walled);
+    assert!(passable.occupancy.iter().all(|cell| *cell >= 0));
+    assert_eq!(
+        passable
+            .occupancy
+            .iter()
+            .filter(|cell| **cell >= 65)
+            .count(),
+        walled.occupancy.iter().filter(|cell| **cell >= 65).count()
+    );
+    assert_eq!((passable.width, passable.resolution), (200, 0.1));
+}

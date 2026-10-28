@@ -52,6 +52,44 @@ pub fn select_frontier(
     exclude_radius: f64,
     scorer: &dyn GoalScorer,
 ) -> Option<FrontierCandidate> {
+    select_frontier_in(map, map, pose, radius, excluded, exclude_radius, scorer)
+}
+/// [`select_frontier`] with unknown cells passable on the way to the frontier.
+///
+/// Travel and the candidate's footprint are checked on
+/// [`terra_navigation::unknown_as_free`], so only occupied cells and map bounds
+/// block them. The candidate cell itself must still be observed free, and
+/// information gain still counts the real unknown cells around it.
+pub fn select_frontier_through_unknown(
+    map: &MapSnapshot,
+    pose: Pose,
+    radius: f64,
+    excluded: &[(f64, f64)],
+    exclude_radius: f64,
+    scorer: &dyn GoalScorer,
+) -> Option<FrontierCandidate> {
+    let passable = terra_navigation::unknown_as_free(map);
+    select_frontier_in(
+        &passable,
+        map,
+        pose,
+        radius,
+        excluded,
+        exclude_radius,
+        scorer,
+    )
+}
+/// Search `clearance` for travel and footprints, and `observed` for gain and the candidate cell.
+fn select_frontier_in(
+    clearance: &MapSnapshot,
+    observed: &MapSnapshot,
+    pose: Pose,
+    radius: f64,
+    excluded: &[(f64, f64)],
+    exclude_radius: f64,
+    scorer: &dyn GoalScorer,
+) -> Option<FrontierCandidate> {
+    let map = observed;
     if !pose.finite() || !radius.is_finite() || radius <= 0. || radius > 5. {
         return None;
     }
@@ -72,7 +110,7 @@ pub fn select_frontier(
         seen[index] = true;
         let px = map.origin_x + (x as f64 + 0.5) * map.resolution;
         let py = map.origin_y + (y as f64 + 0.5) * map.resolution;
-        if !footprint_clear(map, px, py, radius, Some(pose)) {
+        if !footprint_clear(clearance, px, py, radius, Some(pose)) {
             continue;
         }
         let reach = (radius / map.resolution).ceil() as isize + 2;
@@ -92,7 +130,8 @@ pub fn select_frontier(
             }
         }
         let distance = (px - pose.x).hypot(py - pose.y);
-        if footprint_clear(map, px, py, radius, None)
+        if footprint_clear(clearance, px, py, radius, None)
+            && map.occupancy[index] >= 0
             && gain > 0
             && distance > radius.max(0.8)
             && excluded

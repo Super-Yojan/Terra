@@ -333,7 +333,9 @@ impl AutonomyArbiter {
             .step(input.pose.x, input.pose.y, input.pose.yaw)
             .status;
         let mut decision = TickDecision::new(goal);
-        let bounded_map = self.search_bounded_map(&input);
+        let bounded_map = self
+            .search_bounded_map(&input)
+            .or_else(|| self.explore_planning_map(&input));
         let planning_map = bounded_map.as_ref().or(input.map);
 
         // 2. Safety has priority over operator intent, goals and planning.

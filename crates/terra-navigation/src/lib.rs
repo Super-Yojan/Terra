@@ -561,6 +561,20 @@ pub fn footprint_clear(
 ) -> bool {
     clear(m, x, y, radius, current)
 }
+/// Copy of `map` with every unknown cell marked free. Observed cells and map bounds are kept.
+///
+/// Exploration through unknown space plans routes, local rollouts and the
+/// look-around turn on this copy, so it relies on the local planner stopping for
+/// obstacles as the camera observes them. Occupied cells still reject motion.
+pub fn unknown_as_free(map: &MapSnapshot) -> MapSnapshot {
+    let mut copy = map.clone();
+    for cell in &mut copy.occupancy {
+        if *cell < 0 {
+            *cell = 0;
+        }
+    }
+    copy
+}
 /// Breadth-first search through inflated observed free cells. Stable ordering breaks ties.
 ///
 /// Supervised mode proposes this point and waits for approval. Time-bounded autonomous
