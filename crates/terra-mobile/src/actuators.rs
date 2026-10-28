@@ -224,16 +224,37 @@ pub(crate) struct ActiveLayout {
 }
 
 impl ActiveLayout {
+    /// Accepts drive profiles, or a full layout (as framed sessions read it),
+    /// whose port and calibration are dropped.
     pub(crate) fn parse(profiles_json: &str) -> Result<Self, MobileActuatorError> {
-        let set: DriveProfileSet = parse(profiles_json)?;
-        if set.schema_version != 1 {
+        let (schema_version, profiles) = match parse::<DriveProfileSet>(profiles_json) {
+            Ok(set) => (set.schema_version, set.actuators),
+            Err(profile_error) => match parse::<Layout>(profiles_json) {
+                Ok(layout) => (
+                    layout.schema_version,
+                    layout
+                        .actuators
+                        .into_iter()
+                        .map(|a| DriveProfile {
+                            id: a.id,
+                            kind: a.kind,
+                            limits: a.limits,
+                            route: a.route,
+                            safe: a.safe,
+                        })
+                        .collect(),
+                ),
+                Err(_) => return Err(profile_error),
+            },
+        };
+        if schema_version != 1 {
             return Err(invalid("unsupported drive profile schema"));
         }
         // Validate once here so routing a tick can only fail on its inputs.
-        terra_actuators::route_drive_profiles(&set.actuators, &RoutingInput::default())
+        terra_actuators::route_drive_profiles(&profiles, &RoutingInput::default())
             .map_err(invalid)?;
         Ok(Self {
-            profiles: set.actuators,
+            profiles,
             servos: BTreeMap::new(),
         })
     }
@@ -471,6 +492,17 @@ mod tests {
             serde_json::from_str(&layout.frame(0.0, 0.0).unwrap()).unwrap();
         assert_eq!(frame[2].value, 0.8);
         assert!(layout.frame(1.5, 0.0).is_err());
+    }
+
+    #[test]
+    /// A framed session's full layout routes like the stick helper.
+    fn active_layout_accepts_a_full_layout() {
+        let layout = ActiveLayout::parse(LAYOUT).unwrap();
+        assert!(layout.supports_vio_control());
+        assert_eq!(
+            layout.frame(-0.3, 0.7).unwrap(),
+            actuator_route_stick(LAYOUT.into(), 0.2, 0.5).unwrap()
+        );
     }
 
     #[test]
