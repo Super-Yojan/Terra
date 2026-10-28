@@ -7,7 +7,7 @@
 
 ![Phone, Bluetooth, Pi, HAT](../assets/pi-stack.svg)
 
-*Gate `0` means open. Gate `1` means closed. Closing it does not arm.*
+*The Pi relays drive commands from the phone and holds each one for 250 ms.*
 
 ![App icon of the rover this service is meant to drive](../assets/terra-icon.png){ width="200" }
 
@@ -15,6 +15,7 @@
 
 | Guide | Use it for |
 | --- | --- |
+| [Flash the SD card](FLASH_SD.md) | Ready-made Terra image, Raspberry Pi Imager steps. |
 | [Install](INSTALL.md) | Build, `install.sh`, USR enrollment. |
 | [Bluetooth](BLUETOOTH.md) | GATT, frames, owner admission. |
 | [Fusion HAT](FUSION_HAT.md) | Pins, timers, library 1.14.0. |
@@ -26,11 +27,11 @@ Software twin of the motor checklist: [terra-motors](../crates/terra-motors.md).
 
 ```mermaid
 stateDiagram-v2
-  [*] --> EnableOpen
-  EnableOpen --> AwaitCommand: switch closes
-  AwaitCommand --> Live: fresh command
-  Live --> Watchdog: 200 ms
-  Watchdog --> EnableOpen: switch opens
+  [*] --> Idle
+  Idle --> Driving: drive command
+  Driving --> Driving: next command within 250 ms
+  Driving --> Idle: 250 ms with no command
+  Driving --> Idle: neutral, disconnect, fault or layout change
 ```
 
-*Zero effort coasts. A dropped enable still coasts. It does not brake.*
+*Zero effort coasts. It does not brake.*
