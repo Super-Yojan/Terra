@@ -1,17 +1,18 @@
 # TerraPhone
 
-!!! tip "TL;DR"
-    SwiftUI app in `mobile/ios/`.
-    Android shell in `mobile/android/`.
-    Shared math is `terra-mobile`.
-    Simulator talks to Zorvane. iPhone talks to the Pi.
-    Tap-to-configure is not built.
+> [!TIP]
+> **TL;DR**
+> SwiftUI app in `mobile/ios/`.
+> Android shell in `mobile/android/`.
+> Shared math is `terra-mobile`.
+> Simulator talks to Zorvane. iPhone talks to the Pi.
+> Tap-to-configure is not built.
 
-![TerraPhone app icon](../assets/terra-icon.png){ width="220" }
+![TerraPhone app icon](../assets/terra-icon.png)
 
 *Real asset. The frames below are wireframes, not Simulator captures.*
 
-![Home sections: rover, drive, and a link that depends on the target](../assets/phone-home.svg){ width="260" }
+![Home sections: rover, drive, and a link that depends on the target](../assets/phone-home.svg)
 
 *One controller backs every screen. Connection never arms the motors.*
 
@@ -38,7 +39,8 @@
 
 Long-form sensor notes: [Phone controller](../MOBILE_CONTROL.md).
 
-!!! note "Mount"
-    Flat phone. Screen up. Top edge forward.
-    Loss of ARKit tracking commands neutral effort.
-    Calibrate before the wheels touch the ground.
+> [!NOTE]
+> **Mount**
+> Flat phone. Screen up. Top edge forward.
+> Loss of ARKit tracking commands neutral effort.
+> Calibrate before the wheels touch the ground.

@@ -1,8 +1,9 @@
 # Headless customer pairing with the Fusion HAT button
 
-!!! tip "TL;DR"
-    Spec for headless first-owner pairing.
-    The button opens a window. It does not arm.
+> [!TIP]
+> **TL;DR**
+> Spec for headless first-owner pairing.
+> The button opens a window. It does not arm.
 
 ![Customer steps from the spec.](../../assets/pairing.svg)
 
@@ -31,7 +32,6 @@ The implementation uses Bluetooth Just Works bonding with a physically opened, l
 This provides encrypted communication after bonding but not the man-in-the-middle protection of numeric comparison.
 The random device name is a discovery identifier, not a password or proof of identity.
 Another nearby phone can compete for the pairing window; only one candidate may be accepted.
-
 
 ## Customer experience
 
@@ -89,7 +89,6 @@ flowchart LR
 ```
 
 *Physical path. Arming is still a separate step.*
-
 
 Once owned, retain the current owner-only admission, interlock, layout validation
 and explicit arming behavior. A missing/unavailable motor gate must keep motion
@@ -153,7 +152,6 @@ flowchart LR
 
 *Physical path. Arming is still a separate step.*
 
-
 Owner persistence requires all of the following: agent approval for this window,
 matching candidate identity, BlueZ `Paired` and `Bonded`, a completed setup-status
 read by that candidate, and a still-live deadline. If the platform does not invoke
@@ -167,7 +165,6 @@ A previously bonded candidate without fresh authorization is not eligible for fi
 Timeout/failure clears transient candidate state and exports.
 Attempt all cleanup operations even if the adapter or bus disappears.
 Disable pairability and discoverability on every exit, and apply BlueZ's own timeout as an additional bound.
-
 
 Save `owner.json` with mode 0600 using an atomic write, file fsync, rename and
 directory fsync. Save identity address and address type as the normal peripheral
@@ -210,7 +207,6 @@ flowchart LR
 ```
 
 *Physical path. Arming is still a separate step.*
-
 
 Use fake time and temporary input files for the button/LED state machine. Test
 debounce, startup-held button, the exact hold threshold, one window per release,

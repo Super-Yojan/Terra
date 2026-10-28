@@ -1,8 +1,9 @@
 # Compiled Raspberry Pi release validation
 
-!!! tip "TL;DR"
-    Records the artifact that was built.
-    It does not claim a radio session or a moving rover.
+> [!TIP]
+> **TL;DR**
+> Records the artifact that was built.
+> It does not claim a radio session or a moving rover.
 
 ![Install target for the checked bundle.](../../assets/pi-stack.svg)
 
@@ -96,7 +97,6 @@ bond inspection remain necessary for the physical enrollment flow.
 The 37 source tests pass, including enrollment through the actual Bless backend objects on a simulated BlueZ bus, advertisement interface/name/UUID inspection, partial registration cleanup, owner persistence before confirmation, encrypted request identity, prepared-write rejection/disarm callbacks, and subscription reset.
 Independent code review found two startup cleanup/adapter-selection issues; both were corrected and rechecked.
 Phone discovery and radio behavior on rover2 remain unverified until the new package is installed there.
-
 
 The final ARM64 Docker build passed all 37 tests and compiled with Nuitka 4.2.2.
 A clean Debian Bookworm ARM64 verification stage with no Python installed passed

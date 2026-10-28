@@ -1,9 +1,10 @@
 # terra-state
 
-!!! tip "TL;DR"
-    VIO anchors velocity.
-    IMU fills the gap until the next VIO sample.
-    Stale or untracked input reports zero.
+> [!TIP]
+> **TL;DR**
+> VIO anchors velocity.
+> IMU fills the gap until the next VIO sample.
+> Stale or untracked input reports zero.
 
 ```mermaid
 flowchart LR

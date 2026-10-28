@@ -1,9 +1,10 @@
 # terra-actuators
 
-!!! tip "TL;DR"
-    Layout JSON in. Normalized actuator values out.
-    This crate does not arm and does not invert.
-    PWM presets stay invalid until you replace `SELECT_*_PWM_PORT`.
+> [!TIP]
+> **TL;DR**
+> Layout JSON in. Normalized actuator values out.
+> This crate does not arm and does not invert.
+> PWM presets stay invalid until you replace `SELECT_*_PWM_PORT`.
 
 ![Phone to Pi path these frames travel](../assets/pi-stack.svg)
 
@@ -38,6 +39,6 @@ Presets: [`presets/`](https://github.com/Super-Yojan/Terra/tree/main/crates/terr
 
 Positive yaw turns left when the left coefficient is negative and the right coefficient is positive.
 
-![List UI that edits these layouts today](../assets/phone-iphone.svg){ width="240" }
+![List UI that edits these layouts today](../assets/phone-iphone.svg)
 
 *Tap-to-configure is planned. This screen is the list that exists.*

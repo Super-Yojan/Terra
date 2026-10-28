@@ -1,10 +1,11 @@
 # terra-autonomy
 
-!!! tip "TL;DR"
-    Four base levels plus capability-gated target search. The arbiter does not pick a favorite.
-    Five levels. The arbiter does not pick a favorite.
-    Stop latches until a healthy reset.
-    Reset does not restore the old goal.
+> [!TIP]
+> **TL;DR**
+> Four base levels plus capability-gated target search. The arbiter does not pick a favorite.
+> Five levels. The arbiter does not pick a favorite.
+> Stop latches until a healthy reset.
+> Reset does not restore the old goal.
 
 ![teleop, assisted, waypoint, supervised](../assets/levels.svg)
 

@@ -1,10 +1,11 @@
 # Install Terra Rover on Raspberry Pi
 
-!!! tip "TL;DR"
-    64-bit Bookworm or newer.
-    The release is an ARM64 executable. No Python on the Pi.
-    Pair with the USR button. The Pi relays drive commands and holds each one for 250 ms.
-    For a new card, [flash the Terra SD card image](FLASH_SD.md) instead. It already has this service.
+> [!TIP]
+> **TL;DR**
+> 64-bit Bookworm or newer.
+> The release is an ARM64 executable. No Python on the Pi.
+> Pair with the USR button. The Pi relays drive commands and holds each one for 250 ms.
+> For a new card, [flash the Terra SD card image](FLASH_SD.md) instead. It already has this service.
 
 ![What the installer is aiming at.](../assets/pi-stack.svg)
 
@@ -171,7 +172,6 @@ Keep enrollment physically supervised.
 Pairing never moves an output.
 Motor operation requires a valid saved layout and fresh drive commands.
 
-
 The button and LED default to `/sys/class/fusion_hat/fusion_hat/button` and
 `/sys/class/fusion_hat/fusion_hat/led`. Override `--button-file` and `--led-file`
 only for a board whose kernel exposes different attributes.
@@ -240,7 +240,6 @@ flowchart LR
 ```
 
 *Physical path. The phone decides when to send drive commands.*
-
 
 References: [Nuitka standalone/onefile modes](https://nuitka.net/user-documentation/user-manual.html),
 [pinned Fusion HAT source](https://github.com/sunfounder/fusion-hat/tree/4bd1018ad5a70ee113160536f969cdadd9f22918).

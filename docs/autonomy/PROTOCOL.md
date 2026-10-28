@@ -1,9 +1,10 @@
 # Autonomy contract, version 1
 
-!!! tip "TL;DR"
-    Prefix `terra/rover/<id>`.
-    JSON requests, at most 2048 bytes.
-    Unknown fields are rejected.
+> [!TIP]
+> **TL;DR**
+> Prefix `terra/rover/<id>`.
+> JSON requests, at most 2048 bytes.
+> Unknown fields are rejected.
 
 ![Level names on the autonomy key.](../assets/levels.svg)
 
@@ -46,7 +47,6 @@ Reset never restores an old goal/lease.
 Planner footprint defaults to a 0.65 m circumscribed radius for the simulated 0.9 × 0.8 m chassis, 2 m/s and 2 rad/s caps, 1 m/s² acceleration/braking, 2 rad/s² yaw acceleration, and 2 s rollout.
 Planning runs at up to 10 Hz while the motor loop remains independent.
 These configuration values require physical calibration before real robot trials.
-
 
 ## Observed occupancy telemetry
 

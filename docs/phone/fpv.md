@@ -1,9 +1,10 @@
 # FPV video
 
-!!! tip "TL;DR"
-    The iPhone sends one rear-camera video track to ARGOS over WebRTC.
-    Signaling rides the existing fleet Zenoh session.
-    Drive commands stay on `teleop` and `hardware`. The video path cannot arm or move the rover.
+> [!TIP]
+> **TL;DR**
+> The iPhone sends one rear-camera video track to ARGOS over WebRTC.
+> Signaling rides the existing fleet Zenoh session.
+> Drive commands stay on `teleop` and `hardware`. The video path cannot arm or move the rover.
 
 The phone and the dashboard are often on different networks. WebRTC uses ICE, with a public STUN server by default and TURN when you configure it. There is no Tailscale dependency for the video.
 

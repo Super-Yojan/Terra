@@ -1,9 +1,10 @@
 # Architecture
 
-!!! tip "TL;DR"
-    ARGOS decides. Terra drives. Zorvane pretends to be the world.
-    Onboard loop: IMU and VIO, then a velocity PI, then left and right effort.
-    Zero effort coasts. It does not brake.
+> [!TIP]
+> **TL;DR**
+> ARGOS decides. Terra drives. Zorvane pretends to be the world.
+> Onboard loop: IMU and VIO, then a velocity PI, then left and right effort.
+> Zero effort coasts. It does not brake.
 
 ![Top view of body axes: plus X forward, plus Y left](assets/body-axes.svg)
 
@@ -28,7 +29,7 @@ flowchart TB
 
 ## Two phone builds
 
-![Placeholder wireframe of the Simulator Zenoh section](assets/phone-simulator.svg){ width="260" }
+![Placeholder wireframe of the Simulator Zenoh section](assets/phone-simulator.svg)
 
 *Not a Simulator capture. No Xcode in this docs build. Labels match `ContentView`.*
 
@@ -41,7 +42,7 @@ flowchart TB
 
 **Simulated rover** is a motor plant inside the app. It is on both targets. It is not Zorvane.
 
-![Placeholder wireframe of the iPhone Bluetooth section](assets/phone-iphone.svg){ width="260" }
+![Placeholder wireframe of the iPhone Bluetooth section](assets/phone-iphone.svg)
 
 *Device build. Bevy controls are compiled out.*
 
@@ -62,7 +63,7 @@ flowchart LR
 
 ## Planned
 
-![Placeholder of the planned tap-to-configure popup](assets/phone-tap.svg){ width="260" }
+![Placeholder of the planned tap-to-configure popup](assets/phone-tap.svg)
 
 *#27 is not built. `rover.usdz` orbits and zooms. It does not edit actuators.*
 

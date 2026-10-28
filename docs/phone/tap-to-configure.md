@@ -1,14 +1,15 @@
 # Tap to configure
 
-!!! warning "Planned"
-    [Terra #27](https://github.com/Super-Yojan/Terra/issues/27) is open.
-    The 3D model does not edit actuators today.
+> [!WARNING]
+> **Planned**
+> [Terra #27](https://github.com/Super-Yojan/Terra/issues/27) is open.
+> The 3D model does not edit actuators today.
 
-![Real rover artwork in the app icon](../assets/terra-icon.png){ width="200" }
+![Real rover artwork in the app icon](../assets/terra-icon.png)
 
 *`RoverModelView` loads `rover.usdz`, orbits, and zooms. No tap handler selects a part.*
 
-![Planned popup, labeled as not built](../assets/phone-tap.svg){ width="260" }
+![Planned popup, labeled as not built](../assets/phone-tap.svg)
 
 *Today’s editor is the list `ActuatorLayoutView`: Discover, configure and arm.*
 

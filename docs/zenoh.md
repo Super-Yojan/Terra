@@ -1,10 +1,11 @@
 # Zenoh
 
-!!! tip "TL;DR"
-    Prefix: `terra/rover/<id>/…`
-    Simulator client publishes `cmd_vel` at 20 Hz.
-    Lease is 250 ms, then zeros.
-    iPhone does not open this socket. It uses Bluetooth.
+> [!TIP]
+> **TL;DR**
+> Prefix: `terra/rover/<id>/…`
+> Simulator client publishes `cmd_vel` at 20 Hz.
+> Lease is 250 ms, then zeros.
+> iPhone does not open this socket. It uses Bluetooth.
 
 ```mermaid
 flowchart LR
@@ -21,7 +22,7 @@ flowchart LR
 | `RoverConnection` | Simulator only | Any `tcp/` endpoint. Usually `tcp/127.0.0.1:7447`. |
 | `ControlPlane` | `host_dashboard` | `tcp/127.0.0.1` only. `0.0.0.0` is rejected. |
 
-![Placeholder Zenoh section in the Simulator](assets/phone-simulator.svg){ width="240" }
+![Placeholder Zenoh section in the Simulator](assets/phone-simulator.svg)
 
 *Device builds delete `zenohEndpoint` on launch.*
 
@@ -77,9 +78,10 @@ Optional `body` pose supplies rover `x`, `y`, `yaw`.
 
 Default 256×192 is about 1.9 MiB/s before protocol overhead.
 
-!!! note "Session open"
-    That status means TCP is up.
-    It does not mean the rover moved.
+> [!NOTE]
+> **Session open**
+> That status means TCP is up.
+> It does not mean the rover moved.
 
 ## FPV signaling
 

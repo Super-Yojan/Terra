@@ -1,9 +1,10 @@
 # TerraPhone for Android
 
-!!! tip "TL;DR"
-    Kotlin and Compose shell over `terra-mobile`.
-    Rust owns the 100 Hz control tick and decides every motor frame.
-    Any target can connect to ARGOS; the emulator also talks to Zorvane at `10.0.2.2`.
+> [!TIP]
+> **TL;DR**
+> Kotlin and Compose shell over `terra-mobile`.
+> Rust owns the 100 Hz control tick and decides every motor frame.
+> Any target can connect to ARGOS; the emulator also talks to Zorvane at `10.0.2.2`.
 
 ```mermaid
 flowchart LR

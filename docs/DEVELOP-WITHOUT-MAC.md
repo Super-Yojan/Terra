@@ -1,10 +1,11 @@
 # Develop the world without a Mac
 
-!!! tip "TL;DR"
-    Zorvane runs on Linux.
-    The Android shell builds on Linux.
-    The iOS app still needs a Mac.
-    The Pi image also builds on Linux, with Docker.
+> [!TIP]
+> **TL;DR**
+> Zorvane runs on Linux.
+> The Android shell builds on Linux.
+> The iOS app still needs a Mac.
+> The Pi image also builds on Linux, with Docker.
 
 ![Splash from the phone, which you cannot compile here](assets/mountain-banner.jpg)
 

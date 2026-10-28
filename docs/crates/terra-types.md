@@ -1,9 +1,10 @@
 # terra-types
 
-!!! tip "TL;DR"
-    Shared geometry and samples.
-    Body axes: +X forward, +Y left, +Z up.
-    Motor effort is −1…+1. Zero coasts.
+> [!TIP]
+> **TL;DR**
+> Shared geometry and samples.
+> Body axes: +X forward, +Y left, +Z up.
+> Motor effort is −1…+1. Zero coasts.
 
 ![Top-view chassis and body axes](../assets/body-axes.svg)
 

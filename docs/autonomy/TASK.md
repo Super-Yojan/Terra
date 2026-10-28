@@ -1,8 +1,9 @@
 # L5 task autonomy
 
-!!! tip "TL;DR"
-    The operator types a task in ARGOS. The phone's own language model picks waypoints from the phone's occupancy map.
-    Rust checks every waypoint with A* and drives it on the L3 route. The model never sends a speed or a motor command.
+> [!TIP]
+> **TL;DR**
+> The operator types a task in ARGOS. The phone's own language model picks waypoints from the phone's occupancy map.
+> Rust checks every waypoint with A* and drives it on the L3 route. The model never sends a speed or a motor command.
 
 ```mermaid
 sequenceDiagram

@@ -2,7 +2,9 @@
 *.swp
 
 /target/
-/site/
+/docs/node_modules/
+/docs/dist/
+/docs/.astro/
 /mobile/ios/Generated/
 /mobile/ios/build/
 /mobile/ios/DerivedData/

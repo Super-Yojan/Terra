@@ -1,10 +1,11 @@
 # terra-mapping
 
-!!! tip "TL;DR"
-    A 20 m × 20 m grid.
-    Cells are 10 cm.
-    Depth is axial Z, not ray length.
-    −1 means unknown.
+> [!TIP]
+> **TL;DR**
+> A 20 m × 20 m grid.
+> Cells are 10 cm.
+> Depth is axial Z, not ray length.
+> −1 means unknown.
 
 ![Occupancy sketch: free, occupied, unknown, rover, goal](../assets/occupancy.svg)
 

@@ -1,9 +1,10 @@
 # Flash the Terra SD card
 
-!!! tip "TL;DR"
-    Open Raspberry Pi Imager on the Terra OS list. Pick your Pi, **Terra (64-bit)**, and the card.
-    Set a username, password, Wi-Fi and SSH in **Edit settings**. Write. Boot.
-    The card already has the Fusion HAT driver and `terra-rover`. Nothing to install.
+> [!TIP]
+> **TL;DR**
+> Open Raspberry Pi Imager on the Terra OS list. Pick your Pi, **Terra (64-bit)**, and the card.
+> Set a username, password, Wi-Fi and SSH in **Edit settings**. Write. Boot.
+> The card already has the Fusion HAT driver and `terra-rover`. Nothing to install.
 
 The Terra image is 64-bit Raspberry Pi OS Bookworm for the **Raspberry Pi 4 and Pi 5**.
 It is built by [terra-image-gen](https://github.com/Super-Yojan/terra-image-gen) and
@@ -30,23 +31,23 @@ points at the newest Terra image:
 https://github.com/Super-Yojan/terra-image-gen/releases/latest/download/terra-os-list.json
 ```
 
-=== "macOS"
+**macOS**
 
-    ```sh
-    open -a 'Raspberry Pi Imager' --args --repo https://github.com/Super-Yojan/terra-image-gen/releases/latest/download/terra-os-list.json
-    ```
+```sh
+open -a 'Raspberry Pi Imager' --args --repo https://github.com/Super-Yojan/terra-image-gen/releases/latest/download/terra-os-list.json
+```
 
-=== "Linux"
+**Linux**
 
-    ```sh
-    rpi-imager --repo https://github.com/Super-Yojan/terra-image-gen/releases/latest/download/terra-os-list.json
-    ```
+```sh
+rpi-imager --repo https://github.com/Super-Yojan/terra-image-gen/releases/latest/download/terra-os-list.json
+```
 
-=== "Windows"
+**Windows**
 
-    ```bat
-    "%ProgramFiles%\Raspberry Pi Imager\rpi-imager.exe" --repo https://github.com/Super-Yojan/terra-image-gen/releases/latest/download/terra-os-list.json
-    ```
+```bat
+"%ProgramFiles%\Raspberry Pi Imager\rpi-imager.exe" --repo https://github.com/Super-Yojan/terra-image-gen/releases/latest/download/terra-os-list.json
+```
 
 ![Raspberry Pi Imager home screen](../assets/flash/01-imager-home.png)
 

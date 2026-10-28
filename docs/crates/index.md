@@ -1,9 +1,10 @@
 # Crates
 
-!!! tip "TL;DR"
-    Fourteen workspace crates.
-    `terra-mobile` is the only UniFFI boundary.
-    The Pi reimplements Bluetooth in Python. It does not link these crates.
+> [!TIP]
+> **TL;DR**
+> Fourteen workspace crates.
+> `terra-mobile` is the only UniFFI boundary.
+> The Pi reimplements Bluetooth in Python. It does not link these crates.
 
 ```mermaid
 flowchart LR
