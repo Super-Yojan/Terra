@@ -124,6 +124,28 @@ struct ActuatorProfileSynchronization {
     mutating func clear() { self = Self() }
 }
 
+/// The dump gate servo and its positions as the person set them. Rust owns
+/// when the gate opens; Swift only stores the setting.
+struct DumpGateSetting: Codable, Equatable {
+    var servoId: Int
+    var openPosition: Double
+    var closedPosition: Double
+
+    private static let storageKey = "terra.dumpGate.v1"
+    static func load() -> DumpGateSetting? {
+        guard let data = UserDefaults.standard.data(forKey: storageKey) else { return nil }
+        return try? JSONDecoder().decode(DumpGateSetting.self, from: data)
+    }
+    static func save(_ value: DumpGateSetting?) {
+        if let value, let data = try? JSONEncoder().encode(value) { UserDefaults.standard.set(data, forKey: storageKey) }
+        else { UserDefaults.standard.removeObject(forKey: storageKey) }
+    }
+    var rust: DumpGate? {
+        guard let id = UInt8(exactly: servoId) else { return nil }
+        return DumpGate(servoId: id, openPosition: openPosition, closedPosition: closedPosition)
+    }
+}
+
 /// Built-in rover profiles from Rust. Swift only stores which one is selected.
 enum RoverProfiles {
     static let key = "roverProfile"

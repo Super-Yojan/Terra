@@ -57,8 +57,11 @@ Operator teleop, a level change, a new goal and an emergency stop also end a doc
 Decision events: `dock_started`, `dock_aligned`, `dock_gate_opened`, `dock_gate_closed`,
 `dock_backoff`, `dock_done`, `dock_failed`, `dock_cancelled`.
 
-`verified` is false when the camera lost the bucket in the last part of the approach and the rover
-finished on odometry. Auto-dump needs `verified`; the operator can still approve.
+`verified` is true when a camera fix arrived during settle, or when the last fix that had the
+rover in line (within the lateral and heading tolerances) came within 0.5 m of travel of the finish
+(reason `verified_blind`). The second case is Terra's normal finish: the outlet sits over the phone,
+so the bucket is under the camera when lined up. A longer blind finish is `odometry_only` and not
+verified. Auto-dump needs `verified`; the operator can still approve.
 
 ## Geometry and tolerances
 
@@ -72,10 +75,18 @@ Rover profile `dock` section (all optional):
 
 | Field | Default | Meaning |
 |---|---|---|
-| `outlet_ahead` | half length + 0.152 + 0.03 m | Rover centre to outlet centre. Not measured on Terra yet. |
+| `outlet_ahead` | half length + 0.152 + 0.03 m | Rover centre to outlet centre. On the phone it is the mount's camera forward offset once measured (Terra's outlet is over the phone). |
 | `gate_servo` | none | Actuator id of the gate's positional servo. Without it no servo moves. |
 | `gate_open` / `gate_closed` | 1 / −1 | Normalized servo positions. |
 | `gate_open_seconds` | 1.5 | Open time per dump. |
+
+On TerraPhone, Rover setup → Dump gate picks the gate servo and sets its open and closed positions,
+with Try open and Try closed to check them on the rover. These replace the profile's gate and stay
+across profile changes (`MobileController::set_dump_gate`, `test_dump_gate`). A running dock always
+controls the gate; a dock start ends a gate test.
+
+Terra's outlet is 3–4 in (0.076–0.10 m) wide, one tennis ball. The 0.05 m lateral tolerance keeps
+it well inside a 0.30 m bucket rim.
 
 Give the gate servo a `safe` position equal to `gate_closed` in the actuator layout, so the Pi relay
 closes it when the 250 ms lease lapses.

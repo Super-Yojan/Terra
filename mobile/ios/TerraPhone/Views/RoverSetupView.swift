@@ -29,6 +29,9 @@ struct RoverSetupView: View {
                 Text("Sets the body size the planner avoids obstacles with, the speed limits, and the motor deadband the speed loop drives past.")
                     .font(.footnote).foregroundStyle(.secondary)
             }
+            Section("Dump gate") {
+                DumpGateEditor(brain: brain)
+            }
             Section("GPS position") {
                 PhoneLocalizationStatusView(report: brain.localizationReport, trackingActive: brain.phoneTrackingActive)
             }
@@ -66,5 +69,53 @@ struct PhoneLocalizationStatusView: View {
                     .font(.footnote).foregroundStyle(.secondary)
             }
         }
+    }
+}
+
+/// Choose the gate servo and set its open and closed positions. Rust decides
+/// when the gate opens; these are only where the servo goes.
+struct DumpGateEditor: View {
+    @ObservedObject var brain: PhoneController
+    @State private var draft: DumpGateSetting?
+    private var servos: [ActuatorDriveProfile] {
+        ((try? ActuatorDriveProfileSet.decode(json: brain.committedLayoutJSON))?.actuators ?? [])
+            .filter { $0.kind == "positional_servo" && $0.limits.min < $0.limits.max }
+    }
+    var body: some View {
+        let gate = draft ?? brain.dumpGate
+        let servo = servos.first { $0.id == gate?.servoId }
+        Picker("Gate servo", selection: Binding(
+            get: { gate?.servoId ?? -1 },
+            set: { id in
+                guard id >= 0 else { draft = nil; brain.setDumpGate(nil); return }
+                let s = servos.first { $0.id == id }
+                draft = DumpGateSetting(servoId: id, openPosition: gate?.openPosition ?? s?.limits.max ?? 1,
+                                        closedPosition: gate?.closedPosition ?? s?.limits.min ?? -1)
+            })) {
+            Text("None").tag(-1)
+            ForEach(servos, id: \.id) { Text("Servo \($0.id)").tag($0.id) }
+        }
+        if let gate, let servo {
+            position("Open", value: gate.openPosition, servo: servo) { draft = DumpGateSetting(servoId: gate.servoId, openPosition: $0, closedPosition: gate.closedPosition) }
+            Button("Try open") { save(); brain.testDumpGate(open: true) }.disabled(!brain.hardwareReady)
+            position("Closed", value: gate.closedPosition, servo: servo) { draft = DumpGateSetting(servoId: gate.servoId, openPosition: gate.openPosition, closedPosition: $0) }
+            Button("Try closed") { save(); brain.testDumpGate(open: false) }.disabled(!brain.hardwareReady)
+            Button("Save gate") { save(); brain.testDumpGate(open: nil) }.disabled(draft == nil || draft == brain.dumpGate)
+        }
+        Text(servos.isEmpty ? "Add a positional servo in Actuator configuration first."
+             : "The dock opens the gate once the outlet is over a bucket, then closes it. Try each position on the rover before a run.")
+            .font(.footnote).foregroundStyle(.secondary)
+        if !brain.dumpGateStatus.isEmpty { Text(brain.dumpGateStatus).font(.footnote) }
+    }
+    private func position(_ title: String, value: Double, servo: ActuatorDriveProfile, set: @escaping (Double) -> Void) -> some View {
+        VStack(alignment: .leading) {
+            LabeledContent(title, value: value.formatted(.number.precision(.fractionLength(2))))
+            Slider(value: Binding(get: { value }, set: { set(($0 * 100).rounded() / 100) }), in: servo.limits.min...servo.limits.max)
+        }
+    }
+    private func save() {
+        guard let draft, draft.openPosition != draft.closedPosition else { return }
+        brain.setDumpGate(draft)
+        self.draft = nil
     }
 }

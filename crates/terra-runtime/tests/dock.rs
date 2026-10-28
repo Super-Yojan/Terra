@@ -100,3 +100,31 @@ fn gate_servo_follows_the_profile() {
     r.begin_run("run-2".into()).unwrap();
     assert_eq!(r.autonomy.dock_config().outlet_ahead, 0.7);
 }
+
+#[test]
+fn phone_gate_and_outlet_survive_profile_changes() {
+    let mut r = Runtime::new(RuntimeConfig::default(), "run-1".into()).unwrap();
+    assert!(r.test_dock_gate(Some(true)).is_err(), "no gate servo yet");
+    assert!(r.set_dock_gate(Some((3, 0.5, 0.5))).is_err());
+    assert!(r.set_dock_outlet(Some(0.01)).is_err());
+    r.set_dock_gate(Some((3, 0.8, -0.2))).unwrap();
+    r.set_dock_outlet(Some(0.42)).unwrap();
+    assert_eq!(r.gate_servo(false), Some((3, -0.2)));
+    assert_eq!(r.autonomy.dock_config().outlet_ahead, 0.42);
+    r.apply_rover_profile(rover_profile::RoverProfile::terra())
+        .unwrap();
+    assert_eq!(r.gate_servo(true), Some((3, 0.8)));
+    assert_eq!(r.autonomy.dock_config().outlet_ahead, 0.42);
+    // A gate test holds the gate until it ends.
+    r.test_dock_gate(Some(true)).unwrap();
+    assert_eq!(r.gate_servo(false), Some((3, 0.8)));
+    r.test_dock_gate(None).unwrap();
+    assert_eq!(r.gate_servo(false), Some((3, -0.2)));
+    r.set_dock_outlet(None).unwrap();
+    assert_eq!(
+        r.autonomy.dock_config().outlet_ahead,
+        rover_profile::RoverProfile::terra()
+            .dock_config()
+            .outlet_ahead
+    );
+}

@@ -201,7 +201,12 @@ impl Runtime {
                 });
                 let pose = self.pose.unwrap_or_default().0;
                 self.autonomy.run_id = self.run_id.clone();
-                self.autonomy.apply_dock_request(r, target, pose, now)
+                let accepted = self.autonomy.apply_dock_request(r, target, pose, now);
+                if self.autonomy.dock_active() {
+                    // A gate test ends when a dock takes the gate.
+                    self.gate_test = None;
+                }
+                accepted
             }),
             "goal/decision" => {
                 if let Some(r) = terra_autonomy::decode_decision(&bytes) {

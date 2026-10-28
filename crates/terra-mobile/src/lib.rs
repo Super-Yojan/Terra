@@ -264,6 +264,15 @@ pub struct ControlOutput {
     pub gate_servo: Option<GateServo>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, uniffi::Record)]
+/// The dump gate as the person set it on the phone.
+pub struct DumpGate {
+    /// Actuator id of the positional servo in the layout.
+    pub servo_id: u8,
+    /// Normalized positions, -1..=1.
+    pub open_position: f64,
+    pub closed_position: f64,
+}
+#[derive(Clone, Copy, Debug, PartialEq, uniffi::Record)]
 /// One servo target from Rust control.
 pub struct GateServo {
     /// Actuator id in the layout.
@@ -508,6 +517,39 @@ impl MobileController {
             .map_err(|e| ControllerError::InvalidInput {
                 message: e.to_string(),
             })
+    }
+    /// Dump-gate servo and its open and closed positions, set by the person on
+    /// the phone. They replace the rover profile's gate and survive profile
+    /// changes; `None` returns to the profile's. Local and trusted.
+    ///
+    /// # Errors
+    /// Returns `InvalidInput` for positions outside -1..=1 or equal.
+    pub fn set_dump_gate(&self, gate: Option<DumpGate>) -> Result<(), ControllerError> {
+        let mut b = self.brain.lock().map_err(|_| ControllerError::Internal)?;
+        b.runtime
+            .set_dock_gate(gate.map(|g| (g.servo_id, g.open_position, g.closed_position)))?;
+        Ok(())
+    }
+    /// Dump outlet ahead of the rover centre, metres. Terra's outlet sits over
+    /// the phone, so the apps pass the mount's camera forward offset. `None`
+    /// returns to the rover profile's value.
+    ///
+    /// # Errors
+    /// Returns `InvalidInput` outside 0.05..=3 m.
+    pub fn set_dock_outlet_ahead(&self, metres: Option<f64>) -> Result<(), ControllerError> {
+        let mut b = self.brain.lock().map_err(|_| ControllerError::Internal)?;
+        b.runtime.set_dock_outlet(metres)?;
+        Ok(())
+    }
+    /// Hold the dump gate open (`Some(true)`) or closed to try its positions,
+    /// or end the test (`None`). A running dock always controls the gate.
+    ///
+    /// # Errors
+    /// Returns `InvalidInput` while a dock runs or without a gate servo.
+    pub fn test_dump_gate(&self, open: Option<bool>) -> Result<(), ControllerError> {
+        let mut b = self.brain.lock().map_err(|_| ControllerError::Internal)?;
+        b.runtime.test_dock_gate(open)?;
+        Ok(())
     }
     /// Drive and plan as the rover described by `profile_json`, one entry of
     /// [`rover_profile_presets`] or an edited copy. Sets the planner footprint,

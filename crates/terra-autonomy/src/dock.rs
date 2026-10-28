@@ -70,6 +70,10 @@ pub struct DockConfig {
     /// Inside this body-x range of the bucket centre the camera may lose it;
     /// the rover finishes on odometry and settle reports the result unverified.
     pub blind_range: f64,
+    /// A blind finish still counts as verified when the last in-line camera fix
+    /// came within this much travel of it, metres: an outlet over the camera
+    /// always finishes blind, with the bucket under the phone.
+    pub blind_verify_travel: f64,
     /// Seconds still before `aligned`.
     pub settle_seconds: f64,
     /// Seconds settle waits for a fresh fix before accepting an unverified alignment.
@@ -123,6 +127,7 @@ impl DockConfig {
             lock_timeout: 3.,
             fix_timeout: 1.,
             blind_range: length / 2. + target_radius + 0.35,
+            blind_verify_travel: 0.5,
             settle_seconds: 0.5,
             settle_timeout: 2.,
             gate_open_seconds: 1.5,
@@ -167,6 +172,7 @@ impl DockConfig {
                 self.target_radius,
                 self.min_speed,
                 self.blind_range,
+                self.blind_verify_travel,
                 self.settle_seconds,
                 self.gate_close_seconds,
             ]
@@ -288,6 +294,8 @@ pub struct Dock {
     lock_count: u32,
     retries: u32,
     verified: bool,
+    /// Bucket body range at the last fix that had the rover in line.
+    inline_fix_at: Option<f64>,
     approved: bool,
     approval: DumpApproval,
     still_since: Option<f64>,
@@ -332,6 +340,7 @@ impl Dock {
             lock_count: 0,
             retries: 0,
             verified: false,
+            inline_fix_at: None,
             approved: false,
             approval: DumpApproval::Operator,
             still_since: None,
@@ -442,6 +451,10 @@ impl Dock {
         self.target.y += w * (cy - self.target.y);
         self.last_fix = Some(now);
         self.fixes += 1;
+        let (bx, by) = body(pose, self.target.x, self.target.y);
+        self.inline_fix_at = (by.abs() <= self.config.lateral_tolerance
+            && by.atan2(bx).abs() <= self.config.heading_tolerance)
+            .then_some(bx);
         if self.phase == DockPhase::Lock {
             self.lock_count += 1;
         }
@@ -586,8 +599,17 @@ impl Dock {
                     if bx > self.config.blind_range {
                         return self.back_off(pose, "lost_fix");
                     }
-                    self.verified = false;
-                    self.enter(DockPhase::Aligned, "odometry_only");
+                    self.verified = self
+                        .inline_fix_at
+                        .is_some_and(|at| at - bx <= self.config.blind_verify_travel);
+                    self.enter(
+                        DockPhase::Aligned,
+                        if self.verified {
+                            "verified_blind"
+                        } else {
+                            "odometry_only"
+                        },
+                    );
                 }
                 DockTick {
                     reason: "dock_settle",
@@ -697,6 +719,7 @@ impl Dock {
             self.enter(DockPhase::Failed, &format!("retries_exhausted:{reason}"));
         } else {
             self.retries += 1;
+            self.inline_fix_at = None;
             self.backoff_from = Some((pose.x, pose.y));
             self.enter(DockPhase::Backoff, reason);
         }
@@ -988,13 +1011,27 @@ mod tests {
     }
 
     #[test]
-    fn blind_finish_is_unverified_and_never_auto_dumps() {
+    fn short_blind_finish_in_line_is_verified_and_auto_dumps() {
+        // The outlet over the camera: the bucket leaves view under the phone.
         let config = DockConfig::default();
         let mut sim = Sim::new(Pose::default(), (2.0, 0.));
         sim.blind = config.blind_range;
         let mut dock = Dock::start(config, 1, "t".into(), target(2.0, 0.), sim.pose, 0.).unwrap();
         sim.run(&mut dock, 40., DumpApproval::Auto);
-        assert_eq!(dock.phase, DockPhase::Aligned);
+        assert_eq!(dock.phase, DockPhase::Done, "{:?}", dock.status(sim.now));
+        assert!(dock.verified);
+        assert!(sim.gate_opened);
+    }
+
+    #[test]
+    fn long_blind_finish_is_unverified_and_never_auto_dumps() {
+        let mut config = DockConfig::default();
+        config.blind_range = config.outlet_ahead + 1.0;
+        let mut sim = Sim::new(Pose::default(), (2.4, 0.));
+        sim.blind = config.blind_range;
+        let mut dock = Dock::start(config, 1, "t".into(), target(2.4, 0.), sim.pose, 0.).unwrap();
+        sim.run(&mut dock, 40., DumpApproval::Auto);
+        assert_eq!(dock.phase, DockPhase::Aligned, "{:?}", dock.status(sim.now));
         assert!(!dock.verified);
         assert!(!sim.gate_opened);
         assert!(dock.status(sim.now).awaiting_approval);
