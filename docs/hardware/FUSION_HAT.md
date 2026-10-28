@@ -1,9 +1,10 @@
 # Fusion HAT actuator backend
 
-!!! tip "TL;DR"
-    Library pin is fusion_hat 1.14.0.
-    M0–M3 own fixed pin pairs at 100 Hz.
-    A version string is not electrical proof.
+> [!TIP]
+> **TL;DR**
+> Library pin is fusion_hat 1.14.0.
+> M0–M3 own fixed pin pairs at 100 Hz.
+> A version string is not electrical proof.
 
 ![HAT sits at the end of the Bluetooth path.](../assets/pi-stack.svg)
 
@@ -90,7 +91,6 @@ Check min/center/max or stop/neutral/full calibration against each actuator's ap
 Confirm inversion once, safe output on gate opening, disconnect/watchdog, write failure, restart and shutdown.
 Record board/library identities and measured results separately.
 Source capability checks and saved JSON are not physical verification or calibration certification.
-
 
 Ordinary close retains safe ESC output objects; process exit and object destruction
 can disable pulses, so continuity cannot be guaranteed after service termination.

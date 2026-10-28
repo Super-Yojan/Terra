@@ -1,11 +1,12 @@
 # Building in Xcode
 
-!!! tip "TL;DR"
-    Needs a Mac, Xcode, and iOS 17.
-    `./scripts/build-ios.sh` makes the XCFramework.
-    Linux CI does not run `xcodebuild`.
+> [!TIP]
+> **TL;DR**
+> Needs a Mac, Xcode, and iOS 17.
+> `./scripts/build-ios.sh` makes the XCFramework.
+> Linux CI does not run `xcodebuild`.
 
-![App icon produced for the phone target](../assets/terra-icon.png){ width="180" }
+![App icon produced for the phone target](../assets/terra-icon.png)
 
 *Generated Rust bindings are gitignored under `mobile/ios/Generated/`.*
 
@@ -28,7 +29,7 @@ rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios
 open mobile/ios/TerraPhone.xcodeproj
 ```
 
-![Which scheme destination you pick changes the link](../assets/phone-home.svg){ width="240" }
+![Which scheme destination you pick changes the link](../assets/phone-home.svg)
 
 *Simulator destination for Zenoh. Physical iPhone for Bluetooth. Set a signing team for the phone.*
 

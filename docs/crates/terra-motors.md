@@ -1,10 +1,11 @@
 # terra-motors
 
-!!! tip "TL;DR"
-    Signed effort becomes PWM duty and a direction.
-    Boot assumes the enable switch is open.
-    Closing the switch does not replay the last command.
-    Default watchdog is 200 ms. Zero effort coasts.
+> [!TIP]
+> **TL;DR**
+> Signed effort becomes PWM duty and a direction.
+> Boot assumes the enable switch is open.
+> Closing the switch does not replay the last command.
+> Default watchdog is 200 ms. Zero effort coasts.
 
 ```mermaid
 stateDiagram-v2

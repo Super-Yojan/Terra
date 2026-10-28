@@ -1,0 +1,298 @@
+---
+import BaseLayout from "./BaseLayout.astro";
+import { href, link, type NavSection } from "../consts";
+
+interface Props {
+    title: string;
+    description?: string;
+    /** Shown under the title. Pages written in Markdown leave it out. */
+    lede?: string;
+    /** The nav group this page is in; its pages are listed at the end. */
+    section?: NavSection;
+    /** This page's own route, to mark it in the section list. */
+    current?: string;
+    /** Mono kicker above the title. */
+    kicker?: string;
+    /** Ruled note under the lede. Used for the pre-release warning. */
+    note?: string;
+    manualHref?: string;
+    manualLabel?: string;
+    repoHref?: string;
+    repoLabel?: string;
+    backHref?: string;
+    backLabel?: string;
+}
+
+const fm = Astro.props.frontmatter ?? Astro.props;
+const {
+    title,
+    description,
+    lede,
+    section,
+    current,
+    kicker = section?.title ?? "Terra",
+    note,
+    manualHref,
+    manualLabel = "Manual",
+    repoHref = "https://github.com/Super-Yojan/Terra",
+    repoLabel = "Repository",
+    backHref = section?.path && section.path !== current ? link(section.path) : href("/"),
+    backLabel = section?.path && section.path !== current ? section.title : "Overview",
+} = fm;
+---
+
+<BaseLayout title={title} description={description}>
+    <article class="doc">
+        <header class="post-head shell">
+            <a href={backHref} class="link-wipe back">← {backLabel}</a>
+            <p class="t-label rise" data-delay="80">{kicker}</p>
+            <h1 class="post-title">
+                <span class="reveal-line"><span>{title}</span></span>
+            </h1>
+            {lede && <p class="t-lede rise" data-delay="200">{lede}</p>}
+            {
+                note && (
+                    <aside class="release-note rise" data-delay="320">
+                        <p class="t-label">Pre-release</p>
+                        <p>{note}</p>
+                    </aside>
+                )
+            }
+        </header>
+
+        <div class="shell">
+            <div class="prose">
+                <slot />
+                <p class="end-mark" aria-hidden="true"></p>
+            </div>
+
+            {
+                section && (
+                    <nav class="section-nav" aria-label={section.title}>
+                        <p class="t-label">{section.title}</p>
+                        <ul>
+                            {section.path && (
+                                <li>
+                                    <a
+                                        class="link-wipe"
+                                        href={link(section.path)}
+                                        aria-current={section.path === current ? "page" : undefined}
+                                    >
+                                        Overview
+                                    </a>
+                                </li>
+                            )}
+                            {section.pages.map((p) => (
+                                <li>
+                                    <a
+                                        class="link-wipe"
+                                        href={link(p.path)}
+                                        aria-current={p.path === current ? "page" : undefined}
+                                    >
+                                        {p.label}
+                                    </a>
+                                </li>
+                            ))}
+                        </ul>
+                    </nav>
+                )
+            }
+
+            <footer class="post-foot">
+                <a href={backHref} class="link-wipe">← {backLabel}</a>
+                {
+                    manualHref && (
+                        <a class="link-wipe" href={manualHref}>
+                            {manualLabel}
+                        </a>
+                    )
+                }
+                {
+                    repoHref && (
+                        <a class="link-wipe" href={repoHref}>
+                            {repoLabel}
+                        </a>
+                    )
+                }
+            </footer>
+        </div>
+    </article>
+</BaseLayout>
+
+<style>
+    /* Same reading measure as a blog post: head and prose share one column. */
+    .doc { --shell: 860px; }
+
+    .post-head {
+        padding-top: 160px;
+        padding-bottom: 64px;
+    }
+    .back { margin-bottom: 48px; }
+    .post-head .t-label { margin-bottom: 16px; }
+
+    .post-title {
+        margin-top: 24px;
+        font-size: clamp(2.25rem, 5vw, 3.75rem);
+        font-weight: 700;
+        line-height: 1;
+        letter-spacing: -0.055em;
+    }
+
+    .post-head :global(.t-lede) { max-width: 52ch; }
+
+    /* An ink rule, not a tint, carries the warning. */
+    .release-note {
+        max-width: 62ch;
+        margin-top: 48px;
+        padding-top: 24px;
+        border-top: 1px solid var(--teal-deep);
+    }
+    .release-note p:last-child {
+        margin-top: 12px;
+        color: var(--graphite);
+    }
+
+    .section-nav {
+        margin-top: 64px;
+        padding-top: 32px;
+        border-top: 1px solid var(--rule);
+    }
+    .section-nav ul {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+        gap: 12px 32px;
+        margin-top: 20px;
+        padding: 0;
+        list-style: none;
+    }
+    .section-nav a[aria-current="page"] { color: var(--graphite); }
+
+    .end-mark {
+        width: 10px;
+        height: 10px;
+        margin-top: 48px;
+        background: var(--ink);
+    }
+
+    .post-foot {
+        display: flex;
+        justify-content: space-between;
+        flex-wrap: wrap;
+        gap: 24px;
+        margin-top: 64px;
+        padding-top: 32px;
+        border-top: 1px solid var(--rule);
+    }
+
+    @media (max-width: 900px) {
+        .post-head { padding-top: 120px; }
+        .back { margin-bottom: 32px; }
+    }
+</style>
+
+<style is:global>
+    /* Subhead is the 32px step, set semibold. Title stays at 500. */
+    .doc .prose h2 { font-weight: 600; }
+    .doc .prose h3 { font-weight: 500; }
+    .doc .prose figure,
+    .doc .prose .diagram {
+        margin: 40px 0;
+    }
+    .doc .prose .diagram {
+        max-width: 100%;
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+    }
+    .doc .prose figure svg {
+        display: block;
+        max-width: 100%;
+        height: auto;
+    }
+    /* Flowcharts keep the size Mermaid drew. A narrow column scrolls
+       sideways so the labels stay at reading size. */
+    .doc .prose .diagram svg {
+        display: block;
+        width: auto;
+        max-width: none;
+        height: auto;
+    }
+    .doc .prose figcaption {
+        margin-top: 12px;
+        color: var(--graphite);
+        font-family: var(--font-mono);
+        font-size: 14px;
+        font-weight: 400;
+        line-height: 1.45;
+        letter-spacing: 0.01em;
+        text-transform: lowercase;
+    }
+    .doc .prose img {
+        filter: grayscale(1) contrast(1.08);
+    }
+    .doc .prose .shot-phone {
+        max-width: 280px;
+    }
+    .doc .prose .shot-phone img,
+    .doc .prose figure img {
+        width: 100%;
+        height: auto;
+    }
+    .doc .prose table {
+        display: table;
+        width: 100%;
+        font-size: 15px;
+        table-layout: auto;
+    }
+    .doc .prose thead th,
+    .doc .prose tbody td {
+        white-space: normal;
+        vertical-align: top;
+        overflow-wrap: break-word;
+    }
+    .doc .prose tbody td { line-height: 1.45; }
+
+    /* A warning is a pitch panel, the same tonal flip as a code block,
+       so it cannot be read as a pull quote. No accent color. */
+    .doc .prose blockquote.callout {
+        margin-block: 40px;
+        padding: 20px 24px;
+        border: 0;
+        border-left: 0;
+        border-radius: var(--r-slight);
+        background: var(--pitch);
+        color: var(--paper);
+    }
+    .doc .prose blockquote.callout p { margin: 0; }
+    .doc .prose blockquote.callout > * + * { margin-top: 12px; }
+    .doc .prose blockquote.callout .callout-label { color: var(--safe-light); }
+    .doc .prose blockquote.callout a { color: var(--paper); }
+    .doc .prose blockquote.callout code {
+        background: rgba(255, 255, 255, 0.12);
+        color: var(--paper);
+    }
+
+    /* Diagrams sit on paper, not in a code panel. */
+    .doc .prose pre.mermaid {
+        margin: 0;
+        padding: 0;
+        background: transparent !important;
+        background-color: transparent !important;
+        color: var(--ink);
+        border: 0;
+        white-space: pre;
+    }
+    .doc .prose blockquote.callout strong {
+        font-weight: 500;
+        color: var(--paper);
+    }
+
+    @media (max-width: 600px) {
+        .doc .prose thead th,
+        .doc .prose tbody td {
+            padding: 12px 12px 12px 0;
+        }
+        .doc .prose thead th:last-child,
+        .doc .prose tbody td:last-child { padding-right: 0; }
+        .doc .prose blockquote.callout { padding: 16px 18px; }
+    }
+</style>

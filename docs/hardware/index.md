@@ -1,15 +1,16 @@
 # Hardware
 
-!!! tip "TL;DR"
-    64-bit Pi. Executable `terra-rover`. Fusion HAT.
-    TerraPhone on an iPhone is the controller.
-    The Rust crates do not run on the Pi.
+> [!TIP]
+> **TL;DR**
+> 64-bit Pi. Executable `terra-rover`. Fusion HAT.
+> TerraPhone on an iPhone is the controller.
+> The Rust crates do not run on the Pi.
 
 ![Phone, Bluetooth, Pi, HAT](../assets/pi-stack.svg)
 
 *The Pi relays drive commands from the phone and holds each one for 250 ms.*
 
-![App icon of the rover this service is meant to drive](../assets/terra-icon.png){ width="200" }
+![App icon of the rover this service is meant to drive](../assets/terra-icon.png)
 
 *Artwork from the iOS catalog, not a bench photo.*
 

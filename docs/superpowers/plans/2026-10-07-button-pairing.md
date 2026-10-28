@@ -1,8 +1,9 @@
 # Headless Button Pairing Implementation Plan
 
-!!! tip "TL;DR"
-    Plan for USR-button enrollment.
-    Customer pairing is Just Works inside a 60-second window.
+> [!TIP]
+> **TL;DR**
+> Plan for USR-button enrollment.
+> Customer pairing is Just Works inside a 60-second window.
 
 ![Steps the plan asked for.](../../assets/pairing.svg)
 

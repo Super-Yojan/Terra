@@ -1,8 +1,9 @@
 # Bluetooth actuator evidence status
 
-!!! tip "TL;DR"
-    Compiled bundle was built and checked.
-    Radio timing and the physical bench were not.
+> [!TIP]
+> **TL;DR**
+> Compiled bundle was built and checked.
+> Radio timing and the physical bench were not.
 
 ![The service this evidence is about.](../../assets/pi-stack.svg)
 
@@ -33,7 +34,6 @@ Those reviews considered schema validation, resource aliases, owner admission, f
 Source review provides no measurement or runtime proof.
 In particular, compilation/generated API spelling, BlueZ/iOS pairing and long reads, vendor electrical compatibility, pulse widths, cutoff behavior, 10 ms worker scheduling, 200 ms expiry and 210 ms safe requests remain unverified.
 Preservation of Zenoh paths is a source-level implementation claim; regression behavior was not exercised.
-
 
 The Task 9 automated round-trip test and acceptance runs were deliberately omitted.
 No issue acceptance criteria are proven by this directory. Plan test/bench boxes

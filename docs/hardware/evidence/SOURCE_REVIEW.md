@@ -1,8 +1,9 @@
 # Bluetooth implementation source review
 
-!!! tip "TL;DR"
-    Source was read. It was not run on a rover.
-    Later packaging checks are a different record.
+> [!TIP]
+> **TL;DR**
+> Source was read. It was not run on a rover.
+> Later packaging checks are a different record.
 
 ![Pairing flow under review.](../../assets/pairing.svg)
 

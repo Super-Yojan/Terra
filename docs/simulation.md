@@ -1,10 +1,11 @@
 # Simulation
 
-!!! tip "TL;DR"
-    The world is [Zorvane](https://super-yojan.dev/Zorvane/).
-    Command: `cargo run -p zorvane`.
-    Prefix stays `terra/rover`.
-    Only the iOS Simulator joins that peer.
+> [!TIP]
+> **TL;DR**
+> The world is [Zorvane](https://super-yojan.dev/Zorvane/).
+> Command: `cargo run -p zorvane`.
+> Prefix stays `terra/rover`.
+> Only the iOS Simulator joins that peer.
 
 ```mermaid
 flowchart LR
@@ -16,7 +17,7 @@ flowchart LR
 
 *Terra keeps the follower, mapper, planner, and arbiter. Zorvane keeps cameras and physics.*
 
-![Placeholder of the Bevy connection fields](assets/phone-simulator.svg){ width="240" }
+![Placeholder of the Bevy connection fields](assets/phone-simulator.svg)
 
 *Same Mac: `TERRA_ZENOH_LISTEN=tcp/0.0.0.0:7447`. Phone field: `tcp/127.0.0.1:7447`.*
 

@@ -1,0 +1,16 @@
+{
+  "name": "terra-docs",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview"
+  },
+  "dependencies": {
+    "@astrojs/sitemap": "3.6.0",
+    "@fontsource-variable/geist": "5.3.0",
+    "astro": "5.16.6",
+    "mermaid": "11.12.0"
+  }
+}

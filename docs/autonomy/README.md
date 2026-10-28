@@ -1,10 +1,11 @@
 # Mission autonomy
 
-!!! tip "TL;DR"
-    Teleop, assisted teleop, L2 direct waypoint, L3 obstacle-aware waypoint, supervised exploration and L4 target search share one arbiter.
-    Time-bounded autonomous frontier exploration uses the same safety arbiter.
-    Stop latches until reset.
-    The reference mission runs in Zorvane, not in this repo.
+> [!TIP]
+> **TL;DR**
+> Teleop, assisted teleop, L2 direct waypoint, L3 obstacle-aware waypoint, supervised exploration and L4 target search share one arbiter.
+> Time-bounded autonomous frontier exploration uses the same safety arbiter.
+> Stop latches until reset.
+> The reference mission runs in Zorvane, not in this repo.
 
 ![teleop, assisted teleop, waypoint, supervised.](../assets/levels.svg)
 
@@ -37,7 +38,6 @@ The mission requires finding three simulated survivors, confirming their observe
 Locations are private simulator ground truth until a rover is within 5 m and the complete occupancy ray to the target is observed free.
 These are simulated detection rules, not a validated human-detection sensor model.
 Mission obstacles and rover maps are separate from hidden targets.
-
 
 Connect the ARGOS Rust server to `tcp/127.0.0.1:7447`, then open its React browser UI. Explicitly choose a level before sending a waypoint:
 
@@ -89,7 +89,6 @@ Space in Zorvane latches emergency stop; release alone does not reset it.
 Keyboard release, focus loss, changing selected rover, and connection loss revoke dashboard driving intent.
 Fleet actions fan out independently; unacknowledged targets are not reported as stopped.
 
-
 ## Trial design and logs
 
 `TERRA_TRIAL_DESIGN=fixed` with `TERRA_ASSIGNED_LEVEL=waypoint` records a fixed assigned condition. `TERRA_TRIAL_DESIGN=adaptive` records operator-selected switching. Assigned conditions remain unchanged on takeover; actual requests/effective levels are recorded separately. The assigned variable labels the trial, not a lock preventing emergency intervention. Balance trial order and use multiple recorded scenario seeds in the study protocol; this implementation does not infer causality or an optimal policy from a single run.
@@ -107,7 +106,6 @@ Remote-supervisor mode sends goals and control intent to Zorvane instead of runn
 Depthless devices hold levels needing maps.
 The optional Rust phone control endpoint currently accepts loopback addresses only: LAN exposure was rejected by automatic approval review and remains a separate approval/security-boundary decision.
 Physical device navigation, braking calibration, and real survivor detection are not inferred from Zorvane or Xcode build results.
-
 
 ARGOS exports operator JSONL sessions. Join action tokens and teleop session/sequence values to rover receipts; do not count both ends as two interventions. `/experiment/status` provides run identity and paired run-time/UTC samples. Clock offsets and network uncertainty must be retained rather than treating two machines' monotonic clocks as interchangeable.
 

@@ -1,9 +1,10 @@
 # terra-transport
 
-!!! tip "TL;DR"
-    `RoverConnection` is a TCP client. Simulator only.
-    It publishes `cmd_vel` at 20 Hz and drops the lease after 250 ms.
-    `ControlPlane` listens only on `tcp/127.0.0.1`.
+> [!TIP]
+> **TL;DR**
+> `RoverConnection` is a TCP client. Simulator only.
+> It publishes `cmd_vel` at 20 Hz and drops the lease after 250 ms.
+> `ControlPlane` listens only on `tcp/127.0.0.1`.
 
 ```mermaid
 flowchart LR
