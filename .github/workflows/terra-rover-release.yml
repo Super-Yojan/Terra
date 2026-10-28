@@ -1,6 +1,8 @@
 # Publish terra-rover-<version>-linux-arm64.tar.gz and its .sha256.
-# Push an existing tag rover-v<version> (for example rover-v0.2.0) that matches
-# hardware/raspberry-pi/pyproject.toml. This workflow does not create tags.
+# Push a tag rover-v<version> (for example rover-v0.3.0) that matches
+# hardware/raspberry-pi/pyproject.toml. Or run it by hand from a branch with that
+# tag name: if the tag does not exist yet, the release creates it at the commit
+# the run was started from.
 name: Publish terra-rover release
 
 on:
@@ -10,7 +12,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Existing tag to publish, for example rover-v0.2.0. Must match the packaged version. Does not create a tag."
+        description: "Tag to publish, for example rover-v0.3.0. Must match the packaged version. A missing tag is created at the commit this run starts from."
         required: true
         type: string
 
@@ -52,10 +54,12 @@ jobs:
           esac
           echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
 
+      # A pushed tag runs at the tagged commit. A manual run builds the commit it
+      # was started from, and the publish step checks it against the tag.
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          ref: ${{ steps.tag.outputs.tag }}
+          ref: ${{ github.sha }}
 
       - name: Require the tag to match the packaged version
         env:
@@ -131,12 +135,22 @@ jobs:
             echo "refusing: GitHub release ${RELEASE_TAG} already exists" >&2
             exit 1
           fi
+          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${RELEASE_TAG}" >/dev/null 2>&1; then
+            tagged="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${RELEASE_TAG}" --jq .sha)"
+            if [ "${tagged}" != "${GITHUB_SHA}" ]; then
+              echo "refusing: tag ${RELEASE_TAG} is ${tagged}, but this run built ${GITHUB_SHA}" >&2
+              exit 1
+            fi
+            target=(--verify-tag)
+          else
+            target=(--target "${GITHUB_SHA}")
+          fi
           notes="$(printf '%s\n' \
             "terra-rover ${version} for 64-bit Raspberry Pi OS Bookworm or newer." \
             "Verify with: sha256sum -c ${name}.tar.gz.sha256" \
             "https://github.com/Super-Yojan/Terra/releases/download/${RELEASE_TAG}/${name}.tar.gz" \
             "The image build in Super-Yojan/terra-image-gen consumes this tarball and hash.")"
           gh release create "${RELEASE_TAG}" "${tarball}" "${checksum}" \
-            --verify-tag \
+            "${target[@]}" \
             --title "terra-rover ${version}" \
             --notes "${notes}"
