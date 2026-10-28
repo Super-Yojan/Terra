@@ -1,6 +1,7 @@
 package dev.superyojan.terra.phone
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -8,6 +9,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
 
 class TerraApp : android.app.Application() {
     override fun onCreate() {
@@ -42,6 +44,7 @@ class MainActivity : ComponentActivity() {
                         }
                     },
                     onScanBluetooth = { requestBluetoothScan() },
+                    onShareLog = { shareRunLog() },
                 )
             }
         }
@@ -57,6 +60,17 @@ class MainActivity : ComponentActivity() {
             ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
         }
         if (missing.isEmpty()) session.scanBluetooth() else bluetoothPermission.launch(missing.toTypedArray())
+    }
+
+    /** Hands the current run's JSONL log to any app that takes a file. */
+    private fun shareRunLog() {
+        val log = session.runLog?.takeIf { it.isFile } ?: return
+        val uri = FileProvider.getUriForFile(this, "$packageName.runlogs", log)
+        val send = Intent(Intent.ACTION_SEND)
+            .setType("application/json")
+            .putExtra(Intent.EXTRA_STREAM, uri)
+            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        startActivity(Intent.createChooser(send, "Share run log"))
     }
 
     override fun onStop() {

@@ -16,7 +16,7 @@ import androidx.compose.ui.unit.dp
 fun BluetoothSection(
     session: TerraSession,
     onScan: () -> Unit,
-    onEffort: (Pair<Float, Float>) -> Unit,
+    onDisarm: () -> Unit,
 ) {
     val link = session.ble
     SectionCard("Bluetooth actuators") {
@@ -52,17 +52,12 @@ fun BluetoothSection(
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(
-                onClick = {
-                    onEffort(0f to 0f)
-                    session.setBluetoothEffort(0.0, 0.0)
-                    session.armBluetooth()
-                },
+                onClick = { session.armBluetooth() },
                 enabled = link.ready && !link.armed,
             ) { Text("Arm") }
             OutlinedButton(
                 onClick = {
-                    onEffort(0f to 0f)
-                    session.setBluetoothEffort(0.0, 0.0)
+                    onDisarm()
                     session.disarmBluetooth()
                 },
                 enabled = link.connected,
@@ -80,7 +75,7 @@ fun BluetoothSection(
             Text("Refresh configuration")
         }
         Text(
-            "Hold USR for three seconds, then scan for terra-XXXXXX. Accept pairing when the phone asks. Pairing does not arm the motors. Arm sends a safe output first. The sliders drive only while armed. Disarm, Stop, emergency stop, and leaving the app send safe output. Stop and leaving the app also drop the link. Stage sends the layout last read from the rover; Commit applies that stage. This screen has no layout editor. Radio behavior still needs a rover to verify.",
+            "Hold USR for three seconds, then scan for terra-XXXXXX. Accept pairing when the phone asks. Pairing does not arm the motors. Arm sends a safe output first. Motors move only while armed, with Phone IMU + VIO or Bluetooth drive running, the mount confirmed, and the Rust gate allowing it. Disarm, Stop, emergency stop, and leaving the app send safe output. Stop and leaving the app also drop the link. Stage sends the layout last read from the rover; Commit applies that stage. This screen has no layout editor. Radio behavior still needs a rover to verify.",
             style = MaterialTheme.typography.bodySmall,
         )
     }

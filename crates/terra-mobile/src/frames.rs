@@ -628,9 +628,34 @@ pub(crate) fn quaternion_from_matrix(m: [[f64; 3]; 3]) -> Quaternion {
 }
 
 /// Deterministic contract and regression scenarios for this module.
+/// Put an AR frame time on the sensor clock. ARCore leaves its frame time base
+/// open (in practice `System.nanoTime`), while Android sensor events use
+/// `elapsedRealtimeNanos`; the two differ by the time the phone has slept since
+/// boot. A frame within 1 s of the sensor clock is kept, one within 1 s of the
+/// monotonic clock is shifted onto the sensor clock, and any other is stamped
+/// `sensor_now_s`. All values are seconds.
+#[uniffi::export]
+pub fn ar_time_on_sensor_clock(frame_s: f64, monotonic_now_s: f64, sensor_now_s: f64) -> f64 {
+    if (sensor_now_s - frame_s).abs() <= 1.0 {
+        frame_s
+    } else if (monotonic_now_s - frame_s).abs() <= 1.0 {
+        frame_s + (sensor_now_s - monotonic_now_s)
+    } else {
+        sensor_now_s
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    /// Monotonic frame times move onto the boot-time sensor clock.
+    fn ar_time_moves_onto_the_sensor_clock() {
+        assert_eq!(ar_time_on_sensor_clock(99.9, 50.0, 100.0), 99.9);
+        assert!((ar_time_on_sensor_clock(49.9, 50.0, 3650.0) - 3649.9).abs() < 1e-9);
+        assert_eq!(ar_time_on_sensor_clock(7.0, 50.0, 3650.0), 3650.0);
+    }
 
     /// Assert equality of deterministic frame/plant results within an absolute tolerance of 1e-9.
     fn approx(a: f64, b: f64) {
