@@ -246,6 +246,7 @@ impl Runtime {
             autonomy.configure_planner(config.navigation.planner());
         }
         autonomy.configure_turning(config.navigation.turning)?;
+        autonomy.explorer.config_mut().through_unknown = config.navigation.explore_through_unknown;
         let mut outdoor = terra_autonomy::outdoor::OutdoorController::default();
         outdoor.supported = config.outdoor_supported;
         let mut navigation = navigation::State::default();
@@ -322,6 +323,8 @@ impl Runtime {
             .configure_planner(self.navigation.parameters.planner());
         self.autonomy
             .configure_turning(self.navigation.parameters.turning)?;
+        self.autonomy.explorer.config_mut().through_unknown =
+            self.navigation.parameters.explore_through_unknown;
         Ok(())
     }
     /// Begin a fresh control session while retaining configured policy and calibration.
@@ -487,6 +490,7 @@ impl Runtime {
         }
         self.autonomy.configure_planner(navigation.planner());
         self.autonomy.configure_turning(navigation.turning)?;
+        self.autonomy.explorer.config_mut().through_unknown = navigation.explore_through_unknown;
         self.controller = VelocityController::new(controller)?;
         self.configuration.controller = controller;
         self.control_limits = (controller.max_forward, controller.max_yaw_rate);

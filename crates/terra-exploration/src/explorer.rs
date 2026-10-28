@@ -1,6 +1,7 @@
 use crate::{
     Detection, EndReason, FrontierCandidate, GoalScorer, InformationGainScorer, MissionObjective,
     ObjectiveContext, TimeBudgetObjective, map_coverage, select_frontier,
+    select_frontier_through_unknown,
 };
 use serde::{Deserialize, Serialize};
 use terra_mapping::MapSnapshot;
@@ -105,12 +106,20 @@ pub struct ExplorationConfig {
     /// A front depth camera cannot see beside or behind the chassis. When no
     /// frontier is reachable and unknown cells lie within [`Self::scan_radius`],
     /// the rover turns in place once so the camera maps around it before the run
-    /// gives up. Unknown space stays an obstacle throughout.
+    /// gives up. Unknown space stays an obstacle unless [`Self::through_unknown`] is set.
     pub scan_yaw_rate: f64,
     /// Metres beyond the footprint radius in which unknown cells trigger a look-around.
     pub scan_radius: f64,
     /// Seconds a look-around may take before it counts as finished.
     pub scan_timeout: f64,
+    /// Plan through unknown space instead of treating it as an obstacle. Off by default.
+    ///
+    /// Frontier choice, routes, local rollouts and the look-around then pass
+    /// through unknown cells; occupied cells and map bounds still block, and the
+    /// goal must be an observed free cell. The local planner stops for obstacles
+    /// as the front camera observes them, which only holds while the camera sees
+    /// farther ahead than the rover travels in one planner horizon.
+    pub through_unknown: bool,
 }
 impl Default for ExplorationConfig {
     fn default() -> Self {
@@ -128,6 +137,7 @@ impl Default for ExplorationConfig {
             scan_yaw_rate: 0.35,
             scan_radius: 1.,
             scan_timeout: terra_types::timing::EXPLORATION_SCAN_TIMEOUT_SECONDS,
+            through_unknown: false,
         }
     }
 }
@@ -441,8 +451,12 @@ impl Explorer {
                 self.best_distance = None;
             } else if tracking && tick.goal_active {
                 let unreachable = tick.map.is_none_or(|map| {
+                    let passable = self
+                        .config
+                        .through_unknown
+                        .then(|| terra_navigation::unknown_as_free(map));
                     !reachable(
-                        map,
+                        passable.as_ref().unwrap_or(map),
                         tick.pose,
                         self.config.footprint_radius,
                         target.x,
@@ -507,7 +521,12 @@ impl Explorer {
     }
     fn choose(&self, map: &MapSnapshot, pose: Pose, now: f64) -> Option<FrontierCandidate> {
         let excluded = self.excluded(now);
-        select_frontier(
+        let select = if self.config.through_unknown {
+            select_frontier_through_unknown
+        } else {
+            select_frontier
+        };
+        select(
             map,
             pose,
             self.config.footprint_radius,

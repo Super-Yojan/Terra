@@ -28,6 +28,13 @@ impl AutonomyArbiter {
             None
         }
     }
+    /// Explore through unknown space plans on a copy whose unknown cells are free.
+    /// The explorer itself still reads the real map for frontiers and the look-around.
+    pub(super) fn explore_planning_map(&self, input: &ArbiterInput<'_>) -> Option<MapSnapshot> {
+        (self.level == Level::Explore && self.explorer.config().through_unknown)
+            .then(|| input.map.map(terra_navigation::unknown_as_free))
+            .flatten()
+    }
     pub(super) fn select_motion(
         &mut self,
         input: &ArbiterInput<'_>,

@@ -24,6 +24,9 @@ pub struct Parameters {
     pub max_angular: f64,
     /// Planner rollout horizon, seconds, validated in 0.5..=5.
     pub horizon: f64,
+    /// L4 Explore plans through unknown space; occupied cells still block. Off when omitted.
+    #[serde(default)]
+    pub explore_through_unknown: bool,
 }
 fn default_reverse() -> f64 {
     0.15
@@ -45,6 +48,7 @@ impl Default for Parameters {
             max_linear: 2.,
             max_angular: 2.,
             horizon: 2.,
+            explore_through_unknown: false,
         }
     }
 }
@@ -177,6 +181,7 @@ pub fn apply(b: &mut super::Runtime, bytes: &[u8], age: f64, now: f64) -> bool {
     b.autonomy
         .configure_turning(r.parameters.turning)
         .expect("validated turning settings");
+    b.autonomy.explorer.config_mut().through_unknown = r.parameters.explore_through_unknown;
     b.controller.reset();
     b.navigation.parameters = r.parameters;
     b.navigation.revision += 1;
