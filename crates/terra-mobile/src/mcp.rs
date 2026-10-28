@@ -18,6 +18,9 @@ const LOOK_MAX_AGE_SECONDS: f64 = 2.;
 const TRANSCRIPT_LIMIT: usize = 8;
 /// Replies without a tool call before the on-phone agent gives up the task.
 const BAD_REPLY_LIMIT: u32 = 3;
+/// Prompts and tool calls kept for the agent debug page.
+const DEBUG_LIMIT: usize = 30;
+const DEBUG_TEXT_CHARS: usize = 8000;
 
 #[derive(Default)]
 pub(crate) struct McpState {
@@ -29,6 +32,58 @@ pub(crate) struct McpState {
     frame: Option<(Vec<u8>, f64)>,
     agent: InProcessAgent,
     next_stop: u64,
+    /// Every tool call from any session, newest last, for the debug page.
+    call_log: VecDeque<Value>,
+    /// On-phone prompts with the model's reply and what Rust did with it, newest last.
+    exchanges: VecDeque<Exchange>,
+}
+
+/// One on-phone prompt and its answer, for the agent debug page.
+#[derive(Clone, Debug, Default, serde::Serialize)]
+struct Exchange {
+    prompt_id: u64,
+    task_id: String,
+    asked_at: f64,
+    attach_image: bool,
+    prompt: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reply: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    arguments: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    result: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ok: Option<bool>,
+    /// The reply had no usable tool call, or the model failed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    latency_seconds: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    answered_at: Option<f64>,
+}
+
+fn unix_now() -> f64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0., |d| d.as_secs_f64())
+}
+
+fn clip(text: &str, limit: usize) -> String {
+    let mut out: String = text.chars().take(limit).collect();
+    if out.len() < text.len() {
+        out.push_str(" …");
+    }
+    out
+}
+
+fn push_limited<T>(list: &mut VecDeque<T>, item: T) {
+    list.push_back(item);
+    while list.len() > DEBUG_LIMIT {
+        list.pop_front();
+    }
 }
 
 /// Conversation state of the on-phone agent. Rust writes every prompt; the phone only generates.
@@ -175,8 +230,27 @@ impl MobileController {
         }
     }
 
-    /// Run one tool. Returns an MCP `tools/call` result.
+    /// Run one tool and log it for the debug page. Returns an MCP `tools/call` result.
     fn call_tool(&self, session: &str, name: &str, args: &Value) -> Value {
+        let result = self.run_tool(session, name, args);
+        if let Ok(mut m) = self.mcp.lock() {
+            let body = match result["content"][0]["type"].as_str() {
+                Some("image") => "(camera image)".to_owned(),
+                _ => clip(
+                    result["content"][0]["text"].as_str().unwrap_or_default(),
+                    1200,
+                ),
+            };
+            push_limited(
+                &mut m.call_log,
+                json!({"at": unix_now(), "session": session, "tool": name, "arguments": args,
+                    "ok": result["isError"] == false, "result": body}),
+            );
+        }
+        result
+    }
+
+    fn run_tool(&self, session: &str, name: &str, args: &Value) -> Value {
         if let Ok(mut m) = self.mcp.lock() {
             let now = Instant::now();
             let calls = m.calls.entry(session.to_owned()).or_default();
@@ -520,8 +594,18 @@ impl MobileController {
         }
         prompt.push_str("\nCall exactly one tool.");
         let attach_image = std::mem::take(&mut a.attach_image);
+        let prompt_id = a.next_prompt;
+        let exchange = Exchange {
+            prompt_id,
+            task_id: a.task_id.clone().unwrap_or_default(),
+            asked_at: unix_now(),
+            attach_image,
+            prompt: clip(&prompt, DEBUG_TEXT_CHARS),
+            ..Default::default()
+        };
+        push_limited(&mut m.exchanges, exchange);
         Some(MobileAgentPrompt {
-            prompt_id: a.next_prompt,
+            prompt_id,
             system: agent_system_prompt(),
             prompt,
             attach_image,
@@ -542,6 +626,12 @@ impl MobileController {
             m.agent.outstanding = None;
         }
         let call = parse_tool_call(&reply);
+        let mut record = Exchange {
+            reply: Some(clip(&reply, DEBUG_TEXT_CHARS)),
+            latency_seconds: Some(latency_seconds),
+            answered_at: Some(unix_now()),
+            ..Default::default()
+        };
         let (line, resume) = match call {
             Err(why) => {
                 let give_up = self
@@ -559,6 +649,7 @@ impl MobileController {
                         &json!({"status":"fail","rationale":"the on-phone agent sent 3 replies without a tool call"}),
                     );
                 }
+                record.error = Some(why.clone());
                 (
                     format!("(no tool call: {why}; reply with one <tool_call>)"),
                     None,
@@ -577,6 +668,10 @@ impl MobileController {
                 };
                 let ok = result["isError"] == false;
                 let body = result["content"][0]["text"].as_str().unwrap_or_default();
+                record.tool = Some(name.clone());
+                record.arguments = Some(args.clone());
+                record.result = Some(clip(body, 1200));
+                record.ok = Some(ok);
                 let body: String = body.chars().take(600).collect();
                 let resume = match name.as_str() {
                     "wait" => Some(Some(
@@ -611,6 +706,21 @@ impl MobileController {
                 a.transcript.pop_front();
             }
             a.resume = resume;
+            if let Some(e) = m
+                .exchanges
+                .iter_mut()
+                .rev()
+                .find(|e| e.prompt_id == prompt_id)
+            {
+                e.reply = record.reply;
+                e.tool = record.tool;
+                e.arguments = record.arguments;
+                e.result = record.result;
+                e.ok = record.ok;
+                e.error = record.error;
+                e.latency_seconds = record.latency_seconds;
+                e.answered_at = record.answered_at;
+            }
         }
         true
     }
@@ -624,6 +734,15 @@ impl MobileController {
             return false;
         }
         m.agent.outstanding = None;
+        if let Some(e) = m
+            .exchanges
+            .iter_mut()
+            .rev()
+            .find(|e| e.prompt_id == prompt_id)
+        {
+            e.error = Some(format!("model error: {}", clip(&reason, 500)));
+            e.answered_at = Some(unix_now());
+        }
         let line: String = format!("(model error: {reason})")
             .chars()
             .take(200)
@@ -634,6 +753,115 @@ impl MobileController {
         }
         true
     }
+
+    /// Everything the agent debug page shows: who is attached, the task, why the
+    /// on-phone agent is or is not being prompted, its last prompts and replies, and
+    /// every tool call from any session. JSON.
+    pub fn agent_debug_json(&self) -> String {
+        let snapshot = self.snapshot();
+        let (agent_name, task) = match self.brain.lock() {
+            Ok(b) => (
+                b.autonomy.task_agent().map(str::to_owned),
+                b.autonomy.task_status(b.last_tick),
+            ),
+            Err(_) => (None, None),
+        };
+        let Ok(m) = self.mcp.lock() else {
+            return "{}".into();
+        };
+        let a = &m.agent;
+        let mcp_task = task
+            .as_ref()
+            .is_some_and(|t| t.agent == terra_autonomy::TaskAgent::Mcp && !t.phase.terminal());
+        let waiting = if agent_name.is_none() {
+            "no agent attached (the model has not loaded)"
+        } else if !a.attached {
+            "attached as a remote agent; the phone does not prompt it"
+        } else if !mcp_task {
+            "no MCP task running (start one in ARGOS with MCP agent)"
+        } else if m
+            .controller
+            .as_ref()
+            .is_some_and(|(_, owner)| owner != IN_PROCESS_SESSION)
+        {
+            "another MCP session controls this task"
+        } else if a.outstanding.is_some() {
+            "model is answering"
+        } else if let Some((on, until)) = &a.resume {
+            if *on == snapshot && until.is_none_or(|t| Instant::now() < t) {
+                if on.drive_request {
+                    "waiting for the operator to approve drive"
+                } else if on.phase == Some(TaskPhase::WaitingOperator) {
+                    "waiting for the operator's answer"
+                } else if on.phase == Some(TaskPhase::Navigating) {
+                    "rover is driving the plan"
+                } else {
+                    "waiting for the task to change"
+                }
+            } else {
+                "ready for the next prompt"
+            }
+        } else {
+            "ready for the next prompt"
+        };
+        json!({
+            "agent": agent_name,
+            "in_process": a.attached,
+            "controller": m.controller.as_ref().map(|(task, session)| json!({"task_id": task, "session": session})),
+            "status": waiting,
+            "outstanding_prompt": a.outstanding,
+            "bad_replies": a.bad_replies,
+            "bad_reply_limit": BAD_REPLY_LIMIT,
+            "task": task,
+            "transcript": a.transcript,
+            "exchanges": m.exchanges,
+            "calls": m.call_log,
+        })
+        .to_string()
+    }
+
+    /// Clear the debug page's prompt and call history. The agent's own transcript stays.
+    pub fn clear_agent_debug(&self) {
+        if let Ok(mut m) = self.mcp.lock() {
+            m.exchanges.clear();
+            m.call_log.clear();
+        }
+    }
+}
+
+/// The on-phone agent's instructions, for a test prompt on the debug page.
+#[uniffi::export]
+pub fn agent_system_prompt_text() -> String {
+    agent_system_prompt()
+}
+
+/// The MCP tools as chat-template tool specs (`{"type":"function","function":{name,
+/// description, parameters}}`), so a local model sees them in its native format. JSON array.
+#[uniffi::export]
+pub fn agent_tool_specs_json() -> String {
+    Value::Array(
+        tools()
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|t| {
+                json!({"type": "function", "function": {
+                    "name": t["name"], "description": t["description"], "parameters": t["inputSchema"]}})
+            })
+            .collect(),
+    )
+    .to_string()
+}
+
+/// What Rust would make of a model reply, without running it: `{"ok":true,"tool","arguments"}`
+/// or `{"ok":false,"error"}`. For the debug page's test prompt.
+#[uniffi::export]
+pub fn agent_parse_reply(reply: String) -> String {
+    match parse_tool_call(&reply) {
+        Ok((tool, arguments)) => json!({"ok": true, "tool": tool, "arguments": arguments}),
+        Err(error) => json!({"ok": false, "error": error}),
+    }
+    .to_string()
 }
 
 /// The tool call in a model reply: `<tool_call>{"name":..,"arguments":{..}}</tool_call>`,

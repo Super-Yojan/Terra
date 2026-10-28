@@ -143,7 +143,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
     /// On-phone language model for L5 tasks; nil when this phone has none.
     private let taskModel = TaskModelRunner.onDevice()
     /// Qwen 3.5 2B as the on-phone MCP agent for L5 tasks; loads on the first phone start.
-    private let taskAgent = TaskAgentRunner()
+    let taskAgent = TaskAgentRunner()
     private var detectorHealth = "not started"
     private var feedbackTrackingHealthy = false
     private var phoneFrameOrder = PhoneFrameOrder()
@@ -576,14 +576,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
         // L5 is offered only when the phone can run a model.
         try self.controller?.setTaskModel(name: mode == .phone ? taskModel?.model.name : nil)
         try self.controller?.setTaskAgent(name: mode == .phone ? taskAgent.model?.name : nil, inProcess: true)
-        if mode == .phone && taskAgent.model == nil {
-            taskAgent.load { [weak self] name in
-                self?.controlQueue.async {
-                    guard let self, self.mode == .phone else { return }
-                    try? self.controller?.setTaskAgent(name: name, inProcess: true)
-                }
-            }
-        }
+        if mode == .phone && taskAgent.model == nil { loadTaskAgent() }
         self.occupancyMap = try MobileOccupancyMap(settings: self.occupancySettings)
         self.floorEpoch &+= 1
         if let map = self.occupancyMap { try self.controller?.attachOccupancyMap(map: map); map.setClassificationDebug(enabled: classificationDebugEnabled) }
@@ -1054,6 +1047,24 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
         }
     }
     func clearObjectMap() { controlQueue.async { try? self.controller?.clearObjectMap() } }
+    /// Download (first time) and load the on-phone agent model. In phone mode the rover
+    /// then offers it to ARGOS as the MCP agent.
+    func loadTaskAgent() {
+        taskAgent.load { [weak self] name in
+            self?.controlQueue.async {
+                guard let self, self.mode == .phone else { return }
+                try? self.controller?.setTaskAgent(name: name, inProcess: true)
+            }
+        }
+    }
+    /// Rust's agent trace (status, prompts, replies, tool calls), delivered on the main queue.
+    func agentDebugJSON(_ deliver: @escaping (String) -> Void) {
+        controlQueue.async {
+            let json = self.controller?.agentDebugJson() ?? ""
+            DispatchQueue.main.async { deliver(json) }
+        }
+    }
+    func clearAgentDebug() { controlQueue.async { self.controller?.clearAgentDebug() } }
     func setClassificationDebug(_ enabled: Bool) {
         controlQueue.async {
             self.classificationDebugEnabled = enabled
