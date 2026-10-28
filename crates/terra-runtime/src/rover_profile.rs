@@ -39,6 +39,53 @@ pub struct RoverProfile {
     pub wheel_deadband: f64,
     /// Open-loop wheel effort for a managed in-place spin, 0..=1.
     pub spin_effort: f64,
+    /// Dump outlet and gate servo. Older profiles without it get the defaults.
+    #[serde(default)]
+    pub dock: DockProfile,
+}
+
+/// Where the dump outlet sits and which servo opens its gate.
+///
+/// The real dumper's size and servo are not measured yet, so every field is
+/// optional: without `outlet_ahead` the outlet is taken to sit just past the
+/// front bumper, and without `gate_servo` the dock still aligns and reports
+/// the gate request but drives no servo.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct DockProfile {
+    /// Rover centre to outlet centre along the body, metres, 0.05..=3.
+    pub outlet_ahead: Option<f64>,
+    /// Actuator id of the positional servo on the gate, from the actuator layout.
+    pub gate_servo: Option<u8>,
+    /// Normalized servo positions, -1..=1.
+    pub gate_open: f64,
+    pub gate_closed: f64,
+    /// Seconds the gate stays open per dump, 0.2..=10.
+    pub gate_open_seconds: f64,
+}
+
+impl Default for DockProfile {
+    fn default() -> Self {
+        Self {
+            outlet_ahead: None,
+            gate_servo: None,
+            gate_open: 1.,
+            gate_closed: -1.,
+            gate_open_seconds: 1.5,
+        }
+    }
+}
+
+impl DockProfile {
+    pub fn valid(&self) -> bool {
+        self.outlet_ahead
+            .is_none_or(|v| v.is_finite() && (0.05..=3.).contains(&v))
+            && [self.gate_open, self.gate_closed]
+                .iter()
+                .all(|v| v.is_finite() && (-1.0..=1.0).contains(v))
+            && self.gate_open_seconds.is_finite()
+            && (0.2..=10.).contains(&self.gate_open_seconds)
+    }
 }
 
 impl RoverProfile {
@@ -58,6 +105,7 @@ impl RoverProfile {
             skid_factor: 2.4,
             wheel_deadband: 0.,
             spin_effort: 0.35,
+            dock: DockProfile::default(),
         }
     }
     /// terra-mini (four DC motors on the Fusion HAT): 7 in (0.178 m) square
@@ -82,6 +130,7 @@ impl RoverProfile {
             skid_factor: 2.,
             wheel_deadband: 0.3,
             spin_effort: 0.6,
+            dock: DockProfile::default(),
         }
     }
     pub fn presets() -> Vec<Self> {
@@ -111,6 +160,26 @@ impl RoverProfile {
             && self.min_turn_radius > 0.
             && self.min_turn_radius <= 5.
             && (self.spin_effort == 0. || self.spin_effort > self.wheel_deadband)
+            && self.dock.valid()
+    }
+    /// Docking geometry and turning for this body.
+    pub fn dock_config(&self) -> terra_autonomy::DockConfig {
+        let mut config = terra_autonomy::DockConfig::for_body(
+            self.length,
+            self.width,
+            self.allow_in_place,
+            self.min_turn_radius,
+        );
+        if let Some(ahead) = self.dock.outlet_ahead {
+            config.outlet_ahead = ahead;
+            config.blind_range = ahead + 0.35;
+        }
+        config.gate_open_seconds = self.dock.gate_open_seconds;
+        // Stay under the profile's own speed limit.
+        config.approach_speed = config.approach_speed.min(self.max_linear);
+        config.creep_speed = config.creep_speed.min(config.approach_speed);
+        config.min_speed = config.min_speed.min(config.creep_speed);
+        config
     }
     /// Planner geometry and turning from this profile; horizon and reverse
     /// settings stay as in `base`.
@@ -202,6 +271,18 @@ mod tests {
                 .is_ok()
         );
         assert!(RoverProfile::preset("unknown").is_none());
+        assert!(mini.dock_config().valid());
+        assert!(mini.dock_config().can_spin);
+        let old: RoverProfile = serde_json::from_value({
+            let mut v = serde_json::to_value(&mini).unwrap();
+            v.as_object_mut().unwrap().remove("dock");
+            v
+        })
+        .unwrap();
+        assert_eq!(old.dock, DockProfile::default());
+        let mut bad = mini.clone();
+        bad.dock.outlet_ahead = Some(0.);
+        assert!(!bad.valid());
         let mut bad = mini.clone();
         bad.spin_effort = 0.2;
         assert!(!bad.valid(), "spin below the deadband would stall");

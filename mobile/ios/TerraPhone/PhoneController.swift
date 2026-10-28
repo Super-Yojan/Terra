@@ -633,6 +633,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
                 }
                 syncRustLayout(controller)
                 let output = try controller.step(timestamp: now)
+                applyGateServo(output.gateServo)
                 if tick % 10 == 0 { serviceManualDashboard(); updateAuthority() }
                 tick += 1
                 if tick % 5 == 0 {
@@ -678,6 +679,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
             try controller.setActuationMode(feedback: !direct)
             syncRustLayout(controller)
             let output = try controller.step(timestamp: now)
+            applyGateServo(output.gateServo)
             if mode == .phone {
                 SensorTimingProbe.shared.record(.tick, sensor: timingLastImu, queue: now, done: CACurrentMediaTime(), a: timingLastVio, b: output.safety == .active ? 1 : 0)
             }
@@ -1901,6 +1903,12 @@ extension PhoneController {
     }
     func stopHardware() {
         controlQueue.async { self.revokeHardwareMotion(reason: "output stop requested") }
+    }
+    /// The bucket dock's dump-gate position from Rust. Swift only routes it.
+    private func applyGateServo(_ gate: GateServo?) {
+        guard let gate, servoTargets[String(gate.id)] != gate.position else { return }
+        servoTargets[String(gate.id)] = gate.position
+        DispatchQueue.main.async { self.servoPositions[gate.id] = gate.position }
     }
     func setServoTarget(id: UInt8, position: Double) {
         guard position.isFinite, hardwareReady else { return }

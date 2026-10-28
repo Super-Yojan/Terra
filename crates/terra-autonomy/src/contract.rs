@@ -214,6 +214,9 @@ pub struct AutonomyStatus {
     /// few seconds so a hold of one tick can still be read on a dashboard.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sensor_hold: Option<SensorHold>,
+    /// Present once a bucket dock has started, including after it ends.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dock: Option<crate::DockStatus>,
 }
 /// What tripped a `sensor_unhealthy` hold.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]

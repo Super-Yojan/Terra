@@ -451,6 +451,7 @@ mod tests {
             target_yaw_rate: 0.0,
             safety,
             actuator_frame: frame.map(str::to_owned),
+            gate_servo: None,
         }
     }
     fn facts() -> LinkFacts {

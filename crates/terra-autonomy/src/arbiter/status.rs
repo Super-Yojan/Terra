@@ -78,6 +78,7 @@ impl AutonomyArbiter {
             paused: self.paused,
             exploration: self.exploration_report(input.now),
             task: self.task_status(input.now),
+            dock: self.dock_status(input.now),
         }
     }
 }

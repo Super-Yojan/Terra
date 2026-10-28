@@ -35,6 +35,7 @@ Per-rover prefix: `terra/rover/<id>`. Requests are JSON, at most 2048 bytes, fin
 | `mission/status` | Objective, phase, budget, boundaries, confirmed/required count and observed survivor locations. Hidden targets are excluded. |
 | `mission/report` | `{"survivor_id":1,"token":"report-1"}` confirms an observation belonging to that rover. Confirmation is reflected in mission status. |
 | `task` / `task/action` / `task/status` | L5 task autonomy: start a task, reply to or cancel it, and its status. See [TASK.md](TASK.md). |
+| `dock` | Bucket dock: `{"action":"start","object_id":4}`, `{"action":"dump","dock_id":1}` or `{"action":"cancel"}`, plus `token`. Status is `dock` inside `autonomy/status`. See [DOCK.md](DOCK.md). |
 | `pose` | Phone direct pose: rover_id, sequence, x/y metres and yaw radians. Simulator also supplies exposure-aligned depth pose. |
 
 State is retained in application memory and republished periodically, not dependent on Zenoh storage/history. Simulator status is emitted on transitions and at 5 Hz; the loopback phone service republishes at 10 Hz. Fleet takeover/stop use per-rover commands and receipts; they are not atomic. A network publication is not an acknowledgement. No automatic replay on reconnect.

@@ -43,6 +43,9 @@ mod arbiter;
 pub use arbiter::*;
 mod task;
 pub use task::*;
+/// Bucket docking and the dump gate.
+mod dock;
+pub use dock::*;
 /// Detected buckets and balls in the local frame, with GPS when outdoor.
 pub mod objects;
 pub use terra_exploration::{

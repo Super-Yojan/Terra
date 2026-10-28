@@ -213,6 +213,8 @@ pub struct Runtime {
     sensor_hold: Option<(f64, terra_autonomy::SensorHold)>,
     sensor_holds: u64,
     sensor_held: bool,
+    /// Dump outlet and gate servo of the applied rover profile.
+    pub dock_profile: rover_profile::DockProfile,
 }
 /// How long a `sensor_unhealthy` hold stays in the status after it clears.
 const SENSOR_HOLD_DISPLAY_SECONDS: f64 = 10.;
@@ -274,6 +276,7 @@ impl Runtime {
             sensor_holds: 0,
             sensor_held: false,
             last_snapshot: RuntimeSnapshot { value: json!({}) },
+            dock_profile: Default::default(),
         })
     }
     pub fn metadata(&self) -> Value {
@@ -297,8 +300,10 @@ impl Runtime {
         self.objects.clear();
         self.outdoor.selected = false;
         self.outdoor.revision = self.outdoor.revision.saturating_add(1);
+        let dock = self.autonomy.dock_config().clone();
         self.autonomy = AutonomyArbiter::default();
         self.autonomy.run_id = self.run_id.clone();
+        self.autonomy.configure_dock(dock);
         self.autonomy
             .configure_planner(self.navigation.parameters.planner());
         self.autonomy
@@ -336,7 +341,31 @@ impl Runtime {
                 .then(|| self.outdoor.geolocate(now, pose, sighting.x, sighting.y))
                 .flatten()
         });
+        if let Some((pose, _)) = self.pose {
+            self.autonomy.observe_dock(
+                &sighting.class,
+                sighting.color.as_deref(),
+                sighting.x,
+                sighting.y,
+                pose,
+                now,
+            );
+        }
         self.objects.observe(sighting).map_err(invalid)
+    }
+    /// The dock's gate request this tick as a servo position, when the rover
+    /// profile names a gate servo: `(actuator id, normalized position)`.
+    pub fn gate_servo(&self, gate_open: bool) -> Option<(u8, f64)> {
+        self.dock_profile.gate_servo.map(|id| {
+            (
+                id,
+                if gate_open {
+                    self.dock_profile.gate_open
+                } else {
+                    self.dock_profile.gate_closed
+                },
+            )
+        })
     }
     pub fn configuration_identity(&self) -> String {
         let mut config = self.configuration.clone();
@@ -369,6 +398,8 @@ impl Runtime {
         self.control_limits = (controller.max_forward, controller.max_yaw_rate);
         self.navigation.parameters = navigation;
         self.navigation.revision = self.navigation.revision.saturating_add(1);
+        self.autonomy.configure_dock(profile.dock_config());
+        self.dock_profile = profile.dock.clone();
         self.navigation.profile = Some(profile.name.clone());
         self.navigation.result = Some(format!("profile {}", profile.name));
         self.outdoor.revision = self.outdoor.revision.saturating_add(1);
@@ -696,10 +727,11 @@ impl Runtime {
             self.controller.reset();
         }
         let effective_mode = if self.mode == ActuationMode::DirectEffort
-            && !matches!(
-                output.status.requested_level,
-                terra_autonomy::Level::Teleop | terra_autonomy::Level::AssistedTeleop
-            ) {
+            && (output.status.active_source == "dock"
+                || !matches!(
+                    output.status.requested_level,
+                    terra_autonomy::Level::Teleop | terra_autonomy::Level::AssistedTeleop
+                )) {
             ActuationMode::VelocityFeedback
         } else {
             self.mode
