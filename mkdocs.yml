@@ -48,6 +48,8 @@ markdown_extensions:
   - toc:
       permalink: true
   - pymdownx.details
+  - pymdownx.tabbed:
+      alternate_style: true
   - pymdownx.superfences:
       custom_fences:
         - name: mermaid
@@ -93,6 +95,7 @@ nav:
       - Tap to configure: phone/tap-to-configure.md
   - Hardware:
       - hardware/index.md
+      - Flash the SD card: hardware/FLASH_SD.md
       - Install on a Pi: hardware/INSTALL.md
       - Bluetooth peripheral: hardware/BLUETOOTH.md
       - Fusion HAT: hardware/FUSION_HAT.md
