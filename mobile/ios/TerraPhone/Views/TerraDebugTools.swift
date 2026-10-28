@@ -14,6 +14,7 @@ struct TerraDebugTools: View {
                 NavigationLink("Map inspection") { ControllerDetailView(brain: brain, destination: .live) }
                 NavigationLink("3D classification") { ClassificationDebugView(brain: brain) }
                 NavigationLink("Object detection") { ObjectDetectionDebugView(brain: brain) }
+                NavigationLink("Agent (Qwen)") { AgentDebugView(brain: brain) }
                 NavigationLink("Sensor timing") { SensorTimingView(brain: brain) }
                 NavigationLink("Waypoint & autonomy tools") { ControllerDetailView(brain: brain, destination: .missions) }
             }

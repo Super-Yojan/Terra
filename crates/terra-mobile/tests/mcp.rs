@@ -294,3 +294,83 @@ fn confirmed_detections_become_landmarks_the_agent_can_drive_to() {
     tick(&c, 1.2);
     assert_eq!(status(&c)["task"]["plan"][0]["label"], "L1");
 }
+
+#[test]
+fn the_debug_page_sees_prompts_replies_and_every_call() {
+    let c = agent_task();
+    let debug =
+        |c: &MobileController| -> Value { serde_json::from_str(&c.agent_debug_json()).unwrap() };
+    assert_eq!(debug(&c)["agent"], "qwen3.5-2b");
+    assert_eq!(debug(&c)["status"], "ready for the next prompt");
+
+    let p = c.take_agent_prompt().unwrap();
+    assert_eq!(debug(&c)["status"], "model is answering");
+    c.submit_agent_reply(
+        p.prompt_id,
+        "<tool_call>{\"name\": \"get_map\", \"arguments\": {}}</tool_call>".into(),
+        2.5,
+    );
+    let p = c.take_agent_prompt().unwrap();
+    c.submit_agent_reply(p.prompt_id, "no idea".into(), 1.0);
+    let p = c.take_agent_prompt().unwrap();
+    c.fail_agent_prompt(p.prompt_id, "out of memory".into());
+    call(&c, "http-1", "get_state", json!({}));
+
+    let v = debug(&c);
+    let exchanges = v["exchanges"].as_array().unwrap();
+    assert_eq!(exchanges.len(), 3);
+    assert_eq!(exchanges[0]["tool"], "get_map");
+    assert_eq!(exchanges[0]["ok"], true);
+    assert_eq!(exchanges[0]["latency_seconds"], 2.5);
+    assert!(
+        exchanges[0]["prompt"]
+            .as_str()
+            .unwrap()
+            .contains("Explore the room.")
+    );
+    assert!(exchanges[0]["result"].as_str().unwrap().contains("F1"));
+    assert_eq!(exchanges[1]["reply"], "no idea");
+    assert!(exchanges[1]["error"].is_string());
+    assert!(
+        exchanges[2]["error"]
+            .as_str()
+            .unwrap()
+            .contains("out of memory")
+    );
+    assert_eq!(v["bad_replies"], 1);
+    let sessions: Vec<_> = v["calls"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["session"].clone())
+        .collect();
+    assert_eq!(sessions, vec![json!("in-process"), json!("http-1")]);
+    assert_eq!(v["task"]["agent"], "mcp");
+
+    c.clear_agent_debug();
+    assert!(debug(&c)["exchanges"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn test_prompt_helpers_parse_without_running_and_list_native_tool_specs() {
+    let ok: Value = serde_json::from_str(&agent_parse_reply(
+        r#"<tool_call>{"name":"go_to","arguments":{"waypoints":[{"target":"F1"}]}}</tool_call>"#
+            .into(),
+    ))
+    .unwrap();
+    assert_eq!(ok["tool"], "go_to");
+    assert_eq!(ok["arguments"]["waypoints"][0]["target"], "F1");
+    let bad: Value = serde_json::from_str(&agent_parse_reply("set_motor 1".into())).unwrap();
+    assert_eq!(bad["ok"], false);
+    let specs: Value = serde_json::from_str(&agent_tool_specs_json()).unwrap();
+    let specs = specs.as_array().unwrap();
+    assert_eq!(specs.len(), 12);
+    assert_eq!(specs[0]["type"], "function");
+    assert!(
+        specs
+            .iter()
+            .any(|s| s["function"]["name"] == "request_drive"
+                && s["function"]["parameters"]["required"][0] == "reason")
+    );
+    assert!(agent_system_prompt_text().contains("<tool_call>"));
+}

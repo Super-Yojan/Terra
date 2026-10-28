@@ -37,7 +37,9 @@ pub use search::{
     MobileObjectDetection, MobileSearchRequest, MobileSearchSnapshot, MobileTargetObservation,
 };
 mod mcp;
-pub use mcp::MobileAgentPrompt;
+pub use mcp::{
+    MobileAgentPrompt, agent_parse_reply, agent_system_prompt_text, agent_tool_specs_json,
+};
 mod task;
 pub use task::MobileTaskQuery;
 mod frames;

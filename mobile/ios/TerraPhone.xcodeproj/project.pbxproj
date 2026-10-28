@@ -10,6 +10,7 @@
 		014E5986C12CC878354BE533 /* View+TerraPairingConsent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B42D733D17017ED54DF9E3E /* View+TerraPairingConsent.swift */; };
 		06793BBE2D9E7876A63D0C2A /* ActuatorPagination.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C11A546598F9DA3655EF0C0 /* ActuatorPagination.swift */; };
 		08906BAF4104CBE47B269B2D /* PhoneController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C2FA04187CC39D929F3A531 /* PhoneController.swift */; };
+		C8A9E10C0000000000000001 /* AgentDebugView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C8A9E10C0000000000000002 /* AgentDebugView.swift */; };
 		0BD0E7EC0000000000000001 /* ObjectDetectionDebugView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0BD0E7EC0000000000000002 /* ObjectDetectionDebugView.swift */; };
 		137DAA3A5D1B6CB13A6C5CC6 /* RoverModelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 72D31377D574D8AFFB9FBB0D /* RoverModelView.swift */; };
 		1DEE8F75CDA61D4F9594BCB6 /* FleetConnectionSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 48EBDF0CFE543A6304242A8B /* FleetConnectionSettings.swift */; };
@@ -82,6 +83,7 @@
 
 /* Begin PBXFileReference section */
 		05345BECCAB64836C1C5C910 /* FleetConnectionDetails.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = FleetConnectionDetails.swift; sourceTree = "<group>"; };
+		C8A9E10C0000000000000002 /* AgentDebugView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AgentDebugView.swift; sourceTree = "<group>"; };
 		0BD0E7EC0000000000000002 /* ObjectDetectionDebugView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ObjectDetectionDebugView.swift; sourceTree = "<group>"; };
 		0D2EB8FAB5C424C195564DB7 /* MountCalibration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MountCalibration.swift; sourceTree = "<group>"; };
 		15314EB9500C69B32E097620 /* ConnectionPresentation.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ConnectionPresentation.swift; sourceTree = "<group>"; };
@@ -211,6 +213,7 @@
 				D7A1546BE87BB04B342BA5B7 /* TerraConnectionHome.swift */,
 				9BC2EE52CB19C0C8A6F9709C /* TerraDebugTools.swift */,
 				C1A55D3B0000000000000002 /* ClassificationDebugView.swift */,
+				C8A9E10C0000000000000002 /* AgentDebugView.swift */,
 				0BD0E7EC0000000000000002 /* ObjectDetectionDebugView.swift */,
 				5E7A1A900000000000000004 /* SensorTimingView.swift */,
 				6A28F21C23959A63436B7478 /* TerraMark.swift */,
@@ -400,6 +403,7 @@
 				B14E9049EF9188CE566261ED /* TerraConnectionHome.swift in Sources */,
 				836ABE039025B23DE742B338 /* TerraDebugTools.swift in Sources */,
 				C1A55D3B0000000000000001 /* ClassificationDebugView.swift in Sources */,
+				C8A9E10C0000000000000001 /* AgentDebugView.swift in Sources */,
 				0BD0E7EC0000000000000001 /* ObjectDetectionDebugView.swift in Sources */,
 				5E7A1A900000000000000003 /* SensorTimingView.swift in Sources */,
 				5E7A1A900000000000000001 /* SensorTimingProbe.swift in Sources */,
