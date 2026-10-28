@@ -327,7 +327,7 @@ impl AutonomyArbiter {
             self.acknowledge(r.token, fp, false, "invalid_budget");
             return;
         }
-        if r.level == Level::Task && self.task_model.is_none() {
+        if r.level == Level::Task && self.task_model.is_none() && self.task_agent.is_none() {
             self.acknowledge(r.token, fp, false, "task_model_unavailable");
             return;
         }
@@ -336,6 +336,10 @@ impl AutonomyArbiter {
             .is_some_and(|t| r.level != Level::Task || !t.valid())
         {
             self.acknowledge(r.token, fp, false, "invalid_task");
+            return;
+        }
+        if let Some(reason) = task.as_ref().and_then(|t| self.task_answerer_missing(t)) {
+            self.acknowledge(r.token, fp, false, reason);
             return;
         }
         let budget = r

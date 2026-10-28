@@ -202,6 +202,10 @@ pub struct AutonomyStatus {
     pub request_reason: Option<String>,
     /// Authority levels advertised by this arbiter.
     pub supported_levels: Vec<Level>,
+    /// L5 answerers this phone has: `builtin` (a built-in model) and/or `mcp` (an MCP agent).
+    /// A task's `agent` must name one of them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub task_agents: Vec<crate::TaskAgent>,
     /// Whether supervised operation is paused.
     pub paused: bool,
     /// Present once an exploration run has started, including after it ends.

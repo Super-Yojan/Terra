@@ -35,6 +35,7 @@ fn spec(instruction: &str) -> TaskSpec {
         instruction: instruction.into(),
         budget_seconds: Some(600.),
         max_steps: Some(10),
+        agent: None,
     }
 }
 

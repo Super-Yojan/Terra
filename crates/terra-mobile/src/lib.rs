@@ -36,6 +36,8 @@ mod search;
 pub use search::{
     MobileObjectDetection, MobileSearchRequest, MobileSearchSnapshot, MobileTargetObservation,
 };
+mod mcp;
+pub use mcp::MobileAgentPrompt;
 mod task;
 pub use task::MobileTaskQuery;
 mod frames;
@@ -343,6 +345,8 @@ pub struct MobileController {
     /// Video signaling only. It cannot arm the rover or change the velocity target.
     fpv: Mutex<fpv_signaling::SignalingSession>,
     observation: observability::ObservationState,
+    /// MCP sessions, the camera frame for `look`, and the on-phone agent's conversation.
+    mcp: Mutex<mcp::McpState>,
 }
 #[uniffi::export]
 impl MobileController {
@@ -356,6 +360,7 @@ impl MobileController {
         Ok(Arc::new(Self {
             fpv: Mutex::new(fpv_signaling::SignalingSession::phone()),
             observation: Default::default(),
+            mcp: Default::default(),
             brain: Mutex::new(Brain {
                 runtime: terra_runtime::Runtime::new(
                     terra_runtime::RuntimeConfig {

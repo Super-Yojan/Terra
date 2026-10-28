@@ -28,6 +28,12 @@
 		62C0FE3E47BC4186D25299BD /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C39B748CBDE909384D42F851 /* Foundation.framework */; };
 		65EAF991EBE20C1CF1F79D46 /* RoverSceneView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6D2B5DFC45F42ECE9CFDE33 /* RoverSceneView.swift */; };
 		6710F89BCC7511382EB28DDD /* ActuatorLayoutView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1FE42CD4C297A5554D72BC92 /* ActuatorLayoutView.swift */; };
+		B7C40A110000000000000002 /* TaskAgentRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = B7C40A110000000000000001 /* TaskAgentRunner.swift */; };
+		B7C40A110000000000000016 /* MLXVLM in Frameworks */ = {isa = PBXBuildFile; productRef = B7C40A110000000000000006 /* MLXVLM */; };
+		B7C40A110000000000000017 /* MLXLMCommon in Frameworks */ = {isa = PBXBuildFile; productRef = B7C40A110000000000000007 /* MLXLMCommon */; };
+		B7C40A110000000000000018 /* MLXHuggingFace in Frameworks */ = {isa = PBXBuildFile; productRef = B7C40A110000000000000008 /* MLXHuggingFace */; };
+		B7C40A110000000000000019 /* HuggingFace in Frameworks */ = {isa = PBXBuildFile; productRef = B7C40A110000000000000009 /* HuggingFace */; };
+		B7C40A11000000000000001A /* Tokenizers in Frameworks */ = {isa = PBXBuildFile; productRef = B7C40A11000000000000000A /* Tokenizers */; };
 		7A5C0E12D2B34F6A8C9D0E1F /* TaskModelRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A5C0E11D2B34F6A8C9D0E1F /* TaskModelRunner.swift */; };
 		7DF4152879F6895ADFBAD61E /* TerraBevySessionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 763C867BB9779625BBC8706D /* TerraBevySessionStore.swift */; };
 		836ABE039025B23DE742B338 /* TerraDebugTools.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9BC2EE52CB19C0C8A6F9709C /* TerraDebugTools.swift */; };
@@ -101,6 +107,7 @@
 		6ED85D206145C66F75335E86 /* ContentView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		72D31377D574D8AFFB9FBB0D /* RoverModelView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = RoverModelView.swift; sourceTree = "<group>"; };
 		763C867BB9779625BBC8706D /* TerraBevySessionStore.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TerraBevySessionStore.swift; sourceTree = "<group>"; };
+		B7C40A110000000000000001 /* TaskAgentRunner.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TaskAgentRunner.swift; sourceTree = "<group>"; };
 		7A5C0E11D2B34F6A8C9D0E1F /* TaskModelRunner.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TaskModelRunner.swift; sourceTree = "<group>"; };
 		8B42D733D17017ED54DF9E3E /* View+TerraPairingConsent.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = "View+TerraPairingConsent.swift"; sourceTree = "<group>"; };
 		8E15CDF054403F8D93571D51 /* SwiftUI.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SwiftUI.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS18.0.sdk/System/Library/Frameworks/SwiftUI.framework; sourceTree = DEVELOPER_DIR; };
@@ -156,6 +163,11 @@
 				D4D6286AE77051472C8C0C79 /* SwiftUI.framework in Frameworks */,
 				B6FDD0A913C808F7D18B4619 /* CoreLocation.framework in Frameworks */,
 				A11F0E51000000000000000D /* WebRTC in Frameworks */,
+				B7C40A110000000000000016 /* MLXVLM in Frameworks */,
+				B7C40A110000000000000017 /* MLXLMCommon in Frameworks */,
+				B7C40A110000000000000018 /* MLXHuggingFace in Frameworks */,
+				B7C40A110000000000000019 /* HuggingFace in Frameworks */,
+				B7C40A11000000000000001A /* Tokenizers in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -262,6 +274,7 @@
 				58BEF209DEE2945A7D96965A /* BluetoothFragmentAssembler.swift */,
 				DB887F7AD412C1F04EDC079D /* PersonDepthGeometry.swift */,
 				50BE71F885C99967A195ECC8 /* ObjectSearchDetector.swift */,
+				B7C40A110000000000000001 /* TaskAgentRunner.swift */,
 				7A5C0E11D2B34F6A8C9D0E1F /* TaskModelRunner.swift */,
 				F9F7CE3FE9E7E9C9734B9A85 /* PhoneMountGeometry.swift */,
 				C2AC19B9778E4A6CD3D5E1BA /* RotationOffsetFit.swift */,
@@ -300,6 +313,11 @@
 			name = TerraPhone;
 			packageProductDependencies = (
 				A11F0E51000000000000000C /* WebRTC */,
+				B7C40A110000000000000006 /* MLXVLM */,
+				B7C40A110000000000000007 /* MLXLMCommon */,
+				B7C40A110000000000000008 /* MLXHuggingFace */,
+				B7C40A110000000000000009 /* HuggingFace */,
+				B7C40A11000000000000000A /* Tokenizers */,
 			);
 			productName = TerraPhone;
 			productReference = 4DB3F3D968483A1FD1080BEB /* TerraPhone.app */;
@@ -325,6 +343,9 @@
 			mainGroup = 5DCD7148EBFDD85DE41A6F6F;
 			packageReferences = (
 				A11F0E51000000000000000B /* XCRemoteSwiftPackageReference "WebRTC" */,
+				B7C40A110000000000000003 /* XCRemoteSwiftPackageReference "mlx-swift-lm" */,
+				B7C40A110000000000000004 /* XCRemoteSwiftPackageReference "swift-huggingface" */,
+				B7C40A110000000000000005 /* XCRemoteSwiftPackageReference "swift-transformers" */,
 			);
 			productRefGroup = 3BB314A2FAAB054273A28597 /* Products */;
 			projectDirPath = "";
@@ -398,6 +419,7 @@
 				F0EA40F2756462AED7DD4EE2 /* BluetoothFragmentAssembler.swift in Sources */,
 				24894F900F7490AA19DE55B3 /* PersonDepthGeometry.swift in Sources */,
 				37C8F681B8564FABEA922179 /* ObjectSearchDetector.swift in Sources */,
+				B7C40A110000000000000002 /* TaskAgentRunner.swift in Sources */,
 				7A5C0E12D2B34F6A8C9D0E1F /* TaskModelRunner.swift in Sources */,
 				CD7A9A2C8F638D6DB8443AE7 /* PhoneMountGeometry.swift in Sources */,
 				D637CFC5BD62A44FA1709F52 /* RotationOffsetFit.swift in Sources */,
@@ -615,6 +637,30 @@
 				version = 155.0.0;
 			};
 		};
+		B7C40A110000000000000003 /* XCRemoteSwiftPackageReference "mlx-swift-lm" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/ml-explore/mlx-swift-lm";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 3.31.3;
+			};
+		};
+		B7C40A110000000000000004 /* XCRemoteSwiftPackageReference "swift-huggingface" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/huggingface/swift-huggingface";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 0.9.0;
+			};
+		};
+		B7C40A110000000000000005 /* XCRemoteSwiftPackageReference "swift-transformers" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/huggingface/swift-transformers";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 1.3.0;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -622,6 +668,31 @@
 			isa = XCSwiftPackageProductDependency;
 			package = A11F0E51000000000000000B /* XCRemoteSwiftPackageReference "WebRTC" */;
 			productName = WebRTC;
+		};
+		B7C40A110000000000000006 /* MLXVLM */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = B7C40A110000000000000003 /* XCRemoteSwiftPackageReference "mlx-swift-lm" */;
+			productName = MLXVLM;
+		};
+		B7C40A110000000000000007 /* MLXLMCommon */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = B7C40A110000000000000003 /* XCRemoteSwiftPackageReference "mlx-swift-lm" */;
+			productName = MLXLMCommon;
+		};
+		B7C40A110000000000000008 /* MLXHuggingFace */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = B7C40A110000000000000003 /* XCRemoteSwiftPackageReference "mlx-swift-lm" */;
+			productName = MLXHuggingFace;
+		};
+		B7C40A110000000000000009 /* HuggingFace */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = B7C40A110000000000000004 /* XCRemoteSwiftPackageReference "swift-huggingface" */;
+			productName = HuggingFace;
+		};
+		B7C40A11000000000000000A /* Tokenizers */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = B7C40A110000000000000005 /* XCRemoteSwiftPackageReference "swift-transformers" */;
+			productName = Tokenizers;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

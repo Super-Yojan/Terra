@@ -336,7 +336,17 @@ impl Runtime {
                 .then(|| self.outdoor.geolocate(now, pose, sighting.x, sighting.y))
                 .flatten()
         });
-        self.objects.observe(sighting).map_err(invalid)
+        self.objects.observe(sighting).map_err(invalid)?;
+        // Confirmed objects become L5 landmarks, so a task model or agent can drive to them.
+        for o in self.objects.objects().iter().filter(|o| o.confirmed) {
+            let label = match &o.color {
+                Some(color) => format!("{color} {} {}", o.class, o.id),
+                None => format!("{} {}", o.class, o.id),
+            };
+            self.autonomy
+                .observe_task_landmark(&label, o.x, o.y, o.confidence, o.last_seen);
+        }
+        Ok(())
     }
     pub fn configuration_identity(&self) -> String {
         let mut config = self.configuration.clone();
