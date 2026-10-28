@@ -1,6 +1,7 @@
 package dev.superyojan.terra.phone
 
 import dev.superyojan.terra.core.ActuatorAssembler
+import dev.superyojan.terra.core.DriveSource
 import dev.superyojan.terra.core.ImuReading
 import dev.superyojan.terra.core.actuatorEncodeControl
 import dev.superyojan.terra.core.actuatorEncodeFrame
@@ -13,6 +14,11 @@ import dev.superyojan.terra.core.MobileController
 import dev.superyojan.terra.core.MobileOccupancyMap
 import dev.superyojan.terra.core.MobileWaypoint
 import dev.superyojan.terra.core.MobileZenohClient
+import dev.superyojan.terra.core.MotorCommand
+import dev.superyojan.terra.core.MotorGate
+import dev.superyojan.terra.core.PhoneDriveLoop
+import dev.superyojan.terra.core.PhonePosePipeline
+import dev.superyojan.terra.core.PoseAxes
 import dev.superyojan.terra.core.SafetyState
 import dev.superyojan.terra.core.TwistSetpoint
 import dev.superyojan.terra.core.VioReading
@@ -20,9 +26,12 @@ import dev.superyojan.terra.core.WaypointPhase
 import dev.superyojan.terra.core.defaultControlSettings
 import dev.superyojan.terra.core.defaultOccupancySettings
 import dev.superyojan.terra.core.defaultWaypointSettings
+import dev.superyojan.terra.core.depth16ToMetres
 import dev.superyojan.terra.core.deviceVectorToBody
 import dev.superyojan.terra.core.runVelocityBenchmark
 import dev.superyojan.terra.core.supportedAutonomyLevels
+import dev.superyojan.terra.core.terraLandscapeMount
+import dev.superyojan.terra.core.uncalibratedMount
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -130,6 +139,53 @@ class TerraCoreSmokeTest {
         val text = control.toString(Charsets.UTF_8)
         assertTrue(text.contains("capabilities"))
         assertTrue(text.contains("1000"))
+    }
+}
+
+class PhoneDriveSmokeTest {
+    @Test
+    fun rustLoopGatesBluetoothFrames() {
+        val brain = MobileController(defaultControlSettings())
+        // A framed session's full layout works as well as drive profiles.
+        brain.setActuatorLayout(DRIVE_LAYOUT)
+        val drive = PhoneDriveLoop(brain, MotorGate(), DriveSource.BLUETOOTH_MANUAL, 10.0)
+        drive.setLink(true, true, false, true)
+        drive.setLocalInput(0.5, 0.0)
+        for (i in 0..10) drive.stepOnce(10.0 + i * 0.01)
+        val command = drive.takeMotorCommand(1e9)
+        assertTrue("expected a drive frame, got $command", command is MotorCommand.Drive)
+        assertTrue((command as MotorCommand.Drive).valuesJson.contains("\"id\":1"))
+        assertEquals("disconnected", drive.snapshot().dashboard)
+
+        val phone = PhoneDriveLoop(MobileController(defaultControlSettings()), MotorGate(), DriveSource.PHONE, 0.0)
+        phone.setLink(true, true, true, true)
+        phone.setTracking(true)
+        phone.stepOnce(0.0)
+        val held = phone.takeMotorCommand(1.0)
+        assertTrue("an unconfirmed mount must stop output, got $held", held is MotorCommand.Stop)
+        drive.stop()
+        phone.stop()
+    }
+
+    @Test
+    fun deviceAxesFollowTheIosMountConvention() {
+        // Uncalibrated is upright portrait with the rear camera (device -Z) forward.
+        val upright = PhonePosePipeline(uncalibratedMount(), PoseAxes.DEVICE, 0.0)
+        assertEquals(1.0, upright.imu(1.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0).accelerationForward, 1e-9)
+        // Terra's landscape mount keeps the rear camera forward and rolls the phone onto its side.
+        val terra = PhonePosePipeline(terraLandscapeMount(true), PoseAxes.DEVICE, 0.0)
+        assertEquals(1.0, terra.imu(1.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0).accelerationForward, 1e-9)
+        assertEquals(0.23, terra.calibration().cameraHeight, 1e-9)
+    }
+
+    @Test
+    fun rawDepthDropsLowConfidence() {
+        val depth = byteArrayOf(0xE8.toByte(), 0x03, 0x00, 0x00)
+        val values = depth16ToMetres(depth, 4u, byteArrayOf(255.toByte(), 255.toByte()), 2u, 2u, 1u, 128u.toUByte())
+        assertEquals(1.0f, values[0], 0f)
+        assertTrue(values[1].isNaN())
+        val untrusted = depth16ToMetres(depth, 4u, byteArrayOf(10, 0), 2u, 2u, 1u, 128u.toUByte())
+        assertTrue(untrusted[0].isNaN())
     }
 }
 

@@ -29,6 +29,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
 import dev.superyojan.terra.core.ActuatorAssembler
+import dev.superyojan.terra.core.MotorCommand
 import dev.superyojan.terra.core.actuatorEncodeControl
 import dev.superyojan.terra.core.actuatorEncodeFrame
 import dev.superyojan.terra.core.actuatorEncodeRelayDrive
@@ -51,6 +52,9 @@ data class DiscoveredRover(val address: String, val name: String, val pairing: B
  * The current rover service speaks streamed-relay pairs. A status document
  * with a session and no `streamed_relay` mode uses the documented `TA` frames.
  * Pairing and disconnect never leave the link armed.
+ *
+ * While a controller runs, [setFrameSource] hands the drive loop the Rust
+ * motor gate's frames instead of the sliders.
  */
 @SuppressLint("MissingPermission")
 class TerraBluetooth(context: Context) {
@@ -80,6 +84,9 @@ class TerraBluetooth(context: Context) {
     var errorText by mutableStateOf("")
         private set
     var summary by mutableStateOf("Hold USR for three seconds, then scan for terra-XXXXXX.")
+        private set
+    /** Drive profiles, or the full layout on a framed session, once ready; for the Rust actuator frame. */
+    var driveLayout by mutableStateOf<String?>(null)
         private set
 
     private val found = linkedMapOf<String, DiscoveredRover>()
@@ -123,6 +130,8 @@ class TerraBluetooth(context: Context) {
     private var localArmed = false
     private var effortForward = 0f
     private var effortTurn = 0f
+    private var frameSource: (() -> MotorCommand)? = null
+    private var sentFrame = false
     private var waiting: Waiting? = null
     private var shutdownLatch: CountDownLatch? = null
 
@@ -322,6 +331,18 @@ class TerraBluetooth(context: Context) {
             if (!forward.isFinite() || !turn.isFinite()) return@post
             effortForward = forward.toFloat().coerceIn(-1f, 1f)
             effortTurn = turn.toFloat().coerceIn(-1f, 1f)
+        }
+    }
+
+    /**
+     * While set, each 50 ms drive tick sends the source's command instead of
+     * the slider effort: a frame as is, a stop as neutral output, and idle as
+     * nothing (one neutral output right after a frame). Arm still gates output.
+     */
+    fun setFrameSource(source: (() -> MotorCommand)?) {
+        handler.post {
+            frameSource = source
+            sentFrame = false
         }
     }
 
@@ -845,7 +866,7 @@ class TerraBluetooth(context: Context) {
         localArmed = true
         handler.removeCallbacks(driveLoop)
         handler.post(driveLoop)
-        publish { armed = true; errorText = ""; statusText = "Armed · streaming safe output until you move the sliders" }
+        publish { armed = true; errorText = ""; statusText = "Armed · motors follow the Rust gate" }
     }
 
     private fun disarmOnThread() {
@@ -912,7 +933,25 @@ class TerraBluetooth(context: Context) {
     }
 
     private fun queueMotion() {
-        val values = routedValues(effortForward, effortTurn)
+        val source = frameSource ?: return queueValues(routedValues(effortForward, effortTurn))
+        when (val command = source()) {
+            is MotorCommand.Drive -> {
+                queueValues(command.valuesJson)
+                sentFrame = true
+            }
+            is MotorCommand.Stop -> {
+                queueValues(safeValues())
+                sentFrame = false
+            }
+            MotorCommand.Idle -> if (sentFrame) {
+                queueValues(safeValues())
+                sentFrame = false
+            }
+        }
+    }
+
+    /** Drive values on the drive characteristic, never `disarm`, so the link stays armed. */
+    private fun queueValues(values: String) {
         if (linkFramed) {
             pendingDrive = framedDrive(values, stamp = true, onComplete = null)
         } else {
@@ -1138,8 +1177,12 @@ class TerraBluetooth(context: Context) {
         }
         val actuators = profileIds.size
         val revisionText = revision?.toString() ?: "unknown"
+        val layoutNow = if (readyNow) profilesJson ?: layoutJson else null
         val text = when {
-            !live -> return
+            !live -> {
+                publish { driveLayout = null }
+                return
+            }
             fault != null -> "Fault: $fault"
             localArmed -> if (outputActive) "Armed · output active" else "Armed · neutral output"
             arming -> "Arming"
@@ -1163,6 +1206,7 @@ class TerraBluetooth(context: Context) {
         val commitNow = stagedRequestId != null && !armedNow && live
         publish {
             ready = readyNow
+            driveLayout = layoutNow
             armed = armedNow
             canStage = stageNow
             canCommit = commitNow
@@ -1211,6 +1255,7 @@ class TerraBluetooth(context: Context) {
         publish {
             connected = false
             ready = false
+            driveLayout = null
             armed = false
             canStage = false
             canCommit = false

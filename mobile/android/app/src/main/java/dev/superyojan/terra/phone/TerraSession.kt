@@ -7,48 +7,77 @@ import android.os.Looper
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import dev.superyojan.terra.core.ConnectionPolicy
+import dev.superyojan.terra.core.DriveLoopSnapshot
+import dev.superyojan.terra.core.DriveSource
 import dev.superyojan.terra.core.ImuReading
 import dev.superyojan.terra.core.MappingDepthFrame
 import dev.superyojan.terra.core.MobileController
 import dev.superyojan.terra.core.MobileOccupancyMap
 import dev.superyojan.terra.core.MobileWaypoint
 import dev.superyojan.terra.core.MobileZenohClient
+import dev.superyojan.terra.core.MotorCommand
+import dev.superyojan.terra.core.MotorGate
 import dev.superyojan.terra.core.OccupancyGrid
-import dev.superyojan.terra.core.PoseVelocityFilter
+import dev.superyojan.terra.core.OffsetFitCancel
+import dev.superyojan.terra.core.OffsetFitOutcome
+import dev.superyojan.terra.core.OffsetFitState
+import dev.superyojan.terra.core.PhoneDriveLoop
+import dev.superyojan.terra.core.PhoneMountCalibration
+import dev.superyojan.terra.core.PhonePose
+import dev.superyojan.terra.core.PhonePosePipeline
+import dev.superyojan.terra.core.PoseAxes
+import dev.superyojan.terra.core.RouterSettings
 import dev.superyojan.terra.core.SafetyState
 import dev.superyojan.terra.core.SimulatedPlant
 import dev.superyojan.terra.core.TwistSetpoint
 import dev.superyojan.terra.core.VioReading
 import dev.superyojan.terra.core.WaypointPhase
-import dev.superyojan.terra.core.bodyYaw
 import dev.superyojan.terra.core.defaultControlSettings
 import dev.superyojan.terra.core.defaultOccupancySettings
 import dev.superyojan.terra.core.defaultWaypointSettings
+import dev.superyojan.terra.core.mountCalibrationFromJson
+import dev.superyojan.terra.core.mountCalibrationToJson
+import dev.superyojan.terra.core.mountIsPlausible
+import dev.superyojan.terra.core.parseRouterSettings
 import dev.superyojan.terra.core.runVelocityBenchmark
 import dev.superyojan.terra.core.simulatedRoomDepth
 import dev.superyojan.terra.core.supportedAutonomyLevels
+import dev.superyojan.terra.core.terraLandscapeMount
+import dev.superyojan.terra.core.uncalibratedMount
 import org.json.JSONObject
 import java.io.File
 import java.util.UUID
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
-private enum class DriveMode { Stopped, Simulation, Phone, Remote }
+private enum class DriveMode { Stopped, Simulation, Phone, Bluetooth, Remote }
 
 /**
  * Thin shell over `terra-mobile`. Estimation, the plant, the waypoint follower,
  * occupancy integration, and Zenoh framing all stay in Rust.
+ *
+ * Phone and Bluetooth drive run the Rust [PhoneDriveLoop]: it owns the 100 Hz
+ * control tick and the [MotorGate], and the Bluetooth writer takes its frames.
+ * This class polls ARCore, forwards the phone stick and link facts, connects
+ * ARGOS, and copies a snapshot into Compose state at 10 Hz.
  */
 class TerraSession(context: Context) {
     private val appContext = context.applicationContext
     private val prefs = appContext.getSharedPreferences("terra-phone", Context.MODE_PRIVATE)
     private val thread = HandlerThread("terra.control").also { it.start() }
     private val control = Handler(thread.looper)
+    private val routerThread = HandlerThread("terra.router").also { it.start() }
+    private val router = Handler(routerThread.looper)
     private val main = Handler(Looper.getMainLooper())
 
     val emulator = isEmulator()
     val ble: TerraBluetooth? = if (emulator) null else TerraBluetooth(appContext)
     val supportedLevels: List<String> = supportedAutonomyLevels()
+    /** Mount confirmation and the e-stop latch outlive each drive session. */
+    private val gate = MotorGate()
+    private val connectionPolicy = ConnectionPolicy()
+    private val pipeline = PhonePosePipeline(loadMount(), PoseAxes.DEVICE, 0.0)
 
     var source by mutableStateOf("Stopped")
     var status by mutableStateOf("Motor output disabled")
@@ -72,17 +101,30 @@ class TerraSession(context: Context) {
     var proposalText by mutableStateOf("")
     var proposalId by mutableStateOf<ULong?>(null)
     var depthNote by mutableStateOf(
-        "Phone mapping uses ARCore Depth when the device supports it. " +
-            "Initial camera height is assumed 0.5 m above flat ground. " +
+        "Phone mapping uses ARCore raw depth with its confidence when the device supports it. " +
+            "The floor sits the mount's camera height below the phone, or 0.5 m without a calibration. " +
             "Zorvane mode uses the simulator exposure pose, with ground at robotics Z = 0.",
     )
+    var routerStatus by mutableStateOf("Disconnected")
+    var routerConnecting by mutableStateOf(false)
+    var routerConnected by mutableStateOf(false)
+    var motorStatus by mutableStateOf("Motors idle")
+    var emergencyLatched by mutableStateOf(false)
+    var mount by mutableStateOf(pipeline.calibration())
+    var mountConfirmed by mutableStateOf(false)
+    var mountStatus by mutableStateOf("")
+    var fitStatus by mutableStateOf("No turn pass running")
+    var fitCollecting by mutableStateOf(false)
+    var runLog by mutableStateOf<File?>(null)
+    /** Bluetooth drive: the stick is normalized effort instead of m/s and rad/s. */
+    var normalizedStick by mutableStateOf(false)
 
-    private var controller: MobileController? = null
-    private var follower: MobileWaypoint? = null
+    @Volatile private var controller: MobileController? = null
+    @Volatile private var driveLoop: PhoneDriveLoop? = null
     private var map: MobileOccupancyMap? = null
+    private var follower: MobileWaypoint? = null
     private var zenoh: MobileZenohClient? = null
     private val plant = SimulatedPlant()
-    private val velocityFilter = PoseVelocityFilter()
     private var sensors: PhoneSensors? = null
     private var mode = DriveMode.Stopped
     private var forward = 0.0
@@ -95,6 +137,16 @@ class TerraSession(context: Context) {
     private var phonePose: Pose? = null
     private var proposalRun = ""
     private var generation = 0
+    private var syncedLayout: String? = null
+    private var routerAttempt = 0
+    private var routerRetryAt: Double? = null
+    /** Operator disconnected or never connected: no automatic retry. */
+    private var routerSuppressed = true
+    private var routerUser = ""
+    private var routerPassword = ""
+    private var routerSettings: RouterSettings? = null
+    private var routerBusy = false
+    private var handledLosses = 0u
     private val loop = object : Runnable {
         override fun run() {
             if (!looping) return
@@ -106,6 +158,11 @@ class TerraSession(context: Context) {
             }
             control.postDelayed(this, 10)
         }
+    }
+
+    init {
+        // The Bluetooth drive tick writes whatever the Rust gate decided last.
+        ble?.setFrameSource { driveLoop?.takeMotorCommand(FRAME_MAX_AGE_S) ?: MotorCommand.Idle }
     }
 
     fun discardZenohOnDevice() {
@@ -132,7 +189,7 @@ class TerraSession(context: Context) {
     }
 
     fun startSimulation() {
-        stop()
+        stop(keepBluetooth = true)
         control.post {
             try {
                 prepare(DriveMode.Simulation)
@@ -145,12 +202,14 @@ class TerraSession(context: Context) {
     }
 
     fun startPhone() {
-        stop()
+        stop(keepBluetooth = true)
         control.post {
             val epoch = generation
             val phone = PhoneSensors(
                 appContext,
                 control,
+                pipeline,
+                mountHeight = { mountHeight() },
                 onImu = { sample ->
                     if (epoch != generation || mode != DriveMode.Phone) return@PhoneSensors
                     try {
@@ -159,9 +218,9 @@ class TerraSession(context: Context) {
                         fail(error)
                     }
                 },
-                onCamera = { camera ->
+                onPose = { pose ->
                     if (epoch != generation || mode != DriveMode.Phone) return@PhoneSensors
-                    acceptCamera(camera)
+                    acceptPose(pose)
                 },
                 onDepth = { frame ->
                     if (epoch != generation || mode != DriveMode.Phone) return@PhoneSensors
@@ -188,6 +247,7 @@ class TerraSession(context: Context) {
             try {
                 prepare(DriveMode.Phone)
                 sensors = phone
+                startDriveLoop(DriveSource.PHONE)
                 beginLoop()
                 publish {
                     source = "SensorManager + ARCore"
@@ -195,6 +255,24 @@ class TerraSession(context: Context) {
                 }
             } catch (error: Exception) {
                 phone.close()
+                fail(error)
+            }
+        }
+    }
+
+    /** Bluetooth effort through the Rust gate with no phone sensors: the phone stick is normalized effort. */
+    fun startBluetoothDrive() {
+        stop(keepBluetooth = true)
+        control.post {
+            try {
+                prepare(DriveMode.Bluetooth)
+                startDriveLoop(DriveSource.BLUETOOTH_MANUAL)
+                beginLoop()
+                publish {
+                    source = "Bluetooth drive · no phone sensors"
+                    mapStatus = "No map without phone sensors"
+                }
+            } catch (error: Exception) {
                 fail(error)
             }
         }
@@ -246,10 +324,6 @@ class TerraSession(context: Context) {
         }
     }
 
-    fun setBluetoothEffort(forward: Double, turn: Double) {
-        ble?.setEffort(forward, turn)
-    }
-
     fun armBluetooth() {
         ble?.arm()
     }
@@ -262,9 +336,12 @@ class TerraSession(context: Context) {
         ble?.startScan()
     }
 
-    /** Leaving the foreground and Stop both end here. Disconnect publishes a final zero. */
-    fun stop() {
-        ble?.disarmAndDisconnect()
+    /**
+     * Leaving the foreground and Stop both end here. Disconnect publishes a final
+     * zero. Switching drive modes keeps the Bluetooth link but disarms it.
+     */
+    fun stop(keepBluetooth: Boolean = false) {
+        if (keepBluetooth) ble?.disarm() else ble?.disarmAndDisconnect()
         generation += 1
         if (Looper.myLooper() == thread.looper) {
             stopOnControl()
@@ -369,11 +446,20 @@ class TerraSession(context: Context) {
     }
 
     fun emergencyStop(reset: Boolean) {
-        ble?.disarm()
+        if (!reset) ble?.disarm()
         control.post {
             forward = 0.0
             yaw = 0.0
             goalLatched = false
+            try {
+                if (reset) {
+                    gate.clearEmergencyStop()
+                    gate.clearStopReason()
+                } else {
+                    gate.emergencyStop(PhoneSensors.monotonicSeconds())
+                }
+            } catch (_: Exception) {
+            }
             try {
                 follower?.cancel()
             } catch (_: Exception) {
@@ -422,10 +508,12 @@ class TerraSession(context: Context) {
         }
     }
 
+    /** Close the run log so [runLog] can be shared; the controller keeps running unrecorded. */
     fun finishLog() {
         control.post {
             try {
                 controller?.endRecording()
+                publish { autonomyReason = "Run log closed · share it below" }
             } catch (error: Exception) {
                 publish { autonomyReason = error.message ?: "Could not close the run log" }
             }
@@ -462,36 +550,18 @@ class TerraSession(context: Context) {
 
     fun close() {
         stop()
+        ble?.setFrameSource(null)
         ble?.close()
         thread.quitSafely()
+        routerThread.quitSafely()
     }
 
-    private fun acceptCamera(camera: CameraObservation) {
+    private fun acceptPose(pose: PhonePose) {
         try {
-            val velocity = velocityFilter.push(camera.x, camera.y, camera.z, camera.timestamp, camera.tracked)
-            val brain = controller ?: return
-            brain.pushVio(
-                VioReading(
-                    timestamp = camera.timestamp,
-                    positionX = camera.x,
-                    positionY = camera.y,
-                    positionZ = camera.z,
-                    quaternionX = camera.quaternionX,
-                    quaternionY = camera.quaternionY,
-                    quaternionZ = camera.quaternionZ,
-                    quaternionW = camera.quaternionW,
-                    velocityX = velocity?.x ?: 0.0,
-                    velocityY = velocity?.y ?: 0.0,
-                    velocityZ = velocity?.z ?: 0.0,
-                    tracked = camera.tracked && velocity != null,
-                ),
-            )
-            if (camera.tracked) {
-                phonePose = Pose(
-                    camera.x,
-                    camera.y,
-                    bodyYaw(camera.quaternionX, camera.quaternionY, camera.quaternionZ, camera.quaternionW),
-                )
+            controller?.pushVio(pose.vio)
+            driveLoop?.setTracking(pose.tracked)
+            if (pose.tracked) {
+                phonePose = Pose(pose.vio.positionX, pose.vio.positionY, pose.yaw)
             } else {
                 phonePose = null
                 publish { mapStatus = "Tracking lost · map paused" }
@@ -504,12 +574,15 @@ class TerraSession(context: Context) {
     private fun prepare(next: DriveMode) {
         val brain = MobileController(defaultControlSettings())
         val runId = UUID.randomUUID().toString()
-        val log = File(appContext.filesDir, "Terra-run-$runId.jsonl")
+        val log = File(File(appContext.filesDir, RUN_LOG_DIR).also { it.mkdirs() }, "Terra-run-$runId.jsonl")
         brain.beginRecording(log.absolutePath, runId)
+        val grid = MobileOccupancyMap(defaultOccupancySettings())
+        // The planner and ARGOS read the same map the phone integrates.
+        brain.attachOccupancyMap(grid)
         controller = brain
-        map = MobileOccupancyMap(defaultOccupancySettings())
+        map = grid
+        syncedLayout = null
         plant.reset()
-        velocityFilter.reset()
         mode = next
         forward = 0.0
         yaw = 0.0
@@ -518,6 +591,8 @@ class TerraSession(context: Context) {
         phonePose = null
         remotePose = null
         publish {
+            runLog = log
+            normalizedStick = next == DriveMode.Bluetooth
             occupancy = null
             mapX = 0.0
             mapY = 0.0
@@ -572,8 +647,16 @@ class TerraSession(context: Context) {
         }
         val brain = controller ?: return
         if (mode == DriveMode.Stopped) return
-        if (mode == DriveMode.Phone) sensors?.poll()
-        val now = if (mode == DriveMode.Simulation) simulatedTime else PhoneSensors.monotonicSeconds()
+        driveLoop?.let { drive ->
+            // The Rust loop ticks on its own thread; this thread feeds it.
+            if (mode == DriveMode.Phone) sensors?.poll()
+            val command = commandFor(phonePose)
+            drive.setLocalInput(command.forward, command.yaw)
+            tick += 1
+            if (tick % 10 == 0) serviceDrive(brain, drive)
+            return
+        }
+        val now = simulatedTime
         val pose = if (mode == DriveMode.Simulation) plant.state() else null
         if (pose != null) {
             brain.pushImu(
@@ -606,12 +689,7 @@ class TerraSession(context: Context) {
                 )
             }
         }
-        val current = when (mode) {
-            DriveMode.Simulation -> pose?.let { Pose(it.x, it.y, it.yaw) }
-            DriveMode.Phone -> phonePose
-            else -> null
-        }
-        val command = commandFor(current)
+        val command = commandFor(pose?.let { Pose(it.x, it.y, it.yaw) })
         brain.setTarget(TwistSetpoint(timestamp = now, forward = command.forward, yawRate = command.yaw))
         val output = brain.step(now)
         if (mode == DriveMode.Simulation && pose != null) {
@@ -626,16 +704,309 @@ class TerraSession(context: Context) {
                 measuredYaw = output.estimatedYawRate
                 leftEffort = output.leftEffort
                 rightEffort = output.rightEffort
-                status = when (output.safety) {
-                    SafetyState.ACTIVE -> "Feedback control active"
-                    SafetyState.SENSOR_NOT_READY -> "Waiting for IMU and VIO"
-                    SafetyState.TRACKING_LOST -> "Tracking lost · neutral output"
-                    SafetyState.STALE_SENSORS -> "Stale sensors · neutral output"
-                    SafetyState.STALE_TARGET -> "Target expired · neutral output"
-                    SafetyState.INVALID_TIME -> "Clock mismatch · neutral output"
-                }
+                status = safetyText(output.safety)
             }
             readAuthority(brain.autonomyStatus())
+        }
+    }
+
+    private fun startDriveLoop(source: DriveSource) {
+        val brain = controller ?: return
+        gate.reset()
+        val drive = PhoneDriveLoop(brain, gate, source, PhoneSensors.monotonicSeconds())
+        drive.start()
+        driveLoop = drive
+        handledLosses = 0u
+        if (!routerSuppressed) routerRetryAt = 0.0
+    }
+
+    private fun stopDriveLoop() {
+        driveLoop?.stop()
+        driveLoop = null
+    }
+
+    /** 10 Hz on the sensor thread: layout and link facts in, snapshot out. */
+    private fun serviceDrive(brain: MobileController, drive: PhoneDriveLoop) {
+        val link = ble
+        val layout = link?.driveLayout
+        if (layout != syncedLayout) {
+            syncedLayout = layout
+            try {
+                brain.setActuatorLayout(layout ?: "")
+            } catch (error: Exception) {
+                publish { motorStatus = "Rover layout rejected: ${error.message}" }
+            }
+        }
+        val connected = link?.connected == true
+        val armed = link?.ready == true && link.armed
+        val routes = brain.layoutSupportsVioControl()
+        drive.setLink(connected, armed, mode == DriveMode.Phone, routes)
+        val snapshot = drive.snapshot()
+        snapshot.error?.let { throw IllegalStateException(it) }
+        serviceRouter(snapshot)
+        serviceFit()
+        val output = snapshot.output
+        val note = when {
+            snapshot.emergencyStopped -> "Emergency stop latched · Reset stop to drive"
+            !connected -> "No rover link"
+            !armed -> "Arm the rover to drive"
+            mode == DriveMode.Phone && !routes -> "Phone drive needs left and right wheel routes in the rover layout"
+            snapshot.stopReason != null -> "Held · ${snapshot.stopReason}"
+            else -> "Driving through the Rust motor gate"
+        }
+        publish {
+            motorStatus = note
+            emergencyLatched = snapshot.emergencyStopped
+            if (output != null) {
+                measuredForward = output.estimatedForward
+                measuredYaw = output.estimatedYawRate
+                leftEffort = output.leftEffort
+                rightEffort = output.rightEffort
+                status = safetyText(output.safety)
+            }
+        }
+        readAuthority(brain.autonomyStatus())
+    }
+
+    private fun safetyText(safety: SafetyState): String = when (safety) {
+        SafetyState.ACTIVE -> "Feedback control active"
+        SafetyState.SENSOR_NOT_READY -> "Waiting for IMU and VIO"
+        SafetyState.TRACKING_LOST -> "Tracking lost · neutral output"
+        SafetyState.STALE_SENSORS -> "Stale sensors · neutral output"
+        SafetyState.STALE_TARGET -> "Target expired · neutral output"
+        SafetyState.INVALID_TIME -> "Clock mismatch · neutral output"
+    }
+
+    /** ARGOS link on a phone. The controller holds the session; Rust gates every motor frame. */
+    fun connectRouter(endpoint: String, prefix: String, roverId: String, user: String, password: String) {
+        val settings = parseRouterSettings(endpoint, prefix, roverId)
+        if (settings == null) {
+            routerStatus = "Enter tcp/ or tls/host:port, a topic prefix, and a numeric rover ID"
+            return
+        }
+        prefs.edit()
+            .putString(ROUTER_ENDPOINT_KEY, settings.endpoint)
+            .putString(ROUTER_PREFIX_KEY, settings.prefix)
+            .putString(ROUTER_ROVER_KEY, settings.roverId.toString())
+            .putString(ROUTER_USER_KEY, user.trim())
+            .putString(ROUTER_PASSWORD_KEY, password)
+            .apply()
+        control.post {
+            routerSettings = settings
+            routerUser = user.trim()
+            routerPassword = password
+            routerSuppressed = false
+            routerRetryAt = null
+            attemptRouter()
+        }
+    }
+
+    fun disconnectRouter() {
+        control.post {
+            routerSuppressed = true
+            routerRetryAt = null
+            routerAttempt += 1
+            routerBusy = false
+            forward = 0.0
+            yaw = 0.0
+            try {
+                controller?.disconnectDashboard()
+            } catch (_: Exception) {
+            }
+            publish {
+                routerConnecting = false
+                routerConnected = false
+                routerStatus = "Disconnected · remote intent cleared"
+            }
+        }
+    }
+
+    fun savedRouter(): SavedRouter = SavedRouter(
+        endpoint = prefs.getString(ROUTER_ENDPOINT_KEY, null) ?: DEFAULT_ROUTER_ENDPOINT,
+        prefix = prefs.getString(ROUTER_PREFIX_KEY, null) ?: DEFAULT_ROUTER_PREFIX,
+        roverId = prefs.getString(ROUTER_ROVER_KEY, null) ?: "0",
+        user = prefs.getString(ROUTER_USER_KEY, null) ?: DEFAULT_ROUTER_USER,
+        password = prefs.getString(ROUTER_PASSWORD_KEY, null) ?: "",
+    )
+
+    /** Control thread. One attempt at a time; a stale attempt's link is dropped. */
+    private fun attemptRouter() {
+        val settings = routerSettings ?: return
+        val brain = controller
+        if (brain == null || driveLoop == null) {
+            publish { routerStatus = "Start Phone sensors or Bluetooth drive, then connect" }
+            return
+        }
+        if (routerBusy) return
+        routerBusy = true
+        routerAttempt += 1
+        val attempt = routerAttempt
+        val user = routerUser
+        val password = routerPassword
+        brain.setObservabilityRover(settings.roverId.toString())
+        publish {
+            routerConnecting = true
+            routerStatus = "Connecting…"
+        }
+        router.post {
+            val error = try {
+                // Keeps an accepted onboard mission; network setup stays off the sensor thread.
+                brain.reconnectDashboardAuthenticated(settings.endpoint, settings.prefix, settings.roverId, user, password)
+                null
+            } catch (failure: Exception) {
+                failure
+            }
+            control.post {
+                routerBusy = false
+                if (attempt != routerAttempt || brain !== controller) {
+                    if (error == null) runCatching { brain.detachDashboardLink() }
+                    return@post
+                }
+                if (error == null) {
+                    runCatching { connectionPolicy.routerConnected() }
+                    routerRetryAt = null
+                    publish {
+                        routerConnecting = false
+                        routerConnected = true
+                        routerStatus = "Connected · rover ${settings.roverId} · motors still need arm and mount check"
+                    }
+                } else {
+                    routerRetryAt = PhoneSensors.monotonicSeconds() + routerDelay()
+                    publish {
+                        routerConnecting = false
+                        routerConnected = false
+                        routerStatus = "${error.message ?: "Router connection failed"} · retrying"
+                    }
+                }
+            }
+        }
+    }
+
+    private fun routerDelay(): Double = runCatching { connectionPolicy.nextRouterDelay() }.getOrDefault(5.0)
+
+    private fun serviceRouter(snapshot: DriveLoopSnapshot) {
+        if (snapshot.linkLosses > handledLosses) {
+            handledLosses = snapshot.linkLosses
+            forward = 0.0
+            yaw = 0.0
+            routerRetryAt = PhoneSensors.monotonicSeconds() + routerDelay()
+            val keeps = runCatching { controller?.acceptedOnboardMission() == true }.getOrDefault(false)
+            publish {
+                routerConnected = false
+                routerStatus = if (keeps) "Router interrupted · continuing onboard mission" else "Router connection lost · retrying"
+            }
+        }
+        val retry = routerRetryAt ?: return
+        if (routerSuppressed || routerBusy || snapshot.dashboard == "connected") return
+        if (PhoneSensors.monotonicSeconds() >= retry) {
+            routerRetryAt = null
+            attemptRouter()
+        }
+    }
+
+    fun mountHeight(): Double? = try {
+        pipeline.calibration().takeIf { mountIsPlausible(it) }?.cameraHeight
+    } catch (_: Exception) {
+        null
+    }
+
+    /** Landscape on Terra, screen toward the rover, 0.23 m camera height. */
+    fun applyTerraMount(topEdgeLeft: Boolean) = saveMount(terraLandscapeMount(topEdgeLeft))
+
+    fun saveMount(calibration: PhoneMountCalibration) {
+        control.post {
+            val text = try {
+                pipeline.setCalibration(calibration)
+                prefs.edit().putString(MOUNT_KEY, mountCalibrationToJson(calibration)).apply()
+                publish { mount = calibration }
+                "Saved. Restart Phone sensors so the map floor uses the new height."
+            } catch (error: Exception) {
+                error.message ?: "Mount rejected"
+            }
+            publish { mountStatus = text }
+        }
+    }
+
+    /** The person checked the phone is in its mount. Motors stay held until then. */
+    fun confirmMount(confirmed: Boolean) {
+        mountConfirmed = confirmed
+        control.post {
+            try {
+                gate.setMountConfirmed(confirmed)
+                if (confirmed) gate.clearStopReason()
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    /** Turn the rover in place at least 90°, then [finishOffsetFit]; twice, in opposite directions. */
+    fun beginOffsetFit() {
+        control.post {
+            val text = try {
+                pipeline.beginOffsetFit()
+                "Collecting · turn the rover in place"
+            } catch (error: Exception) {
+                error.message ?: "Could not start the turn pass"
+            }
+            publish { fitStatus = text }
+        }
+    }
+
+    fun finishOffsetFit() {
+        control.post {
+            val text = try {
+                when (val outcome = pipeline.finishOffsetFit()) {
+                    OffsetFitOutcome.NotCollecting -> "No turn pass was running"
+                    OffsetFitOutcome.Rejected -> "Pass rejected · turn at least 90° in place over 2 s or more"
+                    OffsetFitOutcome.Disagreed -> "The two passes differ by over 5 cm · start again"
+                    is OffsetFitOutcome.FirstPass ->
+                        "First pass %.1f cm RMS · now turn the other way and run a second pass".format(outcome.rms * 100)
+                    is OffsetFitOutcome.Accepted -> {
+                        val updated = pipeline.calibration().copy(
+                            cameraOffsetForward = outcome.forward,
+                            cameraOffsetLeft = outcome.left,
+                        )
+                        pipeline.setCalibration(updated)
+                        prefs.edit().putString(MOUNT_KEY, mountCalibrationToJson(updated)).apply()
+                        publish { mount = updated }
+                        "Offsets saved · %.1f cm forward, %.1f cm left".format(outcome.forward * 100, outcome.left * 100)
+                    }
+                }
+            } catch (error: Exception) {
+                error.message ?: "Turn fit failed"
+            }
+            publish {
+                fitCollecting = false
+                fitStatus = text
+            }
+        }
+    }
+
+    private fun serviceFit() {
+        val state = try {
+            pipeline.offsetFitState()
+        } catch (_: Exception) {
+            return
+        }
+        when (state) {
+            is OffsetFitState.Collecting -> publish {
+                fitCollecting = true
+                fitStatus = "Collecting · ${state.samples} frames"
+            }
+            is OffsetFitState.Cancelled -> publish {
+                fitCollecting = false
+                fitStatus = "Pass cancelled · ${if (state.reason == OffsetFitCancel.TRACKING_LOST) "tracking lost" else "turn took too long"}"
+            }
+            OffsetFitState.Idle -> publish { fitCollecting = false }
+        }
+    }
+
+    private fun loadMount(): PhoneMountCalibration {
+        val saved = prefs.getString(MOUNT_KEY, null) ?: return uncalibratedMount()
+        return try {
+            mountCalibrationFromJson(saved)
+        } catch (_: Exception) {
+            uncalibratedMount()
         }
     }
 
@@ -739,6 +1110,13 @@ class TerraSession(context: Context) {
     private fun stopOnControl() {
         looping = false
         control.removeCallbacks(loop)
+        stopDriveLoop()
+        routerBusy = false
+        routerAttempt += 1
+        try {
+            gate.reset()
+        } catch (_: Exception) {
+        }
         sensors?.close()
         sensors = null
         mode = DriveMode.Stopped
@@ -763,6 +1141,10 @@ class TerraSession(context: Context) {
             waypointStatus = "No goal"
             zenohConnecting = false
             zenohStatus = "Disconnected"
+            routerConnecting = false
+            routerConnected = false
+            if (!routerSuppressed) routerStatus = "Reconnects when a drive mode starts"
+            motorStatus = "Motors idle"
             leftEffort = 0.0
             rightEffort = 0.0
             measuredForward = 0.0
@@ -773,6 +1155,9 @@ class TerraSession(context: Context) {
     private fun fail(error: Exception) {
         looping = false
         control.removeCallbacks(loop)
+        stopDriveLoop()
+        routerBusy = false
+        routerAttempt += 1
         sensors?.close()
         sensors = null
         mode = DriveMode.Stopped
@@ -790,6 +1175,9 @@ class TerraSession(context: Context) {
             mapStatus = "Map paused"
             zenohConnecting = false
             zenohStatus = error.message ?: "Disconnected"
+            routerConnecting = false
+            routerConnected = false
+            motorStatus = "Motors idle"
             waypointActive = false
             waypointStatus = "No goal"
         }
@@ -802,8 +1190,30 @@ class TerraSession(context: Context) {
     private data class Pose(val x: Double, val y: Double, val yaw: Double)
     private data class Twist(val forward: Double, val yaw: Double)
 
+    data class SavedRouter(
+        val endpoint: String,
+        val prefix: String,
+        val roverId: String,
+        val user: String,
+        val password: String,
+    )
+
     companion object {
         private const val ENDPOINT_KEY = "zenohEndpoint"
         private const val ROVER_KEY = "zenohRoverID"
+        private const val ROUTER_ENDPOINT_KEY = "dashboardRouterEndpoint"
+        private const val ROUTER_PREFIX_KEY = "dashboardTopicPrefix"
+        private const val ROUTER_ROVER_KEY = "dashboardRoverID"
+        private const val ROUTER_USER_KEY = "dashboardRouterUser"
+        // App-private preferences; the iOS app keeps this in the keychain.
+        private const val ROUTER_PASSWORD_KEY = "dashboardRouterPassword"
+        private const val MOUNT_KEY = "mountCalibration"
+        /** Same defaults as the iOS app. */
+        const val DEFAULT_ROUTER_ENDPOINT = "tls/argos.34.135.204.210.sslip.io:7448"
+        const val DEFAULT_ROUTER_PREFIX = "terra/phone"
+        const val DEFAULT_ROUTER_USER = "terra"
+        const val RUN_LOG_DIR = "runs"
+        /** A Rust frame older than this is not written; the rover lease then stops it. */
+        private const val FRAME_MAX_AGE_S = 0.15
     }
 }

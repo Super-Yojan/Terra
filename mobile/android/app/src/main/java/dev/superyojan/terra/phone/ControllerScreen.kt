@@ -40,11 +40,13 @@ private val levelLabels = mapOf(
     "explore" to "Explore · 120 seconds",
 )
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun ControllerScreen(
     session: TerraSession,
     onStartPhone: () -> Unit,
     onScanBluetooth: () -> Unit = {},
+    onShareLog: () -> Unit = {},
 ) {
     var forward by remember { mutableFloatStateOf(0f) }
     var yaw by remember { mutableFloatStateOf(0f) }
@@ -74,7 +76,11 @@ fun ControllerScreen(
         SectionCard("Controller") {
             Readout("Source", session.source)
             Readout("Status", session.status)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Readout("Motors", session.motorStatus)
+            if (session.emergencyLatched) {
+                Text("Emergency stop latched", color = MaterialTheme.colorScheme.error)
+            }
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(onClick = {
                     forward = 0f
                     yaw = 0f
@@ -85,15 +91,27 @@ fun ControllerScreen(
                     yaw = 0f
                     onStartPhone()
                 }) { Text("Phone IMU + VIO") }
+                if (!session.emulator) {
+                    Button(onClick = {
+                        forward = 0f
+                        yaw = 0f
+                        session.startBluetoothDrive()
+                    }) { Text("Bluetooth drive") }
+                }
             }
             OutlinedButton(onClick = {
                 forward = 0f
                 yaw = 0f
                 session.setTarget(0.0, 0.0)
-                session.setBluetoothEffort(0.0, 0.0)
                 session.stop()
             }) { Text("Stop") }
+            Text(
+                "Phone IMU + VIO drives the rover in closed loop. Bluetooth drive sends stick effort with no phone sensors. Either way the Rust motor gate decides every frame.",
+                style = MaterialTheme.typography.bodySmall,
+            )
         }
+
+        RouterSection(session)
 
         if (session.emulator) {
             SectionCard("Zorvane · Zenoh") {
@@ -129,29 +147,28 @@ fun ControllerScreen(
             BluetoothSection(
                 session = session,
                 onScan = onScanBluetooth,
-                onEffort = { forward = it.first; yaw = it.second },
+                onDisarm = { forward = 0f; yaw = 0f },
             )
+            MountSection(session)
         }
 
-        SectionCard("Velocity target") {
-            Text("Forward  %.2f m/s".format(forward))
+        SectionCard(if (session.normalizedStick) "Stick effort" else "Velocity target") {
+            Text(if (session.normalizedStick) "Forward  %+.2f".format(forward) else "Forward  %.2f m/s".format(forward))
             Slider(
                 value = forward,
                 onValueChange = {
                     forward = snap(it)
                     session.setTarget(forward.toDouble(), yaw.toDouble())
-                    session.setBluetoothEffort(forward.toDouble(), yaw.toDouble())
                 },
                 valueRange = -1f..1f,
                 enabled = !session.waypointActive,
             )
-            Text("Left turn  %.2f rad/s".format(yaw))
+            Text(if (session.normalizedStick) "Left turn  %+.2f".format(yaw) else "Left turn  %.2f rad/s".format(yaw))
             Slider(
                 value = yaw,
                 onValueChange = {
                     yaw = snap(it)
                     session.setTarget(forward.toDouble(), yaw.toDouble())
-                    session.setBluetoothEffort(forward.toDouble(), yaw.toDouble())
                 },
                 valueRange = -1f..1f,
                 enabled = !session.waypointActive,
@@ -161,7 +178,6 @@ fun ControllerScreen(
                     forward = 0f
                     yaw = 0f
                     session.setTarget(0.0, 0.0)
-                    session.setBluetoothEffort(0.0, 0.0)
                 },
                 enabled = !session.waypointActive,
             ) { Text("Zero target") }
@@ -249,9 +265,10 @@ fun ControllerScreen(
                     session.emergencyStop(false)
                 }) { Text("Emergency stop") }
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(onClick = { session.emergencyStop(true) }) { Text("Reset stop") }
                 OutlinedButton(onClick = { session.finishLog() }) { Text("Finish run log") }
+                OutlinedButton(onClick = onShareLog, enabled = session.runLog != null) { Text("Share run log · stops driving") }
             }
         }
 
@@ -307,13 +324,6 @@ fun ControllerScreen(
         SectionCard("Shared Rust test") {
             Button(onClick = { session.runBenchmark() }) { Text("Run velocity benchmark") }
             Text(session.benchmark, style = MaterialTheme.typography.bodySmall)
-        }
-
-        SectionCard("Phone mounting") {
-            Text(
-                "Default: phone flat, screen up, top edge toward the rover’s front. Phone and rover origins are assumed coincident. Calibrate the mount before connecting motor hardware. Tracking loss commands neutral effort. Leaving the app stops the controller.",
-                style = MaterialTheme.typography.bodySmall,
-            )
         }
     }
 }

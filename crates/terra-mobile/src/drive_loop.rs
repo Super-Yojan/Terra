@@ -460,7 +460,10 @@ mod tests {
             }
         );
         for i in 1..10 {
-            assert_eq!(drive.step_once(i as f64 * 0.01).unwrap(), MotorCommand::Idle);
+            assert_eq!(
+                drive.step_once(i as f64 * 0.01).unwrap(),
+                MotorCommand::Idle
+            );
         }
         gate.set_mount_confirmed(true).unwrap();
         let next = drive.step_once(0.1).unwrap();
