@@ -102,6 +102,7 @@ export const sections: NavSection[] = [
         pages: [
             { path: "/autonomy/PROTOCOL", label: "Contract" },
             { path: "/autonomy/TASK", label: "L5 task" },
+            { path: "/autonomy/DOCK", label: "Bucket dock" },
             { path: "/autonomy/TARGET_SEARCH", label: "Target search" },
             { path: "/autonomy/outdoor-gps", label: "Outdoor GPS" },
             { path: "/autonomy/turning-policy", label: "Turning policy" },

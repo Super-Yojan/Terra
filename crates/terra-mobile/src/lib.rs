@@ -260,6 +260,27 @@ pub struct ControlOutput {
     /// Efforts routed through the layout from [`MobileController::set_actuator_layout`],
     /// as `[{"id","value"}]` JSON. `None` without a valid layout or when routing fails.
     pub actuator_frame: Option<String>,
+    /// Dump-gate servo position chosen by the bucket dock this tick, when the
+    /// rover profile names a gate servo. Already in `actuator_frame`; a host
+    /// that routes servos itself applies it as that servo's target.
+    pub gate_servo: Option<GateServo>,
+}
+#[derive(Clone, Copy, Debug, PartialEq, uniffi::Record)]
+/// The dump gate as the person set it on the phone.
+pub struct DumpGate {
+    /// Actuator id of the positional servo in the layout.
+    pub servo_id: u8,
+    /// Normalized positions, -1..=1.
+    pub open_position: f64,
+    pub closed_position: f64,
+}
+#[derive(Clone, Copy, Debug, PartialEq, uniffi::Record)]
+/// One servo target from Rust control.
+pub struct GateServo {
+    /// Actuator id in the layout.
+    pub id: u8,
+    /// Normalized position, already clipped to the servo's limits by the layout.
+    pub position: f64,
 }
 impl From<MotorOutput> for ControlOutput {
     fn from(value: MotorOutput) -> Self {
@@ -279,6 +300,7 @@ impl From<MotorOutput> for ControlOutput {
                 StopReason::InvalidTime => SafetyState::InvalidTime,
             },
             actuator_frame: None,
+            gate_servo: None,
         }
     }
 }
@@ -501,6 +523,39 @@ impl MobileController {
                 message: e.to_string(),
             })
     }
+    /// Dump-gate servo and its open and closed positions, set by the person on
+    /// the phone. They replace the rover profile's gate and survive profile
+    /// changes; `None` returns to the profile's. Local and trusted.
+    ///
+    /// # Errors
+    /// Returns `InvalidInput` for positions outside -1..=1 or equal.
+    pub fn set_dump_gate(&self, gate: Option<DumpGate>) -> Result<(), ControllerError> {
+        let mut b = self.brain.lock().map_err(|_| ControllerError::Internal)?;
+        b.runtime
+            .set_dock_gate(gate.map(|g| (g.servo_id, g.open_position, g.closed_position)))?;
+        Ok(())
+    }
+    /// Dump outlet ahead of the rover centre, metres. Terra's outlet sits over
+    /// the phone, so the apps pass the mount's camera forward offset. `None`
+    /// returns to the rover profile's value.
+    ///
+    /// # Errors
+    /// Returns `InvalidInput` outside 0.05..=3 m.
+    pub fn set_dock_outlet_ahead(&self, metres: Option<f64>) -> Result<(), ControllerError> {
+        let mut b = self.brain.lock().map_err(|_| ControllerError::Internal)?;
+        b.runtime.set_dock_outlet(metres)?;
+        Ok(())
+    }
+    /// Hold the dump gate open (`Some(true)`) or closed to try its positions,
+    /// or end the test (`None`). A running dock always controls the gate.
+    ///
+    /// # Errors
+    /// Returns `InvalidInput` while a dock runs or without a gate servo.
+    pub fn test_dump_gate(&self, open: Option<bool>) -> Result<(), ControllerError> {
+        let mut b = self.brain.lock().map_err(|_| ControllerError::Internal)?;
+        b.runtime.test_dock_gate(open)?;
+        Ok(())
+    }
     /// Drive and plan as the rover described by `profile_json`, one entry of
     /// [`rover_profile_presets`] or an edited copy. Sets the planner footprint,
     /// turning policy, speed limits, velocity-loop gains and wheel deadband, and
@@ -619,6 +674,11 @@ impl MobileController {
             );
         }
         let mut output = runtime_output.autonomy;
+        // The dock owns the gate: open only on its request, closed otherwise.
+        let gate = brain.runtime.gate_servo(output.gate_open);
+        if let (Some((id, position)), Some(layout)) = (gate, brain.actuators.as_mut()) {
+            let _ = layout.set_servo(id, position);
+        }
         let outdoor_motion = output.status.safety == "clear";
         let mut outdoor_status = brain.outdoor.status(
             timestamp,
@@ -870,6 +930,7 @@ impl MobileController {
             .actuators
             .as_ref()
             .and_then(|layout| layout.frame(control.left_effort, control.right_effort).ok());
+        control.gate_servo = gate.map(|(id, position)| GateServo { id, position });
         Ok(control)
     }
 

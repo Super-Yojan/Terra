@@ -25,6 +25,7 @@ impl Runtime {
                 | "search/report/ack"
                 | "task"
                 | "task/action"
+                | "dock"
         ) {
             return Err("unsupported_request");
         }
@@ -34,6 +35,7 @@ impl Runtime {
                 && matches!(v["action"].as_str(), Some("pause" | "cancel")))
             || kind == "search/report/ack"
             || (kind == "task/action" && v["action"] == "cancel")
+            || (kind == "dock" && v["action"] == "cancel")
             || (kind == "teleop"
                 && v["linear"].as_f64() == Some(0.)
                 && v["angular"].as_f64() == Some(0.));
@@ -64,6 +66,7 @@ impl Runtime {
                 | "goal"
                 | "task"
                 | "task/action"
+                | "dock"
         ) {
             o.remove("authority_revision");
         }
@@ -124,6 +127,7 @@ impl Runtime {
                     | "search/report/ack"
                     | "task"
                     | "task/action"
+                    | "dock"
             )
         {
             return Err(invalid("invalid local request"));
@@ -181,6 +185,28 @@ impl Runtime {
             "task/action" => terra_autonomy::decode_task_action(&bytes).is_some_and(|a| {
                 self.autonomy.run_id = self.run_id.clone();
                 self.autonomy.apply_task_action(a, now).is_ok()
+            }),
+            "dock" => terra_autonomy::decode_dock(bytes).is_some_and(|r| {
+                let target = r.object_id.and_then(|id| {
+                    self.objects
+                        .objects()
+                        .iter()
+                        .find(|o| o.id == id && o.confirmed && o.class == "bucket")
+                        .map(|o| terra_autonomy::DockTarget {
+                            object_id: Some(o.id),
+                            color: o.color.clone(),
+                            x: o.x,
+                            y: o.y,
+                        })
+                });
+                let pose = self.pose.unwrap_or_default().0;
+                self.autonomy.run_id = self.run_id.clone();
+                let accepted = self.autonomy.apply_dock_request(r, target, pose, now);
+                if self.autonomy.dock_active() {
+                    // A gate test ends when a dock takes the gate.
+                    self.gate_test = None;
+                }
+                accepted
             }),
             "goal/decision" => {
                 if let Some(r) = terra_autonomy::decode_decision(&bytes) {

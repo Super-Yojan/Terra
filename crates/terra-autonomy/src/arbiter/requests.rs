@@ -231,6 +231,7 @@ impl AutonomyArbiter {
         Ok(())
     }
     pub(super) fn clear(&mut self) {
+        self.cancel_dock("authority_cleared");
         self.turning.reset();
         self.commanded = Twist::default();
         self.turning_identity = None;
@@ -461,6 +462,9 @@ impl AutonomyArbiter {
             r.operator_session_id.clone(),
             &format!("sequence:{:?}", r.sequence),
         );
+        if self.dock_active() && (r.linear != 0. || r.angular != 0.) {
+            self.cancel_dock("operator_takeover");
+        }
         self.operator = Some((r, now));
         self.operator_origin = origin;
         true

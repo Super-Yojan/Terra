@@ -213,6 +213,19 @@ pub struct Runtime {
     sensor_hold: Option<(f64, terra_autonomy::SensorHold)>,
     sensor_holds: u64,
     sensor_held: bool,
+    /// Dump outlet and gate servo in use: the rover profile's, with the
+    /// phone's local settings on top.
+    pub dock_profile: rover_profile::DockProfile,
+    rover_profile: Option<rover_profile::RoverProfile>,
+    dock_local: DockLocal,
+    /// Gate test from the setup screen while no dock runs: open or closed.
+    gate_test: Option<bool>,
+}
+/// Dock values set on the phone, kept across rover profile changes.
+#[derive(Clone, Debug, Default, PartialEq)]
+struct DockLocal {
+    outlet_ahead: Option<f64>,
+    gate: Option<(u8, f64, f64)>,
 }
 /// How long a `sensor_unhealthy` hold stays in the status after it clears.
 const SENSOR_HOLD_DISPLAY_SECONDS: f64 = 10.;
@@ -274,6 +287,10 @@ impl Runtime {
             sensor_holds: 0,
             sensor_held: false,
             last_snapshot: RuntimeSnapshot { value: json!({}) },
+            dock_profile: Default::default(),
+            rover_profile: None,
+            dock_local: DockLocal::default(),
+            gate_test: None,
         })
     }
     pub fn metadata(&self) -> Value {
@@ -297,8 +314,10 @@ impl Runtime {
         self.objects.clear();
         self.outdoor.selected = false;
         self.outdoor.revision = self.outdoor.revision.saturating_add(1);
+        let dock = self.autonomy.dock_config().clone();
         self.autonomy = AutonomyArbiter::default();
         self.autonomy.run_id = self.run_id.clone();
+        self.autonomy.configure_dock(dock);
         self.autonomy
             .configure_planner(self.navigation.parameters.planner());
         self.autonomy
@@ -336,6 +355,16 @@ impl Runtime {
                 .then(|| self.outdoor.geolocate(now, pose, sighting.x, sighting.y))
                 .flatten()
         });
+        if let Some((pose, _)) = self.pose {
+            self.autonomy.observe_dock(
+                &sighting.class,
+                sighting.color.as_deref(),
+                sighting.x,
+                sighting.y,
+                pose,
+                now,
+            );
+        }
         self.objects.observe(sighting).map_err(invalid)?;
         // Confirmed objects become L5 landmarks, so a task model or agent can drive to them.
         for o in self.objects.objects().iter().filter(|o| o.confirmed) {
@@ -347,6 +376,90 @@ impl Runtime {
                 .observe_task_landmark(&label, o.x, o.y, o.confidence, o.last_seen);
         }
         Ok(())
+    }
+    /// The dock's gate request this tick as a servo position, when a gate
+    /// servo is set: `(actuator id, normalized position)`. With no dock
+    /// running, a gate test from the setup screen holds the gate where it put it.
+    pub fn gate_servo(&self, gate_open: bool) -> Option<(u8, f64)> {
+        let open = if self.autonomy.dock_active() {
+            gate_open
+        } else {
+            gate_open || self.gate_test == Some(true)
+        };
+        self.dock_profile.gate_servo.map(|id| {
+            (
+                id,
+                if open {
+                    self.dock_profile.gate_open
+                } else {
+                    self.dock_profile.gate_closed
+                },
+            )
+        })
+    }
+    /// Outlet distance ahead of the rover centre set on the phone, metres, in
+    /// place of the profile's. `None` returns to the profile's value.
+    ///
+    /// # Errors
+    /// Outside 0.05..=3 m; the current value stays.
+    pub fn set_dock_outlet(&mut self, ahead: Option<f64>) -> Result<(), RuntimeError> {
+        if ahead.is_some_and(|v| !(v.is_finite() && (0.05..=3.).contains(&v))) {
+            return Err(invalid("dock outlet must be 0.05 to 3 m ahead"));
+        }
+        self.dock_local.outlet_ahead = ahead;
+        self.apply_dock();
+        Ok(())
+    }
+    /// Gate servo and its open and closed positions set on the phone, in place
+    /// of the profile's. `None` returns to the profile's servo.
+    ///
+    /// # Errors
+    /// Positions outside -1..=1 or equal; the current gate stays.
+    pub fn set_dock_gate(&mut self, gate: Option<(u8, f64, f64)>) -> Result<(), RuntimeError> {
+        if let Some((_, open, closed)) = gate
+            && !([open, closed]
+                .iter()
+                .all(|v| v.is_finite() && (-1.0..=1.0).contains(v))
+                && open != closed)
+        {
+            return Err(invalid("gate positions must differ and lie in -1..=1"));
+        }
+        self.dock_local.gate = gate;
+        self.apply_dock();
+        Ok(())
+    }
+    /// Hold the gate open (`Some(true)`) or closed to try its positions, or end
+    /// the test (`None`). A running dock always controls the gate itself.
+    ///
+    /// # Errors
+    /// While a dock runs, or without a gate servo.
+    pub fn test_dock_gate(&mut self, open: Option<bool>) -> Result<(), RuntimeError> {
+        if open.is_some() && self.autonomy.dock_active() {
+            return Err(invalid("a dock is running"));
+        }
+        if open.is_some() && self.dock_profile.gate_servo.is_none() {
+            return Err(invalid("no gate servo set"));
+        }
+        self.gate_test = open;
+        Ok(())
+    }
+    fn apply_dock(&mut self) {
+        let mut profile = self
+            .rover_profile
+            .clone()
+            .unwrap_or_else(rover_profile::RoverProfile::terra);
+        if let Some(ahead) = self.dock_local.outlet_ahead {
+            profile.dock.outlet_ahead = Some(ahead);
+        }
+        if let Some((id, open, closed)) = self.dock_local.gate {
+            profile.dock.gate_servo = Some(id);
+            profile.dock.gate_open = open;
+            profile.dock.gate_closed = closed;
+        }
+        if self.rover_profile.is_some() || self.dock_local != DockLocal::default() {
+            self.autonomy.configure_dock(profile.dock_config());
+        }
+        self.dock_profile = profile.dock;
     }
     pub fn configuration_identity(&self) -> String {
         let mut config = self.configuration.clone();
@@ -379,6 +492,8 @@ impl Runtime {
         self.control_limits = (controller.max_forward, controller.max_yaw_rate);
         self.navigation.parameters = navigation;
         self.navigation.revision = self.navigation.revision.saturating_add(1);
+        self.rover_profile = Some(profile.clone());
+        self.apply_dock();
         self.navigation.profile = Some(profile.name.clone());
         self.navigation.result = Some(format!("profile {}", profile.name));
         self.outdoor.revision = self.outdoor.revision.saturating_add(1);
@@ -706,10 +821,11 @@ impl Runtime {
             self.controller.reset();
         }
         let effective_mode = if self.mode == ActuationMode::DirectEffort
-            && !matches!(
-                output.status.requested_level,
-                terra_autonomy::Level::Teleop | terra_autonomy::Level::AssistedTeleop
-            ) {
+            && (output.status.active_source == "dock"
+                || !matches!(
+                    output.status.requested_level,
+                    terra_autonomy::Level::Teleop | terra_autonomy::Level::AssistedTeleop
+                )) {
             ActuationMode::VelocityFeedback
         } else {
             self.mode

@@ -107,6 +107,8 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
     @Published private(set) var committedLayoutJSON = "{}"
     @Published private(set) var configurationStatus = "No staged layout"
     @Published private(set) var servoPositions: [UInt8: Double] = [:]
+    @Published private(set) var dumpGate = DumpGateSetting.load()
+    @Published private(set) var dumpGateStatus = ""
     @Published private(set) var feedbackCompatible = false
     @Published private(set) var vioControlCompatible = false
     private var requestedHardwareFeedback: UUID?
@@ -644,6 +646,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
                 }
                 syncRustLayout(controller)
                 let output = try controller.step(timestamp: now)
+                applyGateServo(output.gateServo)
                 if tick % 10 == 0 { serviceManualDashboard(); updateAuthority() }
                 tick += 1
                 if tick % 5 == 0 {
@@ -689,6 +692,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
             try controller.setActuationMode(feedback: !direct)
             syncRustLayout(controller)
             let output = try controller.step(timestamp: now)
+            applyGateServo(output.gateServo)
             if mode == .phone {
                 SensorTimingProbe.shared.record(.tick, sensor: timingLastImu, queue: now, done: CACurrentMediaTime(), a: timingLastVio, b: output.safety == .active ? 1 : 0)
             }
@@ -960,6 +964,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
                 guard self.mode == .stopped else { throw CalibrationSaveError.stopFirst }
                 try value.save()
                 self.mountCalibration = value
+                if let controller = self.controller { self.applyDock(to: controller) }
                 let headingOrientation = PhoneMountGeometry.headingReference(deviceToBody: value.deviceToBody).orientation
                 DispatchQueue.main.async {
                     self.locationManager.headingOrientation = headingOrientation
@@ -1914,6 +1919,12 @@ extension PhoneController {
     func stopHardware() {
         controlQueue.async { self.revokeHardwareMotion(reason: "output stop requested") }
     }
+    /// The bucket dock's dump-gate position from Rust. Swift only routes it.
+    private func applyGateServo(_ gate: GateServo?) {
+        guard let gate, servoTargets[String(gate.id)] != gate.position else { return }
+        servoTargets[String(gate.id)] = gate.position
+        DispatchQueue.main.async { self.servoPositions[gate.id] = gate.position }
+    }
     func setServoTarget(id: UInt8, position: Double) {
         guard position.isFinite, hardwareReady else { return }
         controlQueue.async {
@@ -1949,7 +1960,48 @@ extension PhoneController {
     private func makeController() throws -> MobileController {
         let controller = try MobileController(settings: defaultControlSettings())
         if let json = RoverProfiles.json(named: RoverProfiles.selected) { try controller.setRoverProfile(profileJson: json) }
+        applyDock(to: controller)
         return controller
+    }
+    /// Runs on `controlQueue`. The outlet sits over the phone, so the dock aims
+    /// the camera's forward offset at the bucket once it is measured.
+    private func applyDock(to controller: MobileController) {
+        let ahead = mountCalibration.isPlausible && mountCalibration.cameraOffsetForward >= 0.05 ? mountCalibration.cameraOffsetForward : nil
+        try? controller.setDockOutletAhead(metres: ahead)
+        do { try controller.setDumpGate(gate: dumpGate?.rust) }
+        catch { DispatchQueue.main.async { self.dumpGateStatus = "Gate setting rejected: \(error)" } }
+    }
+    /// Save the dump gate servo and positions (nil clears them) and hand them to Rust.
+    func setDumpGate(_ value: DumpGateSetting?) {
+        DumpGateSetting.save(value)
+        dumpGate = value
+        controlQueue.async {
+            guard let controller = self.controller else { return }
+            do {
+                try controller.setDumpGate(gate: value?.rust)
+                DispatchQueue.main.async { self.dumpGateStatus = value == nil ? "Gate cleared" : "Gate saved" }
+            } catch { DispatchQueue.main.async { self.dumpGateStatus = "Gate setting rejected: \(error)" } }
+        }
+    }
+    /// Move the gate to its open or closed position to check it, or end the test (nil).
+    /// Rust refuses while a dock runs; with no controller the servo is set directly.
+    func testDumpGate(open: Bool?) {
+        guard let gate = dumpGate, let id = UInt8(exactly: gate.servoId) else { return }
+        controlQueue.async {
+            do {
+                if let controller = self.controller {
+                    try controller.setDumpGate(gate: gate.rust)
+                    try controller.testDumpGate(open: open)
+                }
+                if let open {
+                    DispatchQueue.main.async { self.setServoTarget(id: id, position: open ? gate.openPosition : gate.closedPosition) }
+                }
+                DispatchQueue.main.async {
+                    self.dumpGateStatus = !self.hardwareReady ? "Connect the rover to move the gate"
+                        : open.map { $0 ? "Gate open" : "Gate closed" } ?? "Test ended"
+                }
+            } catch { DispatchQueue.main.async { self.dumpGateStatus = "Gate test refused: \(error)" } }
+        }
     }
     func selectRoverProfile(_ name: String) {
         guard let json = RoverProfiles.json(named: name) else { return }

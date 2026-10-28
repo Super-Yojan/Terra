@@ -92,6 +92,9 @@ pub struct ArbiterOutput {
     pub in_place_turn: bool,
     /// L5 task status once a task has started under the `task` level.
     pub task: Option<crate::TaskStatus>,
+    /// Open the dump gate this tick. Only an aligned, stopped dock with
+    /// approval sets it; every hold clears it. Hosts map it to the gate servo.
+    pub gate_open: bool,
 }
 /// Stateful authority arbiter, waypoint follower, exploration runner, and target-search coordinator.
 pub struct AutonomyArbiter {
@@ -170,6 +173,12 @@ pub struct AutonomyArbiter {
     outdoor_destination: Option<(f64, f64)>,
     /// Destination the explorer's scorer currently pulls toward.
     explore_bias: Option<(f64, f64)>,
+    /// Bucket dock, kept after it ends for status.
+    dock: Option<Dock>,
+    dock_config: DockConfig,
+    next_dock: u64,
+    gate_open: bool,
+    dock_in_place: bool,
 }
 impl Default for AutonomyArbiter {
     fn default() -> Self {
@@ -233,11 +242,17 @@ impl Default for AutonomyArbiter {
             next_task_query: 0,
             outdoor_destination: None,
             explore_bias: None,
+            dock: None,
+            dock_config: DockConfig::default(),
+            next_dock: 0,
+            gate_open: false,
+            dock_in_place: false,
         }
     }
 }
 
 mod agent;
+mod dock;
 mod exploration;
 mod motion;
 mod requests;
@@ -323,20 +338,26 @@ impl AutonomyArbiter {
 
         // 2. Safety has priority over operator intent, goals and planning.
         self.check_initial_safety(&input, valid_time, &mut decision);
-        if !decision.held && self.level == Level::Task {
+        // A bucket dock takes over motion at any level until it ends; it does
+        // its own corridor check and keeps the gate shut under every hold.
+        let docking = self.drive_dock(&input, &mut decision);
+        if !docking && !decision.held && self.level == Level::Task {
             // L5: apply the model's latest answer, or hold while it thinks.
             self.drive_task(&input, &mut decision);
         }
-        if !decision.held {
+        if !docking && !decision.held {
             // 3. Choose intent and check the planned motion against occupancy.
             self.select_motion(&input, planning_map, command_origin, &mut decision);
         }
-        if self.level == Level::Task {
+        if !docking && self.level == Level::Task {
             self.watch_task_route(&input, &decision);
         }
 
         // 4. Apply the vehicle's turning constraints to the selected command.
-        self.limit_turning(&input, command_origin, &mut decision);
+        // Dock commands already respect the turn radius and spin policy.
+        if !docking {
+            self.limit_turning(&input, command_origin, &mut decision);
+        }
 
         // 5. Update search state and turn every remaining hold into zero motion.
         let search = self.finish_holds(&input, valid_time, &mut decision);
@@ -356,7 +377,13 @@ impl AutonomyArbiter {
         }
         let exploration = status.exploration.clone();
         self.drain_explore_events();
-        let in_place_turn = !decision.held && decision.reason == "exploration_scan";
+        let in_place_turn = !decision.held
+            && (decision.reason == "exploration_scan"
+                || (decision.source == "dock" && self.dock_in_place));
+        let gate_open = self.gate_open && !decision.held;
+        if !gate_open {
+            self.gate_open = false;
+        }
         ArbiterOutput {
             task: status.task.clone(),
             in_place_turn,
@@ -371,6 +398,7 @@ impl AutonomyArbiter {
             reset_controller: std::mem::take(&mut self.reset),
             search,
             pending_reports: self.pending_reports.iter().cloned().collect(),
+            gate_open,
         }
     }
     fn begin_tick(&mut self, input: &ArbiterInput<'_>, command_origin: CommandOrigin) -> bool {
@@ -486,6 +514,7 @@ impl AutonomyArbiter {
         self.collect_search_report(input.now);
         let search_status = self.search_status(input.now);
         if let Some(status) = search_status.as_ref()
+            && decision.source != "dock"
             && self.level == Level::TargetSearch
             && status.phase != SearchPhase::Searching
         {
