@@ -35,10 +35,15 @@ private const val REACH_METRES = 49.0
 private val levelLabels = mapOf(
     "teleop" to "Teleop",
     "assisted_teleop" to "Assisted teleop",
-    "waypoint" to "Waypoint",
-    "supervised" to "Supervised search",
-    "explore" to "Explore · 120 seconds",
+    "waypoint_direct" to "L2 · Direct waypoint",
+    "waypoint" to "L3 · Waypoint",
+    "explore" to "L4 · Explore + search · 120 seconds",
+    "task" to "L5 · Task",
 )
+
+// L4 is one chip: explore plus search. `target_search` counts as that L4 and
+// `supervised` is not part of the design, so neither gets a chip of its own.
+private val hiddenLevels = setOf("supervised", "target_search")
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -332,9 +337,10 @@ fun ControllerScreen(
 @Composable
 private fun LevelPicker(session: TerraSession, onSelect: () -> Unit) {
     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        session.supportedLevels.forEach { level ->
+        session.supportedLevels.filterNot { it in hiddenLevels }.forEach { level ->
             FilterChip(
-                selected = session.autonomyLevel == level,
+                selected = session.autonomyLevel == level ||
+                    (level == "explore" && session.autonomyLevel == "target_search"),
                 onClick = {
                     onSelect()
                     session.setAutonomy(level)
@@ -343,7 +349,7 @@ private fun LevelPicker(session: TerraSession, onSelect: () -> Unit) {
             )
         }
         if ("explore" !in session.supportedLevels) {
-            FilterChip(selected = false, onClick = {}, enabled = false, label = { Text("Explore") })
+            FilterChip(selected = false, onClick = {}, enabled = false, label = { Text("L4 · Explore + search") })
         }
     }
 }
