@@ -11,7 +11,7 @@
 
 // DATA AND COMMAND FRESHNESS: separate limits for separate evidence streams.
 /// Maximum occupancy observation age. Runtime override: arbiter map timeout setter.
-pub const MAP_FRESHNESS_SECONDS: f64 = 0.5;
+pub const MAP_FRESHNESS_SECONDS: f64 = 2.5;
 /// Maximum pose age for modes that require fresh localization.
 pub const POSE_FRESHNESS_SECONDS: f64 = 0.5;
 /// Maximum age of a teleop command before its intent expires.

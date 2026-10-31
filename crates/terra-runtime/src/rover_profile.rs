@@ -100,7 +100,7 @@ impl RoverProfile {
             max_linear: 2.,
             max_angular: 2.,
             min_turn_radius: 0.5,
-            allow_in_place: false,
+            allow_in_place: true,
             top_speed: 3.,
             skid_factor: 2.4,
             wheel_deadband: 0.,
