@@ -9,7 +9,7 @@
 //! `lock` (wait for agreeing fixes) → `creep` (point at the bucket, slow down
 //! near the dock range) → `settle` (stop, re-check) → `aligned` (flag raised,
 //! drive locked) → `dumping` (gate open, then closed) → `done`.
-//! `backoff` reverses a short way and locks again; `failed` hands the rover
+//! `backoff` reverses a short way (without checking the map) and locks again; `failed` hands the rover
 //! back to the operator.
 //!
 //! The gate opens only from `aligned`, with the rover still, after operator
@@ -680,22 +680,7 @@ impl Dock {
                         ..stop
                     };
                 }
-                let behind = self.config.backoff_distance + 0.05;
-                if self.corridor_blocked(
-                    pose,
-                    map,
-                    -self.config.half_length - behind,
-                    -self.config.half_length,
-                ) {
-                    let since = *self.blocked_since.get_or_insert(now);
-                    if now - since > self.config.blocked_timeout {
-                        self.enter(DockPhase::Failed, "backoff_blocked");
-                    }
-                    return DockTick {
-                        reason: "dock_path_blocked",
-                        ..stop
-                    };
-                }
+                // Backing off never waits on the map (see `reverse_requested`).
                 let linear = -self.config.backoff_speed;
                 let mut angular =
                     (1.5 * heading).clamp(-self.config.max_turn, self.config.max_turn);

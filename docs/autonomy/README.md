@@ -43,6 +43,8 @@ Connect the ARGOS Rust server to `tcp/127.0.0.1:7447`, then open its React brows
 
 - Teleop: hold keyboard/touch controls for precise movement. Commands expire after 500 ms.
 - Assisted teleop: operator intent goes through the shared obstacle/braking checker.
+
+Backing up is always allowed. Reverse motion never waits for a fresh map and is not checked against mapped obstacles, because the phone camera faces forward and the map has no fresh evidence behind the rover. This covers assisted-teleop reverse, an approved L5 agent drive in reverse, and a bucket dock backing off. Reverse is still capped at the planner's `max_reverse` (0.15 m/s by default) and still obeys stop, sensor health, the turning limiter and the relay lease.
 - Waypoint: operator-selected targets use the shared follower and local planner.
 - Supervised: reachable frontier targets are proposed; approval is required before motion. Reject, redirect, cancel/pause, or take over as mission conditions require.
 - Explore: the same frontiers are goals immediately. There is no per-goal approval. The run stops when the budget ends, no frontier remains, the operator stops or takes over, or the map or safety hold ends it.

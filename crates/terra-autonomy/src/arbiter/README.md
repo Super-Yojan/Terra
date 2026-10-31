@@ -31,7 +31,9 @@ For example, in waypoint mode with a stale map:
 4. `status_for_tick` copies those values into the report consumed by ARGOS.
 
 Checks preserve the original priority: invalid time, latched stop, unhealthy
-sensors, required map freshness, then supervision pause. Local manual mode and
+sensors, required map freshness, then supervision pause. Reverse requests
+(assisted-teleop or L5 agent reverse, dock backoff) skip the map freshness
+check, and operator/agent reverse also skips the local planner. Local manual mode and
 fleet/autonomous commands retain their existing differences; this refactor does
 not change thresholds, command admission, turning policy or telemetry strings.
 

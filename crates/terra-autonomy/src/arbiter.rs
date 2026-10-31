@@ -318,6 +318,24 @@ impl AutonomyArbiter {
         )
     }
 
+    /// Backing up never needs the occupancy map. The phone camera faces
+    /// forward, so the map holds no fresh evidence behind the rover anyway.
+    /// True when this tick's request is reverse motion: L1 operator input,
+    /// an L5 agent drive, or a bucket dock backing off. Stop, sensor health,
+    /// the turning limiter and the relay lease still apply.
+    fn reverse_requested(&self, now: f64) -> bool {
+        let operator_reverse = self.level == Level::AssistedTeleop
+            && self.operator.as_ref().is_some_and(|(r, t)| {
+                r.linear < 0. && fresh(now, Some(*t), timing::OPERATOR_COMMAND_FRESHNESS_SECONDS)
+            });
+        let agent_reverse = self.task_agent_twist(now).is_some_and(|t| t.linear < 0.);
+        let dock_backoff = self
+            .dock
+            .as_ref()
+            .is_some_and(|d| d.phase == crate::dock::DockPhase::Backoff);
+        operator_reverse || agent_reverse || dock_backoff
+    }
+
     /// Process one set of observations and return the allowed motion command.
     /// Callers must execute `output.twist`, not the unfiltered `output.intent`.
     pub fn step(&mut self, input: ArbiterInput<'_>) -> ArbiterOutput {
@@ -458,6 +476,7 @@ impl AutonomyArbiter {
             decision.held = true;
             self.note_safety_hold(input.now);
         } else if !matches!(self.level, Level::Teleop | Level::WaypointDirect)
+            && !self.reverse_requested(input.now)
             && (input.map.is_none() || !self.map_is_fresh(input))
         {
             decision.reason = "map_stale";

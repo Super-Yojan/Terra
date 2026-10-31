@@ -80,14 +80,25 @@ impl AutonomyArbiter {
                 );
             }
             decision.intent_command = intent;
-            let (intent, maneuver_active) = self.heading_maneuver(
-                input,
-                planning_map,
-                command_origin,
-                decision,
-                intent,
-                guidance_heading,
-            );
+            // Operator or agent reverse skips the map: it runs as asked.
+            let reversing = reverse_drive(decision.source, intent);
+            let (intent, maneuver_active) = if reversing {
+                // Without the planner, keep its reverse speed cap for every origin.
+                let cap = &self.planner.config;
+                intent.linear = intent.linear.max(-cap.max_reverse.min(cap.max_linear));
+                intent.angular = intent.angular.clamp(-cap.max_angular, cap.max_angular);
+                self.maneuver.clear();
+                (intent, false)
+            } else {
+                self.heading_maneuver(
+                    input,
+                    planning_map,
+                    command_origin,
+                    decision,
+                    intent,
+                    guidance_heading,
+                )
+            };
             if let Some(why) = decision.route_failure {
                 decision.held = true;
                 decision.reason = why;
@@ -223,7 +234,8 @@ impl AutonomyArbiter {
             (decision.goal.y - input.pose.y).atan2(decision.goal.x - input.pose.x);
         let agent_twist = self.task_agent_twist(input.now);
         let intent = match self.level {
-            // An approved MCP agent drives like assisted teleop: the planner checks every command.
+            // An approved MCP agent drives like assisted teleop: the planner checks every
+            // forward command; reverse runs unchecked.
             Level::Task if agent_twist.is_some() => {
                 decision.source = "task_agent_drive";
                 self.global_route.clear();
@@ -373,6 +385,7 @@ impl AutonomyArbiter {
         maneuver_active: bool,
         decision: &mut TickDecision,
     ) {
+        let reversing = reverse_drive(decision.source, intent);
         if maneuver_active && !decision.held {
             let (planned, mut trace) = self.planner.plan_with_turning(
                 planning_map.unwrap(),
@@ -392,7 +405,13 @@ impl AutonomyArbiter {
                 decision.reason = "heading_requires_spin_or_replan";
                 self.maneuver.clear();
             }
-        } else if !decision.held && matches!(self.level, Level::Teleop | Level::WaypointDirect) {
+        } else if !decision.held
+            && (reversing || matches!(self.level, Level::Teleop | Level::WaypointDirect))
+        {
+            if reversing {
+                self.last_plan = None;
+                self.planner_trace = None;
+            }
             decision.twist = intent;
             if decision.source != "none" {
                 decision.reason = "active";
@@ -598,4 +617,9 @@ fn window_centre(commanded: Twist, measured: Twist) -> Twist {
         linear: pick(commanded.linear, measured.linear),
         angular: pick(commanded.angular, measured.angular),
     }
+}
+
+/// Operator or agent reverse runs without the map or the local planner.
+fn reverse_drive(source: &str, intent: Twist) -> bool {
+    intent.linear < 0. && matches!(source, "assisted_operator" | "task_agent_drive")
 }
