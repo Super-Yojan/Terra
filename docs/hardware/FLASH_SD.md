@@ -16,8 +16,14 @@ The image contains:
   enabled as `terra-rover.service`,
 - SSH over USB (Pi 4), Ethernet and Wi-Fi, and a `Terra-` hotspot when no saved Wi-Fi connects.
 
-It does not contain a password, a Wi-Fi password, an SSH key, or a paired phone.
-Imager adds the first three while it writes the card. You pair the phone after boot.
+It does not contain a Wi-Fi password, an SSH key, or a paired phone.
+
+> [!WARNING]
+> **Default password: `raspberrypi`**
+> Without Imager settings, the login is `pi` / `raspberrypi`, and the `Terra-`
+> hotspot passphrase is also `raspberrypi`. Anyone nearby who knows this can
+> join the hotspot and log in with `sudo`. Set your own password in step 5 for
+> a rover that leaves the lab.
 
 You need a microSD card of **8 GB or more**, a card reader, and
 [Raspberry Pi Imager](https://www.raspberrypi.com/software/) 1.8 or newer.
@@ -88,7 +94,7 @@ On the **General** tab:
 
 - **Hostname**: a name for this rover, for example `terra-lab1`. Leave it unticked
   and the card names itself `terra-` plus the last six hex digits of the Pi serial.
-- **Username and password**: this is the only login password. The image has none of its own.
+- **Username and password**: replaces the default `pi` / `raspberrypi`.
 - **Wireless LAN**: SSID, password, and the country the network is in.
 - **Locale**: time zone and keyboard.
 
@@ -133,8 +139,9 @@ If `.local` names do not resolve on your network, use one of these:
 | USB-C cable (Pi 4 only) | `192.168.77.1` | Use a data cable to the USB-C port. Works whether or not Wi-Fi is up. |
 | `Terra-xxxxxx` hotspot | `192.168.78.1` | Starts when no saved Wi-Fi connects within 30 s. |
 
-The hotspot password is generated on each card. Read it over USB SSH from
-`/etc/terra-image/network.conf`. The full network options are in the
+The hotspot passphrase is `raspberrypi`. To change it, edit `HOTSPOT_PASSPHRASE`
+in `/etc/terra-image/network.conf` and reboot, or put a `terra-network.conf` with
+that line on the boot partition before first boot. The full network options are in the
 [image README](https://github.com/Super-Yojan/terra-image-gen/blob/master/examples/terra/README.md).
 
 `sudo` does not ask for a password.

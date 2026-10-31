@@ -171,10 +171,15 @@ body {
 }
 
 /* The custom cursor replaces the native one only where a real pointer
-   exists. Touch and coarse pointers keep their own affordances. */
+   exists, and only while it is showing (`cursor-live`, set by the layout
+   script). When the window loses focus the custom cursor hides, and the
+   native one must come back, or the pointer vanishes until the next move.
+   Touch and coarse pointers keep their own affordances. */
 @media (hover: hover) and (pointer: fine) {
-  body { cursor: none; }
-  body a, body button, body [role="button"] { cursor: none; }
+  html.cursor-live body { cursor: none; }
+  html.cursor-live body a,
+  html.cursor-live body button,
+  html.cursor-live body [role="button"] { cursor: none; }
 }
 
 h1, h2, h3, h4, h5, h6 { margin: 0; font-weight: 500; }
