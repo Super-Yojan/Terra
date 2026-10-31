@@ -308,3 +308,38 @@ fn ask_operator_holds_until_the_reply() {
     assert_eq!(sim.tick().task.unwrap().phase, TaskPhase::Planning);
     assert!(sim.go(&[RequestedWaypoint::Target("O1".into())]).is_ok());
 }
+
+#[test]
+fn approved_agent_can_back_up_on_a_stale_map() {
+    let mut sim = Sim::new();
+    sim.start(TaskAgent::Mcp);
+    sim.arbiter
+        .agent_request_drive("back away from the wall", 30., sim.now)
+        .unwrap();
+    sim.tick();
+    sim.action(TaskActionKind::ApproveDrive, "approve-r")
+        .unwrap();
+    let map_time = sim.now;
+    let stale = |sim: &mut Sim| {
+        sim.now += 5.;
+        let map = sim.map.clone();
+        sim.arbiter.step(ArbiterInput {
+            now: sim.now,
+            pose: sim.pose,
+            pose_time: sim.now,
+            map: Some(&map),
+            map_time: Some(map_time),
+            map_revision: 1,
+            measured: Twist::default(),
+            healthy: true,
+        })
+    };
+    sim.arbiter.agent_drive(-0.3, 0., 1., sim.now + 5.).unwrap();
+    let output = stale(&mut sim);
+    assert_eq!(output.status.active_source, "task_agent_drive");
+    assert!(output.twist.linear < 0., "{}", output.status.reason);
+
+    // Forward on the same stale map still holds.
+    sim.arbiter.agent_drive(0.3, 0., 1., sim.now + 5.).unwrap();
+    assert_eq!(stale(&mut sim).status.reason, "map_stale");
+}
