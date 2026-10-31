@@ -59,7 +59,7 @@ Publish on `terra/rover/<id>/autonomy`. Use seconds or minutes, not both:
 {"level":"explore","token":"explore-2","budget_minutes":5}
 ```
 
-The rover must already have a fresh pose and occupancy map. The budget clock starts on the next arbiter step. TerraPhone has an **Autonomous explore** level and an explore-budget field. In process code, `set_exploration_budget(180.0)` lets a later level request omit the budget.
+The rover must already have a fresh pose and occupancy map. The budget clock starts on the next arbiter step. TerraPhone has one L4 level, **L4 · Explore + search**, and an explore-budget field. Bounded target search is the same L4: start it under **Target search** with **Use L4 area search**. Android shows the same single L4 chip. In process code, `set_exploration_budget(180.0)` lets a later level request omit the budget.
 
 Stop the run with any of these:
 

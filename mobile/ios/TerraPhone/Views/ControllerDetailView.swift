@@ -112,7 +112,9 @@ struct ControllerDetailView: View {
                     TextField("Explore budget (seconds)", text: $exploreSeconds)
                         .keyboardType(.decimalPad)
                         .accessibilityLabel("Explore budget seconds")
-                    Picker("Requested level",selection:Binding(get:{brain.autonomyLevel},set:{brain.setAutonomy($0, budgetSeconds: Double(exploreSeconds))})) {Text("Teleop").tag("teleop");Text("Assisted teleop").tag("assisted_teleop");Text("L2 · Direct waypoint").tag("waypoint_direct");Text("L3 · Obstacle-aware waypoint").tag("waypoint");Text("Autonomous explore").tag("explore");Text("Supervised search").tag("supervised");if brain.searchAvailable {Text("L4 target search").tag("target_search")}}
+                    // L4 is one entry: explore plus search. Area search (target_search) is the
+                    // same L4, started under Target search, so it shows as L4 here.
+                    Picker("Requested level",selection:Binding(get:{brain.autonomyLevel == "target_search" ? "explore" : brain.autonomyLevel},set:{brain.setAutonomy($0, budgetSeconds: Double(exploreSeconds))})) {Text("Teleop").tag("teleop");Text("Assisted teleop").tag("assisted_teleop");Text("L2 · Direct waypoint").tag("waypoint_direct");Text("L3 · Obstacle-aware waypoint").tag("waypoint");Text("L4 · Explore + search").tag("explore")}
                         .disabled(brain.hardwareActive && !brain.hardwareFeedback && !(brain.phoneTrackingActive && brain.vioControlCompatible))
                     Text(brain.autonomyReason)
                     if !brain.explorationSummary.isEmpty { Text(brain.explorationSummary).font(.footnote) }
@@ -130,11 +132,14 @@ struct ControllerDetailView: View {
                         HStack {TextField("Min x",text:$searchMinX).accessibilityLabel("Search minimum x");TextField("Max x",text:$searchMaxX).accessibilityLabel("Search maximum x")}.keyboardType(.numbersAndPunctuation)
                         HStack {TextField("Min y",text:$searchMinY).accessibilityLabel("Search minimum y");TextField("Max y",text:$searchMaxY).accessibilityLabel("Search maximum y")}.keyboardType(.numbersAndPunctuation)
                         TextField("Time budget in seconds",text:$searchBudget).keyboardType(.numbersAndPunctuation).accessibilityLabel("Search time budget in seconds")
+                        if brain.autonomyLevel != "target_search" {
+                            Button("Use L4 area search") { brain.setAutonomy("target_search") }
+                        }
                         Button("Start search") {
                             guard let a=Double(searchMinX),let b=Double(searchMinY),let c=Double(searchMaxX),let d=Double(searchMaxY),let t=Double(searchBudget) else {entryNote="Enter numeric search bounds and budget";return}
                             brain.startTargetSearch(targetClass:searchClass,minX:a,minY:b,maxX:c,maxY:d,budget:t)
                         }.disabled(brain.autonomyLevel != "target_search" || !brain.searchTerminal)
-                    }else {Text("L4 people search requires a LiDAR phone with live camera tracking and scene depth.").font(.caption).foregroundStyle(.secondary)}
+                    }else {Text("L4 area search requires a LiDAR phone with live camera tracking and scene depth.").font(.caption).foregroundStyle(.secondary)}
                     Text(brain.objectDetectorStatus).font(.caption).foregroundStyle(.secondary)
                     if brain.autonomyLevel == "waypoint_direct" { Text("L2 follows directly without obstacle avoidance.").font(.caption) }
                     if !brain.searchPhase.isEmpty {Text(brain.searchPhase.replacingOccurrences(of:"_",with:" ").capitalized)}
