@@ -37,7 +37,7 @@ private val levelLabels = mapOf(
     "assisted_teleop" to "Assisted teleop",
     "waypoint_direct" to "L2 · Direct waypoint",
     "waypoint" to "L3 · Waypoint",
-    "explore" to "L4 · Explore + search · 120 seconds",
+    "explore" to "L4 · Explore + search",
     "task" to "L5 · Task",
 )
 
@@ -245,6 +245,11 @@ fun ControllerScreen(
                 forward = 0f
                 yaw = 0f
             }
+            // TerraSession sends a fixed 120 s explore budget; Android has no budget field yet.
+            Text(
+                "L4 from this phone runs for 2 min, then stops. Use ARGOS for 3, 5 or 10 min.",
+                style = MaterialTheme.typography.bodySmall,
+            )
             if ("explore" !in session.supportedLevels) {
                 Text(
                     "Explore stays off until the shared arbiter lists it. That level arrives with frontier exploration.",
