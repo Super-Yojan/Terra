@@ -2,7 +2,8 @@ import os
 import SwiftUI
 import UIKit
 
-/// The on-phone L5 agent (Qwen 3.5 2B over the rover's MCP tools): model download and load,
+/// The on-phone L5 agent (Qwen 3.5 2B over the rover's MCP tools). The Chat tab is a general
+/// chat with the model (no tools). The Debug tab shows model download and load,
 /// speed and memory, why it is or is not being prompted, each prompt with the raw reply and
 /// the tool call Rust ran, and every tool call from any session. A test prompt runs the
 /// model with its real instructions and tools without a rover and without running the tool.
@@ -16,18 +17,45 @@ struct AgentDebugView: View {
     @State private var testCamera = false
     @State private var testRunning = false
     @State private var testResult: (reply: TaskAgentReply?, parsed: String, seconds: Double, error: String?)?
+    @State private var tab = Tab.chat
+    @StateObject private var chat = AgentChat()
+
+    enum Tab: String, CaseIterable { case chat = "Chat", debug = "Debug" }
 
     var body: some View {
-        Form {
-            modelSection
-            agentSection
-            taskSection
-            testSection
-            exchangesSection
-            callsSection
-            cameraSection
+        VStack(spacing: 0) {
+            Picker("View", selection: $tab) {
+                ForEach(Tab.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+            switch tab {
+            case .chat:
+                AgentChatView(brain: brain, chat: chat, status: model)
+            case .debug:
+                Form {
+                    modelSection
+                    agentSection
+                    taskSection
+                    testSection
+                    exchangesSection
+                    callsSection
+                    cameraSection
+                }
+            }
         }
         .navigationTitle("Agent")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            if tab == .chat {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button { chat.newChat(brain: brain) } label: { Image(systemName: "square.and.pencil") }
+                        .disabled(chat.messages.isEmpty && !chat.running)
+                        .accessibilityLabel("New chat")
+                }
+            }
+        }
         .task {
             var ticks = 0
             while !Task.isCancelled {

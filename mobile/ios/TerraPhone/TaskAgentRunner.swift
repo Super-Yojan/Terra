@@ -26,7 +26,23 @@ struct TaskAgentReply {
 protocol TaskAgentModel: AnyObject {
     var name: String { get }
     func respond(system: String, prompt: String, image: CIImage?) async throws -> TaskAgentReply
+    /// One turn of the debug page's general chat. The chat keeps its own history and has
+    /// no tools, so nothing said here can move the rover. `onText` gets the reply so far.
+    func chat(_ message: String, image: CIImage?, thinking: Bool,
+              onText: @escaping @Sendable (String) -> Void) async throws -> TaskAgentReply
+    /// Forget the general chat's history.
+    func resetChat() async
 }
+
+/// Instructions for the debug page's general chat.
+let taskAgentChatInstructions = """
+You are Terra's on-phone assistant, a small language model running locally on the iPhone \
+that is the brain of a Terra rover. Answer any question the user asks, clearly and briefly. \
+Use Markdown for lists and code. You cannot move the rover or call tools from this chat; \
+if the user wants the rover to do something, tell them to start an L5 task from ARGOS. \
+When a message starts with a ROVER CONTEXT block, it is the rover's live state; use it \
+only when the question is about the rover.
+"""
 
 #if canImport(MLXVLM) && canImport(MLXLMCommon) && canImport(MLXHuggingFace)
 /// Qwen 3.5 2B (4-bit MLX), a vision-language model small enough to run beside ARKit.
@@ -37,6 +53,9 @@ final class QwenTaskAgent: TaskAgentModel {
     private let container: ModelContainer
     /// Rust's tools in the chat template's own format, so Qwen sees them natively.
     private let tools: [ToolSpec]
+    /// The general chat, kept between turns so it remembers the conversation.
+    private var chatSession: ChatSession?
+    private var chatThinking = false
 
     private init(container: ModelContainer) {
         self.container = container
@@ -98,6 +117,48 @@ final class QwenTaskAgent: TaskAgentModel {
             }
         }
         return reply
+    }
+
+    func chat(_ message: String, image: CIImage?, thinking: Bool,
+              onText: @escaping @Sendable (String) -> Void) async throws -> TaskAgentReply {
+        let session: ChatSession
+        if let existing = chatSession {
+            session = existing
+        } else {
+            session = ChatSession(
+                container,
+                instructions: taskAgentChatInstructions,
+                generateParameters: GenerateParameters(maxTokens: 1024, temperature: 0.6, topP: 0.95),
+                additionalContext: ["enable_thinking": thinking]
+            )
+            chatSession = session
+        }
+        if thinking != chatThinking {
+            session.additionalContext = ["enable_thinking": thinking]
+            chatThinking = thinking
+        }
+        var reply = TaskAgentReply(text: "")
+        for try await item in session.streamDetails(to: message, images: image.map { [.ciImage($0)] } ?? []) {
+            try Task.checkCancellation()
+            switch item {
+            case .chunk(let text):
+                reply.text += text
+                onText(reply.text)
+            case .info(let info):
+                reply.promptTokens = info.promptTokenCount
+                reply.generatedTokens = info.generationTokenCount
+                reply.promptSeconds = info.promptTime
+                reply.generateSeconds = info.generateTime
+            default:
+                break
+            }
+        }
+        return reply
+    }
+
+    func resetChat() async {
+        await chatSession?.clear()
+        chatSession = nil
     }
 }
 #endif
@@ -262,6 +323,46 @@ final class TaskAgentRunner {
             finish(reply: nil, latency: nil, error: String(describing: error))
             return (nil, "", ProcessInfo.processInfo.systemUptime - started, String(describing: error))
         }
+    }
+
+    /// One turn of the general chat on the debug page. Streams the reply into `onText`.
+    /// Rover prompts wait while a chat reply is being written, so keep replies short
+    /// during a task; cancelling the calling task stops the reply.
+    func chat(_ message: String, image: CIImage?, thinking: Bool,
+              onText: @escaping @Sendable (String) -> Void) async -> (reply: TaskAgentReply?, seconds: Double, error: String?) {
+        lock.lock()
+        guard let model = loaded, !busy else {
+            let why = loaded == nil ? "The model has not loaded yet." : "The model is answering a rover prompt; try again in a moment."
+            lock.unlock()
+            return (nil, 0, why)
+        }
+        busy = true
+        lock.unlock()
+        let started = ProcessInfo.processInfo.systemUptime
+        do {
+            let reply = try await model.chat(message, image: image, thinking: thinking, onText: onText)
+            let seconds = ProcessInfo.processInfo.systemUptime - started
+            finish(reply: reply, latency: seconds, error: nil)
+            return (reply, seconds, nil)
+        } catch is CancellationError {
+            finish(reply: nil, latency: nil, error: nil)
+            return (nil, ProcessInfo.processInfo.systemUptime - started, nil)
+        } catch {
+            finish(reply: nil, latency: nil, error: String(describing: error))
+            return (nil, ProcessInfo.processInfo.systemUptime - started, String(describing: error))
+        }
+    }
+
+    /// The camera frame `look` would attach now, for a chat message.
+    func chatImage() -> CIImage? {
+        lock.lock(); defer { lock.unlock() }
+        return frame
+    }
+
+    /// Forget the general chat's history.
+    func resetChat() async {
+        lock.lock(); let model = loaded; lock.unlock()
+        await model?.resetChat()
     }
 
     private func finish(reply: TaskAgentReply?, latency: Double?, error: String?) {
