@@ -173,6 +173,30 @@ impl AutonomyArbiter {
             );
         }
     }
+    /// Mirror the runtime's tilt latch. While it is set the arbiter holds an
+    /// emergency stop at every level (L0 included) with reason `tilt_stop`.
+    /// The first latch ends exploration, a task and any dock, like an
+    /// operator stop. Clearing it does not clear the stop: the operator's
+    /// safety reset does that, and the runtime refuses the reset while the
+    /// rover is still tilted.
+    pub fn set_tilt_stop(&mut self, latched: bool) {
+        if latched && !self.tilt_stop {
+            if self.explorer.is_running() {
+                self.explorer.stop(EndReason::OperatorStop);
+            }
+            self.end_task(TaskPhase::Cancelled, "tilt_stop", f64::NAN);
+            self.clear();
+            self.event("tilt_stop", None, "tilt_stop");
+        }
+        if latched {
+            self.stopped = true;
+        }
+        self.tilt_stop = latched;
+    }
+    /// Whether the tilt latch is mirrored into the stop.
+    pub fn tilt_stopped(&self) -> bool {
+        self.tilt_stop
+    }
     /// Set the waypoint WGS84 origin in degrees; invalid coordinates are ignored by the follower.
     pub fn set_origin(&mut self, lat: f64, lon: f64) {
         let _ = self.follower.set_origin(lat, lon);

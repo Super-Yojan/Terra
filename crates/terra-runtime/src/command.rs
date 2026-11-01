@@ -163,11 +163,18 @@ impl Runtime {
             }),
             "safety" => terra_autonomy::decode_safety(&bytes)
                 .map(|r| {
-                    let ready = self.autonomy.is_manual()
-                        || self.estimator.estimate(now).health == Health::Ready;
+                    let reset = r.action == terra_autonomy::SafetyAction::Reset;
+                    // A tilt stop clears only once the rover is upright again.
+                    let ready = !(reset && self.tilt.latched() && self.tilt.still_tilted())
+                        && (self.autonomy.is_manual()
+                            || self.estimator.estimate(now).health == Health::Ready);
                     let token = r.token.clone();
                     self.autonomy.set_safety(r, ready);
-                    self.autonomy.request_receipt() == Some((token.as_str(), true))
+                    let ok = self.autonomy.request_receipt() == Some((token.as_str(), true));
+                    if ok && reset && self.tilt.clear() {
+                        self.autonomy.set_tilt_stop(false);
+                    }
+                    ok
                 })
                 .unwrap_or(false),
             "navigation/settings" => navigation::apply(self, &bytes, now - at, now),

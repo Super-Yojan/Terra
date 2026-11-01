@@ -17,6 +17,7 @@ pub mod outdoor;
 pub mod pose_quality;
 pub mod rover_profile;
 pub mod search;
+pub mod tilt;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RuntimeError {
     InvalidInput { message: String },
@@ -220,6 +221,8 @@ pub struct Runtime {
     dock_local: DockLocal,
     /// Gate test from the setup screen while no dock runs: open or closed.
     gate_test: Option<bool>,
+    /// Tilt and flip hold; survives a new run, cleared by operator reset.
+    pub tilt: tilt::TiltMonitor,
 }
 /// Dock values set on the phone, kept across rover profile changes.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -292,6 +295,7 @@ impl Runtime {
             rover_profile: None,
             dock_local: DockLocal::default(),
             gate_test: None,
+            tilt: Default::default(),
         })
     }
     pub fn metadata(&self) -> Value {
@@ -344,6 +348,7 @@ impl Runtime {
         self.autonomy_json.clear();
         self.autonomy_brief.clear();
         self.grid.clear();
+        self.tilt.reset();
         Ok(())
     }
     /// Add one detector sighting in the local frame. Adds latitude and longitude
@@ -564,6 +569,7 @@ impl Runtime {
                     };
                     self.pose = Some((pose, sample.timestamp));
                     self.outdoor.observe_pose(pose, sample.timestamp);
+                    self.tilt.observe(q, sample.timestamp);
                 }
             }
             RuntimeEvent::Depth {
@@ -791,6 +797,12 @@ impl Runtime {
             .parameters
             .max_angular
             .min(self.control_limits.1);
+        let tilted = self.tilt.update(now);
+        if tilted && !self.autonomy.tilt_stopped() {
+            self.events
+                .push(json!({"kind":"safety.tilt_stop","tilt":self.tilt.status(now)}));
+        }
+        self.autonomy.set_tilt_stop(tilted);
         let p = self.pose.unwrap_or_default();
         let map = self.map.as_ref();
         let mut output = self.autonomy.step(ArbiterInput {
@@ -883,7 +895,7 @@ impl Runtime {
         };
         self.sequence += 1;
         let quality = pose_quality::value(self, now);
-        let value = json!({"status":output.status,"command_origin":output.command_origin,"pose_quality":quality,"navigation":self.navigation.status(),"outdoor":outdoor_status,"connectivity":{"policy":self.connectivity,"revision":self.connectivity_revision},"goal":output.goal,"proposal":output.proposal,"exploration":output.exploration,"search":output.search,"pending_reports":output.pending_reports,"twist":output.twist,"runtime":{"schema_version":1,"mode":effective_mode,"configured_mode":self.mode,"source_revision":SOURCE_REVISION,"configuration_identity":self.configuration_identity()}});
+        let value = json!({"status":output.status,"command_origin":output.command_origin,"pose_quality":quality,"navigation":self.navigation.status(),"outdoor":outdoor_status,"connectivity":{"policy":self.connectivity,"revision":self.connectivity_revision},"goal":output.goal,"proposal":output.proposal,"exploration":output.exploration,"search":output.search,"pending_reports":output.pending_reports,"twist":output.twist,"runtime":{"schema_version":1,"tilt":self.tilt.status(now),"mode":effective_mode,"configured_mode":self.mode,"source_revision":SOURCE_REVISION,"configuration_identity":self.configuration_identity()}});
         self.autonomy_json = value.to_string();
         self.last_snapshot = RuntimeSnapshot { value };
         let mut events = std::mem::take(&mut self.events);
