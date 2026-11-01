@@ -190,3 +190,36 @@ fn enclosed_goal_is_refused() {
     let result = astar_progress_route(&map, rover(), RADIUS, 5.5, 0.0, SNAP);
     assert_eq!(result, Err("route_no_path"), "{result:?}");
 }
+
+/// Review of #109: a goal in known-free space whose footprint touches the box
+/// (seen from behind earlier). The old code returned a plain
+/// `route_goal_blocked` with no fallback; now the goal moves to where the
+/// rover fits, within the arrival radius, and the route reaches it.
+#[test]
+fn known_free_goal_touching_the_box_snaps_to_where_the_rover_fits() {
+    let mut map = MapSnapshot {
+        width: 200,
+        height: 200,
+        resolution: 0.1,
+        origin_x: -10.,
+        origin_y: -10.,
+        occupancy: vec![0; 40_000],
+    };
+    for row in 0..200 {
+        for col in 0..200 {
+            let x = map.origin_x + (col as f64 + 0.5) * 0.1;
+            let y = map.origin_y + (row as f64 + 0.5) * 0.1;
+            if (2.0..2.2).contains(&x) && y.abs() <= 0.6 {
+                map.occupancy[row * 200 + col] = 100;
+            }
+        }
+    }
+    let goal = [2.5, 0.0];
+    let route = astar_progress_route(&map, rover(), RADIUS, goal[0], goal[1], SNAP)
+        .expect("known-free goal near the box must give a route");
+    assert_safe(&map, &route);
+    let end = *route.last().unwrap();
+    let miss = (end[0] - goal[0]).hypot(end[1] - goal[1]);
+    assert!(miss <= SNAP, "end {end:?} is {miss:.2} m from the goal");
+    assert!(end[0] > 2.2, "end should be behind the box: {route:?}");
+}
