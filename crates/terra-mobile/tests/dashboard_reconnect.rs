@@ -408,3 +408,27 @@ fn autonomy_brief_is_small_and_matches_the_full_status() {
     assert!(brief["status"].get("planner_trace").is_none());
     assert!(c.autonomy_brief().len() < 1024);
 }
+
+/// ARGOS only trusts a pose/quality report that names its rover, and falls
+/// back to a yaw-rate guess ("yaw-rate fallback") otherwise (#111).
+#[test]
+fn pose_quality_names_the_dashboard_rover() {
+    let socket = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let endpoint = format!("tcp/127.0.0.1:{}", socket.local_addr().unwrap().port());
+    drop(socket);
+    let _router = router(&endpoint);
+    let c = MobileController::new(default_control_settings()).unwrap();
+    fresh_local(&c, 1.);
+    c.step(1.).unwrap();
+    assert!(status(&c)["pose_quality"]["rover_id"].is_null());
+    c.connect_dashboard(endpoint, "phone-quality".into(), 7)
+        .unwrap();
+    fresh_local(&c, 1.1);
+    c.step(1.1).unwrap();
+    let quality = status(&c)["pose_quality"].clone();
+    assert_eq!(quality["schema_version"], 1);
+    assert_eq!(quality["rover_id"], 7);
+    assert!(!quality["run_id"].as_str().unwrap().is_empty());
+    assert!(quality["sequence"].is_u64());
+    assert!(quality["degraded"].is_boolean());
+}
