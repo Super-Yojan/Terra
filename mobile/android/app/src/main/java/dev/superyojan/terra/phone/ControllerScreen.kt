@@ -33,10 +33,10 @@ import kotlin.math.round
 
 private const val REACH_METRES = 49.0
 private val levelLabels = mapOf(
-    "teleop" to "Teleop",
-    "assisted_teleop" to "Assisted teleop",
-    "waypoint_direct" to "L2 · Direct waypoint",
-    "waypoint" to "L3 · Waypoint",
+    "teleop" to "L0 · Manual",
+    "assisted_teleop" to "L1 · Assisted",
+    "waypoint_direct" to "L2 · Direct",
+    "waypoint" to "L3 · Planned",
     "explore" to "L4 · Explore + search",
     "task" to "L5 · Task",
 )
