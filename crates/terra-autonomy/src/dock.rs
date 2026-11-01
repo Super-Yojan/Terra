@@ -24,6 +24,10 @@ use terra_navigation::{Pose, Twist};
 /// Occupancy at or above this blocks the docking corridor (the planner's own threshold).
 const OCCUPIED: i8 = 65;
 
+/// How far past the dock range the camera may already have lost the bucket
+/// (out of view under the phone, or nearer than the depth minimum), metres.
+pub const DOCK_BLIND_MARGIN: f64 = 0.5;
+
 /// Geometry, tolerances and speeds for docking. Defaults fit Terra (CrabTrapBot).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DockConfig {
@@ -36,8 +40,15 @@ pub struct DockConfig {
     pub lateral_tolerance: f64,
     /// Aligned when the bucket centre is within this of `outlet_ahead`, metres.
     pub range_tolerance: f64,
-    /// Aligned when the bucket bearing is within this, radians.
+    /// A fix counts as "in line" (for a verified blind finish) when the bucket
+    /// bearing is within this, radians. Not part of the line-up test: for a
+    /// round bucket only where the outlet sits matters, and close in a small
+    /// lateral offset is a large bearing.
     pub heading_tolerance: f64,
+    /// Once aligned, the line-up may drift to this multiple of the lateral and
+    /// range tolerances before the dock backs off, so fix noise while parked
+    /// does not undo an alignment.
+    pub aligned_slack: f64,
     /// Farthest bucket a dock may start on, metres.
     pub max_start_distance: f64,
     /// Forward speed cap within 1 m of the dock range, m/s.
@@ -65,8 +76,11 @@ pub struct DockConfig {
     pub lock_fixes: u32,
     /// Fail when no lock within this many seconds.
     pub lock_timeout: f64,
-    /// Back off when the newest fix is older than this while still far, seconds.
+    /// Stop and wait for the bucket when the newest fix is older than this
+    /// while still far, seconds.
     pub fix_timeout: f64,
+    /// Seconds stopped waiting for a fix before backing off with `lost_fix`.
+    pub reacquire_seconds: f64,
     /// Inside this body-x range of the bucket centre the camera may lose it;
     /// the rover finishes on odometry and settle reports the result unverified.
     pub blind_range: f64,
@@ -108,9 +122,14 @@ impl DockConfig {
         Self {
             outlet_ahead: length / 2. + target_radius + 0.03,
             target_radius,
-            lateral_tolerance: 0.05,
-            range_tolerance: 0.04,
-            heading_tolerance: 6f64.to_radians(),
+            // A tennis ball (0.067 m) through the outlet lands inside the
+            // 0.30 m rim while the outlet centre is within ~0.12 m of the
+            // bucket centre; 0.07 m on each axis keeps it in, even at the
+            // aligned slack (0.084 m per axis, 0.119 m worst case).
+            lateral_tolerance: 0.07,
+            range_tolerance: 0.07,
+            heading_tolerance: 10f64.to_radians(),
+            aligned_slack: 1.2,
             max_start_distance: 3.,
             creep_speed: 0.1,
             approach_speed: 0.25,
@@ -122,12 +141,13 @@ impl DockConfig {
             backoff_heading: 25f64.to_radians(),
             backoff_distance: 0.3,
             backoff_speed: 0.08,
-            max_retries: 3,
+            max_retries: 4,
             lock_fixes: 3,
-            lock_timeout: 3.,
-            fix_timeout: 1.,
-            blind_range: length / 2. + target_radius + 0.35,
-            blind_verify_travel: 0.5,
+            lock_timeout: 5.,
+            fix_timeout: 1.5,
+            reacquire_seconds: 2.,
+            blind_range: length / 2. + target_radius + DOCK_BLIND_MARGIN,
+            blind_verify_travel: 0.7,
             settle_seconds: 0.5,
             settle_timeout: 2.,
             gate_open_seconds: 1.5,
@@ -158,6 +178,7 @@ impl DockConfig {
             self.backoff_speed,
             self.lock_timeout,
             self.fix_timeout,
+            self.reacquire_seconds,
             self.settle_timeout,
             self.gate_open_seconds,
             self.half_width,
@@ -182,6 +203,8 @@ impl DockConfig {
             && self.min_speed <= self.creep_speed
             && self.creep_speed <= self.approach_speed
             && self.lock_fixes > 0
+            && self.aligned_slack.is_finite()
+            && self.aligned_slack >= 1.
     }
 }
 
@@ -491,9 +514,13 @@ impl Dock {
             range: bx - self.config.outlet_ahead,
             heading_deg: heading.to_degrees(),
         };
-        self.in_tolerance = by.abs() <= self.config.lateral_tolerance
-            && self.errors.range.abs() <= self.config.range_tolerance
-            && heading.abs() <= self.config.heading_tolerance;
+        let slack = if self.phase == DockPhase::Aligned {
+            self.config.aligned_slack
+        } else {
+            1.
+        };
+        self.in_tolerance = by.abs() <= self.config.lateral_tolerance * slack
+            && self.errors.range.abs() <= self.config.range_tolerance * slack;
         let still = measured.linear.abs() < 0.03 && measured.angular.abs() < 0.08;
         if still {
             self.still_since.get_or_insert(now);
@@ -543,7 +570,17 @@ impl Dock {
             DockPhase::Creep => {
                 let blind = bx <= self.config.blind_range;
                 if fix_age.is_none_or(|age| age > self.config.fix_timeout) && !blind {
-                    return self.back_off(pose, "lost_fix");
+                    // Stop and give the detector a still frame before paying
+                    // for a reverse and a fresh lock.
+                    if fix_age.is_none_or(|age| {
+                        age > self.config.fix_timeout + self.config.reacquire_seconds
+                    }) {
+                        return self.back_off(pose, "lost_fix");
+                    }
+                    return DockTick {
+                        reason: "dock_reacquire",
+                        ..stop
+                    };
                 }
                 if heading.abs() > self.config.backoff_heading {
                     return self.back_off(pose, "heading");
@@ -879,6 +916,8 @@ mod tests {
         bucket: (f64, f64),
         blind: f64,
         noise: f64,
+        /// No fixes arrive between these sim times, seconds.
+        dropout: (f64, f64),
         gate_opened: bool,
         map: Option<MapSnapshot>,
     }
@@ -892,6 +931,7 @@ mod tests {
                 bucket,
                 blind: 0.,
                 noise: 0.,
+                dropout: (0., 0.),
                 gate_opened: false,
                 map: None,
             }
@@ -903,7 +943,8 @@ mod tests {
             while self.now < end && dock.active() {
                 self.now += DT;
                 frame += 1;
-                if frame.is_multiple_of(20) {
+                let dropped = (self.dropout.0..self.dropout.1).contains(&self.now);
+                if frame.is_multiple_of(20) && !dropped {
                     let (bx, _) = body(self.pose, self.bucket.0, self.bucket.1);
                     if bx > self.blind {
                         let (dx, dy) = (self.bucket.0 - self.pose.x, self.bucket.1 - self.pose.y);
@@ -971,7 +1012,7 @@ mod tests {
         assert!(sim.gate_opened);
         assert!(dock.verified);
         assert!(
-            outlet_error(&sim, &config) <= 0.06,
+            outlet_error(&sim, &config) <= BALL_IN_BUCKET,
             "{}",
             outlet_error(&sim, &config)
         );
@@ -1037,7 +1078,7 @@ mod tests {
         .unwrap();
         sim.run(&mut dock, 40., DumpApproval::Auto);
         assert_eq!(dock.phase, DockPhase::Done, "{:?}", dock.status(sim.now));
-        assert!(outlet_error(&sim, &config) <= 0.06);
+        assert!(outlet_error(&sim, &config) <= BALL_IN_BUCKET);
     }
 
     #[test]
@@ -1057,6 +1098,70 @@ mod tests {
         assert_eq!(dock.phase, DockPhase::Failed);
         assert_eq!(dock.reason, "no_fix");
         assert!(!sim.gate_opened);
+    }
+
+    /// Where the dock aims stays inside the bucket for a tennis ball.
+    const BALL_IN_BUCKET: f64 = 0.1524 - 0.0335 + 1e-3;
+
+    #[test]
+    fn default_tolerances_keep_the_ball_in_the_bucket() {
+        let c = DockConfig::default();
+        assert!(c.valid());
+        let worst =
+            (c.lateral_tolerance * c.aligned_slack).hypot(c.range_tolerance * c.aligned_slack);
+        assert!(worst <= BALL_IN_BUCKET, "{worst}");
+    }
+
+    #[test]
+    fn close_in_lateral_offset_is_aligned_despite_its_bearing() {
+        // Outlet over the camera, close behind the bucket: 0.06 m off the axis
+        // is a 14° bearing, which the old 6° heading test refused.
+        let mut config = DockConfig::default();
+        config.outlet_ahead = 0.25;
+        config.blind_range = config.outlet_ahead + DOCK_BLIND_MARGIN;
+        let pose = Pose::default();
+        let mut dock = Dock::start(config, 1, "t".into(), target(0.25, 0.06), pose, 0.).unwrap();
+        dock.enter(DockPhase::Settle, "at_range");
+        dock.step(
+            0.1,
+            pose,
+            Twist::default(),
+            None,
+            DumpApproval::Operator,
+            None,
+        );
+        let status = dock.status(0.1);
+        assert!(status.errors.heading_deg > 10., "{:?}", status.errors);
+        assert!(status.in_tolerance);
+    }
+
+    #[test]
+    fn a_short_fix_gap_while_creeping_waits_instead_of_backing_off() {
+        let config = DockConfig::default();
+        let mut sim = Sim::new(Pose::default(), (2.2, 0.));
+        // Locks in 0.6 s, then the detector drops out for 2.5 s far from the bucket.
+        sim.dropout = (1.5, 4.0);
+        let mut dock = Dock::start(config, 1, "t".into(), target(2.2, 0.), sim.pose, 0.).unwrap();
+        sim.run(&mut dock, 3.5, DumpApproval::Auto);
+        assert_eq!(dock.phase, DockPhase::Creep, "{:?}", dock.status(sim.now));
+        assert_eq!(dock.status(sim.now).retries, 0);
+        sim.run(&mut dock, 60., DumpApproval::Auto);
+        assert_eq!(dock.phase, DockPhase::Done, "{:?}", dock.status(sim.now));
+        assert_eq!(dock.status(sim.now).retries, 0);
+    }
+
+    #[test]
+    fn a_long_fix_gap_while_creeping_backs_off_with_lost_fix() {
+        let config = DockConfig::default();
+        let mut sim = Sim::new(Pose::default(), (2.2, 0.));
+        sim.dropout = (1.5, 20.);
+        let mut dock = Dock::start(config, 1, "t".into(), target(2.2, 0.), sim.pose, 0.).unwrap();
+        sim.run(&mut dock, 6., DumpApproval::Auto);
+        let kinds: Vec<_> = dock.take_events();
+        assert!(
+            kinds.contains(&("dock_backoff", "lost_fix".into())),
+            "{kinds:?}"
+        );
     }
 
     #[test]
@@ -1162,7 +1267,7 @@ mod tests {
         .unwrap();
         sim.run(&mut dock, 60., DumpApproval::Auto);
         assert_eq!(dock.phase, DockPhase::Done, "{:?}", dock.status(sim.now));
-        assert!(outlet_error(&sim, &config) <= 0.08);
+        assert!(outlet_error(&sim, &config) <= BALL_IN_BUCKET);
     }
 
     /// The bucket's own occupied cells are not an obstacle in the corridor.

@@ -12,11 +12,12 @@ stateDiagram-v2
     direction LR
     [*] --> lock: dock start
     lock --> creep: 3 agreeing fixes
-    lock --> failed: no fix for 3 s
+    lock --> failed: no fix for 5 s
     creep --> settle: at range
-    creep --> backoff: lost fix, bearing > 25°, overshoot
+    creep --> creep: no fix for 1.5 s, stop and wait
+    creep --> backoff: no fix for 3.5 s, bearing > 25°, overshoot
     backoff --> lock: reversed 0.3 m
-    backoff --> failed: 3 retries used
+    backoff --> failed: 4 retries used
     settle --> aligned: still 0.5 s, in tolerance
     settle --> backoff: out of tolerance
     aligned --> dumping: approved, or auto at L4–L5
@@ -59,7 +60,7 @@ Decision events: `dock_started`, `dock_aligned`, `dock_gate_opened`, `dock_gate_
 `dock_backoff`, `dock_done`, `dock_failed`, `dock_cancelled`.
 
 `verified` is true when a camera fix arrived during settle, or when the last fix that had the
-rover in line (within the lateral and heading tolerances) came within 0.5 m of travel of the finish
+rover in line (within the lateral tolerance and 10° of bearing) came within 0.7 m of travel of the finish
 (reason `verified_blind`). The second case is Terra's normal finish: the outlet sits over the phone,
 so the bucket is under the camera when lined up. A longer blind finish is `odometry_only` and not
 verified. Auto-dump needs `verified`; the operator can still approve.
@@ -67,8 +68,15 @@ verified. Auto-dump needs `verified`; the operator can still approve.
 ## Geometry and tolerances
 
 The bucket centre is the sighting pushed 0.152 m further along the ray (the camera hits the near
-wall). Aligned means the centre is within 0.05 m of the rover axis, within 0.04 m of
-`outlet_ahead`, and within 6° of straight ahead, with the rover still. Rovers that cannot spin
+wall). Aligned means the centre is within 0.07 m of the rover axis and within 0.07 m of
+`outlet_ahead`, with the rover still. There is no bearing test: for a round bucket only where the
+outlet sits matters, and close in a small offset is a large bearing (0.06 m at 0.25 m is 14°).
+Once aligned, the line-up may drift to 1.2× those tolerances before the dock backs off, so fix
+noise while parked does not undo it.
+
+When the camera loses the bucket while it is still farther than the blind range (dock range +
+0.5 m), the dock stops with reason `dock_reacquire` after 1.5 s and waits up to 2 s more for a
+fix before it backs off with `lost_fix`. Inside the blind range it finishes on odometry. Rovers that cannot spin
 (Terra, `allow_in_place: false`) steer within their minimum turn radius and back off in a reverse
 arc when the bearing is too large; spinners turn in place.
 
@@ -86,8 +94,10 @@ with Try open and Try closed to check them on the rover. These replace the profi
 across profile changes (`MobileController::set_dump_gate`, `test_dump_gate`). A running dock always
 controls the gate; a dock start ends a gate test.
 
-Terra's outlet is 3–4 in (0.076–0.10 m) wide, one tennis ball. The 0.05 m lateral tolerance keeps
-it well inside a 0.30 m bucket rim.
+Terra's outlet is 3–4 in (0.076–0.10 m) wide, one tennis ball. A 0.067 m ball lands inside the
+0.30 m rim while the outlet centre is within about 0.12 m of the bucket centre; 0.07 m per axis
+(0.084 m with the aligned slack, 0.119 m worst case) stays inside that. These values come from the
+geometry, not from hardware runs (Terra #108).
 
 Give the gate servo a `safe` position equal to `gate_closed` in the actuator layout, so the Pi relay
 closes it when the 250 ms lease lapses.
