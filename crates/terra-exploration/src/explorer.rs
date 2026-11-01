@@ -1,11 +1,11 @@
 use crate::{
     Detection, EndReason, FrontierCandidate, GoalScorer, InformationGainScorer, MissionObjective,
-    ObjectiveContext, TimeBudgetObjective, map_coverage, select_frontier,
-    select_frontier_through_unknown,
+    ObjectiveContext, TimeBudgetObjective, frontier::unknown_cells_around, map_coverage,
+    select_frontier, select_frontier_through_unknown,
 };
 use serde::{Deserialize, Serialize};
 use terra_mapping::MapSnapshot;
-use terra_navigation::{Pose, reachable};
+use terra_navigation::{Pose, footprint_clear, grid_cell, reachable};
 /// Lifecycle phase of a frontier exploration run.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -79,8 +79,10 @@ impl Default for ExplorationStatus {
 pub struct ExplorationConfig {
     /// Circumscribed radius passed to the shared clearance check. The arbiter overwrites this from the planner.
     pub footprint_radius: f64,
-    /// Seconds a goal may stay blocked or fail to get closer before it is blacklisted.
+    /// Seconds a goal may stay blocked (planner hold or no route) before it is blacklisted.
     pub stuck_timeout: f64,
+    /// Seconds a goal may go without getting [`Self::progress_epsilon`] closer before it is blacklisted.
+    pub no_progress_timeout: f64,
     /// Seconds before a blacklisted frontier may be selected again.
     pub blacklist_seconds: f64,
     /// Failures before a frontier stays excluded for the rest of the run.
@@ -126,6 +128,7 @@ impl Default for ExplorationConfig {
         Self {
             footprint_radius: 0.65,
             stuck_timeout: terra_types::timing::EXPLORATION_STUCK_SECONDS,
+            no_progress_timeout: terra_types::timing::EXPLORATION_NO_PROGRESS_SECONDS,
             blacklist_seconds: terra_types::timing::EXPLORATION_BLACKLIST_SECONDS,
             max_attempts: 3,
             exclude_radius: 1.,
@@ -231,6 +234,8 @@ pub struct Explorer {
     scan: Option<Scan>,
     /// A look-around finished since the last frontier assignment.
     scan_done: bool,
+    /// The last tick returned [`ExploreAction::Hold`]; logs the wait once.
+    holding: bool,
     events: Vec<ExploreEvent>,
 }
 impl Default for Explorer {
@@ -258,6 +263,7 @@ impl Default for Explorer {
             detection_count: 0,
             scan: None,
             scan_done: false,
+            holding: false,
             events: Vec::new(),
         }
     }
@@ -326,6 +332,7 @@ impl Explorer {
         self.detection_count = 0;
         self.scan = None;
         self.scan_done = false;
+        self.holding = false;
         self.objective.reset();
         self.objective.set_budget(budget_seconds);
         self.events.push(ExploreEvent {
@@ -450,41 +457,7 @@ impl Explorer {
                 self.blocked_since = None;
                 self.best_distance = None;
             } else if tracking && tick.goal_active {
-                let unreachable = tick.map.is_none_or(|map| {
-                    let passable = self
-                        .config
-                        .through_unknown
-                        .then(|| terra_navigation::unknown_as_free(map));
-                    !reachable(
-                        passable.as_ref().unwrap_or(map),
-                        tick.pose,
-                        self.config.footprint_radius,
-                        target.x,
-                        target.y,
-                    )
-                });
-                if unreachable {
-                    self.block_target(tick.now);
-                } else if tick.planner_blocked {
-                    let since = *self.blocked_since.get_or_insert(tick.now);
-                    if tick.now - since >= self.config.stuck_timeout.max(0.) {
-                        self.block_target(tick.now);
-                    }
-                } else {
-                    self.blocked_since = None;
-                    let improved = self.best_distance.is_none_or(|best| {
-                        tick.goal_distance < best - self.config.progress_epsilon
-                    });
-                    if improved {
-                        self.best_distance = Some(tick.goal_distance);
-                        self.progress_since = Some(tick.now);
-                    } else {
-                        let since = self.progress_since.unwrap_or(tick.now);
-                        if tick.now - since >= self.config.stuck_timeout.max(0.) {
-                            self.block_target(tick.now);
-                        }
-                    }
-                }
+                self.check_target(&tick, target);
             }
         }
         if self.phase != ExplorePhase::Running {
@@ -496,12 +469,20 @@ impl Explorer {
         {
             self.assign(candidate, tick.now);
         }
+        let holding = self.target.is_none() && self.retry_pending(tick.now);
+        if holding && !self.holding {
+            self.events.push(ExploreEvent {
+                kind: "frontier_retry_wait",
+                reason: format!("blacklisted={}", self.blacklist.len()),
+            });
+        }
+        self.holding = holding;
         if let Some(target) = self.target {
             ExploreAction::Seek {
                 x: target.x,
                 y: target.y,
             }
-        } else if self.retry_pending(tick.now) {
+        } else if holding {
             ExploreAction::Hold
         } else if let Some(yaw_rate) = self.scan_step(tick.map, tick.pose, tick.now) {
             ExploreAction::Scan { yaw_rate }
@@ -519,8 +500,36 @@ impl Explorer {
             ExplorePhase::Running => ExploreAction::Idle,
         }
     }
-    fn choose(&self, map: &MapSnapshot, pose: Pose, now: f64) -> Option<FrontierCandidate> {
-        let excluded = self.excluded(now);
+    /// Pick the best frontier that is not blacklisted. When none is left but some
+    /// blacklisted frontiers still have attempts, retry the best of those now
+    /// instead of standing still until their blacklist time runs out: a parked
+    /// rover's camera sees nothing new, so waiting rarely changes the answer.
+    fn choose(&mut self, map: &MapSnapshot, pose: Pose, now: f64) -> Option<FrontierCandidate> {
+        if let Some(candidate) = self.select(map, pose, &self.excluded(now)) {
+            return Some(candidate);
+        }
+        if !self.retry_pending(now) {
+            return None;
+        }
+        let exhausted: Vec<(f64, f64)> = self
+            .blacklist
+            .iter()
+            .filter(|entry| entry.attempts >= self.config.max_attempts.max(1))
+            .map(|entry| (entry.x, entry.y))
+            .collect();
+        let candidate = self.select(map, pose, &exhausted)?;
+        self.events.push(ExploreEvent {
+            kind: "frontier_retry_early",
+            reason: format!("x={:.2},y={:.2}", candidate.x, candidate.y),
+        });
+        Some(candidate)
+    }
+    fn select(
+        &self,
+        map: &MapSnapshot,
+        pose: Pose,
+        excluded: &[(f64, f64)],
+    ) -> Option<FrontierCandidate> {
         let select = if self.config.through_unknown {
             select_frontier_through_unknown
         } else {
@@ -530,10 +539,85 @@ impl Explorer {
             map,
             pose,
             self.config.footprint_radius,
-            &excluded,
+            excluded,
             self.config.exclude_radius,
             self.scorer.as_ref(),
         )
+    }
+    /// Judge the frontier the follower is driving to: done, blocked, or still going.
+    ///
+    /// - Mapped: no unknown cells are left around it, so the camera has already
+    ///   seen what was there. Drop it without blacklisting and pick the next one.
+    ///   This is what lets the rover stop at the edge of unknown space instead of
+    ///   needing to fit its footprint all the way to the frontier.
+    /// - Target occupied: the frontier itself no longer fits the footprint. Blacklist now.
+    /// - No route, or the local planner holds: blacklist after [`ExplorationConfig::stuck_timeout`].
+    ///   One noisy map update no longer drops the goal on the spot.
+    /// - No progress: blacklist after [`ExplorationConfig::no_progress_timeout`].
+    fn check_target(&mut self, tick: &ExploreTick<'_>, target: FrontierTarget) {
+        let passable = tick.map.and_then(|map| {
+            self.config
+                .through_unknown
+                .then(|| terra_navigation::unknown_as_free(map))
+        });
+        let clearance = passable.as_ref().or(tick.map);
+        if let Some(map) = tick.map
+            && let Some((cx, cy)) = grid_cell(map, target.x, target.y)
+            && unknown_cells_around(map, cx, cy, self.config.footprint_radius) == 0
+        {
+            self.target = None;
+            self.blocked_since = None;
+            self.best_distance = None;
+            self.progress_since = None;
+            self.events.push(ExploreEvent {
+                kind: "frontier_mapped",
+                reason: format!(
+                    "x={:.2},y={:.2},distance={:.2}",
+                    target.x, target.y, tick.goal_distance
+                ),
+            });
+            return;
+        }
+        if clearance.is_some_and(|map| {
+            !footprint_clear(map, target.x, target.y, self.config.footprint_radius, None)
+        }) {
+            self.block_target(tick.now, "target_occupied");
+            return;
+        }
+        let unreachable = clearance.is_none_or(|map| {
+            !reachable(
+                map,
+                tick.pose,
+                self.config.footprint_radius,
+                target.x,
+                target.y,
+            )
+        });
+        if unreachable || tick.planner_blocked {
+            let since = *self.blocked_since.get_or_insert(tick.now);
+            if tick.now - since >= self.config.stuck_timeout.max(0.) {
+                let why = if unreachable {
+                    "unreachable"
+                } else {
+                    "planner_blocked"
+                };
+                self.block_target(tick.now, why);
+            }
+            return;
+        }
+        self.blocked_since = None;
+        let improved = self
+            .best_distance
+            .is_none_or(|best| tick.goal_distance < best - self.config.progress_epsilon);
+        if improved {
+            self.best_distance = Some(tick.goal_distance);
+            self.progress_since = Some(tick.now);
+        } else {
+            let since = self.progress_since.unwrap_or(tick.now);
+            if tick.now - since >= self.config.no_progress_timeout.max(0.) {
+                self.block_target(tick.now, "no_progress");
+            }
+        }
     }
     /// Advance the look-around. `None` once it is finished, disabled, or not needed.
     ///
@@ -627,7 +711,7 @@ impl Explorer {
             ),
         });
     }
-    fn block_target(&mut self, now: f64) {
+    fn block_target(&mut self, now: f64, why: &str) {
         let Some(target) = self.target.take() else {
             return;
         };
@@ -664,9 +748,17 @@ impl Explorer {
                 self.blacklist.remove(0);
             }
         }
+        let attempts = self
+            .blacklist
+            .iter()
+            .find(|entry| (entry.x - target.x).hypot(entry.y - target.y) <= radius)
+            .map_or(0, |entry| entry.attempts);
         self.events.push(ExploreEvent {
             kind: "frontier_blocked",
-            reason: format!("x={:.2},y={:.2}", target.x, target.y),
+            reason: format!(
+                "x={:.2},y={:.2},why={why},attempts={attempts}",
+                target.x, target.y
+            ),
         });
     }
     fn finish(&mut self, reason: EndReason) {

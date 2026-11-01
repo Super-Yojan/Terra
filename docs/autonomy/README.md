@@ -71,7 +71,7 @@ Stop the run with any of these:
 
 `terra/rover/<id>/exploration/status` reports elapsed and remaining time, the current target, observed free area, and `end_reason`. The same object is nested in `autonomy/status` under `exploration`. While the run is moving, `active_source` is `explore`.
 
-Run logs stay JSONL via `RunRecorder`. Each control tick already stores `events`. Exploration adds `exploration_started`, `frontier_selected`, `frontier_blocked`, `exploration_progress` (coverage, elapsed, remaining about once a second), `exploration_ended`, and `detection_reported`. TerraPhone also stores the status object on the tick. Summarize with `terra-run-summary` as before.
+Run logs stay JSONL via `RunRecorder`. Each control tick already stores `events`. Exploration adds `exploration_started`, `frontier_selected`, `frontier_blocked` (with `why` and `attempts`), `frontier_mapped`, `frontier_retry_early`, `frontier_retry_wait`, `exploration_progress` (coverage, elapsed, remaining about once a second), `exploration_ended`, and `detection_reported`. TerraPhone also stores the status object on the tick. Summarize with `terra-run-summary` as before.
 
 Zorvane applies the twist from the arbiter as soon as it depends on this crate. It already forwards `autonomy` and serializes `autonomy/status`, so the nested `exploration` object appears without a bridge change. To publish the dedicated key, add this next to the other status puts in `drive_autonomy`:
 

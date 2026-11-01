@@ -113,22 +113,7 @@ fn select_frontier_in(
         if !footprint_clear(clearance, px, py, radius, Some(pose)) {
             continue;
         }
-        let reach = (radius / map.resolution).ceil() as isize + 2;
-        let mut gain = 0u32;
-        for dy in -reach..=reach {
-            for dx in -reach..=reach {
-                let a = x as isize + dx;
-                let b = y as isize + dy;
-                if a >= 0
-                    && b >= 0
-                    && a < map.width as isize
-                    && b < map.height as isize
-                    && map.occupancy[b as usize * map.width as usize + a as usize] < 0
-                {
-                    gain += 1;
-                }
-            }
-        }
+        let gain = unknown_cells_around(map, x, y, radius);
         let distance = (px - pose.x).hypot(py - pose.y);
         if footprint_clear(clearance, px, py, radius, None)
             && map.occupancy[index] >= 0
@@ -161,4 +146,27 @@ fn select_frontier_in(
         }
     }
     best
+}
+/// Unknown cells in the square of `radius` plus two cells around grid cell `(x, y)`.
+///
+/// This is a frontier's information gain. Zero means the area is mapped and the
+/// point is no longer a frontier.
+pub(crate) fn unknown_cells_around(map: &MapSnapshot, x: usize, y: usize, radius: f64) -> u32 {
+    let reach = (radius / map.resolution).ceil() as isize + 2;
+    let mut gain = 0u32;
+    for dy in -reach..=reach {
+        for dx in -reach..=reach {
+            let a = x as isize + dx;
+            let b = y as isize + dy;
+            if a >= 0
+                && b >= 0
+                && a < map.width as isize
+                && b < map.height as isize
+                && map.occupancy[b as usize * map.width as usize + a as usize] < 0
+            {
+                gain += 1;
+            }
+        }
+    }
+    gain
 }

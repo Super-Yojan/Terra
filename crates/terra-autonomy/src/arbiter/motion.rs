@@ -117,7 +117,10 @@ impl AutonomyArbiter {
 
             self.update_frontier_proposal(input, decision);
             if self.level == Level::Explore {
-                self.explore_blocked = decision.reason == "obstacle_blocked";
+                // A missing route holds the rover just like an obstacle does, so
+                // it counts toward the short blocked window, not the no-progress one.
+                self.explore_blocked =
+                    decision.reason == "obstacle_blocked" || decision.route_failure.is_some();
             }
         }
     }
