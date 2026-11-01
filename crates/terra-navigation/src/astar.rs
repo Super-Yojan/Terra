@@ -91,36 +91,78 @@ pub fn astar_route(
     exact_route(&grid, pose, x, y)
 }
 
-/// Route to the goal when its footprint is certifiable. Otherwise route to the
-/// reachable free cell that most reduces distance to the goal, which is the
-/// frontier in that direction when the goal is unknown or outside the window.
-/// An occupied goal, or a known-free goal with no path, still fails.
+/// Extra cost of a step whose footprint is not yet known to be free. Routes
+/// prefer observed space, but may cross unseen space when it is much shorter.
+const UNKNOWN_STEP_COST: usize = 3;
+
+/// Route toward an operator goal that may sit in space the rover has not seen,
+/// such as behind an obstacle (issue #109).
+///
+/// 1. When the goal footprint is known free and connected, this is [`astar_route`].
+/// 2. Otherwise the search treats unknown cells as passable at a higher cost,
+///    finds the cheapest route to the goal, and returns the part of that route
+///    that is known free. The rover drives to the edge of what it has seen, the
+///    map fills in, and the caller replans. Only that known prefix is returned,
+///    so every returned edge passes [`route_segment_clear`].
+/// 3. A goal whose footprint touches an observed obstacle (for example just
+///    behind a box) is moved to the nearest cell within `snap` metres whose
+///    footprint clears every observed obstacle. Pass the follower's arrival
+///    radius less a margin so that reaching the moved goal counts as arriving.
+/// 4. A goal outside the map routes to the reachable cell nearest to it.
 ///
 /// A successful route begins at `pose` and uses the same compact polyline format
-/// as [`astar_route`]. Its endpoint may be a reachable cell center closer to
-/// `(x, y)`, so success does not imply that the requested goal was reached.
+/// as [`astar_route`]. Its endpoint may fall short of `(x, y)`, so success does
+/// not imply that the requested goal was reached.
 ///
 /// # Errors
 ///
-/// Uses the error strings documented by [`astar_route`]. An unknown or off-map
-/// goal triggers a search for partial progress; if no reachable clear cell is
-/// closer than the starting pose, returns `route_goal_blocked` or
-/// `route_goal_outside_map`, respectively.
+/// Uses the error strings documented by [`astar_route`]:
+/// - `route_goal_blocked`: the goal cell is occupied, or no cell within `snap`
+///   of it fits the rover clear of observed obstacles.
+/// - `route_no_path`: observed obstacles seal the goal off, even when unseen
+///   space is allowed, or no known-free progress is possible from here.
+/// - `route_goal_outside_map`: an off-map goal with no reachable cell closer
+///   to it than the starting pose.
 pub fn astar_progress_route(
     map: &MapSnapshot,
     pose: Pose,
     radius: f64,
     x: f64,
     y: f64,
+    snap: f64,
 ) -> Result<Vec<[f64; 2]>, &'static str> {
     let grid = FootprintGrid::build(map, pose, radius)?;
-    match exact_route(&grid, pose, x, y) {
-        Ok(route) => Ok(route),
-        Err("route_goal_outside_map") => progress_route(&grid, pose, x, y),
-        Err("route_goal_blocked") if goal_is_unknown_or_off_map(map, x, y, radius) => {
-            progress_route(&grid, pose, x, y)
+    let goal = match exact_route(&grid, pose, x, y) {
+        Ok(route) => return Ok(route),
+        Err("route_goal_outside_map") => return progress_route(&grid, pose, x, y),
+        Err("route_start_outside_map") => return Err("route_start_outside_map"),
+        Err(_) => cell(map, x, y).ok_or("route_goal_outside_map")?,
+    };
+    if map.occupancy[goal.1 * map.width as usize + goal.0] >= 65 {
+        return Err("route_goal_blocked");
+    }
+    // Treat unseen cells as free; observed obstacles and the map edge still block.
+    let mut open_map = map.clone();
+    for value in &mut open_map.occupancy {
+        if *value < 0 {
+            *value = 0;
         }
-        Err(why) => Err(why),
+    }
+    let open = FootprintGrid::build(&open_map, pose, radius)?;
+    // The search enters the goal through its cell, so that cell must be open too.
+    let target = if open.open(goal.1 * map.width as usize + goal.0)
+        && footprint_rejection(&open_map, x, y, radius, None).is_none()
+    {
+        [x, y]
+    } else {
+        snap_goal(&open, x, y, snap).ok_or("route_goal_blocked")?
+    };
+    let route = weighted_route(&open, &grid, pose, target)?;
+    match known_prefix(&grid, &route) {
+        Some(prefix) => Ok(prefix),
+        // Nothing known lies along the cheapest route (for example the rover
+        // faces away from it); fall back to the nearest reachable progress.
+        None => progress_route(&grid, pose, x, y).map_err(|_| "route_no_path"),
     }
 }
 
@@ -243,20 +285,6 @@ impl<'a> FootprintGrid<'a> {
     }
 }
 
-fn goal_is_unknown_or_off_map(map: &MapSnapshot, x: f64, y: f64, radius: f64) -> bool {
-    let Some((column, row)) = cell(map, x, y) else {
-        return true;
-    };
-    let occupancy = map.occupancy[row * map.width as usize + column];
-    if occupancy >= 65 {
-        return false;
-    }
-    matches!(
-        footprint_rejection(map, x, y, radius, None),
-        Some("unknown" | "outside_map")
-    )
-}
-
 fn cell_blocked(map: &MapSnapshot, pose: Pose, reach: f64, index: usize) -> bool {
     let occupancy = map.occupancy[index];
     if occupancy >= 65 {
@@ -337,6 +365,124 @@ fn exact_route(
         }
     }
     Err("route_no_path")
+}
+
+/// Nearest cell center within `snap` metres of `(x, y)` whose footprint is open.
+fn snap_goal(open: &FootprintGrid<'_>, x: f64, y: f64, snap: f64) -> Option<[f64; 2]> {
+    if !snap.is_finite() || snap <= 0. {
+        return None;
+    }
+    let map = open.map;
+    let (column, row) = cell(map, x, y)?;
+    let reach = (snap / map.resolution).ceil() as isize;
+    let mut best: Option<([f64; 2], f64)> = None;
+    for dy in -reach..=reach {
+        for dx in -reach..=reach {
+            let c = column as isize + dx;
+            let r = row as isize + dy;
+            if c < 0 || r < 0 || c >= map.width as isize || r >= map.height as isize {
+                continue;
+            }
+            let index = r as usize * map.width as usize + c as usize;
+            let center = open.center(index);
+            let distance = (center[0] - x).hypot(center[1] - y);
+            if distance <= snap && open.open(index) && best.is_none_or(|(_, d)| distance < d) {
+                best = Some((center, distance));
+            }
+        }
+    }
+    best.map(|(center, _)| center)
+}
+
+/// A* over `open` (unseen space passable) where each step into a cell that is
+/// not open in `known` costs [`UNKNOWN_STEP_COST`]. Ends exactly at `goal`.
+fn weighted_route(
+    open: &FootprintGrid<'_>,
+    known: &FootprintGrid<'_>,
+    pose: Pose,
+    goal: [f64; 2],
+) -> Result<Vec<[f64; 2]>, &'static str> {
+    let start = cell(open.map, pose.x, pose.y).ok_or("route_start_outside_map")?;
+    let target = cell(open.map, goal[0], goal[1]).ok_or("route_goal_outside_map")?;
+    let width = open.width();
+    let start_index = start.1 * width + start.0;
+    let goal_index = target.1 * width + target.0;
+    if start_index == goal_index {
+        return commit(open, vec![[pose.x, pose.y], goal]);
+    }
+    let heuristic = |i: usize| (i % width).abs_diff(target.0) + (i / width).abs_diff(target.1);
+    let mut costs = vec![usize::MAX; open.map.occupancy.len()];
+    let mut previous = vec![usize::MAX; open.map.occupancy.len()];
+    let mut heap = BinaryHeap::new();
+    costs[start_index] = 0;
+    heap.push(Reverse((heuristic(start_index), 0usize, start_index)));
+    while let Some(Reverse((_, cost, current))) = heap.pop() {
+        if cost != costs[current] {
+            continue;
+        }
+        if current == goal_index {
+            let mut route = vec![goal];
+            let mut cursor = current;
+            while cursor != start_index {
+                route.push(open.center(cursor));
+                cursor = previous[cursor];
+                if cursor == usize::MAX {
+                    return Err("route_no_path");
+                }
+            }
+            route.push([pose.x, pose.y]);
+            route.reverse();
+            return commit(open, route);
+        }
+        let from_pose = current == start_index;
+        for (dx, dy) in [(1isize, 0isize), (-1, 0), (0, 1), (0, -1)] {
+            let col = (current % width) as isize + dx;
+            let row = (current / width) as isize + dy;
+            if col < 0
+                || row < 0
+                || col >= open.map.width as isize
+                || row >= open.map.height as isize
+            {
+                continue;
+            }
+            let next = row as usize * width + col as usize;
+            let step = if known.open(next) {
+                1
+            } else {
+                UNKNOWN_STEP_COST
+            };
+            if cost + step >= costs[next] || !open.edge(current, next, from_pose) {
+                continue;
+            }
+            previous[next] = current;
+            costs[next] = cost + step;
+            heap.push(Reverse((cost + step + heuristic(next), cost + step, next)));
+        }
+    }
+    Err("route_no_path")
+}
+
+/// The leading part of `route` that is known free, cut at the last clear point
+/// of the first segment that enters unseen space. `None` when that part is
+/// shorter than one map cell.
+fn known_prefix(known: &FootprintGrid<'_>, route: &[[f64; 2]]) -> Option<Vec<[f64; 2]>> {
+    let mut prefix = vec![*route.first()?];
+    for edge in route.windows(2) {
+        if route_segment_clear(known.map, known.pose, known.radius, edge[0], edge[1]) {
+            prefix.push(edge[1]);
+            continue;
+        }
+        let cut = last_clear_point(known, edge[0], edge[1]);
+        if (cut[0] - edge[0][0]).hypot(cut[1] - edge[0][1]) > 1e-3 {
+            prefix.push(cut);
+        }
+        break;
+    }
+    let length: f64 = prefix
+        .windows(2)
+        .map(|p| (p[1][0] - p[0][0]).hypot(p[1][1] - p[0][1]))
+        .sum();
+    (prefix.len() >= 2 && length >= known.map.resolution).then_some(prefix)
 }
 
 /// Search all reachable cells for the closest center that improves on the current pose.

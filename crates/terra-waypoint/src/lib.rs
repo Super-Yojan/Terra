@@ -281,6 +281,11 @@ impl WaypointController {
         })
     }
 
+    /// Pursuit configuration this follower was built with.
+    pub fn config(&self) -> &WaypointConfig {
+        &self.config
+    }
+
     /// Set the geographic projection origin in degrees.
     ///
     /// Returns [`InputError::OutOfRange`] under [`GeoOrigin::new`] rules, preserving

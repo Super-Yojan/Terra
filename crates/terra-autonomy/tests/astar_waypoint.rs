@@ -468,3 +468,114 @@ fn stalled_measured_speed_does_not_pin_waypoint_speed() {
     }
     assert!(linear > 0.4, "{linear}");
 }
+
+/// Issue #109 end to end: a box stands between the rover and an L3 goal just
+/// behind it. The map starts empty (unknown) and a simulated camera (120° view,
+/// 5 m range, line of sight) reveals the true world as the rover drives, the
+/// way the phone map fills in. The rover must reach the goal without ever
+/// putting its footprint on the box.
+#[test]
+fn l3_reaches_a_goal_behind_a_box_as_the_map_fills_in() {
+    for goal in [[3.4, 0.0], [5.0, 0.3]] {
+        let (arrived, pose, reasons) = drive_behind_box(goal);
+        assert!(
+            arrived,
+            "goal {goal:?} not reached, stopped at {pose:?}; reasons {reasons:?}"
+        );
+    }
+}
+
+/// Run the arbiter against a box at x 2.4..2.6, |y| <= 0.6, revealing the map
+/// from the rover's pose each tick. Returns (arrived, final pose, hold reasons).
+fn drive_behind_box(goal: [f64; 2]) -> (bool, Pose, Vec<String>) {
+    let occupied = |x: f64, y: f64| (2.4..2.6).contains(&x) && y.abs() <= 0.6;
+    let mut map = MapSnapshot {
+        width: 120,
+        height: 120,
+        resolution: 0.1,
+        origin_x: -6.,
+        origin_y: -6.,
+        occupancy: vec![-1; 120 * 120],
+    };
+    let reveal = |map: &mut MapSnapshot, pose: Pose| {
+        for row in 0..120 {
+            for col in 0..120 {
+                let x = -6. + (col as f64 + 0.5) * 0.1;
+                let y = -6. + (row as f64 + 0.5) * 0.1;
+                let (dx, dy) = (x - pose.x, y - pose.y);
+                let range = dx.hypot(dy);
+                let bearing = (dy.atan2(dx) - pose.yaw + std::f64::consts::PI)
+                    .rem_euclid(std::f64::consts::TAU)
+                    - std::f64::consts::PI;
+                if range > 5. || bearing.abs() > 60f64.to_radians() {
+                    continue;
+                }
+                // Line of sight: march toward the cell; stop at the first obstacle.
+                let steps = (range / 0.05).ceil() as usize;
+                let blocked = (1..steps).any(|i| {
+                    let f = i as f64 / steps as f64;
+                    let (sx, sy) = (pose.x + dx * f, pose.y + dy * f);
+                    occupied(sx, sy) && ((sx - x).hypot(sy - y) > 0.08)
+                });
+                if !blocked {
+                    map.occupancy[row * 120 + col] = if occupied(x, y) { 100 } else { 0 };
+                }
+            }
+        }
+    };
+    let mut arbiter = AutonomyArbiter::default();
+    arbiter.set_level(LevelRequest {
+        level: Level::Waypoint,
+        token: "mode".into(),
+        budget_seconds: None,
+        budget_minutes: None,
+    });
+    assert!(arbiter.accept_goal(
+        &GoalCommand::Local {
+            x: goal[0],
+            y: goal[1],
+            yaw: None,
+            token: None,
+        },
+        20.
+    ));
+    let mut pose = Pose::default();
+    let mut measured = Twist::default();
+    let mut reasons = Vec::new();
+    // The rover has looked around where it stands before the goal is sent.
+    for yaw in [0., 2.1, -2.1] {
+        reveal(&mut map, Pose { yaw, ..pose });
+    }
+    for tick in 1..=3000 {
+        let now = tick as f64 * 0.1;
+        reveal(&mut map, pose);
+        let output = arbiter.step(ArbiterInput {
+            now,
+            pose,
+            pose_time: now,
+            map: Some(&map),
+            map_time: Some(now),
+            map_revision: tick,
+            measured,
+            healthy: true,
+        });
+        if output.goal.state == GoalState::Arrived {
+            return (true, pose, reasons);
+        }
+        if output.twist == Twist::default() && reasons.last() != Some(&output.status.reason) {
+            reasons.push(output.status.reason.clone());
+        }
+        measured = output.twist;
+        pose.yaw += measured.angular * 0.1;
+        pose.x += measured.linear * pose.yaw.cos() * 0.1;
+        pose.y += measured.linear * pose.yaw.sin() * 0.1;
+        // Terra's 0.65 m footprint never overlaps the box.
+        let nearest_x = pose.x.clamp(2.4, 2.6);
+        let nearest_y = pose.y.clamp(-0.6, 0.6);
+        assert!(
+            (pose.x - nearest_x).hypot(pose.y - nearest_y) > 0.65 - 0.05,
+            "footprint hit the box at {pose:?}"
+        );
+    }
+    (false, pose, reasons)
+}

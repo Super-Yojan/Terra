@@ -553,6 +553,9 @@ impl AutonomyArbiter {
                 radius,
                 out.status.x,
                 out.status.y,
+                // A goal against an obstacle moves to where the rover fits,
+                // still inside the arrival radius so reaching it arrives.
+                (self.follower.config().arrive_radius - 0.1).max(0.),
             ) {
                 Ok(route) => {
                     self.route_reaches_goal = route.last().is_some_and(|point| {
