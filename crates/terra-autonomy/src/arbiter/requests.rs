@@ -104,6 +104,22 @@ impl AutonomyArbiter {
     pub fn has_active_goal(&self, pose: Pose) -> bool {
         self.follower.step(pose.x, pose.y, pose.yaw).status.state == GoalState::Active
     }
+    /// Drop an L2/L3 waypoint goal that a sensor hold has blocked for too
+    /// long, naming why in `request_reason` and a `goal_dropped` event.
+    /// Other levels keep their own timeouts. Return whether a goal was dropped.
+    pub fn drop_goal_for_sensor_hold(&mut self, pose: Pose) -> bool {
+        if !matches!(self.level, Level::Waypoint | Level::WaypointDirect)
+            || !self.has_active_goal(pose)
+        {
+            return false;
+        }
+        self.follower.cancel();
+        self.maneuver.clear();
+        self.last_plan = None;
+        self.request_reason = Some("sensor_hold_timeout".into());
+        self.event("goal_dropped", None, "sensor_hold_timeout");
+        true
+    }
     pub fn clear_guidance(&mut self) {
         self.follower.cancel();
         self.maneuver.clear();

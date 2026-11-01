@@ -213,6 +213,13 @@ pub struct Runtime {
     sensor_hold: Option<(f64, terra_autonomy::SensorHold)>,
     sensor_holds: u64,
     sensor_held: bool,
+    /// Start of the current unbroken `sensor_unhealthy` hold.
+    sensor_hold_since: Option<f64>,
+    /// When data came back fresh after a long hold; motion waits out
+    /// [`SENSOR_SETTLE_SECONDS`] from here.
+    sensor_settle_since: Option<f64>,
+    /// The current hold already dropped its goal.
+    sensor_goal_dropped: bool,
     /// Dump outlet and gate servo in use: the rover profile's, with the
     /// phone's local settings on top.
     pub dock_profile: rover_profile::DockProfile,
@@ -229,6 +236,15 @@ struct DockLocal {
 }
 /// How long a `sensor_unhealthy` hold stays in the status after it clears.
 const SENSOR_HOLD_DISPLAY_SECONDS: f64 = 10.;
+/// A hold at least this long must see fresh data for
+/// [`SENSOR_SETTLE_SECONDS`] before motion resumes. Shorter holds resume on
+/// the next fresh tick, as before.
+const SENSOR_SETTLE_AFTER_SECONDS: f64 = 1.;
+/// How long data must stay fresh after a long hold before the rover drives.
+const SENSOR_SETTLE_SECONDS: f64 = 0.5;
+/// An unbroken hold this long drops the active L2/L3 goal, so the rover does
+/// not lurch toward an old goal minutes later. The operator resends it.
+pub const SENSOR_HOLD_GOAL_TIMEOUT_SECONDS: f64 = 30.;
 impl Runtime {
     pub fn new(config: RuntimeConfig, run_id: String) -> Result<Self, RuntimeError> {
         if run_id.is_empty()
@@ -287,6 +303,9 @@ impl Runtime {
             sensor_hold: None,
             sensor_holds: 0,
             sensor_held: false,
+            sensor_hold_since: None,
+            sensor_settle_since: None,
+            sensor_goal_dropped: false,
             last_snapshot: RuntimeSnapshot { value: json!({}) },
             dock_profile: Default::default(),
             rover_profile: None,
@@ -310,6 +329,9 @@ impl Runtime {
         self.sensor_hold = None;
         self.sensor_holds = 0;
         self.sensor_held = false;
+        self.sensor_hold_since = None;
+        self.sensor_settle_since = None;
+        self.sensor_goal_dropped = false;
         self.outdoor.cancel();
         self.outdoor.invalidate_sensors();
         self.objects.clear();
@@ -739,19 +761,68 @@ impl Runtime {
         self.events
             .push(json!({"kind":if connected{"connection.established"}else{"connection.lost"}}));
     }
+    /// Whether fresh data must wait out the settle period after a long hold.
+    /// Called once per tick with the health the sensors report on their own.
+    fn settling(&mut self, healthy: bool, now: f64) -> bool {
+        let Some(since) = self.sensor_hold_since.filter(|_| healthy) else {
+            self.sensor_settle_since = None;
+            return false;
+        };
+        let back = *self.sensor_settle_since.get_or_insert(now);
+        back - since >= SENSOR_SETTLE_AFTER_SECONDS && now - back < SENSOR_SETTLE_SECONDS
+    }
     /// Name the cause of a `sensor_unhealthy` hold in the status, and log
-    /// each new hold, so holds of a single tick are not silent.
-    fn note_sensor_hold(&mut self, output: &mut ArbiterOutput, now: f64, outdoor_motion: bool) {
+    /// each new hold, so holds of a single tick are not silent. A hold that
+    /// outlasts [`SENSOR_HOLD_GOAL_TIMEOUT_SECONDS`] drops the L2/L3 goal.
+    fn note_sensor_hold(
+        &mut self,
+        output: &mut ArbiterOutput,
+        now: f64,
+        outdoor_motion: bool,
+        settling: bool,
+    ) {
         if output.status.reason == "sensor_unhealthy" {
-            let hold = pose_quality::hold(self, now, outdoor_motion);
-            if !self.sensor_held {
-                self.sensor_holds += 1;
-                self.events.push(json!({"kind":"autonomy.sensor_hold","cause":hold.cause,"pose_age_s":hold.pose_age_s,"imu_age_s":hold.imu_age_s,"count":self.sensor_holds}));
+            let since = *self.sensor_hold_since.get_or_insert(now);
+            if settling && let Some((at, _)) = self.sensor_hold.as_mut() {
+                // Keep the cause that started the hold while data settles.
+                *at = now;
+            } else {
+                let mut hold = pose_quality::hold(self, now, outdoor_motion);
+                hold.goal_dropped = self.sensor_goal_dropped;
+                if !self.sensor_held {
+                    self.sensor_holds += 1;
+                    self.events.push(json!({"kind":"autonomy.sensor_hold","cause":hold.cause,"pose_age_s":hold.pose_age_s,"imu_age_s":hold.imu_age_s,"count":self.sensor_holds}));
+                }
+                self.sensor_hold = Some((now, hold));
             }
             self.sensor_held = true;
-            self.sensor_hold = Some((now, hold));
+            if !self.sensor_goal_dropped
+                && !self.outdoor.selected
+                && now - since >= SENSOR_HOLD_GOAL_TIMEOUT_SECONDS
+                && self
+                    .autonomy
+                    .drop_goal_for_sensor_hold(self.pose.unwrap_or_default().0)
+            {
+                self.sensor_goal_dropped = true;
+                if let Some((_, hold)) = self.sensor_hold.as_mut() {
+                    hold.goal_dropped = true;
+                }
+                self.events.push(json!({"kind":"autonomy.goal_dropped","reason":"sensor_hold_timeout","held_s":now - since}));
+            }
         } else {
+            if self.sensor_held
+                && let Some(since) = self.sensor_hold_since
+            {
+                self.events
+                    .push(json!({"kind":"autonomy.sensor_hold_cleared","held_s":now - since}));
+            }
             self.sensor_held = false;
+            self.sensor_hold_since = None;
+            self.sensor_settle_since = None;
+        }
+        let held_s = self.sensor_hold_since.map_or(0., |since| now - since);
+        if !self.sensor_held {
+            self.sensor_goal_dropped = false;
         }
         output.status.sensor_hold = self
             .sensor_hold
@@ -760,6 +831,8 @@ impl Runtime {
             .map(|(at, hold)| terra_autonomy::SensorHold {
                 age_s: now - at,
                 count: self.sensor_holds,
+                held_s,
+                settling: settling && self.sensor_held,
                 ..hold.clone()
             });
     }
@@ -774,8 +847,13 @@ impl Runtime {
         // A paused outdoor mission holds L3 motion only. L0 takeover drives
         // while the mission waits for an explicit resume.
         let manual = self.autonomy.is_manual();
-        let healthy = (manual || (pose_quality::ready(self, now) && outdoor_motion))
+        let sensors_healthy = (manual || (pose_quality::ready(self, now) && outdoor_motion))
             && self.recording_healthy;
+        // After a long hold, fresh data must last a short settle period
+        // before motion resumes, so one fresh sample between stalls does not
+        // start the rover.
+        let settling = !manual && self.settling(sensors_healthy, now);
+        let healthy = sensors_healthy && !settling;
         self.autonomy.planner.config.max_linear = self
             .navigation
             .parameters
@@ -806,7 +884,7 @@ impl Runtime {
             },
             healthy,
         });
-        self.note_sensor_hold(&mut output, now, outdoor_motion);
+        self.note_sensor_hold(&mut output, now, outdoor_motion, settling);
         let outdoor_status = self
             .outdoor
             .status(now, outdoor::evidence(self, now), &self.run_id);

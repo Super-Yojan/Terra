@@ -54,6 +54,9 @@ pub fn hold(b: &Runtime, now: f64, outdoor_motion: bool) -> terra_autonomy::Sens
         imu_age_s: age(now, b.imu_time),
         age_s: 0.,
         count: 0,
+        held_s: 0.,
+        settling: false,
+        goal_dropped: false,
     }
 }
 pub fn value(b: &Runtime, now: f64) -> serde_json::Value {
