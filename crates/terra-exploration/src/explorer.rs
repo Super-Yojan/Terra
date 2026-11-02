@@ -518,9 +518,22 @@ impl Explorer {
             .map(|entry| (entry.x, entry.y))
             .collect();
         let candidate = self.select(map, pose, &exhausted)?;
+        // Failures already logged for this point; the same frontier can come back
+        // up to `max_attempts` times, so this shows a retry loop in the run log.
+        let radius = self.config.exclude_radius;
+        let attempts = self
+            .blacklist
+            .iter()
+            .find(|entry| (entry.x - candidate.x).hypot(entry.y - candidate.y) <= radius)
+            .map_or(0, |entry| entry.attempts);
         self.events.push(ExploreEvent {
             kind: "frontier_retry_early",
-            reason: format!("x={:.2},y={:.2}", candidate.x, candidate.y),
+            reason: format!(
+                "x={:.2},y={:.2},attempts={attempts},max_attempts={}",
+                candidate.x,
+                candidate.y,
+                self.config.max_attempts.max(1)
+            ),
         });
         Some(candidate)
     }

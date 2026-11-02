@@ -546,7 +546,19 @@ fn all_frontiers_blacklisted_retries_instead_of_holding() {
         matches!(actions[1], ExploreAction::Seek { .. }),
         "{actions:?}"
     );
-    assert!(events.iter().any(|e| e.kind == "frontier_retry_early"));
+    let retries: Vec<_> = events
+        .iter()
+        .filter(|e| e.kind == "frontier_retry_early")
+        .map(|e| e.reason.as_str())
+        .collect();
+    assert!(
+        retries[0].contains("attempts=1,max_attempts=3"),
+        "{retries:?}"
+    );
+    assert!(
+        retries[1].contains("attempts=2,max_attempts=3"),
+        "{retries:?}"
+    );
     assert!(
         actions.iter().all(|a| *a != ExploreAction::Hold),
         "{actions:?}"

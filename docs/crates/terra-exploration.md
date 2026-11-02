@@ -30,7 +30,7 @@ flowchart TD
 | `no_frontiers_left` | No reachable unknown edge remains, including after retries are exhausted. |
 | `operator_stop` | Safety stop, or a goal cancel while exploring. |
 | `operator_takeover` | Level changes away from `explore`. |
-| `map_stale` | The map stays missing or older than 0.5 s for 3 s (`EXPLORATION_MAP_STALE_GRACE_SECONDS`). Motion holds from the first stale tick. |
+| `map_stale` | The map stays missing or older than `MAP_FRESHNESS_SECONDS` (2.5 s) for 3 s (`EXPLORATION_MAP_STALE_GRACE_SECONDS`). Motion holds from the first stale tick. |
 | `safety_hold` | Pose or health is not fresh. Emergency stop uses `operator_stop`. |
 | `objective_complete` | Phase 2 stub. A caller reported a wanted detection. |
 
