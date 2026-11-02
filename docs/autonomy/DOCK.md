@@ -68,10 +68,10 @@ verified. Auto-dump needs `verified`; the operator can still approve.
 ## Geometry and tolerances
 
 The bucket centre is the sighting pushed 0.152 m further along the ray (the camera hits the near
-wall). Aligned means the centre is within 0.07 m of the rover axis and within 0.07 m of
+wall). Aligned means the centre is within 0.06 m of the rover axis and within 0.07 m of
 `outlet_ahead`, with the rover still. There is no bearing test: for a round bucket only where the
-outlet sits matters, and close in a small offset is a large bearing (0.06 m at 0.25 m is 14°).
-Once aligned, the line-up may drift to 1.2× those tolerances before the dock backs off, so fix
+outlet sits matters, and close in a small offset is a large bearing (0.055 m at 0.25 m is 12°).
+Once aligned, the line-up may drift to 1.1× those tolerances before the dock backs off, so fix
 noise while parked does not undo it.
 
 When the camera loses the bucket while it is still farther than the blind range (dock range +
@@ -95,8 +95,11 @@ across profile changes (`MobileController::set_dump_gate`, `test_dump_gate`). A 
 controls the gate; a dock start ends a gate test.
 
 Terra's outlet is 3–4 in (0.076–0.10 m) wide, one tennis ball. A 0.067 m ball lands inside the
-0.30 m rim while the outlet centre is within about 0.12 m of the bucket centre; 0.07 m per axis
-(0.084 m with the aligned slack, 0.119 m worst case) stays inside that. These values come from the
+0.30 m rim while the outlet centre is within about 0.12 m of the bucket centre. 0.06 m lateral and
+0.07 m range at the aligned slack is 0.101 m worst case, leaving about 17 mm for the ball sitting
+off-centre in the outlet. Fix noise and bias in the bucket-centre estimate are not budgeted.
+A fix only counts as in line for a verified blind finish within 10° of bearing, so a 15° fix
+that is otherwise in tolerance aligns as `odometry_only` and never auto-dumps. These values come from the
 geometry, not from hardware runs (Terra #108).
 
 Give the gate servo a `safe` position equal to `gate_closed` in the actuator layout, so the Pi relay

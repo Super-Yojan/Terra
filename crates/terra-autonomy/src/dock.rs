@@ -124,12 +124,14 @@ impl DockConfig {
             target_radius,
             // A tennis ball (0.067 m) through the outlet lands inside the
             // 0.30 m rim while the outlet centre is within ~0.12 m of the
-            // bucket centre; 0.07 m on each axis keeps it in, even at the
-            // aligned slack (0.084 m per axis, 0.119 m worst case).
-            lateral_tolerance: 0.07,
+            // bucket centre. 0.06 m lateral and 0.07 m range, at the aligned
+            // slack, is 0.101 m worst case, leaving ~17 mm for the ball sitting
+            // off-centre in a 0.10 m outlet (the rest of the margin is thin:
+            // fix noise and centre-estimate bias are not in it).
+            lateral_tolerance: 0.06,
             range_tolerance: 0.07,
             heading_tolerance: 10f64.to_radians(),
-            aligned_slack: 1.2,
+            aligned_slack: 1.1,
             max_start_distance: 3.,
             creep_speed: 0.1,
             approach_speed: 0.25,
@@ -1100,8 +1102,10 @@ mod tests {
         assert!(!sim.gate_opened);
     }
 
-    /// Where the dock aims stays inside the bucket for a tennis ball.
-    const BALL_IN_BUCKET: f64 = 0.1524 - 0.0335 + 1e-3;
+    /// Outlet centre to bucket centre with the whole ball inside the rim.
+    const BALL_IN_BUCKET: f64 = 0.1524 - 0.0335;
+    /// How far the ball can sit off the outlet centre in a 0.10 m outlet.
+    const OUTLET_PLAY: f64 = (0.10 - 0.067) / 2.;
 
     #[test]
     fn default_tolerances_keep_the_ball_in_the_bucket() {
@@ -1109,18 +1113,67 @@ mod tests {
         assert!(c.valid());
         let worst =
             (c.lateral_tolerance * c.aligned_slack).hypot(c.range_tolerance * c.aligned_slack);
-        assert!(worst <= BALL_IN_BUCKET, "{worst}");
+        assert!(worst + OUTLET_PLAY <= BALL_IN_BUCKET, "{worst}");
+    }
+
+    /// One fix of the bucket centre at body `(x, y)` from `pose` at the origin.
+    fn fix_at(dock: &mut Dock, x: f64, y: f64, now: f64) {
+        let d = x.hypot(y);
+        let wall = (d - dock.config.target_radius) / d;
+        dock.observe(
+            "bucket",
+            Some("orange"),
+            x * wall,
+            y * wall,
+            Pose::default(),
+            now,
+        );
+    }
+
+    /// Settle on a blind finish (no fix after the last one) and report the result.
+    fn blind_finish(by: f64) -> Dock {
+        let mut config = DockConfig::default();
+        config.outlet_ahead = 0.22;
+        config.blind_range = config.outlet_ahead + DOCK_BLIND_MARGIN;
+        let pose = Pose::default();
+        let mut dock = Dock::start(config, 1, "t".into(), target(0.22, by), pose, 0.).unwrap();
+        fix_at(&mut dock, 0.22, by, 0.5);
+        dock.now = 1.;
+        dock.enter(DockPhase::Settle, "at_range");
+        let mut now = 1.;
+        while now < 5. && dock.phase == DockPhase::Settle {
+            now += DT;
+            dock.step(now, pose, Twist::default(), None, DumpApproval::Auto, None);
+        }
+        dock
+    }
+
+    #[test]
+    fn a_fix_15_degrees_off_does_not_verify_a_blind_finish() {
+        // 0.059 m at 0.22 m: lateral and range in tolerance, bearing 15°.
+        let dock = blind_finish(0.059);
+        let status = dock.status(dock.now);
+        assert!(status.in_tolerance, "{status:?}");
+        assert!(status.errors.heading_deg > 14.9, "{status:?}");
+        assert_eq!(dock.phase, DockPhase::Aligned);
+        assert_eq!(dock.reason, "odometry_only");
+        assert!(!dock.verified);
+        assert!(dock.status(dock.now).awaiting_approval);
+        // Control: the same finish in line (8°) is verified.
+        let dock = blind_finish(0.03);
+        assert_eq!(dock.reason, "verified_blind");
+        assert!(dock.verified);
     }
 
     #[test]
     fn close_in_lateral_offset_is_aligned_despite_its_bearing() {
-        // Outlet over the camera, close behind the bucket: 0.06 m off the axis
-        // is a 14° bearing, which the old 6° heading test refused.
+        // Outlet over the camera, close behind the bucket: 0.055 m off the axis
+        // is a 12° bearing, which the old 6° heading test refused.
         let mut config = DockConfig::default();
         config.outlet_ahead = 0.25;
         config.blind_range = config.outlet_ahead + DOCK_BLIND_MARGIN;
         let pose = Pose::default();
-        let mut dock = Dock::start(config, 1, "t".into(), target(0.25, 0.06), pose, 0.).unwrap();
+        let mut dock = Dock::start(config, 1, "t".into(), target(0.25, 0.055), pose, 0.).unwrap();
         dock.enter(DockPhase::Settle, "at_range");
         dock.step(
             0.1,
