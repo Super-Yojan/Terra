@@ -546,6 +546,8 @@ impl Runtime {
                 }
                 self.estimator.push_imu(sample)?;
                 self.imu_time = Some(sample.timestamp);
+                self.tilt
+                    .observe_gyro(sample.angular_velocity, sample.timestamp);
             }
             RuntimeEvent::Vio { sample, .. } => {
                 if sample.timestamp > received {
