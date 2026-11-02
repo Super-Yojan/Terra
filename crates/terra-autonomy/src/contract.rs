@@ -24,6 +24,23 @@ pub enum Level {
     /// which run on the L3 route. Requires a model advertised by the host.
     Task,
 }
+impl Level {
+    /// The name operators and study participants see, identical in ARGOS
+    /// (`OPERATOR_LEVELS`), both phone pickers and the thesis tables
+    /// (Super-Yojan/ARGOS#112). `target_search` is part of L4, so it shares
+    /// the L4 label. `supervised` is not a level in the design.
+    pub fn label(self) -> &'static str {
+        match self {
+            Level::Teleop => "L0 Manual",
+            Level::AssistedTeleop => "L1 Assisted",
+            Level::WaypointDirect => "L2 Direct",
+            Level::Waypoint => "L3 Planned",
+            Level::Explore | Level::TargetSearch => "L4 Explore + search",
+            Level::Task => "L5 Task",
+            Level::Supervised => "Supervised",
+        }
+    }
+}
 /// Token-correlated authority selection with an optional exploration budget.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

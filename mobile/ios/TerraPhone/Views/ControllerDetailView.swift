@@ -114,7 +114,7 @@ struct ControllerDetailView: View {
                         .accessibilityLabel("Explore budget seconds")
                     // L4 is one entry: explore plus search. Area search (target_search) is the
                     // same L4, started under Target search, so it shows as L4 here.
-                    Picker("Requested level",selection:Binding(get:{brain.autonomyLevel == "target_search" ? "explore" : brain.autonomyLevel},set:{brain.setAutonomy($0, budgetSeconds: Double(exploreSeconds))})) {Text("L0 Manual").tag("teleop");Text("L1 Assisted").tag("assisted_teleop");Text("L2 Direct").tag("waypoint_direct");Text("L3 Planned").tag("waypoint");Text("L4 Explore + search").tag("explore")}
+                    Picker("Requested level",selection:Binding(get:{brain.autonomyLevel == "target_search" ? "explore" : brain.autonomyLevel},set:{brain.setAutonomy($0, budgetSeconds: Double(exploreSeconds))})) {Text(autonomyLevelLabel(level: "teleop")).tag("teleop");Text(autonomyLevelLabel(level: "assisted_teleop")).tag("assisted_teleop");Text(autonomyLevelLabel(level: "waypoint_direct")).tag("waypoint_direct");Text(autonomyLevelLabel(level: "waypoint")).tag("waypoint");Text(autonomyLevelLabel(level: "explore")).tag("explore")}
                         .disabled(brain.hardwareActive && !brain.hardwareFeedback && !(brain.phoneTrackingActive && brain.vioControlCompatible))
                     Text(brain.autonomyReason)
                     if !brain.explorationSummary.isEmpty { Text(brain.explorationSummary).font(.footnote) }

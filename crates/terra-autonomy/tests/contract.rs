@@ -27,3 +27,33 @@ fn strict_requests_and_correlation() {
     assert!(decode_teleop(br#"{"linear":true,"angular":0}"#).is_none());
     assert!(decode_safety(br#"{"action":"stop","token":"stop-1"}"#).is_some());
 }
+
+/// Pinned to the same strings as ARGOS `OPERATOR_LEVELS` and the thesis
+/// tables (Super-Yojan/ARGOS#112). Change all three together.
+#[test]
+fn level_labels_match_argos_and_the_thesis() {
+    use terra_autonomy::Level;
+    let labels: Vec<_> = [
+        Level::Teleop,
+        Level::AssistedTeleop,
+        Level::WaypointDirect,
+        Level::Waypoint,
+        Level::Explore,
+        Level::Task,
+    ]
+    .into_iter()
+    .map(Level::label)
+    .collect();
+    assert_eq!(
+        labels,
+        [
+            "L0 Manual",
+            "L1 Assisted",
+            "L2 Direct",
+            "L3 Planned",
+            "L4 Explore + search",
+            "L5 Task",
+        ]
+    );
+    assert_eq!(Level::TargetSearch.label(), "L4 Explore + search");
+}
