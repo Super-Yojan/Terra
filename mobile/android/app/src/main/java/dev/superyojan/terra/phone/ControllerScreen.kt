@@ -33,12 +33,12 @@ import kotlin.math.round
 
 private const val REACH_METRES = 49.0
 private val levelLabels = mapOf(
-    "teleop" to "L0 · Manual",
-    "assisted_teleop" to "L1 · Assisted",
-    "waypoint_direct" to "L2 · Direct",
-    "waypoint" to "L3 · Planned",
-    "explore" to "L4 · Explore + search",
-    "task" to "L5 · Task",
+    "teleop" to "L0 Manual",
+    "assisted_teleop" to "L1 Assisted",
+    "waypoint_direct" to "L2 Direct",
+    "waypoint" to "L3 Planned",
+    "explore" to "L4 Explore + search",
+    "task" to "L5 Task",
 )
 
 // L4 is one chip: explore plus search. `target_search` counts as that L4 and
@@ -354,7 +354,7 @@ private fun LevelPicker(session: TerraSession, onSelect: () -> Unit) {
             )
         }
         if ("explore" !in session.supportedLevels) {
-            FilterChip(selected = false, onClick = {}, enabled = false, label = { Text("L4 · Explore + search") })
+            FilterChip(selected = false, onClick = {}, enabled = false, label = { Text("L4 Explore + search") })
         }
     }
 }
