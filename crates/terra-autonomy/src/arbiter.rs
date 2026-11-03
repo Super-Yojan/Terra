@@ -147,6 +147,12 @@ pub struct AutonomyArbiter {
     route_map_revision: u64,
     route_checked_at: f64,
     route_reaches_goal: bool,
+    /// Getting unstuck when the local planner keeps holding a routed level.
+    recovery: recovery::Recovery,
+    /// When the local planner started holding with `obstacle_blocked`.
+    blocked_since: Option<f64>,
+    /// When the rover last started moving freely, for resetting recovery.
+    progress_since: Option<f64>,
     last_frontier: f64,
     search: Option<SearchController>,
     detector_classes: Vec<String>,
@@ -228,6 +234,9 @@ impl Default for AutonomyArbiter {
             route_map_revision: 0,
             route_checked_at: f64::NEG_INFINITY,
             route_reaches_goal: false,
+            recovery: Default::default(),
+            blocked_since: None,
+            progress_since: None,
             last_frontier: -1.,
             search: None,
             detector_classes: vec![],
@@ -264,6 +273,7 @@ mod agent;
 mod dock;
 mod exploration;
 mod motion;
+mod recovery;
 mod requests;
 mod search_requests;
 mod status;

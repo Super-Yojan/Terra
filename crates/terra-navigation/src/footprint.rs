@@ -207,6 +207,51 @@ pub(crate) fn fits_some_heading(
     })
 }
 
+/// Whether reversing straight back from `pose` by `distance` keeps the body off
+/// every blocking cell (occupied, unknown or off-map), except cells it already
+/// touches ahead of its centre, which reversing moves away from. Used to back
+/// away from an obstacle the body already overlaps, for example map noise in
+/// front of the rover.
+pub fn backoff_clear(map: &MapSnapshot, footprint: &Footprint, pose: Pose, distance: f64) -> bool {
+    if !valid_map(map)
+        || !pose.finite()
+        || !footprint.valid()
+        || !distance.is_finite()
+        || distance < 0.
+    {
+        return false;
+    }
+    let (a, b) = footprint.half_extents(0.);
+    let (sin, cos) = pose.yaw.sin_cos();
+    let width = map.width as usize;
+    let mut touching = std::collections::HashSet::new();
+    for_each_overlapping_cell(map, pose.x, pose.y, pose.yaw, a, b, |i| {
+        if let Some(i) = i {
+            let cx = map.origin_x + ((i % width) as f64 + 0.5) * map.resolution;
+            let cy = map.origin_y + ((i / width) as f64 + 0.5) * map.resolution;
+            // Only cells ahead of the centre: reversing leaves them behind.
+            if (cx - pose.x) * cos + (cy - pose.y) * sin > 0. {
+                touching.insert(i);
+            }
+        }
+        true
+    });
+    // Half-cell steps; growing the body by a quarter cell covers what lies between.
+    let (a, b) = footprint.half_extents(map.resolution / 4.);
+    let steps = (distance / (map.resolution / 2.)).ceil().max(1.) as usize;
+    (1..=steps).all(|k| {
+        let back = distance * k as f64 / steps as f64;
+        let (x, y) = (pose.x - back * cos, pose.y - back * sin);
+        for_each_overlapping_cell(map, x, y, pose.yaw, a, b, |i| match i {
+            None => false,
+            Some(i) => {
+                let v = map.occupancy[i];
+                (0..OCCUPIED).contains(&v) || touching.contains(&i)
+            }
+        })
+    })
+}
+
 /// Per-cell answer to "does the body fit here at some heading", cached, with a
 /// distance field so most cells need no rectangle test: far from every blocking
 /// cell the body fits at any heading, and within its inner radius of one it
@@ -474,6 +519,27 @@ mod tests {
             footprint_rejection_at(&map, &Footprint::default(), near_edge, 0., None),
             Some("outside_map")
         );
+    }
+
+    #[test]
+    fn backing_off_leaves_cells_ahead_but_not_cells_behind() {
+        let body = Footprint::default();
+        let here = Pose {
+            x: 0.,
+            y: 0.,
+            yaw: 0.,
+        };
+        // Touching ahead (x 0.3..0.4): reversing moves away from it.
+        assert!(backoff_clear(&map_with(&[(23, 20, 100)]), &body, here, 0.3));
+        // Touching behind (x -0.4..-0.3): reversing goes deeper.
+        assert!(!backoff_clear(
+            &map_with(&[(16, 20, 100)]),
+            &body,
+            here,
+            0.3
+        ));
+        // Unknown ground 0.6 m behind is in the way of a 0.3 m back-off.
+        assert!(!backoff_clear(&map_with(&[(13, 20, -1)]), &body, here, 0.3));
     }
 
     #[test]

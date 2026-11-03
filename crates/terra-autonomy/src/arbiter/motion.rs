@@ -137,6 +137,7 @@ impl AutonomyArbiter {
                 decision,
             );
 
+            self.note_blocked(input, decision);
             self.update_frontier_proposal(input, decision);
             if self.level == Level::Explore {
                 // A missing route holds the rover just like an obstacle does, so
@@ -548,6 +549,9 @@ impl AutonomyArbiter {
         if changed_goal {
             self.clear_route();
             self.route_reaches_goal = false;
+            self.reset_recovery();
+        } else if let Some(twist) = self.recovery_step(input, map, decision) {
+            return twist;
         }
         let due = input.now - self.route_checked_at >= timing::ROUTE_RECHECK_SECONDS;
         // Off the route (a localization jump, or drift) or a newly blocked route.
@@ -582,6 +586,9 @@ impl AutonomyArbiter {
                 (self.follower.config().arrive_radius - 0.1).max(0.),
             ) {
                 Ok(job) => self.route_job = Some(job),
+                Err("route_start_blocked") if self.recover_from_start_blocked(input) => {
+                    return Twist::default();
+                }
                 Err(why) => {
                     self.clear_route();
                     self.route_reaches_goal = false;
@@ -604,6 +611,9 @@ impl AutonomyArbiter {
                     self.global_route = route.waypoints;
                     self.route_progress = 0;
                     self.route_reaches_goal = route.reaches_goal;
+                }
+                Err("route_start_blocked") if self.recover_from_start_blocked(input) => {
+                    return Twist::default();
                 }
                 Err(why) => {
                     self.clear_route();
@@ -806,5 +816,10 @@ fn window_centre(commanded: Twist, measured: Twist) -> Twist {
 
 /// Operator or agent reverse runs without the map or the local planner.
 fn reverse_drive(source: &str, intent: Twist) -> bool {
-    intent.linear < 0. && matches!(source, "assisted_operator" | "task_agent_drive")
+    // Recovery checks its own back-off (it may start touching an obstacle).
+    intent.linear < 0.
+        && matches!(
+            source,
+            "assisted_operator" | "task_agent_drive" | "recovery"
+        )
 }
