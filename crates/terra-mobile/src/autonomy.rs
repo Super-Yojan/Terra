@@ -195,6 +195,15 @@ pub fn supported_autonomy_levels() -> Vec<String> {
     .collect()
 }
 
+/// Operator-facing label for a wire level name, from [`terra_autonomy::Level::label`].
+/// Unknown names are returned unchanged.
+#[uniffi::export]
+pub fn autonomy_level_label(level: String) -> String {
+    serde_json::from_value::<terra_autonomy::Level>(serde_json::Value::String(level.clone()))
+        .map(|l| l.label().to_string())
+        .unwrap_or(level)
+}
+
 #[uniffi::export]
 impl MobileController {
     /// Whether transport replacement can preserve an accepted onboard mission.
@@ -845,3 +854,17 @@ mod dashboard_tests {
 #[cfg(test)]
 #[path = "../tests/internal/router_policy.rs"]
 mod router_policy_tests;
+
+#[cfg(test)]
+mod label_tests {
+    use super::autonomy_level_label;
+    #[test]
+    fn wire_names_map_to_operator_labels() {
+        assert_eq!(autonomy_level_label("waypoint".into()), "L3 Planned");
+        assert_eq!(
+            autonomy_level_label("target_search".into()),
+            "L4 Explore + search"
+        );
+        assert_eq!(autonomy_level_label("unknown".into()), "unknown");
+    }
+}

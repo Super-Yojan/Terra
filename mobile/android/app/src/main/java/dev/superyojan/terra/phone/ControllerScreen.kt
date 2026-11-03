@@ -1,5 +1,6 @@
 package dev.superyojan.terra.phone
 
+import dev.superyojan.terra.core.autonomyLevelLabel
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -32,14 +33,6 @@ import dev.superyojan.terra.core.tangentMetres
 import kotlin.math.round
 
 private const val REACH_METRES = 49.0
-private val levelLabels = mapOf(
-    "teleop" to "Teleop",
-    "assisted_teleop" to "Assisted teleop",
-    "waypoint_direct" to "L2 · Direct waypoint",
-    "waypoint" to "L3 · Waypoint",
-    "explore" to "L4 · Explore + search",
-    "task" to "L5 · Task",
-)
 
 // L4 is one chip: explore plus search. `target_search` counts as that L4 and
 // `supervised` is not part of the design, so neither gets a chip of its own.
@@ -350,11 +343,11 @@ private fun LevelPicker(session: TerraSession, onSelect: () -> Unit) {
                     onSelect()
                     session.setAutonomy(level)
                 },
-                label = { Text(levelLabels[level] ?: level) },
+                label = { Text(autonomyLevelLabel(level)) },
             )
         }
         if ("explore" !in session.supportedLevels) {
-            FilterChip(selected = false, onClick = {}, enabled = false, label = { Text("L4 · Explore + search") })
+            FilterChip(selected = false, onClick = {}, enabled = false, label = { Text("L4 Explore + search") })
         }
     }
 }

@@ -65,7 +65,7 @@ final destination; the level decides how to get there.
 | Level | How the GPS destination is used | Obstacles |
 | --- | --- | --- |
 | L2 direct | Follower drives at the 3 m guidance target | No map check (as before) |
-| L3 waypoint | A* route to the 3 m guidance target | Local occupancy map |
+| L3 Planned (`waypoint`) | A* route to the 3 m guidance target | Local occupancy map |
 | L4 explore | Frontiers are scored toward the destination; GPS arrival ends the run (`objective_complete`) | Local occupancy map |
 | L5 task | The prompt lists it as `G1`; G1 resolves to the reachable seen point closest to it. A new destination drops the outstanding query and asks again | Local occupancy map |
 
