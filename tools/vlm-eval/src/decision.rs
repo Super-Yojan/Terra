@@ -1,12 +1,12 @@
 //! Decision JSON, actuator rejection, and the four #49 pass checks.
 //!
 //! Waypoint coordinates are copied from the object list. A waypoint is accepted
-//! only at autonomy level `waypoint` (L3) and only when `astar_route` finds a path.
+//! only at autonomy level `waypoint` (L3) and only when the Hybrid A* route check finds a path.
 
 use serde::{Deserialize, Serialize};
-use terra_navigation::{Pose, astar_route};
+use terra_navigation::Pose;
 
-use crate::scene::{FOOTPRINT_RADIUS, Scenario, SceneObject, WAYPOINT_TOLERANCE_M};
+use crate::scene::{Scenario, SceneObject, WAYPOINT_TOLERANCE_M};
 
 /// Permitted high-level responses; none directly commands an actuator.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -288,14 +288,8 @@ pub fn validate_waypoint(
         y: scenario.rover.y,
         yaw: scenario.rover.yaw,
     };
-    astar_route(
-        &scenario.map,
-        pose,
-        FOOTPRINT_RADIUS,
-        object.approach_x,
-        object.approach_y,
-    )
-    .map_err(|err| format!("astar_route: {err}"))?;
+    crate::scene::route(&scenario.map, pose, object.approach_x, object.approach_y)
+        .map_err(|err| format!("route: {err}"))?;
     Ok(ValidatedWaypoint {
         target_id: object.id.clone(),
         x: object.approach_x,

@@ -316,13 +316,14 @@ mod tests {
             y: 0.6,
             ..Default::default()
         };
-        let route = terra_navigation::astar_route(
-            &map,
-            pose,
-            nav.planner().footprint.circumradius(),
-            3.45,
-            0.6,
-        );
+        let config =
+            terra_navigation::HybridConfig::for_body(nav.planner().footprint, &nav.turning);
+        let goal = terra_navigation::HybridGoal {
+            x: 3.45,
+            y: 0.6,
+            yaw: None,
+        };
+        let route = terra_navigation::hybrid_astar_route(&map, pose, goal, &config);
         assert!(route.is_ok(), "{route:?}");
     }
 }

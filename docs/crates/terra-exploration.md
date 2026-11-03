@@ -45,6 +45,8 @@ Each tick the current frontier is judged:
 
 A blacklisted frontier is skipped for `blacklist_seconds` (30 s) while other frontiers exist. If none is left, the best blacklisted one is retried at once (`frontier_retry_early`) instead of parking the rover. After `max_attempts` (default 3) a point stays out for the rest of the run. `frontier_retry` (Hold) now only shows when nothing at all can be retried. The look-around and `no_frontiers_left` come after that.
 
+**Look-around.** When no frontier is reachable but unknown cells lie within reach of the body (`scan_radius` beyond the circle around it), the rover turns one full circle to see around itself. A rover whose profile allows spinning (`terra_mini`) turns in place. Terra (`allow_in_place: false`) instead drives slowly round its tightest circle, forward and else in reverse, checked by the local planner; if neither fits it holds and the look-around timeout ends it. It never falls back to spinning, and `in_place_turn` is reported only for a turn with no forward speed.
+
 `MissionObjective` and `GoalScorer` are the phase 2 hooks. `TimeBudgetObjective` and `InformationGainScorer` are the defaults. `FindTargetsObjective` records labels such as `survivor` and can end the run. This crate does not classify images.
 
 Coverage is the area of observed free cells (occupancy 0–64), in square metres. `explored_ratio` is the fraction of cells that are no longer unknown.

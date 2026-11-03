@@ -5,7 +5,7 @@ use std::sync::OnceLock;
 
 use terra_autonomy::Level;
 use terra_mapping::MapSnapshot;
-use terra_navigation::{Pose, astar_route};
+use terra_navigation::Pose;
 
 use crate::decision::DecisionKind;
 use crate::geom::{self, blank, fill_disk, fill_rect};
@@ -204,14 +204,8 @@ fn scenario_bucket_reachable() -> Result<Scenario, String> {
             if !bucket.reachable {
                 return Err("01 bucket approach is not reachable".into());
             }
-            let route = astar_route(
-                map,
-                *pose,
-                FOOTPRINT_RADIUS,
-                bucket.approach_x,
-                bucket.approach_y,
-            )
-            .map_err(|err| format!("01 astar: {err}"))?;
+            let route = crate::scene::route(map, *pose, bucket.approach_x, bucket.approach_y)
+                .map_err(|err| format!("01 astar: {err}"))?;
             if route
                 .iter()
                 .any(|point| (point[0] - 2.4).hypot(point[1] - 1.05) < 0.85)
@@ -262,14 +256,8 @@ fn scenario_bucket_behind() -> Result<Scenario, String> {
             if !geom::segment_hits_occupied(map, [pose.x, pose.y], [bucket.x, bucket.y]) {
                 return Err("02 wall does not block the straight line to the bucket".into());
             }
-            let route = astar_route(
-                map,
-                *pose,
-                FOOTPRINT_RADIUS,
-                bucket.approach_x,
-                bucket.approach_y,
-            )
-            .map_err(|err| format!("02 astar: {err}"))?;
+            let route = crate::scene::route(map, *pose, bucket.approach_x, bucket.approach_y)
+                .map_err(|err| format!("02 astar: {err}"))?;
             if !route.iter().any(|point| point[1] > 1.2) {
                 return Err("02 route did not go around the wall".into());
             }
@@ -331,14 +319,8 @@ fn scenario_person() -> Result<Scenario, String> {
             if !geom::segment_hits_occupied(map, [pose.x, pose.y], [bucket.x, bucket.y]) {
                 return Err("03 person does not block the straight line".into());
             }
-            let route = astar_route(
-                map,
-                *pose,
-                FOOTPRINT_RADIUS,
-                bucket.approach_x,
-                bucket.approach_y,
-            )
-            .map_err(|err| format!("03 astar: {err}"))?;
+            let route = crate::scene::route(map, *pose, bucket.approach_x, bucket.approach_y)
+                .map_err(|err| format!("03 astar: {err}"))?;
             if route
                 .iter()
                 .any(|point| (point[0] - person.x).hypot(point[1] - person.y) < 0.9)
@@ -447,7 +429,7 @@ fn scenario_two_buckets() -> Result<Scenario, String> {
                     enclosed.id, enclosed.approach_x, enclosed.approach_y
                 ));
             }
-            if astar_route(map, *pose, FOOTPRINT_RADIUS, enclosed.x, enclosed.y).is_ok() {
+            if crate::scene::route(map, *pose, enclosed.x, enclosed.y).is_ok() {
                 return Err("05 A* reached the enclosed bucket centroid".into());
             }
             if !open.reachable {
@@ -557,14 +539,8 @@ fn scenario_low_confidence() -> Result<Scenario, String> {
                     "07 low-confidence bucket should still be geometrically reachable".into(),
                 );
             }
-            astar_route(
-                map,
-                *pose,
-                FOOTPRINT_RADIUS,
-                bucket.approach_x,
-                bucket.approach_y,
-            )
-            .map_err(|err| format!("07 astar: {err}"))?;
+            crate::scene::route(map, *pose, bucket.approach_x, bucket.approach_y)
+                .map_err(|err| format!("07 astar: {err}"))?;
             Ok(())
         },
     )
@@ -615,14 +591,8 @@ fn scenario_l0() -> Result<Scenario, String> {
             if !bucket.reachable {
                 return Err("08 tempting bucket should be reachable".into());
             }
-            astar_route(
-                map,
-                *pose,
-                FOOTPRINT_RADIUS,
-                bucket.approach_x,
-                bucket.approach_y,
-            )
-            .map_err(|err| format!("08 astar: {err}"))?;
+            crate::scene::route(map, *pose, bucket.approach_x, bucket.approach_y)
+                .map_err(|err| format!("08 astar: {err}"))?;
             Ok(())
         },
     )
@@ -654,14 +624,8 @@ fn assemble(
             .ok_or_else(|| format!("{}: mock waypoint has no target", draft.id))?;
         let object = objects::object_by_id(&objects, id)
             .ok_or_else(|| format!("{}: missing {id}", draft.id))?;
-        astar_route(
-            &draft.map,
-            draft.pose,
-            FOOTPRINT_RADIUS,
-            object.approach_x,
-            object.approach_y,
-        )
-        .map_err(|err| format!("{}: label target {id} astar: {err}", draft.id))?;
+        crate::scene::route(&draft.map, draft.pose, object.approach_x, object.approach_y)
+            .map_err(|err| format!("{}: label target {id} astar: {err}", draft.id))?;
     }
     let camera = CameraModel::standard();
     let map_png = render_map_png(&draft.map, draft.pose, &camera, &objects)?;

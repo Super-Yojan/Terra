@@ -45,7 +45,7 @@ Waypoint cancel enters teleop.
 Supervised cancel pauses exploration; resume or a new operator target is required.
 Explore cancel ends the autonomous run with `operator_stop` and leaves the level at `explore`. A new `explore` request starts a new budget. Reset clears an emergency stop and does not resume the old run.
 Reset never restores an old goal/lease.
-Planner footprint defaults to a 0.65 m circumscribed radius for the simulated 0.9 × 0.8 m chassis, 2 m/s and 2 rad/s caps, 1 m/s² acceleration/braking, 2 rad/s² yaw acceleration, and 2 s rollout.
+The planner body defaults to Terra: a 0.61 m square with 5 cm margin on every side, checked as a rectangle at its heading. Caps are 2 m/s and 2 rad/s, 1 m/s² acceleration/braking, 2 rad/s² yaw acceleration, and a 2 s rollout. Routes are Hybrid A\* arcs no tighter than the minimum turn radius; Terra does not turn in place.
 Planning runs at up to 10 Hz while the motor loop remains independent.
 These configuration values require physical calibration before real robot trials.
 
@@ -61,4 +61,4 @@ The additive `target_search` level and versioned `/search`, `/search/action`, `/
 
 ## L5 task extension
 
-The `task` level hands waypoint choice to the phone's language model. Waypoints are validated with A* and driven on the L3 route; the model never produces motion. See [TASK.md](TASK.md).
+The `task` level hands waypoint choice to the phone's language model. Waypoints are validated with Hybrid A\* and driven on the L3 route; the model never produces motion. See [TASK.md](TASK.md).

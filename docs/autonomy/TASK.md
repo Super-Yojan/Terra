@@ -3,7 +3,7 @@
 > [!TIP]
 > **TL;DR**
 > The operator types a task in ARGOS. The phone's own language model picks waypoints from the phone's occupancy map.
-> Rust checks every waypoint with A* and drives it on the L3 route. The model never sends a speed or a motor command.
+> Rust checks every waypoint with Hybrid A\* and drives it on the L3 route. The model never sends a speed or a motor command.
 
 ```mermaid
 sequenceDiagram
@@ -15,7 +15,7 @@ sequenceDiagram
     R->>M: TaskQuery (system rules + map summary + history)
     Note over R: rover holds while the model thinks
     M->>R: reply text (one JSON object)
-    R->>R: parse, refuse motor fields, resolve ids, A* check
+    R->>R: parse, refuse motor fields, resolve ids, Hybrid A* check
     R->>R: drive waypoints on the L3 route
   end
   R-->>A: task/status (phase, plan, question, history)
@@ -29,8 +29,8 @@ sequenceDiagram
 | Occupancy grid from LiDAR depth | Swift (`PhoneController`), unchanged |
 | Prompt: 1 m symbolic grid, frontiers `F#`, obstacle blobs `O#`, landmarks `L#`, pose, history | Rust, `terra-autonomy/src/task.rs` |
 | Model inference | Swift, `TaskModelRunner.swift`. Apple Foundation Models on iOS 26+ (`apple-foundation-models`). The `TaskLanguageModel` protocol is where an MLX or llama.cpp backend (for example Qwen2.5-VL-3B, issue #49) plugs in. |
-| Reply parsing, motor-field refusal, id resolution, A* check, waypoint sequencing, timeouts, budget | Rust, `terra-autonomy/src/arbiter/task.rs` |
-| Driving | The existing L3 path: waypoint follower, A* route, local planner, turning limits and every safety hold |
+| Reply parsing, motor-field refusal, id resolution, Hybrid A\* check, waypoint sequencing, timeouts, budget | Rust, `terra-autonomy/src/arbiter/task.rs` |
+| Driving | The existing L3 path: waypoint follower, Hybrid A\* route, local planner, turning limits and every safety hold |
 
 The model runs off the control queue. The 10 ms tick and the 20 Hz motor output do not wait for it: the rover holds (`task_planning`) until a reply is validated.
 
@@ -74,7 +74,7 @@ One JSON object. Text around it, such as a Markdown fence, is ignored.
 
 | `decision` | Effect |
 |---|---|
-| `go` | 1 to 5 waypoints, in order. An id resolves to free space beside that frontier, obstacle or landmark. A point is snapped to footprint-clear observed free space within 0.5 m. Each must have an A* route from the previous one. If the first fails, the reply is refused. If a later one fails, the plan stops there. |
+| `go` | 1 to 5 waypoints, in order. An id resolves to free space beside that frontier, obstacle or landmark. A point on an obstacle is refused; otherwise it is snapped to observed free space within 0.5 m where the body fits. Each must have a Hybrid A\* route from the previous one, starting with the heading the rover arrives with. If the first fails, the reply is refused. If a later one fails, the plan stops there. |
 | `ask_operator` | Hold and show `question` in ARGOS until a `reply`. |
 | `done` | The task ends `completed`. |
 | `fail` | The task ends `failed`. |

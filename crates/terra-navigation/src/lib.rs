@@ -8,16 +8,18 @@
 //! # Choosing an API
 //!
 //! - Use [`LocalPlanner`] to turn a velocity request into a checked local command.
-//! - Use [`astar_route`] for a route to an observed goal, or [`astar_progress_route`]
-//!   to make progress toward a goal beyond the observed window.
+//! - Use [`RouteJob`] for a drivable route to a goal (Hybrid A* over position and
+//!   heading, turning only along arcs), spread over control ticks, including goals
+//!   beyond the observed window; [`hybrid_astar_route`] runs one search at once.
 //! - Use [`SearchNavigator`] to accumulate observations and select exploration waypoints.
 //!
 //! # Coordinates and occupancy
 //!
-//! Positions and radii are in metres in the [`MapSnapshot`] world frame. Angles
-//! are in radians. Occupancy is row-major: negative values mean unknown,
-//! `0..65` means traversable, and values of at least `65` mean occupied.
-//! Footprint checks conservatively include cells whose corners may touch the rover.
+//! Positions are in metres in the [`MapSnapshot`] world frame. Angles are in
+//! radians. Occupancy is row-major: negative values mean unknown, `0..65` means
+//! traversable, and values of at least `65` mean occupied. The rover body is a
+//! [`Footprint`] rectangle checked at its heading; a cell blocks it if the
+//! rotated rectangle overlaps the cell at all.
 //! Unknown cells under the starting footprint may be tolerated so the rover can
 //! leave its unobserved underbody; this exception never permits occupied cells.
 //!
@@ -51,8 +53,6 @@
 //! assert_eq!(decision.reason, "assisted");
 //! ```
 
-mod astar;
-pub use astar::*;
 mod footprint;
 pub use footprint::{
     FitGrid, Footprint, OCCUPIED, footprint_fits, footprint_fits_some_heading,
@@ -222,52 +222,6 @@ fn cell(map: &MapSnapshot, x: f64, y: f64) -> Option<(usize, usize)> {
     let row = ((y - map.origin_y) / map.resolution).floor();
     (column >= 0. && row >= 0. && column < (map.width as f64) && row < (map.height as f64))
         .then_some((column as usize, row as usize))
-}
-// Check every cell touched by the circular footprint, including cell corners.
-// Unknown space is allowed only inside the footprint at the starting pose;
-// that exception lets the rover leave its own unobserved underbody cells.
-fn clear(map: &MapSnapshot, x: f64, y: f64, radius: f64, current: Option<Pose>) -> bool {
-    footprint_rejection(map, x, y, radius, current).is_none()
-}
-fn footprint_rejection(
-    map: &MapSnapshot,
-    x: f64,
-    y: f64,
-    radius: f64,
-    current: Option<Pose>,
-) -> Option<&'static str> {
-    let Some((center_column, center_row)) = cell(map, x, y) else {
-        return Some("outside_map");
-    };
-    let cell_reach = (radius / map.resolution).ceil() as isize + 1;
-    for dy in -cell_reach..=cell_reach {
-        for dx in -cell_reach..=cell_reach {
-            let column = center_column as isize + dx;
-            let row = center_row as isize + dy;
-            let cell_x = map.origin_x + (column as f64 + 0.5) * map.resolution;
-            let cell_y = map.origin_y + (row as f64 + 0.5) * map.resolution;
-            // Half a cell diagonal conservatively includes cells touched by the circle.
-            if (cell_x - x).hypot(cell_y - y) > radius + map.resolution * 0.7072 {
-                continue;
-            }
-            if column < 0 || row < 0 || column >= map.width as isize || row >= map.height as isize {
-                return Some("outside_map");
-            }
-            let occupancy = map.occupancy[row as usize * map.width as usize + column as usize];
-            if occupancy >= 65 {
-                return Some("occupied");
-            }
-            if occupancy < 0
-                && current.is_none_or(|sample_pose| {
-                    (cell_x - sample_pose.x).hypot(cell_y - sample_pose.y)
-                        > radius + map.resolution * 0.7072
-                })
-            {
-                return Some("unknown");
-            }
-        }
-    }
-    None
 }
 impl LocalPlanner {
     fn valid(&self) -> bool {
@@ -549,14 +503,12 @@ impl LocalPlanner {
 pub fn grid_cell(m: &MapSnapshot, x: f64, y: f64) -> Option<(usize, usize)> {
     cell(m, x, y)
 }
-/// Footprint clearance on observed cells. Unknown cells count as blocked outside `current`.
+/// Whether the body fits centred at `(x, y)` at some heading (one of eight, 22.5
+/// degrees apart). Use it where the heading is not yet known.
 ///
-/// `(x, y)` is the footprint center and `radius` is in metres. With `current: None`,
-/// every touched cell must be observed and unoccupied. With `Some(pose)`, unknown
-/// cells within that starting footprint are tolerated. Map boundaries remain blocked.
-///
-/// Callers must supply a finite positive radius and, if present, a finite current
-/// pose; this low-level helper does not validate those arguments independently.
+/// With `current: None`, every cell the body touches must be observed and
+/// unoccupied. With `Some(pose)`, unknown cells under the body at that starting
+/// pose are tolerated. Map boundaries remain blocked.
 pub fn footprint_clear(
     m: &MapSnapshot,
     footprint: &Footprint,
@@ -580,7 +532,8 @@ pub fn unknown_as_free(map: &MapSnapshot) -> MapSnapshot {
     }
     copy
 }
-/// Breadth-first search through inflated observed free cells. Stable ordering breaks ties.
+/// Breadth-first search over cells where the body fits at some heading. Stable
+/// ordering breaks ties.
 ///
 /// Supervised mode proposes this point and waits for approval. Time-bounded autonomous
 /// exploration lives in `terra-exploration` and uses the same clearance helpers.
@@ -588,12 +541,11 @@ pub fn unknown_as_free(map: &MapSnapshot) -> MapSnapshot {
 /// # Selection and return value
 ///
 /// Returns a reachable, observed cell center near unknown space, in world metres.
-/// Candidates must be farther than `max(radius, 0.8)` m from `pose` and more than
-/// 1 m from every point in `excluded`. Nearby unknown cells increase the score;
-/// grid travel distance decreases it.
+/// Candidates must be farther than `max(r, 0.8)` m from `pose`, where `r` is the
+/// circle around the body, and more than 1 m from every point in `excluded`.
+/// Nearby unknown cells increase the score; grid travel distance decreases it.
 ///
-/// Returns `None` for invalid map/pose/radius input or when no candidate qualifies.
-/// `radius` must be finite and in `0.0 < radius <= 5.0`.
+/// Returns `None` for invalid map, pose or footprint, or when no candidate qualifies.
 pub fn frontier(
     map: &MapSnapshot,
     pose: Pose,
@@ -658,14 +610,14 @@ pub fn frontier(
     }
     best.map(|b| b.1)
 }
-/// Reachability check for proposal approval using observed, footprint-inflated free cells.
+/// A quick, heading-free reachability filter.
 ///
-/// Tests four-connected cell-center reachability from `pose` to the cell containing
-/// world point `(x, y)`. The target footprint must be entirely observed and clear;
-/// unknown cells under the starting footprint are allowed during traversal.
-/// Returns `false` for invalid inputs, a radius outside `0.0 < radius <= 5.0`,
-/// a blocked target, or absence of a connected path. Use [`astar_route`] when a
-/// polyline with checked connecting segments is required.
+/// Tests four-connected reachability from `pose` to the cell containing `(x, y)`
+/// through cells where the body fits at some heading. The body at the target must
+/// fit in fully observed space; unknown cells under the starting body are allowed
+/// during traversal. It ignores the turning radius, so it can accept a goal the
+/// rover cannot turn into: confirm real decisions with [`hybrid_astar_route`] or
+/// [`RouteJob`]. Returns `false` for invalid inputs, a blocked target, or no path.
 pub fn reachable(map: &MapSnapshot, pose: Pose, footprint: &Footprint, x: f64, y: f64) -> bool {
     let Some(start) = cell(map, pose.x, pose.y) else {
         return false;

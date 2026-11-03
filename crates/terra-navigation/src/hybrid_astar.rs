@@ -25,7 +25,7 @@ use terra_mapping::MapSnapshot;
 const OCTILE_OVER_EUCLID: f64 = 1.082_392_2;
 /// Half a cell diagonal, in cells.
 const HALF_DIAGONAL: f64 = std::f64::consts::FRAC_1_SQRT_2;
-/// Largest map the search accepts, matching `astar_route`.
+/// Largest map the search accepts.
 const MAX_CELLS: usize = 250_000;
 
 /// Rover shape, turning limit and search costs for [`hybrid_astar_route`].

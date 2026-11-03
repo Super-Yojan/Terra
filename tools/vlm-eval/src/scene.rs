@@ -6,7 +6,7 @@ use terra_mapping::MapSnapshot;
 
 use crate::geom::Counts;
 
-/// Planner footprint used by `astar_route` in this pack. Matches Terra's default.
+/// Circumscribed radius of the pack's rover body (see [`FOOTPRINT`]).
 pub const FOOTPRINT_RADIUS: f64 = 0.65;
 /// Body for the heading-free reachability and frontier checks: a square whose
 /// circumscribed radius is [`FOOTPRINT_RADIUS`].
@@ -187,4 +187,21 @@ pub fn level_label(level: Level) -> &'static str {
 pub fn sha256_hex(bytes: &[u8]) -> String {
     use sha2::{Digest, Sha256};
     format!("{:x}", Sha256::digest(bytes))
+}
+
+/// The pack's route check: Hybrid A* for [`FOOTPRINT`] with the default 0.5 m
+/// minimum turn radius (no turning in place), as route points.
+pub fn route(
+    map: &terra_mapping::MapSnapshot,
+    pose: terra_navigation::Pose,
+    x: f64,
+    y: f64,
+) -> Result<Vec<[f64; 2]>, &'static str> {
+    let config = terra_navigation::HybridConfig {
+        footprint: FOOTPRINT,
+        ..Default::default()
+    };
+    let goal = terra_navigation::HybridGoal { x, y, yaw: None };
+    terra_navigation::hybrid_astar_route(map, pose, goal, &config)
+        .map(|path| path.iter().map(|w| [w.x, w.y]).collect())
 }

@@ -1,9 +1,7 @@
 //! Hybrid A*: drivable routes for a rectangular rover that never turns in place.
 use std::f64::consts::PI;
 use terra_mapping::MapSnapshot;
-use terra_navigation::{
-    HybridConfig, HybridGoal, HybridWaypoint, Pose, astar_route, hybrid_astar_route,
-};
+use terra_navigation::{HybridConfig, HybridGoal, HybridWaypoint, Pose, hybrid_astar_route};
 
 const RES: f64 = 0.1;
 
@@ -125,7 +123,8 @@ fn lines_up_to_pass_a_gap_the_circle_planner_rejects() {
         y: 1.5,
         yaw: 0.,
     };
-    assert!(astar_route(&map, start, 0.65, 3., 0.).is_err());
+    // A planner that ignored heading would need the circle around the body.
+    assert!(2. * config.footprint.circumradius() > 0.85);
 
     let goal = HybridGoal {
         x: 3.,

@@ -47,7 +47,7 @@ not change thresholds, command admission, turning policy or telemetry strings.
 
 Within `motion.rs`, read `select_motion` first. It calls `update_search_goal`,
 `choose_intent`, `heading_maneuver`, `check_motion` and `update_frontier_proposal`.
-`waypoint_route_intent` contains the detailed A* route maintenance.
+`waypoint_route_intent` keeps the Hybrid A\* route (a `RouteJob` advanced each tick) and `follow_route` drives its arcs.
 
 Run the behavioral regression suite from the repository root:
 

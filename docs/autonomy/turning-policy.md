@@ -38,8 +38,8 @@ mixing also prevent counterrotation when spins are disabled.
 
 Planner candidates are shaped before collision rollout. The selected velocity
 in `planner_trace.candidates[selected]` is the executed managed twist, not an
-unconstrained precursor. Rollouts check the full conservative circular footprint
-and a braking tail. Reverse motion does not get the current-footprint unknown-cell
+unconstrained precursor. Rollouts check the body rectangle at its heading at
+every step, and a braking tail. Reverse motion does not get the current-footprint unknown-cell
 exemption: unknown or occupied space under/behind the rover rejects the rollout.
 The forward-facing camera may have mapped rear space earlier, but this change
 does not add a rear/selfie-camera feed or certify historical cells against newly

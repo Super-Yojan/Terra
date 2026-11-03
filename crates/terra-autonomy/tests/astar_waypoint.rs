@@ -288,14 +288,16 @@ fn cached_waypoint_command_must_stay_admissible() {
         if planner.admissible(&blocked, pose, first.twist) {
             continue;
         }
+        // The obstacle blocks the cached command but the body still fits at a
+        // route point further on.
         let visible = first.status.global_route.iter().any(|point| {
             (point[0] - pose.x).hypot(point[1] - pose.y) > 0.3
-                && terra_navigation::route_segment_clear(
+                && terra_navigation::footprint_fits_some_heading(
                     &blocked,
-                    pose,
-                    arbiter.planner.config.footprint.circumradius(),
-                    [pose.x, pose.y],
-                    *point,
+                    &arbiter.planner.config.footprint,
+                    point[0],
+                    point[1],
+                    Some(pose),
                 )
         });
         if visible {

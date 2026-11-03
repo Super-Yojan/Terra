@@ -4,10 +4,10 @@
 //! frontiers `F`, other occupied components `O`, numbered by increasing x then y.
 
 use terra_mapping::MapSnapshot;
-use terra_navigation::{Pose, astar_route, frontier, reachable};
+use terra_navigation::{Pose, frontier, reachable};
 
 use crate::geom::{self, cell_center, cell_index};
-use crate::scene::{CameraModel, FOOTPRINT, FOOTPRINT_RADIUS, SceneObject};
+use crate::scene::{CameraModel, FOOTPRINT, SceneObject};
 
 #[derive(Clone, Copy, Debug)]
 pub struct Detection {
@@ -194,7 +194,7 @@ fn approach_point(map: &MapSnapshot, pose: Pose, target: [f64; 2]) -> Option<[f6
         if !reachable(map, pose, &FOOTPRINT, point[0], point[1]) {
             return None;
         }
-        astar_route(map, pose, FOOTPRINT_RADIUS, point[0], point[1])
+        crate::scene::route(map, pose, point[0], point[1])
             .ok()
             .map(|_| point)
     })
@@ -351,14 +351,14 @@ pub fn verified_frontier_viewpoint(map: &MapSnapshot, pose: Pose) -> Option<[f64
         let point = [tidy(x), tidy(pose.y)];
         if geom::near_unknown(map, point[0], point[1], 1.0)
             && reachable(map, pose, &FOOTPRINT, point[0], point[1])
-            && astar_route(map, pose, FOOTPRINT_RADIUS, point[0], point[1]).is_ok()
+            && crate::scene::route(map, pose, point[0], point[1]).is_ok()
         {
             return Some(point);
         }
         x += 0.1;
     }
     if let Some((x, y)) = frontier(map, pose, &FOOTPRINT, &[]) {
-        if astar_route(map, pose, FOOTPRINT_RADIUS, x, y).is_ok() {
+        if crate::scene::route(map, pose, x, y).is_ok() {
             return Some([tidy(x), tidy(y)]);
         }
     }
@@ -402,7 +402,7 @@ fn local_viewpoint(map: &MapSnapshot, pose: Pose, cluster: &[(f64, f64)]) -> Opt
     for extra in [0.15_f64, 0.4, 0.7, 1.0] {
         let point = [mean[0] + dir_x * extra, mean[1] + dir_y * extra];
         if reachable(map, pose, &FOOTPRINT, point[0], point[1])
-            && astar_route(map, pose, FOOTPRINT_RADIUS, point[0], point[1]).is_ok()
+            && crate::scene::route(map, pose, point[0], point[1]).is_ok()
         {
             return Some(point);
         }
