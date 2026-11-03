@@ -118,6 +118,8 @@ pub struct AutonomyArbiter {
     /// Run identifier used to correlate commands and telemetry.
     pub run_id: String,
     stopped: bool,
+    /// The runtime's tilt latch is set (see [`AutonomyArbiter::set_tilt_stop`]).
+    tilt_stop: bool,
     paused: bool,
     pause_reason: &'static str,
     last_time: Option<f64>,
@@ -199,6 +201,7 @@ impl Default for AutonomyArbiter {
             latest_operator_time: None,
             run_id: "local".into(),
             stopped: false,
+            tilt_stop: false,
             paused: false,
             pause_reason: "supervision_paused",
             last_time: None,
@@ -458,7 +461,11 @@ impl AutonomyArbiter {
             decision.held = true;
         } else if self.stopped {
             decision.safety = "emergency_stop";
-            decision.reason = "operator_stop";
+            decision.reason = if self.tilt_stop {
+                "tilt_stop"
+            } else {
+                "operator_stop"
+            };
             decision.held = true;
             self.halt_explore(EndReason::OperatorStop);
         } else if !input.healthy

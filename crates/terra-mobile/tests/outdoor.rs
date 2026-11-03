@@ -817,16 +817,16 @@ fn local_sensors_at(c: &terra_mobile::MobileController, t: f64, x: f64, y: f64, 
         gyro_yaw: 0.,
     })
     .unwrap();
-    // ARKit world frame: x right, y up, z back; rover x forward is -z, y left is -x.
+    // `push_vio` takes the Z-up rover frame both apps produce: yaw about +Z.
     let (s, c2) = ((yaw / 2.).sin(), (yaw / 2.).cos());
     c.push_vio(terra_mobile::VioReading {
         timestamp: t,
-        position_x: -y,
-        position_y: 0.,
-        position_z: -x,
+        position_x: x,
+        position_y: y,
+        position_z: 0.,
         quaternion_x: 0.,
-        quaternion_y: s,
-        quaternion_z: 0.,
+        quaternion_y: 0.,
+        quaternion_z: s,
         quaternion_w: c2,
         velocity_x: 0.,
         velocity_y: 0.,
