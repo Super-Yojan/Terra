@@ -101,7 +101,7 @@ impl RoverProfile {
             max_linear: 2.,
             max_angular: 2.,
             min_turn_radius: 0.5,
-            allow_in_place: true,
+            allow_in_place: false, // skid-steer scrub upsets the phone sensors
             top_speed: 3.,
             skid_factor: 2.4,
             wheel_deadband: 0.,

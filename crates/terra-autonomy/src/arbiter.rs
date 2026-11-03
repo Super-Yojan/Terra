@@ -409,7 +409,9 @@ impl AutonomyArbiter {
         }
         let exploration = status.exploration.clone();
         self.drain_explore_events();
+        // Only a turn with no forward speed is in place; a circling look-around is not.
         let in_place_turn = !decision.held
+            && decision.twist.linear == 0.
             && (decision.reason == "exploration_scan"
                 || (decision.source == "dock" && self.dock_in_place));
         let gate_open = self.gate_open && !decision.held;

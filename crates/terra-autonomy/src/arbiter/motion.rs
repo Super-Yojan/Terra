@@ -12,6 +12,8 @@ const ROUTE_HEURISTIC_WEIGHT: f64 = 2.0;
 const BOUNDED_ROUTE_EXPANSIONS: u32 = 10_000;
 /// Pure-pursuit lookahead along the route, metres.
 const ROUTE_LOOKAHEAD: f64 = 0.5;
+/// Slowest the follower drives before the end of the route, metres/second.
+const ROUTE_MIN_SPEED: f64 = 0.1;
 /// Distance at which a forward/reverse switch counts as reached, metres.
 const ROUTE_SWITCH_REACHED: f64 = 0.1;
 /// Further than this from the route, the rover replans from where it is, metres.
@@ -768,8 +770,14 @@ impl AutonomyArbiter {
         if to_section_end < config.slow_radius {
             speed *= (to_section_end / config.slow_radius).max(0.2);
         }
-        if end == last && to_section_end < 0.05 {
-            speed = 0.;
+        if end == last {
+            if to_section_end < 0.05 {
+                speed = 0.;
+            }
+        } else {
+            // Never crawl into a direction switch: at a few cm/s the local planner
+            // prefers stopping, and the rover would never reach the switch.
+            speed = speed.max(ROUTE_MIN_SPEED);
         }
         Twist {
             linear: if reverse { -speed } else { speed },

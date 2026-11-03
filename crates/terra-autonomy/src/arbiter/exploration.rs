@@ -100,8 +100,12 @@ impl AutonomyArbiter {
             ExploreAction::Idle => Some("exploration_idle"),
         }
     }
-    /// Turn in place for the look-around. Unknown cells stay obstacles: the turn
-    /// sweeps only the rover's own footprint, which must hold no occupied cell.
+    /// The look-around. A rover that may spin turns in place: unknown cells stay
+    /// obstacles, and the turn sweeps only the rover's own footprint. A rover
+    /// that must not spin drives slowly round its tightest circle instead
+    /// (forward, else in reverse), checked like any other motion; the look-around
+    /// counts heading turned, so either way it ends after one full turn or on
+    /// its timeout. It never falls back to spinning.
     pub(super) fn scan_motion(
         &mut self,
         input: &ArbiterInput<'_>,
@@ -109,19 +113,37 @@ impl AutonomyArbiter {
         yaw_rate: f64,
         decision: &mut TickDecision,
     ) {
-        let intent = Twist {
-            linear: 0.,
-            angular: yaw_rate,
-        };
-        decision.intent_command = intent;
         decision.source = "explore";
-        if !planning_map.is_some_and(|map| self.planner.admissible(map, input.pose, intent)) {
+        let spin = self.turning_config.allow_in_place;
+        let circle = yaw_rate.abs() * self.turning_config.min_turn_radius;
+        let candidates: &[Twist] = if spin {
+            &[Twist {
+                linear: 0.,
+                angular: yaw_rate,
+            }]
+        } else {
+            &[
+                Twist {
+                    linear: circle,
+                    angular: yaw_rate,
+                },
+                Twist {
+                    linear: -circle,
+                    angular: -yaw_rate,
+                },
+            ]
+        };
+        decision.intent_command = candidates[0];
+        let Some(intent) = candidates.iter().copied().find(|&intent| {
+            planning_map.is_some_and(|map| self.planner.admissible(map, input.pose, intent))
+        }) else {
             decision.held = true;
             decision.reason = "obstacle_blocked";
             return;
-        }
+        };
+        decision.intent_command = intent;
         let config = TurningConfig {
-            allow_in_place: true,
+            allow_in_place: spin,
             ..self.turning_config
         };
         let limiter = self
@@ -129,12 +151,12 @@ impl AutonomyArbiter {
             .get_or_insert_with(|| TurningLimiter::new(config).unwrap());
         match limiter.step(terra_types::VelocityTarget {
             timestamp: input.now,
-            forward: 0.,
-            yaw_rate,
+            forward: intent.linear,
+            yaw_rate: intent.angular,
         }) {
             Ok(target) => {
                 decision.twist = Twist {
-                    linear: 0.,
+                    linear: target.forward,
                     angular: target.yaw_rate,
                 };
                 decision.reason = "exploration_scan";

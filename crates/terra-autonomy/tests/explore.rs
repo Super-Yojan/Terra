@@ -327,9 +327,20 @@ fn simulated_rover_explores_until_the_budget_expires() {
     );
     assert!(pose.x.hypot(pose.y) > 0.2, "pose {pose:?} did not move");
 }
-/// In its blind zone the rover turns in place slowly, flagged so the vehicle allows it.
-#[test]
-fn blind_zone_look_around_turns_in_place() {
+/// A rover whose turning policy allows spinning (terra_mini).
+fn spinning_arbiter() -> AutonomyArbiter {
+    let mut arbiter = AutonomyArbiter::default();
+    arbiter
+        .configure_turning(terra_control::TurningConfig {
+            allow_in_place: true,
+            ..Default::default()
+        })
+        .unwrap();
+    arbiter
+}
+
+/// The blind-zone map: only a 60 degree wedge ahead, from 0.35 m to 8 m, is known free.
+fn blind_zone_map() -> MapSnapshot {
     let (width, resolution) = (200usize, 0.1);
     let mut occupancy = vec![-1i8; width * width];
     for row in 0..width {
@@ -341,15 +352,70 @@ fn blind_zone_look_around_turns_in_place() {
             }
         }
     }
-    let map = MapSnapshot {
+    MapSnapshot {
         width: width as u32,
         height: width as u32,
         resolution,
         origin_x: -10.,
         origin_y: -10.,
         occupancy,
-    };
+    }
+}
+
+/// A rover that must not spin (Terra) never turns in place to look around. With
+/// unknown ground all round it holds; with known free ground it circles.
+#[test]
+fn a_rover_that_must_not_spin_circles_instead_of_turning_in_place() {
     let mut arbiter = AutonomyArbiter::default();
+    arbiter.set_level(explore("scan", 60.));
+    let blind = blind_zone_map();
+    for tick in 0..5 {
+        let out = arbiter.step(input_at(0.1 * (tick + 1) as f64, Pose::default(), &blind));
+        assert!(!out.in_place_turn);
+        assert!(
+            out.twist.linear != 0. || out.twist.angular == 0.,
+            "{:?}",
+            out.twist
+        );
+    }
+
+    // Only a small disc around the rover is known (free); everything else unknown.
+    let mut open = blind_zone_map();
+    open.occupancy.fill(-1);
+    for (i, cell) in open.occupancy.iter_mut().enumerate() {
+        let x = -10. + ((i % 200) as f64 + 0.5) * 0.1;
+        let y = -10. + ((i / 200) as f64 + 0.5) * 0.1;
+        // Free out to 1.1 m: too small for a frontier more than 0.8 m away (so the
+        // explorer looks around), big enough to start circling.
+        if x.hypot(y) < 1.1 {
+            *cell = 0;
+        }
+    }
+    let mut arbiter = AutonomyArbiter::default();
+    arbiter.set_level(explore("scan", 60.));
+    let mut circled = false;
+    for tick in 0..20 {
+        let out = arbiter.step(input_at(0.1 * (tick + 1) as f64, Pose::default(), &open));
+        assert!(!out.in_place_turn);
+        if out.status.reason == "exploration_scan" && out.twist != Twist::default() {
+            assert!(out.twist.linear.abs() > 0.);
+            // No tighter than the 0.5 m minimum turn radius.
+            assert!(
+                out.twist.angular.abs() <= out.twist.linear.abs() / 0.5 + 1e-9,
+                "{:?}",
+                out.twist
+            );
+            circled = true;
+        }
+    }
+    assert!(circled, "the look-around never started");
+}
+
+/// In its blind zone a rover that may spin turns in place slowly, flagged so the vehicle allows it.
+#[test]
+fn blind_zone_look_around_turns_in_place() {
+    let map = blind_zone_map();
+    let mut arbiter = spinning_arbiter();
     arbiter.set_level(explore("scan", 60.));
     let mut last = None;
     for tick in 0..20 {
@@ -382,26 +448,8 @@ fn blind_zone_look_around_turns_in_place() {
 /// Leaving L4 mid look-around hands control to the new level instead of the stale turn.
 #[test]
 fn level_change_ends_the_look_around() {
-    let (width, resolution) = (200usize, 0.1);
-    let mut occupancy = vec![-1i8; width * width];
-    for row in 0..width {
-        for column in 0..width {
-            let x = -10. + (column as f64 + 0.5) * resolution;
-            let y = -10. + (row as f64 + 0.5) * resolution;
-            if x > 0.35 && x < 8. && y.abs() < x * 30f64.to_radians().tan() {
-                occupancy[row * width + column] = 0;
-            }
-        }
-    }
-    let map = MapSnapshot {
-        width: width as u32,
-        height: width as u32,
-        resolution,
-        origin_x: -10.,
-        origin_y: -10.,
-        occupancy,
-    };
-    let mut arbiter = AutonomyArbiter::default();
+    let map = blind_zone_map();
+    let mut arbiter = spinning_arbiter();
     arbiter.set_level(explore("scan", 300.));
     let out = arbiter.step(input_at(0.1, Pose::default(), &map));
     assert_eq!(out.status.reason, "exploration_scan");
