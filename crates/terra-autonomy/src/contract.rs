@@ -252,6 +252,16 @@ pub struct SensorHold {
     pub age_s: f64,
     /// Holds seen in this run.
     pub count: u64,
+    /// Seconds the current hold has lasted without a break; 0 once it clears.
+    #[serde(default)]
+    pub held_s: f64,
+    /// Data is fresh again after a long hold, and the rover waits a short
+    /// settle period before it drives.
+    #[serde(default)]
+    pub settling: bool,
+    /// The hold outlasted the goal timeout and the L2/L3 goal was dropped.
+    #[serde(default)]
+    pub goal_dropped: bool,
 }
 /// Return whether `s` is 1–64 ASCII letters, digits, or characters from `._:-`.
 pub fn valid_token(s: &str) -> bool {
