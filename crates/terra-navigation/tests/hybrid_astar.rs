@@ -212,9 +212,12 @@ fn a_sealed_wall_or_a_gap_narrower_than_the_body_has_no_route() {
         hybrid_astar_route(&wall_with_gap(0.), start, goal, &config),
         Err("route_no_path")
     );
-    assert_eq!(
-        hybrid_astar_route(&wall_with_gap(0.7), start, goal, &config),
-        Err("route_no_path")
+    // The body's inner circle could squeeze through 0.7 m, so the quick 2D check
+    // cannot rule it out: the search either exhausts every state or hits its cap.
+    let narrow = hybrid_astar_route(&wall_with_gap(0.7), start, goal, &config);
+    assert!(
+        matches!(narrow, Err("route_no_path" | "route_search_limit")),
+        "{narrow:?}"
     );
 }
 
@@ -250,4 +253,39 @@ fn a_blocked_start_or_goal_is_reported() {
         hybrid_astar_route(&map, start, goal_on_wall, &config),
         Err("route_goal_blocked")
     );
+}
+
+#[test]
+fn a_goal_behind_is_reached_by_turning_round_not_by_reversing_all_the_way() {
+    let map = open_map();
+    let config = HybridConfig::default();
+    let start = Pose {
+        x: 1.,
+        y: 0.,
+        yaw: 0.,
+    };
+    let goal = HybridGoal {
+        x: -2.,
+        y: 0.,
+        yaw: None,
+    };
+    let route = hybrid_astar_route(&map, start, goal, &config).unwrap();
+    assert_drivable(&map, &route, &config);
+    arrives(&route, -2., 0., &config);
+    // Longest stretch driven backwards without switching to forward.
+    let (mut run, mut longest) = (0f64, 0f64);
+    for pair in route.windows(2) {
+        if pair[1].reverse {
+            run += (pair[1].x - pair[0].x).hypot(pair[1].y - pair[0].y);
+            longest = longest.max(run);
+        } else {
+            run = 0.;
+        }
+    }
+    assert!(
+        longest <= config.max_reverse_length + 1e-6,
+        "reversed {longest:.2} m in one go"
+    );
+    // It ends up driving forward into the goal.
+    assert!(!route.last().unwrap().reverse);
 }

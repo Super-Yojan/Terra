@@ -38,6 +38,10 @@ pub struct HybridConfig {
     pub min_turn_radius: f64,
     /// Whether the route may drive backwards.
     pub allow_reverse: bool,
+    /// Longest stretch driven backwards in one go, metres. Reversing is for
+    /// short manoeuvres (backing out, three-point turns), not for travel: the
+    /// camera faces forward. A route also always arrives driving forward.
+    pub max_reverse_length: f64,
     /// Cost multiplier for reverse distance; at least 1.
     pub reverse_penalty: f64,
     /// Added cost, in metres, each time the route changes between forward and reverse.
@@ -72,6 +76,7 @@ impl Default for HybridConfig {
             footprint: Footprint::default(),
             min_turn_radius: 0.5,
             allow_reverse: true,
+            max_reverse_length: 1.0,
             reverse_penalty: 2.0,
             switch_penalty: 1.0,
             steer_penalty: 0.2,
@@ -112,6 +117,8 @@ impl HybridConfig {
             && nonnegative.iter().all(|v| v.is_finite() && *v >= 0.)
             && self.footprint.valid()
             && self.min_turn_radius <= 20.
+            && self.max_reverse_length.is_finite()
+            && (0.0..=20.).contains(&self.max_reverse_length)
             && self.reverse_penalty.is_finite()
             && self.reverse_penalty >= 1.
             && (8..=360).contains(&self.heading_bins)
@@ -187,6 +194,8 @@ struct Node {
     curvature: f64,
     /// Signed arc length from the parent; negative is reverse.
     length: f64,
+    /// Distance driven backwards in one go, ending at this node.
+    reversed: f64,
 }
 
 /// A Hybrid A* search that can be advanced a bounded number of expansions at a
@@ -320,6 +329,7 @@ impl HybridSearch {
             parent: None,
             curvature: 0.,
             length: 0.,
+            reversed: 0.,
         });
         Ok(search)
     }
@@ -357,13 +367,14 @@ impl HybridSearch {
         let mut used = 0u32;
         while let Some(Open(_, id)) = self.open.pop() {
             let node = self.nodes[id];
-            let Some(key) = self.bin(node.x, node.y, node.yaw) else {
+            let Some(key) = self.bin(node.x, node.y, node.yaw, node.length < 0.) else {
                 continue;
             };
             if !self.closed.insert(key) {
                 continue;
             }
-            if self.arrived(node.x, node.y, node.yaw) {
+            // Arrive driving forward (or not having moved at all).
+            if node.length >= 0. && self.arrived(node.x, node.y, node.yaw) {
                 self.finished = true;
                 return Some(Ok(self.waypoints(id, None)));
             }
@@ -381,7 +392,15 @@ impl HybridSearch {
                     let length = direction * self.step;
                     let from = (node.x, node.y, node.yaw);
                     let (x, y, yaw) = drive(from, curvature, length);
-                    let Some(child_key) = self.bin(x, y, yaw) else {
+                    let reversed = if length < 0. {
+                        length.abs() + if node.length < 0. { node.reversed } else { 0. }
+                    } else {
+                        0.
+                    };
+                    if reversed > self.config.max_reverse_length + 1e-9 {
+                        continue;
+                    }
+                    let Some(child_key) = self.bin(x, y, yaw, length < 0.) else {
                         continue;
                     };
                     if self.closed.contains(&child_key) {
@@ -413,6 +432,7 @@ impl HybridSearch {
                         parent: Some(id),
                         curvature,
                         length,
+                        reversed,
                     });
                     self.open.push(Open(
                         g + self.config.heuristic_weight * h,
@@ -540,11 +560,13 @@ impl HybridSearch {
         straight.max(grid)
     }
 
-    fn bin(&self, x: f64, y: f64, yaw: f64) -> Option<usize> {
+    /// State bin: map cell, heading, and whether the state was reached in
+    /// reverse (a reversed state may not reverse further, so the two differ).
+    fn bin(&self, x: f64, y: f64, yaw: f64, reverse: bool) -> Option<usize> {
         let c = cell(&self.map, x, y)?;
         let bins = self.config.heading_bins as usize;
         let heading = ((yaw.rem_euclid(TAU) / TAU) * bins as f64) as usize % bins;
-        Some(index(&self.map, c) * bins + heading)
+        Some((index(&self.map, c) * bins + heading) * 2 + usize::from(reverse))
     }
 
     fn arrived(&self, x: f64, y: f64, yaw: f64) -> bool {
