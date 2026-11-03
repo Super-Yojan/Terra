@@ -1,4 +1,7 @@
-use terra_autonomy::{ArbiterInput, AutonomyArbiter, Level, LevelRequest};
+use terra_autonomy::{
+    ArbiterInput, AutonomyArbiter, DEFAULT_MAP_FRESHNESS_TIMEOUT_SECONDS as DEFAULT, Level,
+    LevelRequest,
+};
 use terra_mapping::MapSnapshot;
 use terra_navigation::{Pose, Twist};
 
@@ -33,8 +36,10 @@ fn status_at(timeout: Option<f64>, now: f64, map_time: Option<f64>, pose_time: f
 
 #[test]
 fn default_and_custom_timeout_use_a_strict_age_boundary() {
-    assert_ne!(status_at(None, 1., Some(0.501), 1.), "map_stale");
-    assert_eq!(status_at(None, 1., Some(0.5), 1.), "map_stale");
+    // Default limit, whatever it is set to (2.5 s since Oct 31): age must stay below it.
+    let now = DEFAULT + 0.5;
+    assert_ne!(status_at(None, now, Some(0.501), now), "map_stale");
+    assert_eq!(status_at(None, now, Some(0.5), now), "map_stale");
     assert_ne!(status_at(Some(1.), 1., Some(0.25), 1.), "map_stale");
     assert_eq!(status_at(Some(1.), 1., Some(0.), 1.), "map_stale");
     assert_eq!(status_at(Some(0.1), 1., Some(0.8), 1.), "map_stale");
@@ -43,7 +48,7 @@ fn default_and_custom_timeout_use_a_strict_age_boundary() {
 #[test]
 fn invalid_settings_leave_the_previous_timeout_unchanged() {
     let mut arbiter = AutonomyArbiter::default();
-    assert_eq!(arbiter.map_freshness_timeout(), 0.5);
+    assert_eq!(arbiter.map_freshness_timeout(), DEFAULT);
     assert!(arbiter.set_map_freshness_timeout(1.));
     for invalid in [0., -1., f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
         assert!(!arbiter.set_map_freshness_timeout(invalid));

@@ -57,8 +57,14 @@ pub const TURNING_MAX_STEP_SECONDS: f64 = 0.1;
 pub const TURNING_STEP_TOLERANCE_SECONDS: f64 = 0.000000001;
 
 // EXPLORATION: a zero recovery grace means end on the first qualifying hold.
-/// Time blocked or without sufficient progress before blacklisting an exploration goal.
+/// Time blocked (planner hold or no route) before blacklisting an exploration goal.
 pub const EXPLORATION_STUCK_SECONDS: f64 = 5.0;
+/// Time without getting closer before blacklisting an exploration goal.
+///
+/// Longer than the blocked window: a rover that cannot turn in place (Terra
+/// turns on a 0.5 m radius) drives away from a goal behind it for several
+/// seconds before closing in.
+pub const EXPLORATION_NO_PROGRESS_SECONDS: f64 = 12.0;
 /// Exclusion period for failed exploration frontiers.
 pub const EXPLORATION_BLACKLIST_SECONDS: f64 = 30.0;
 /// Prediction horizon cap when approaching an exploration frontier.

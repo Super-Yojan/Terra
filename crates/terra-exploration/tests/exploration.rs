@@ -437,3 +437,165 @@ fn through_unknown_never_passes_an_occupied_wall() {
     );
     assert_eq!((passable.width, passable.resolution), (200, 0.1));
 }
+/// Issue #113: a frontier whose surroundings got mapped is done, not blocked.
+#[test]
+fn a_frontier_that_got_mapped_is_dropped_without_a_blacklist() {
+    let grid = with_known_core(true);
+    let mut explorer = Explorer::default();
+    explorer.config_mut().footprint_radius = 0.35;
+    assert!(explorer.start(60., "run-1"));
+    let ExploreAction::Seek { x, y } =
+        explorer.step(tick(0., Some(&grid), false, false, false, 0., 0., 0.))
+    else {
+        panic!("missing frontier");
+    };
+    explorer.take_events();
+    // The camera has now seen everything; the rover is still 1.5 m short.
+    let seen = map(0);
+    let action = explorer.step(tick(0.5, Some(&seen), false, true, false, x, y, 1.5));
+    let events = explorer.take_events();
+    assert!(events.iter().any(|e| e.kind == "frontier_mapped"));
+    assert!(events.iter().all(|e| e.kind != "frontier_blocked"));
+    assert_eq!(explorer.status(0.5).blacklist_count, 0);
+    assert_eq!(action, ExploreAction::Finished(EndReason::NoFrontiersLeft));
+}
+/// Issue #113: one map update that cuts the route off does not drop the goal at once.
+#[test]
+fn a_cut_off_route_gets_the_stuck_window_before_blacklisting() {
+    let grid = with_known_core(true);
+    let mut explorer = Explorer::default();
+    explorer.config_mut().footprint_radius = 0.35;
+    explorer.config_mut().stuck_timeout = 2.;
+    assert!(explorer.start(60., "run-1"));
+    let ExploreAction::Seek { x, y } =
+        explorer.step(tick(0., Some(&grid), false, false, false, 0., 0., 0.))
+    else {
+        panic!("missing frontier");
+    };
+    // Ring of occupied cells around the rover; the frontier itself stays clear.
+    let mut boxed = grid.clone();
+    for index in 0..boxed.occupancy.len() {
+        let px = boxed.origin_x + ((index % 40) as f64 + 0.5) * boxed.resolution;
+        let py = boxed.origin_y + ((index / 40) as f64 + 0.5) * boxed.resolution;
+        let r = px.hypot(py);
+        if (0.5..0.7).contains(&r) {
+            boxed.occupancy[index] = 100;
+        }
+    }
+    explorer.take_events();
+    let held = explorer.step(tick(0.5, Some(&boxed), false, true, false, x, y, 2.));
+    assert_eq!(held, ExploreAction::Seek { x, y });
+    assert!(
+        explorer
+            .take_events()
+            .iter()
+            .all(|e| e.kind != "frontier_blocked")
+    );
+    explorer.step(tick(2.6, Some(&boxed), false, true, false, x, y, 2.));
+    let events = explorer.take_events();
+    let blocked = events
+        .iter()
+        .find(|e| e.kind == "frontier_blocked")
+        .expect("blocked after the stuck window");
+    assert!(
+        blocked.reason.contains("why=unreachable"),
+        "{}",
+        blocked.reason
+    );
+}
+/// Issue #113: with every frontier on a short blacklist, retry the best one now
+/// instead of parking in `frontier_retry`.
+#[test]
+fn all_frontiers_blacklisted_retries_instead_of_holding() {
+    let grid = with_known_core(true);
+    let mut explorer = Explorer::default();
+    explorer.config_mut().footprint_radius = 0.35;
+    explorer.config_mut().stuck_timeout = 0.;
+    explorer.config_mut().max_attempts = 3;
+    explorer.config_mut().exclude_radius = 50.;
+    assert!(explorer.start(60., "run-1"));
+    let mut actions = Vec::new();
+    let ExploreAction::Seek { x, y } =
+        explorer.step(tick(0., Some(&grid), false, false, false, 0., 0., 0.))
+    else {
+        panic!("missing frontier");
+    };
+    let (mut gx, mut gy) = (x, y);
+    for i in 1..=3 {
+        let action = explorer.step(tick(
+            i as f64 * 0.1,
+            Some(&grid),
+            true,
+            true,
+            false,
+            gx,
+            gy,
+            2.,
+        ));
+        if let ExploreAction::Seek { x, y } = action {
+            (gx, gy) = (x, y);
+        }
+        actions.push(action);
+    }
+    let events = explorer.take_events();
+    assert!(
+        matches!(actions[0], ExploreAction::Seek { .. }),
+        "{actions:?}"
+    );
+    assert!(
+        matches!(actions[1], ExploreAction::Seek { .. }),
+        "{actions:?}"
+    );
+    let retries: Vec<_> = events
+        .iter()
+        .filter(|e| e.kind == "frontier_retry_early")
+        .map(|e| e.reason.as_str())
+        .collect();
+    assert!(
+        retries[0].contains("attempts=1,max_attempts=3"),
+        "{retries:?}"
+    );
+    assert!(
+        retries[1].contains("attempts=2,max_attempts=3"),
+        "{retries:?}"
+    );
+    assert!(
+        actions.iter().all(|a| *a != ExploreAction::Hold),
+        "{actions:?}"
+    );
+    // Third failure exhausts the only frontier; the run ends instead of waiting.
+    assert_eq!(
+        actions[2],
+        ExploreAction::Finished(EndReason::NoFrontiersLeft)
+    );
+}
+/// Issue #113: an arc away from the goal (no in-place turn) is not "stuck" after 5 s.
+#[test]
+fn no_progress_uses_its_own_longer_window() {
+    let grid = with_known_core(true);
+    let mut explorer = Explorer::default();
+    explorer.config_mut().footprint_radius = 0.35;
+    explorer.config_mut().stuck_timeout = 5.;
+    explorer.config_mut().no_progress_timeout = 12.;
+    assert!(explorer.start(60., "run-1"));
+    let ExploreAction::Seek { x, y } =
+        explorer.step(tick(0., Some(&grid), false, false, false, 0., 0., 0.))
+    else {
+        panic!("missing frontier");
+    };
+    explorer.step(tick(0.1, Some(&grid), false, true, false, x, y, 2.));
+    let still = explorer.step(tick(8., Some(&grid), false, true, false, x, y, 2.3));
+    assert_eq!(still, ExploreAction::Seek { x, y });
+    explorer.take_events();
+    explorer.step(tick(12.2, Some(&grid), false, true, false, x, y, 2.3));
+    let events = explorer.take_events();
+    let blocked = events
+        .iter()
+        .find(|e| e.kind == "frontier_blocked")
+        .unwrap();
+    assert!(
+        blocked.reason.contains("why=no_progress"),
+        "{}",
+        blocked.reason
+    );
+}
