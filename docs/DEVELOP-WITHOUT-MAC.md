@@ -17,8 +17,6 @@ flowchart LR
   Linux --> Pi[Pi package]
   Mac[Mac] --> Phone[iOS TerraPhone]
   Linux --> Android[Android TerraPhone]
-  Phone -->|Simulator| Z
-  Android -->|"emulator 10.0.2.2"| Z
 ```
 
 *From a [Zorvane](https://super-yojan.dev/Zorvane/) checkout: `cargo run -p zorvane`.*
@@ -27,6 +25,6 @@ flowchart LR
 
 Build notes: [Zorvane README](https://github.com/Super-Yojan/Zorvane/blob/main/README.md).
 
-iOS: `./scripts/build-ios.sh` on a Mac. See [Xcode](phone/build.md).
+iOS: `./scripts/ios/build-ios.sh` on a Mac. See [Xcode](phone/build.md).
 
-Android, from this checkout: `./scripts/build-android.sh`, then `mobile/android/gradlew assembleDebug`. See [TerraPhone for Android](MOBILE_ANDROID.md).
+Android, from this checkout: `./scripts/android/build-android.sh`, then `apps/android/gradlew assembleDebug`. See [TerraPhone for Android](MOBILE_ANDROID.md).

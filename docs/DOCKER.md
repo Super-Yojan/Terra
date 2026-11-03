@@ -8,7 +8,7 @@
 ```mermaid
 flowchart LR
   Old[Old simulator image] --> Z[Zorvane]
-  Here[packaging/rover/Dockerfile] --> Pi[terra-rover ARM64]
+  Here[apps/rover-pi/packaging/rover/Dockerfile] --> Pi[terra-rover ARM64]
 ```
 
 *Prefix is still `terra/rover`. `TERRA_*` variables still apply in Zorvane.*

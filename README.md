@@ -35,6 +35,20 @@ See the [mission-autonomy guide](docs/autonomy/README.md) for five shared-core l
 
 See [mobile controller setup](docs/MOBILE_CONTROL.md) for the sensor contract, and [TerraPhone for Android](docs/MOBILE_ANDROID.md) for the Kotlin shell.
 
+## Repository layout
+
+| Path | What lives there |
+| --- | --- |
+| `crates/` | Shared Rust crates (one folder per crate, listed above). |
+| `apps/ios/` | TerraPhone for iOS. `TerraPhone/` is grouped by feature (`App`, `Connection`, `Drive`, `Phone`, `Map`, `FPV`, `Perception`, `Agent`, `Diagnostics`, `Bluetooth`, `Actuators`, `Resources`); `Tests/` holds the standalone Swift tests. |
+| `apps/android/` | TerraPhone for Android (Kotlin shell over `terra-mobile`). |
+| `apps/rover-pi/` | Raspberry Pi rover: `terra_rover/` source, `tests/`, and `packaging/` (Dockerfile, installer, systemd units). |
+| `tools/` | Developer tools: `observability` (replay/export), `sensor_timing`, `vlm-eval`. |
+| `scripts/` | Build and check scripts by target: `ios/`, `android/`, `rover/`, `dashboard/`, `checks/`. |
+| `docs/` | Documentation site (Astro) and guides. |
+| `models/` | Model training notes and exported weights. |
+| `tests/fixtures/` | Fixtures shared across components. |
+
 ## Simulation
 
 World, cameras, physics, and the Zenoh bridge live in
@@ -54,11 +68,11 @@ and
 
 ```sh
 cargo test --locked --workspace
-./scripts/build-ios.sh
-./scripts/check-swift.sh
-open mobile/ios/TerraPhone.xcodeproj
-./scripts/build-android.sh
-cd mobile/android && ./gradlew assembleDebug testDebugUnitTest
+./scripts/ios/build-ios.sh
+./scripts/ios/check-swift.sh
+open apps/ios/TerraPhone.xcodeproj
+./scripts/android/build-android.sh
+cd apps/android && ./gradlew assembleDebug testDebugUnitTest
 ```
 
 ## Integrated capabilities

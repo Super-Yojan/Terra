@@ -48,7 +48,6 @@ mod localization;
 mod mapping;
 mod mount;
 mod timing;
-mod transport;
 mod waypoint;
 pub use frames::*;
 pub use gate::*;
@@ -56,7 +55,6 @@ pub use localization::*;
 pub use mapping::*;
 pub use mount::*;
 pub use timing::*;
-pub use transport::*;
 pub use waypoint::*;
 
 /// Shared presentation and router-loss defaults. Local sensor limits are independent.

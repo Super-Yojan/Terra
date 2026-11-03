@@ -48,7 +48,7 @@ local package (paths require suitable deployment permissions):
 
 ```sh
 python3 -m venv /opt/terra/venv
-/opt/terra/venv/bin/python -m pip install ./hardware/raspberry-pi
+/opt/terra/venv/bin/python -m pip install ./apps/rover-pi
 ```
 
 `fusion_hat` is deliberately absent from package dependencies: install the exact
@@ -64,7 +64,7 @@ layout decides which channels are opened. Its writable
 state directory is separate from the gate producer. Stop it before any standalone
 CLI invocation; two processes must not own the same hardware or GATT application.
 
-Source deployment requires Linux BlueZ and Python 3.10+ and the `hardware/raspberry-pi` package in a virtual environment (dependencies Bless 0.3.0, Bleak 1.1.1 and dbus-next 0.2.3); real hardware additionally requires deployment-approved `fusion_hat` 1.14.0. Enable bluetooth.service. Provision a terra-rover system user with I2C access, a private mode-0700 `/var/lib/terra-rover`, and BlueZ system-bus permission to register GATT/advertisements and set adapter properties. For source deployment, provide a separate service override for the virtual-environment interpreter. The compiled installer creates the account, private state directory, bus policy and executable service; see [installation](INSTALL.md). BlueZ system-bus policy varies by distribution; grant these actions only to the service account.
+Source deployment requires Linux BlueZ and Python 3.10+ and the `apps/rover-pi` package in a virtual environment (dependencies Bless 0.3.0, Bleak 1.1.1 and dbus-next 0.2.3); real hardware additionally requires deployment-approved `fusion_hat` 1.14.0. Enable bluetooth.service. Provision a terra-rover system user with I2C access, a private mode-0700 `/var/lib/terra-rover`, and BlueZ system-bus permission to register GATT/advertisements and set adapter properties. For source deployment, provide a separate service override for the virtual-environment interpreter. The compiled installer creates the account, private state directory, bus policy and executable service; see [installation](INSTALL.md). BlueZ system-bus policy varies by distribution; grant these actions only to the service account.
 
 The independent physical gate producer writes ASCII `0` for confirmed isolated/open and `1` for closed. Other tokens/read failures forbid motion and configuration. The gate file must be protected from the service/phone and refreshed by supervised hardware input; a stale file is not detected by this adapter. Prefer a directly injected GPIO gate reader for production. Gate closure never arms. Outputs must be independently isolated before service termination: process exit cannot guarantee continuous ESC stop PWM.
 

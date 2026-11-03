@@ -33,8 +33,8 @@ On a Mac or Linux development computer with Docker running, from the Terra root:
 
 ```sh
 docker buildx build --platform linux/arm64 \
-  -f packaging/rover/Dockerfile \
-  --output type=local,dest=hardware/raspberry-pi/dist .
+  -f apps/rover-pi/packaging/rover/Dockerfile \
+  --output type=local,dest=apps/rover-pi/dist .
 ```
 
 The build compiles inside ARM64 Debian Bookworm and runs the executable's help
@@ -42,9 +42,9 @@ and dependency checks. It also installs the release into a staged image and
 executes it in a clean Debian container with no Python installation. It exports:
 
 ```text
-hardware/raspberry-pi/dist/terra-rover-0.3.0-linux-arm64.tar.gz
-hardware/raspberry-pi/dist/terra-rover-0.3.0-linux-arm64.tar.gz.sha256
-hardware/raspberry-pi/dist/terra-rover-0.3.0-linux-arm64/
+apps/rover-pi/dist/terra-rover-0.3.0-linux-arm64.tar.gz
+apps/rover-pi/dist/terra-rover-0.3.0-linux-arm64.tar.gz.sha256
+apps/rover-pi/dist/terra-rover-0.3.0-linux-arm64/
 ```
 
 Alternatively, compile directly on a Pi. This downloads the pinned compiler and
@@ -54,10 +54,10 @@ Run the build as your ordinary user, not root:
 ```sh
 sudo apt update
 sudo apt install -y python3-venv python3-dev build-essential patchelf curl ca-certificates
-./scripts/build-rover.sh
+./scripts/rover/build-rover.sh
 ```
 
-Use `TERRA_BUILD_JOBS=1 ./scripts/build-rover.sh` on a Pi with limited memory.
+Use `TERRA_BUILD_JOBS=1 ./scripts/rover/build-rover.sh` on a Pi with limited memory.
 A build made on a newer OS is only portable to systems with compatible or newer
 glibc; the Docker builder establishes the Bookworm baseline (glibc 2.36).
 `build-info.json` records the actual build environment and dependency versions.
@@ -65,7 +65,7 @@ glibc; the Docker builder establishes the Bookworm baseline (glibc 2.36).
 ## Download a release
 
 A `rover-v<version>` tag publishes the arm64 archive and its checksum. The tag
-version is the `version` in `hardware/raspberry-pi/pyproject.toml` (currently
+version is the `version` in `apps/rover-pi/pyproject.toml` (currently
 0.3.0). Asset URLs follow this pattern:
 
 ```text

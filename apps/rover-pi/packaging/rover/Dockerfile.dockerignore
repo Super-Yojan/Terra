@@ -1,0 +1,15 @@
+**
+!apps/
+!apps/rover-pi/
+!apps/rover-pi/**
+apps/rover-pi/.venv/
+apps/rover-pi/.build/
+apps/rover-pi/dist/
+apps/rover-pi/*.egg-info/
+**/__pycache__/
+!scripts/
+!scripts/rover/
+!scripts/rover/build-rover.sh
+!docs/
+!docs/hardware/
+!docs/hardware/INSTALL.md

@@ -3,7 +3,7 @@
 > [!TIP]
 > **TL;DR**
 > Linux: `cargo test --locked --workspace`.
-> Mac: `./scripts/build-ios.sh`, then Xcode.
+> Mac: `./scripts/ios/build-ios.sh`, then Xcode.
 > World: Zorvane, `cargo run -p zorvane`.
 
 ```mermaid
@@ -37,8 +37,8 @@ The ignored transport test needs local TCP. `software_bench_sequence` does not p
 
 ```sh
 rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios
-./scripts/build-ios.sh
-open mobile/ios/TerraPhone.xcodeproj
+./scripts/ios/build-ios.sh
+open apps/ios/TerraPhone.xcodeproj
 ```
 
 Details: [Building in Xcode](phone/build.md).

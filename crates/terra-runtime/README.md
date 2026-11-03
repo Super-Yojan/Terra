@@ -37,7 +37,7 @@ streamed every 50 ms. Its image and relay code do not need changes for this runt
 
 - `cargo test -p terra-runtime -p terra-mobile`: portable policy and phone facade replay.
 - Zorvane `cargo test -p zorvane simulator_sensor_adapter`: actual sensor adapter replay.
-- `node scripts/check-runtime-parity.mjs`: run the same trace natively and in
+- `node scripts/checks/check-runtime-parity.mjs`: run the same trace natively and in
   WebAssembly. Discrete status hashes must match exactly; effort/twist tolerance
   is 1e-5. Requires Node and the wasm32-unknown-unknown Rust target.
 - Full workspace suites include outdoor navigation, exploration/search, transport,

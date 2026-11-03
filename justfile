@@ -1,4 +1,4 @@
-# Build and deploy the Raspberry Pi rover (hardware/raspberry-pi).
+# Build and deploy the Raspberry Pi rover (apps/rover-pi).
 # Override the target with `just pi=pi@rover2.local deploy` or TERRA_PI=...
 # The SSH key defaults to TerraPhone's pi-admin key; override with TERRA_PI_KEY.
 
@@ -7,9 +7,9 @@ set shell := ["bash", "-euo", "pipefail", "-c"]
 pi := env("TERRA_PI", "pi@192.168.78.1")
 ssh_key := env("TERRA_PI_KEY", env("HOME", "") + "/Library/Application Support/Terra/pi-admin/id_ed25519")
 ssh_opts := if path_exists(ssh_key) == "true" { "-i '" + ssh_key + "'" } else { "" }
-version := `sed -n 's/^version = "\(.*\)"/\1/p' hardware/raspberry-pi/pyproject.toml`
+version := `sed -n 's/^version = "\(.*\)"/\1/p' apps/rover-pi/pyproject.toml`
 release := "terra-rover-" + version + "-linux-arm64"
-dist := "hardware/raspberry-pi/dist"
+dist := "apps/rover-pi/dist"
 remote_dir := "/tmp/terra-rover-deploy"
 
 default:
@@ -17,12 +17,12 @@ default:
 
 # Run the rover's Python tests on this machine.
 test:
-    cd hardware/raspberry-pi && uv run --with pytest python -m pytest tests
+    cd apps/rover-pi && uv run --with pytest python -m pytest tests
 
 # Compile the ARM64 release in Docker (same as CI).
 build:
     docker buildx build --platform linux/arm64 \
-        -f packaging/rover/Dockerfile \
+        -f apps/rover-pi/packaging/rover/Dockerfile \
         --output type=local,dest={{dist}} .
     cd {{dist}} && shasum -a 256 -c {{release}}.tar.gz.sha256
 

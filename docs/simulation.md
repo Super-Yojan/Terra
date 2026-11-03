@@ -5,21 +5,15 @@
 > The world is [Zorvane](https://super-yojan.dev/Zorvane/).
 > Command: `cargo run -p zorvane`.
 > Prefix stays `terra/rover`.
-> Only the iOS Simulator joins that peer.
+> TerraPhone iOS does not join that peer.
 
 ```mermaid
 flowchart LR
-  Z[Zorvane] -->|depth and physics| Sim[iOS Simulator]
-  Sim -->|cmd_vel| Z
-  Crates[Terra crates] --- Z
+  Crates[Terra crates] --- Z[Zorvane]
   Phone[iPhone] -->|Bluetooth| Pi[Pi]
 ```
 
 *Terra keeps the follower, mapper, planner, and arbiter. Zorvane keeps cameras and physics.*
-
-![Placeholder of the Bevy connection fields](assets/phone-simulator.svg)
-
-*Same Mac: `TERRA_ZENOH_LISTEN=tcp/0.0.0.0:7447`. Phone field: `tcp/127.0.0.1:7447`.*
 
 ## Mission
 

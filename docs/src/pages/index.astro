@@ -70,7 +70,7 @@ const groups = [...sections, { ...DESIGN_NOTES, path: undefined, pages: notes }]
         </div>
         <div>
             <dt class="t-label">Phone</dt>
-            <dd>TerraPhone, <code>mobile/ios</code> and <code>mobile/android</code></dd>
+            <dd>TerraPhone, <code>apps/ios</code> and <code>apps/android</code></dd>
         </div>
         <div>
             <dt class="t-label">Pi</dt>
@@ -108,9 +108,9 @@ const groups = [...sections, { ...DESIGN_NOTES, path: undefined, pages: notes }]
             <div class="prose">
                 <h3>Build TerraPhone</h3>
                 <p>
-                    On a Mac, run <code>./scripts/build-ios.sh</code>, then
+                    On a Mac, run <code>./scripts/ios/build-ios.sh</code>, then
                     open the project in Xcode. Android builds from
-                    <code>mobile/android</code>.
+                    <code>apps/android</code>.
                 </p>
                 <p>
                     <a href={link("/phone/build")}>Building in Xcode</a> and

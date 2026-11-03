@@ -3,7 +3,7 @@
 YOLO26n detector trained on three classes: `ball`, `blue bucket`, `orange bucket`
 (100 epochs, 640 px, val mAP50 0.95, precision 0.95, recall 0.93; see `results.csv`).
 
-TerraPhone runs it as `mobile/ios/TerraPhone/Models/RoverDetector.mlpackage` for the
+TerraPhone runs it as `apps/ios/TerraPhone/Resources/Models/RoverDetector.mlpackage` for the
 L4 target search and the bucket/ball object map. The phone compiles the package on
 first launch and caches it in Application Support.
 
@@ -12,7 +12,7 @@ first launch and caches it in Application Support.
 ```sh
 pip install ultralytics coremltools
 yolo export model=weights/best.pt format=coreml nms=False half=True imgsz=640
-mv weights/best.mlpackage ../../mobile/ios/TerraPhone/Models/RoverDetector.mlpackage
+mv weights/best.mlpackage ../../apps/ios/TerraPhone/Resources/Models/RoverDetector.mlpackage
 ```
 
 `nms=False` keeps YOLO26's end-to-end head: one output of shape `[1, 300, 6]`, each row

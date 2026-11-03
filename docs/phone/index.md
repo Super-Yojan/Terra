@@ -2,8 +2,8 @@
 
 > [!TIP]
 > **TL;DR**
-> SwiftUI app in `mobile/ios/`.
-> Android shell in `mobile/android/`.
+> SwiftUI app in `apps/ios/`.
+> Android shell in `apps/android/`.
 > Shared math is `terra-mobile`.
 > Simulator talks to Zorvane. iPhone talks to the Pi.
 > Tap-to-configure is not built.

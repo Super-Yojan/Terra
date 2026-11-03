@@ -1,6 +1,6 @@
 # Publish terra-rover-<version>-linux-arm64.tar.gz and its .sha256.
 # Push a tag rover-v<version> (for example rover-v0.3.0) that matches
-# hardware/raspberry-pi/pyproject.toml. Or run it by hand from a branch with that
+# apps/rover-pi/pyproject.toml. Or run it by hand from a branch with that
 # tag name: if the tag does not exist yet, the release creates it at the commit
 # the run was started from.
 name: Publish terra-rover release
@@ -66,7 +66,7 @@ jobs:
           RELEASE_TAG: ${{ steps.tag.outputs.tag }}
         run: |
           set -euo pipefail
-          version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' hardware/raspberry-pi/pyproject.toml)"
+          version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' apps/rover-pi/pyproject.toml)"
           case "${version}" in
             ""|*[!0-9A-Za-z.+-]*)
               echo "refusing: pyproject version '${version}' is missing or not a single version" >&2
@@ -87,8 +87,8 @@ jobs:
         run: |
           set -euo pipefail
           docker buildx build --platform linux/arm64 \
-            -f packaging/rover/Dockerfile \
-            --output type=local,dest=hardware/raspberry-pi/dist .
+            -f apps/rover-pi/packaging/rover/Dockerfile \
+            --output type=local,dest=apps/rover-pi/dist .
 
       - name: Publish the tarball and checksum
         env:
@@ -96,7 +96,7 @@ jobs:
           RELEASE_TAG: ${{ steps.tag.outputs.tag }}
         run: |
           set -euo pipefail
-          version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' hardware/raspberry-pi/pyproject.toml)"
+          version="$(sed -n 's/^version = "\([^"]*\)"/\1/p' apps/rover-pi/pyproject.toml)"
           case "${version}" in
             ""|*[!0-9A-Za-z.+-]*)
               echo "refusing: pyproject version '${version}' is missing or not a single version" >&2
@@ -109,7 +109,7 @@ jobs:
             exit 1
           fi
           name="terra-rover-${version}-linux-arm64"
-          dist="hardware/raspberry-pi/dist"
+          dist="apps/rover-pi/dist"
           tarball="${dist}/${name}.tar.gz"
           checksum="${tarball}.sha256"
           if [ ! -f "${tarball}" ] || [ ! -f "${checksum}" ]; then

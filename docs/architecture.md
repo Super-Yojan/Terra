@@ -29,22 +29,18 @@ flowchart TB
 
 ## Two phone builds
 
-![Placeholder wireframe of the Simulator Zenoh section](assets/phone-simulator.svg)
+| Target | Hardware link |
+| --- | --- |
+| iOS Simulator | **Simulated rover** only. No Bluetooth radio. |
+| iPhone | Bluetooth. Path to a rover. |
 
-*Not a Simulator capture. No Xcode in this docs build. Labels match `ContentView`.*
-
-| Target | Zenoh to Zorvane | Bluetooth |
-| --- | --- | --- |
-| iOS Simulator | Shown. Default `tcp/127.0.0.1:7447`. | Hidden. No radio. |
-| iPhone | Hidden. Saved endpoint is deleted. | Shown. Path to a rover. |
-
-`#if targetEnvironment(simulator)` chooses the section. There is no setting that turns Zenoh on for an iPhone.
+`#if targetEnvironment(simulator)` chooses the section. Neither build connects to Zorvane.
 
 **Simulated rover** is a motor plant inside the app. It is on both targets. It is not Zorvane.
 
 ![Placeholder wireframe of the iPhone Bluetooth section](assets/phone-iphone.svg)
 
-*Device build. Bevy controls are compiled out.*
+*Device build.*
 
 ## Pi and Zenoh
 

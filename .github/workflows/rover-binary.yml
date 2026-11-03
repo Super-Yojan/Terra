@@ -18,13 +18,13 @@ jobs:
       - name: Compile and check ARM64 release
         run: |
           docker buildx build --platform linux/arm64 \
-            -f packaging/rover/Dockerfile \
-            --output type=local,dest=hardware/raspberry-pi/dist .
+            -f apps/rover-pi/packaging/rover/Dockerfile \
+            --output type=local,dest=apps/rover-pi/dist .
       - name: Save installable release
         uses: actions/upload-artifact@v4
         with:
           name: terra-rover-linux-arm64
           path: |
-            hardware/raspberry-pi/dist/*.tar.gz
-            hardware/raspberry-pi/dist/*.sha256
+            apps/rover-pi/dist/*.tar.gz
+            apps/rover-pi/dist/*.sha256
           if-no-files-found: error

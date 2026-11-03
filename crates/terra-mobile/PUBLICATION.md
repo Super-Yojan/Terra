@@ -72,4 +72,4 @@ No synthetic run/frame identifiers or shared sequence APIs are introduced here.
 
 The source-level Swift regression checks that publication revision only
 initializes once and increments at the map callsite, never in `prepare`:
-`swift tests/ios/PhoneMapPublicationTests.swift` (from the repository root).
+`swift apps/ios/Tests/PhoneMapPublicationTests.swift` (from the repository root).

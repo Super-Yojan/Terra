@@ -1,0 +1,275 @@
+import SwiftUI
+
+struct TerraStopReasonView: View {
+    @ObservedObject var brain: PhoneController
+    var body: some View {
+        if let reason = brain.lastStopDiagnostic.message {
+            VStack(alignment: .leading, spacing: 8) {
+                if let time = brain.lastStopDiagnostic.timestamp {
+                    Text(Date(timeIntervalSince1970: time), style: .time).font(.caption).foregroundStyle(.secondary)
+                }
+                Text(reason).font(.subheadline).textSelection(.enabled)
+                Text("Retained through reconnects. Clear it here after reviewing the cause.").font(.caption).foregroundStyle(.secondary)
+                Button("Clear reason") { brain.clearStopReason() }
+            }
+        }
+    }
+}
+
+struct ControllerDetailView: View {
+    @ObservedObject var brain: PhoneController
+    var destination: TerraDestination = .drive
+    @State private var calibration = MountCalibration.load()
+    @State private var forward = 0.0
+    @State private var yaw = 0.0
+    @AppStorage("waypointOriginLat") private var originLat = "38.8297"
+    @AppStorage("waypointOriginLon") private var originLon = "-77.3075"
+    @AppStorage("waypointGoalLat") private var goalLat = "38.82981"
+    @AppStorage("waypointGoalLon") private var goalLon = "-77.3075"
+    @AppStorage("waypointToken") private var waypointToken = "gmu-north"
+    @AppStorage("exploreBudgetSeconds") private var exploreSeconds = "120"
+    @State private var entryNote = ""
+    @State private var searchClass = "bucket"
+    @State private var searchMinX = "-20"
+    @State private var searchMinY = "-20"
+    @State private var searchMaxX = "20"
+    @State private var searchMaxY = "20"
+    @State private var searchBudget = "600"
+    var body: some View {
+        Form {
+                if brain.lastStopDiagnostic.message != nil {
+                    Section("Last stop reason") { TerraStopReasonView(brain: brain) }
+                }
+                if destination == .drive {
+                    Section("Manual Control") { DriveControlPanel(brain: brain) }
+                        .id(TerraDestination.drive)
+                }
+                if destination == .settings || destination == .telemetry {
+                Section("Controller") {
+                    LabeledContent("Source", value: brain.source)
+                    LabeledContent("Status", value: brain.status)
+                    if destination == .settings {
+                        Button("Start local simulation") { brain.startSimulation() }
+                        Button("Start phone sensors") { brain.startPhone() }
+                        Button("Stop controller", role: .destructive) { forward = 0; yaw = 0; brain.stop() }
+                    }
+                }
+                }
+                if destination == .live || destination == .missions {
+                Section("Local occupancy map") {
+                    OccupancyMapView(grid: brain.occupancy, rover: brain.mapPose, goal: selectedGoal) { north, west in
+                        guard !brain.waypointActive,
+                              let originLatitude = Double(originLat), let originLongitude = Double(originLon),
+                              let geo = try? geographicPosition(originLatitude: originLatitude, originLongitude: originLongitude, north: north, west: west) else { return }
+                        goalLat = String(format: "%.6f", geo.latitude)
+                        goalLon = String(format: "%.6f", geo.longitude)
+                    }
+                        .frame(height: 280)
+                    Text(brain.mapStatus).font(.footnote).foregroundStyle(.secondary)
+                    HStack {
+                        Label("Free", systemImage: "square.fill").foregroundStyle(.green)
+                        Label("Occupied", systemImage: "square.fill").foregroundStyle(.primary)
+                        Label("Unknown", systemImage: "square.fill").foregroundStyle(.secondary)
+                        Label("Goal", systemImage: "circle.fill").foregroundStyle(.orange)
+                    }.font(.caption)
+                    if let grid = brain.occupancy {
+                        Text(String(format: "%.0f × %.0f m · %.0f cm cells · world +X right, +Y up", Double(grid.width) * grid.resolution, Double(grid.height) * grid.resolution, grid.resolution * 100)).font(.caption)
+                    }
+                    Button("Clear map") { brain.clearMap() }
+                    #if targetEnvironment(simulator)
+                    Text("Phone mapping uses scene depth when available. Mapping waits for a stable detected floor; point the camera toward the ground during startup.").font(.footnote).foregroundStyle(.secondary)
+                    #else
+                    Text("Phone mapping uses scene depth when available. Mapping waits for a stable detected floor; point the camera toward the ground during startup.").font(.footnote).foregroundStyle(.secondary)
+                    #endif
+                }.id(TerraDestination.live)
+                }
+                if destination == .missions {
+                Section("Mission autonomy") {
+                    TextField("Explore budget (seconds)", text: $exploreSeconds)
+                        .keyboardType(.decimalPad)
+                        .accessibilityLabel("Explore budget seconds")
+                    // L4 is one entry: explore plus search. Area search (target_search) is the
+                    // same L4, started under Target search, so it shows as L4 here.
+                    Picker("Requested level",selection:Binding(get:{brain.autonomyLevel == "target_search" ? "explore" : brain.autonomyLevel},set:{brain.setAutonomy($0, budgetSeconds: Double(exploreSeconds))})) {Text(autonomyLevelLabel(level: "teleop")).tag("teleop");Text(autonomyLevelLabel(level: "assisted_teleop")).tag("assisted_teleop");Text(autonomyLevelLabel(level: "waypoint_direct")).tag("waypoint_direct");Text(autonomyLevelLabel(level: "waypoint")).tag("waypoint");Text(autonomyLevelLabel(level: "explore")).tag("explore")}
+                        .disabled(brain.hardwareActive && !brain.hardwareFeedback && !(brain.phoneTrackingActive && brain.vioControlCompatible))
+                    Text(brain.autonomyReason)
+                    if !brain.explorationSummary.isEmpty { Text(brain.explorationSummary).font(.footnote) }
+                    if let proposal=brain.proposedGoal {Text(brain.proposalText);HStack {Button("Approve search target") {brain.decideProposal(proposal,approve:true)};Button("Reject") {brain.decideProposal(proposal,approve:false)}}}
+                    Button("Take over") {forward=0;yaw=0;brain.setAutonomy("teleop")}
+                    Button("Emergency stop",role:.destructive) {forward=0;yaw=0;brain.emergencyStop()}
+                    Button("Reset stop") {brain.emergencyStop(reset:true)}
+                    Button("Finish run log") {brain.exportRun()}
+                    if let log=brain.runLog {ShareLink("Share run log",item:log)}
+                }.id(TerraDestination.missions)
+                Section("Target search") {
+                    if brain.searchAvailable {
+                        TextField("Target class",text:$searchClass).textInputAutocapitalization(.never).autocorrectionDisabled().accessibilityLabel("Target class")
+                        Text("Bounds in rover local metres").font(.caption)
+                        HStack {TextField("Min x",text:$searchMinX).accessibilityLabel("Search minimum x");TextField("Max x",text:$searchMaxX).accessibilityLabel("Search maximum x")}.keyboardType(.numbersAndPunctuation)
+                        HStack {TextField("Min y",text:$searchMinY).accessibilityLabel("Search minimum y");TextField("Max y",text:$searchMaxY).accessibilityLabel("Search maximum y")}.keyboardType(.numbersAndPunctuation)
+                        TextField("Time budget in seconds",text:$searchBudget).keyboardType(.numbersAndPunctuation).accessibilityLabel("Search time budget in seconds")
+                        if brain.autonomyLevel != "target_search" {
+                            Button("Use L4 area search") { brain.setAutonomy("target_search") }
+                        }
+                        Button("Start search") {
+                            guard let a=Double(searchMinX),let b=Double(searchMinY),let c=Double(searchMaxX),let d=Double(searchMaxY),let t=Double(searchBudget) else {entryNote="Enter numeric search bounds and budget";return}
+                            brain.startTargetSearch(targetClass:searchClass,minX:a,minY:b,maxX:c,maxY:d,budget:t)
+                        }.disabled(brain.autonomyLevel != "target_search" || !brain.searchTerminal)
+                    }else {Text("L4 area search requires a LiDAR phone with live camera tracking and scene depth.").font(.caption).foregroundStyle(.secondary)}
+                    Text(brain.objectDetectorStatus).font(.caption).foregroundStyle(.secondary)
+                    if brain.autonomyLevel == "waypoint_direct" { Text("L2 follows directly without obstacle avoidance.").font(.caption) }
+                    if !brain.searchPhase.isEmpty {Text(brain.searchPhase.replacingOccurrences(of:"_",with:" ").capitalized)}
+                    if !brain.searchReportText.isEmpty {Text(brain.searchReportText).textSelection(.enabled)}
+                    if !brain.searchReportHistory.isEmpty {DisclosureGroup("Confirmed reports") {ForEach(Array(brain.searchReportHistory.enumerated()),id:\.offset) { _,report in Text(report).textSelection(.enabled)}}}
+                    HStack {Button("Pause") {brain.targetSearchAction("pause")};Button("Resume") {brain.targetSearchAction("resume")};Button("Cancel",role:.destructive) {brain.targetSearchAction("cancel")}}.disabled(brain.searchTerminal)
+                }
+                Section("Waypoint") {
+                    TextField("Origin latitude", text: $originLat).keyboardType(.numbersAndPunctuation)
+                        .accessibilityLabel("Origin latitude")
+                        .disabled(brain.waypointActive)
+                    TextField("Origin longitude", text: $originLon).keyboardType(.numbersAndPunctuation)
+                        .accessibilityLabel("Origin longitude")
+                        .disabled(brain.waypointActive)
+                    TextField("Goal latitude", text: $goalLat).keyboardType(.numbersAndPunctuation)
+                        .accessibilityLabel("Goal latitude")
+                        .disabled(brain.waypointActive)
+                    TextField("Goal longitude", text: $goalLon).keyboardType(.numbersAndPunctuation)
+                        .accessibilityLabel("Goal longitude")
+                        .disabled(brain.waypointActive)
+                    TextField("Token", text: $waypointToken)
+                        .textInputAutocapitalization(.never).autocorrectionDisabled()
+                        .accessibilityLabel("Waypoint token")
+                        .disabled(brain.waypointActive)
+                    Button("Johnson Center, 12 m north") {
+                        originLat = "38.8297"; originLon = "-77.3075"
+                        goalLat = "38.82981"; goalLon = "-77.3075"
+                        waypointToken = "gmu-north"
+                    }.disabled(brain.waypointActive)
+                    LabeledContent("Follower", value: brain.waypointStatus)
+                    if brain.waypointActive {
+                        LabeledContent("Distance", value: String(format: "%.1f m", brain.waypointDistance))
+                    }
+                    Button("Go to waypoint") { goToWaypoint() }
+                        .disabled(brain.waypointActive || (brain.hardwareActive && !brain.hardwareFeedback && !(brain.autonomyLevel == "waypoint" && brain.phoneTrackingActive && brain.vioControlCompatible)))
+                    Button("Cancel waypoint", role: .destructive) { brain.cancelWaypoint() }
+                        .disabled(!brain.waypointActive)
+                    if !entryNote.isEmpty {
+                        Text(entryNote).font(.footnote).foregroundStyle(.red)
+                    }
+                    #if targetEnvironment(simulator)
+                    Text("Tap the map to drop the goal. On that grid +X is north and +Y is west, the same frame as the blue rover marker. Select Waypoint autonomy before sending a goal. The shared Rust runtime selects motion locally.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                    #else
+                    Text("Tap the map to drop the goal. On that grid +X is north and +Y is west, the same frame as the blue rover marker. Select Waypoint autonomy before sending a goal. The shared Rust runtime selects motion locally.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                    #endif
+                }
+                }
+                if destination == .settings {
+                Section(brain.hardwareActive && !brain.hardwareFeedback ? "Normalized manual effort" : "Velocity target") {
+                    LabeledContent("Forward", value: String(format: brain.hardwareActive && !brain.hardwareFeedback ? "%.2f effort" : "%.2f m/s", forward))
+                    Slider(value: $forward, in: -1...1, step: 0.05)
+                        .accessibilityLabel("Forward velocity in metres per second")
+                        .disabled(brain.waypointActive)
+                    LabeledContent("Left turn", value: String(format: brain.hardwareActive && !brain.hardwareFeedback ? "%.2f effort" : "%.2f rad/s", yaw))
+                    Slider(value: $yaw, in: -1...1, step: 0.05)
+                        .accessibilityLabel("Turn rate in radians per second")
+                        .disabled(brain.waypointActive)
+                    Button("Zero target") { forward = 0; yaw = 0 }
+                        .disabled(brain.waypointActive)
+                }
+                }
+                if destination == .telemetry {
+                Section("Feedback") {
+                    LabeledContent("Measured forward", value: String(format: "%.2f m/s", brain.measuredForward))
+                    LabeledContent("Measured turn", value: String(format: "%.2f rad/s", brain.measuredYaw))
+                    LabeledContent("Left motor", value: String(format: "%+.3f", brain.leftEffort))
+                    LabeledContent("Right motor", value: String(format: "%+.3f", brain.rightEffort))
+                    Text("Motor effort is normalized from −1 to +1 (unidirectional ESCs use 0 to 1). Bluetooth sends signed integer efforts from −100 to +100 every 50 ms. Zero effort is not a brake.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }.id(TerraDestination.telemetry)
+                Section("Connection details") {
+                    Text(brain.hardwareStatus)
+                    Text(brain.dashboardStatus)
+                    Text(brain.autonomyReason)
+                }
+                Section("Run recording") {
+                    Button("Finish run log") { brain.exportRun() }
+                    if let log = brain.runLog { ShareLink("Share run log", item: log) }
+                }
+                }
+                if destination == .settings {
+                Section("Shared Rust test") {
+                    Button("Run velocity benchmark") { brain.runBenchmark() }
+                    Text(brain.benchmark).font(.footnote)
+                }
+                Section("Phone mounting") {
+                    Text("Mount the phone with its rear camera facing rover-forward. Enter rear-camera position relative to the rover reference point using a straight line measurement in meters.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                    LabeledContent("Calibration", value: brain.calibrationStatus)
+                    calibrationField("Camera forward offset (m)", value: $calibration.cameraOffsetForward)
+                    calibrationField("Camera left offset (m)", value: $calibration.cameraOffsetLeft)
+                    calibrationField("Camera height (m)", value: $calibration.cameraHeight)
+                    calibrationField("Camera roll (°)", value: $calibration.cameraRollDegrees)
+                    calibrationField("Camera pitch (°)", value: $calibration.cameraPitchDegrees)
+                    calibrationField("Camera yaw (°)", value: $calibration.cameraYawDegrees)
+                    Text("Angles are mount corrections around rover +X forward, +Y left, +Z up; roll X, pitch Y, yaw Z. Measure relative to the upright, rear-camera-forward position.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                    Toggle("Measurements reviewed", isOn: $calibration.reviewed)
+                    Button("Save measured mount calibration") { brain.saveMountCalibration(calibration) }
+                    Text("Saving stops the controller, which disconnects Bluetooth and ARGOS. Start phone sensors again before the turn passes.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                    Text("After saving, manually rotate the rover at least 90° in both directions around the rover reference point. Confirm ARKit tracking remains normal and the camera arc agrees with the measured offset; record the result in the calibration checklist.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                    Button("Start offset turn pass") { brain.beginAutomaticOffsetFit() }
+                        .disabled(brain.offsetFitInProgress)
+                    Button("Finish turn pass") { brain.finishAutomaticOffsetFit() }
+                        .disabled(!brain.offsetFitInProgress)
+                    Text(brain.offsetFitStatus).font(.footnote).foregroundStyle(.secondary)
+                    if let fitted = brain.fittedCameraOffset {
+                        Button("Use fitted offset") {
+                            calibration.cameraOffsetForward = fitted.x
+                            calibration.cameraOffsetLeft = fitted.y
+                            calibration.reviewed = false
+                        }
+                    }
+                    Text("With the rover motor-disabled, record one ≥90° turn pass, then a pass in the opposite direction. The fit checks ARKit tracking and rejects inconsistent paths. Review the result before saving it.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                    Text("ARKit needs a physical supported iPhone and visual features. Use Simulated rover on the iOS simuluator.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }.id(TerraDestination.settings)
+                }
+        }
+        .navigationTitle(destination.title)
+        .onChange(of: brain.hardwareReady) { _, _ in forward = 0; yaw = 0 }
+        .onChange(of: brain.hardwareActive) { _, _ in forward = 0; yaw = 0 }
+        .onChange(of: forward) { _, _ in brain.setTarget(forward: forward, yaw: yaw) }
+        .onChange(of: yaw) { _, _ in brain.setTarget(forward: forward, yaw: yaw) }
+        .onDisappear {
+            if destination == .drive || destination == .settings {
+                forward = 0; yaw = 0; brain.setTarget(forward: 0, yaw: 0); brain.stopHardware()
+            }
+        }
+    }
+    private func calibrationField(_ title: String, value: Binding<Double>) -> some View {
+        TextField(title, value: value, format: .number.precision(.fractionLength(0...3)))
+            .keyboardType(.decimalPad)
+    }
+    private var selectedGoal: SIMD2<Double>? {
+        guard let originLatitude = Double(originLat), let originLongitude = Double(originLon),
+              let latitude = Double(goalLat), let longitude = Double(goalLon),
+              let point = try? tangentMetres(originLatitude: originLatitude, originLongitude: originLongitude, latitude: latitude, longitude: longitude) else { return nil }
+        return SIMD2(point.north, point.west)
+    }
+    private func goToWaypoint() {
+        guard let originLatitude = Double(originLat), let originLongitude = Double(originLon),
+              let latitude = Double(goalLat), let longitude = Double(goalLon),
+              (-85...85).contains(originLatitude), (-180...180).contains(originLongitude),
+              (-85...85).contains(latitude), (-180...180).contains(longitude) else {
+            entryNote = "Enter latitude from −85 to 85 and longitude from −180 to 180."
+            return
+        }
+        entryNote = ""
+        brain.engageWaypoint(originLatitude: originLatitude, originLongitude: originLongitude, latitude: latitude, longitude: longitude, token: waypointToken)
+    }
+}

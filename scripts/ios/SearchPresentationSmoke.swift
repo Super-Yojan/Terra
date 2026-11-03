@@ -1,0 +1,2 @@
+import Foundation
+@main struct SearchPresentationSmoke {static func main(){let current:[String:Any]=["run_id":"new"];let old:[String:Any]=["run_id":"old","phase":"completed"];assert(TerraTargetSearchPresentation.currentSearch(["status":current,"search":old])==nil);let same:[String:Any]=["run_id":"new","phase":"completed"];assert(TerraTargetSearchPresentation.currentSearch(["status":current,"search":same]) != nil);print("Search session checks passed")}}

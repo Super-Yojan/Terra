@@ -3,12 +3,12 @@
 > [!TIP]
 > **TL;DR**
 > Needs a Mac, Xcode, and iOS 17.
-> `./scripts/build-ios.sh` makes the XCFramework.
+> `./scripts/ios/build-ios.sh` makes the XCFramework.
 > Linux CI does not run `xcodebuild`.
 
 ![App icon produced for the phone target](../assets/terra-icon.png)
 
-*Generated Rust bindings are gitignored under `mobile/ios/Generated/`.*
+*Generated Rust bindings are gitignored under `apps/ios/Generated/`.*
 
 ```mermaid
 flowchart LR
@@ -24,9 +24,9 @@ flowchart LR
 
 ```sh
 rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios
-./scripts/build-ios.sh
-./scripts/check-swift.sh
-open mobile/ios/TerraPhone.xcodeproj
+./scripts/ios/build-ios.sh
+./scripts/ios/check-swift.sh
+open apps/ios/TerraPhone.xcodeproj
 ```
 
 ![Which scheme destination you pick changes the link](../assets/phone-home.svg)
@@ -36,7 +36,7 @@ open mobile/ios/TerraPhone.xcodeproj
 Rebuild the mesh on a Mac with `usdcat` and `usdzip`:
 
 ```sh
-python3 scripts/prepare-ios-rover.py /path/to/robot.usdc
+python3 scripts/ios/prepare-ios-rover.py /path/to/robot.usdc
 ```
 
 The preview keeps about 853,000 of 3.5 million triangles. The original CAD file is not in git.

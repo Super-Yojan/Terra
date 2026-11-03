@@ -90,8 +90,8 @@ Use the path line. It matches the sibling checkout ARGOS already uses.
 
     ```sh
     rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios
-    ./scripts/build-ios.sh
-    open mobile/ios/TerraPhone.xcodeproj
+    ./scripts/ios/build-ios.sh
+    open apps/ios/TerraPhone.xcodeproj
     ```
 
     Xcode resolves the Swift package `https://github.com/stasel/WebRTC.git` at version **155.0.0**.
@@ -105,8 +105,8 @@ Use the path line. It matches the sibling checkout ARGOS already uses.
 Signaling checks on a desktop:
 
 ```sh
-swiftc mobile/ios/TerraPhone/FpvIceSettings.swift \
-  tests/ios/FpvSignalingTests.swift -o /tmp/terra-fpv-tests
+swiftc apps/ios/TerraPhone/FPV/FpvIceSettings.swift \
+  apps/ios/Tests/FpvSignalingTests.swift -o /tmp/terra-fpv-tests
 /tmp/terra-fpv-tests
 cargo test -p fpv-signaling
 cargo test -p terra-transport --test signaling

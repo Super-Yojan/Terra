@@ -164,7 +164,7 @@ TERRA_OBSERVABILITY_EVENT_BYTES=536870912
 TERRA_OBSERVABILITY_RETENTION_SECONDS=604800
 ```
 
-From a reviewed Terra source bundle run `sudo bash packaging/rover/install-observability.sh`.
+From a reviewed Terra source bundle run `sudo bash apps/rover-pi/packaging/rover/install-observability.sh`.
 It installs only the Python standard-library observer and restarts only that
 service. The rover daemon must separately be rebuilt/upgraded to emit the new
 structured safety/command events. Apply `terra-rover-observability.conf` as an
@@ -260,7 +260,7 @@ intentional: a prior image is never presented as the current depth exposure.
 
 ## Offline Pi uploads through a Mac USB connection
 
-Install the independent Pi observer first with `packaging/rover/install-observability.sh`.
+Install the independent Pi observer first with `apps/rover-pi/packaging/rover/install-observability.sh`.
 It also installs the fixed-path queue helper. Verify a normal SSH login and its
 host key before provisioning the Mac relay. The Pi account must permit the
 restricted command to run as `terra-observability` without an interactive sudo
@@ -269,7 +269,7 @@ prompt (the deployed MasterPi `pi` account already does).
 From the Terra checkout on macOS, run:
 
 ```sh
-python3 packaging/rover/install-usb-relay.py \
+python3 apps/rover-pi/packaging/rover/install-usb-relay.py \
   --host pi@raspberrypi.local \
   --endpoint https://argos.34.135.204.210.sslip.io/observability \
   --token-file /absolute/private/path/pi-rover0.token

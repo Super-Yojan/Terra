@@ -11,14 +11,14 @@ The prepared 2026-10-21 image is a separate copy of that vendor baseline and
 needs validation on a spare card. It has not been boot-tested on a physical Pi.
 
 For an existing Bookworm installation with terminal access, install
-`packaging/rover/terra-usb-modules.conf` as
+`apps/rover-pi/packaging/rover/terra-usb-modules.conf` as
 `/etc/modules-load.d/terra-usb.conf` (root:root, 0644), and
-`packaging/rover/terra-usb-local.nmconnection` as
+`apps/rover-pi/packaging/rover/terra-usb-local.nmconnection` as
 `/etc/NetworkManager/system-connections/terra-usb-local.nmconnection`
 (root:root, 0600). Ensure SSH and Avahi are already enabled and preserve their
 existing credentials/settings.
 
-Also install `packaging/rover/90-terra-usb-managed.conf` as
+Also install `apps/rover-pi/packaging/rover/90-terra-usb-managed.conf` as
 `/etc/NetworkManager/conf.d/90-terra-usb-managed.conf` (root:root, 0644).
 The distribution's `85-nm-unmanaged.rules` explicitly ignores devices of type
 `gadget`; without this per-device override, NetworkManager discovers `usb0` but

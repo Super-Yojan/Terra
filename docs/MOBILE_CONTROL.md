@@ -3,7 +3,7 @@
 > [!TIP]
 > **TL;DR**
 > IMU plus VIO becomes left and right effort.
-> Simulator Zenoh and iPhone Bluetooth are different builds.
+> The iOS Simulator drives a local simulated rover; an iPhone drives a real one over Bluetooth.
 > Zero effort coasts. It is not a brake.
 
 ![Wireframe of the controller this page describes. Not a Simulator capture.](assets/phone-home.svg)
@@ -30,28 +30,26 @@ run for this feature. See [evidence status](hardware/evidence/README.md).
 
 ## Build and run
 
-Run `./scripts/build-ios.sh` on a Mac with Xcode, Cargo and Rust targets `aarch64-apple-ios`, `aarch64-apple-ios-sim`, and `x86_64-apple-ios` installed. It generates the Swift bindings and an XCFramework for iPhone and both simulator architectures. Generated artifacts are ignored by Git. Open `mobile/ios/TerraPhone.xcodeproj`, select a signing team and run TerraPhone. The deployment target is iOS 17.
+Run `./scripts/ios/build-ios.sh` on a Mac with Xcode, Cargo and Rust targets `aarch64-apple-ios`, `aarch64-apple-ios-sim`, and `x86_64-apple-ios` installed. It generates the Swift bindings and an XCFramework for iPhone and both simulator architectures. Generated artifacts are ignored by Git. Open `apps/ios/TerraPhone.xcodeproj`, select a signing team and run TerraPhone. The deployment target is iOS 17.
 
 The app offers a simulated sensor mode and a phone sensor mode, plus a repeatable Rust benchmark. Simulator mode exercises the same UniFFI controller without requiring a camera. Phone mode reads Core Motion's gravity-free acceleration and angular rate and estimates world velocity from ARKit poses. Camera permission and a device supporting AR world tracking are required for phone mode. Loss of tracking produces neutral effort. Leaving the foreground stops the controller.
 
-The Android shell in `mobile/android/` calls the same crate. Its build, the emulator Zenoh endpoint `tcp/10.0.2.2:7447`, and what has not been run on a device are in [TerraPhone for Android](MOBILE_ANDROID.md).
+The Android shell in `apps/android/` calls the same crate. Its build and what has not been run on a device are in [TerraPhone for Android](MOBILE_ANDROID.md).
 
 Which hardware link the connection UI shows depends on the run destination. See [Connection surfaces](#connection-surfaces).
 
-`./scripts/check-swift.sh` validates a real Swift → UniFFI → Rust call and runs the controller benchmark. `cargo test --workspace` checks the Rust modules. Acceleration, turning, and stopping through Avian motor forces are covered by Zorvane's headless physics tests (`cargo test -p zorvane` in that repo).
+`./scripts/ios/check-swift.sh` validates a real Swift → UniFFI → Rust call and runs the controller benchmark. `cargo test --workspace` checks the Rust modules. Acceleration, turning, and stopping through Avian motor forces are covered by Zorvane's headless physics tests (`cargo test -p zorvane` in that repo).
 
 ## Connection surfaces
 
-TerraPhone compiles one hardware link for each target. The check is `#if targetEnvironment(simulator)` in `ContentView` and `PhoneController`. On launch, `TerraPhoneApp` clears a saved Bevy endpoint through that same check. There is no setting that shows the Bevy section on a physical iPhone.
+TerraPhone compiles one hardware link for each target. The check is `#if targetEnvironment(simulator)`.
 
-| Target | Bevy simulator · Zenoh | Bluetooth actuators |
-| --- | --- | --- |
-| iOS Simulator | Shown. Endpoint and rover ID persist in the Simulator’s defaults. Connect still publishes `cmd_vel` and subscribes to that rover’s depth camera. | Hidden. The Simulator has no Bluetooth radio, so Discover and Connect cannot reach a rover. |
-| Physical iPhone | Hidden. The section is not in the device connection UI. Launch deletes any stored `zenohEndpoint` and `zenohRoverID` from an older build, and `startBevy` does not open a session. | Shown. This is the path to a real rover. |
+| Target | Hardware link |
+| --- | --- |
+| iOS Simulator | **Simulated rover** (the local motor plant) only. The Simulator has no Bluetooth radio, so Discover and Connect are hidden. |
+| Physical iPhone | Bluetooth actuators. This is the path to a real rover. **Simulated rover** is also available. |
 
-**Simulated rover** in the Controller section is the local motor plant. It stays on both targets. The Bevy process is the separate Zenoh section, and only the Simulator build includes that section. **Phone IMU + VIO** still needs a physical iPhone with ARKit.
-
-Bluetooth is omitted from the Simulator on purpose. CoreBluetooth is unsupported there (`CBCentralManager` cannot scan or connect), so those controls would sit next to the link that does work: Bevy at `tcp/127.0.0.1:7447` on the same Mac. A device that previously saved a Bevy endpoint or rover ID falls back to the Bluetooth section. It does not reconnect to Zenoh and does not show the saved endpoint.
+The phone does not connect to the Zorvane (Bevy) simulator. **Phone IMU + VIO** still needs a physical iPhone with ARKit.
 
 ## Sensor contract
 
@@ -77,9 +75,8 @@ Zero effort means coast, not a mechanical brake. The motor adapter, enable switc
 
 `terra-waypoint` turns one WGS84 goal into a body twist. TerraPhone imports `MobileWaypoint` from the same UniFFI bundle as `MobileController`. The **Waypoint** section of the app is that call.
 
-Start **Simulated rover**, **Phone IMU + VIO**, or **Connect to Bevy rover**. Then set the origin and the goal, or tap the occupancy map. The orange marker is the goal in the same metres as the blue rover: +X north, +Y west. **Johnson Center, 12 m north** fills latitude 38.82981, longitude −77.3075, about 12 m north of the George W. Johnson Center. **Go to waypoint** calls `setOrigin` and `setGoal`. While that goal is latched the phone steps the follower and the velocity sliders stay idle. **Cancel waypoint** returns to the sliders. Stop, or leaving the app, drops the latch.
+Start **Simulated rover** or **Phone IMU + VIO**. Then set the origin and the goal, or tap the occupancy map. The orange marker is the goal in the same metres as the blue rover: +X north, +Y west. **Johnson Center, 12 m north** fills latitude 38.82981, longitude −77.3075, about 12 m north of the George W. Johnson Center. **Go to waypoint** calls `setOrigin` and `setGoal`. While that goal is latched the phone steps the follower and the velocity sliders stay idle. **Cancel waypoint** returns to the sliders. Stop, or leaving the app, drops the latch.
 
-On a Bevy connection the pose comes from the depth frame's body position, and the twist is published as `cmd_vel`. Leave `terra/rover/<id>/goal` idle during this run. A goal latched inside Zorvane owns the wheels until `{"cancel":true}`. With `TERRA_TILES=1` the world origin is the Johnson Center, which matches the default fields. The reachable square is 49 m from the origin. Keys stay `terra/rover/<id>/…`.
 
 ```swift
 let follower = try MobileWaypoint(settings: defaultWaypointSettings())
@@ -127,6 +124,17 @@ Zero effort is coast: duty 0, no direction, IN1 and IN2 both low. It is not a me
 
 If commands stop arriving, or the last producer stamp ages out, the watchdog coasts and deasserts `drive_enabled`. That is still not a brake. Loss of the phone link only drops driver enable when the robot stops refreshing `commanded_at`. Open the hardware switch before the wheels are on the ground. An invalid effort, a backwards adapter clock, a producer time in the future, or an older stamp than the one already latched also coast and drop enable.
 
+```mermaid
+stateDiagram-v2
+  [*] --> EnableOpen
+  EnableOpen --> AwaitCommand: switch closes
+  AwaitCommand --> Live: fresh command
+  Live --> Watchdog: 200 ms
+  Watchdog --> EnableOpen: switch opens
+```
+
+*Watchdog coasts and drops enable. It does not brake.*
+
 ### Bench
 
 Wheels off the ground. No autonomy stack. Logic power until the enable path is confirmed.
@@ -161,58 +169,6 @@ Initial phone camera height is assumed to be 0.5 m over a flat ground reference;
 Phone depth comes from the rear camera's optical pose, independently of the rover-body mounting rotation.
 Stop preserves the map; starting either mode creates a new map.
 
-Bevy Zenoh mode uses the same grid. It does not subscribe to an occupancy topic. Each Zorvane depth packet carries the exposure-aligned optical camera pose and the rover body pose in the robotics frame (the same conversion Zorvane uses for its own per-rover map). The phone recenters on the body position, integrates axial depth through `MobileOccupancyMap`, and draws the body heading. Ground is robotics Z = 0, which is the world floor (Bevy Y = 0); the 0.5 m phone-height assumption is not used. Depth packets without an exposure pose are ignored. Body pose is sampled with the camera at exposure time, so the marker matches the depth frame rather than a later odometry estimate. There is still no published map snapshot for ARGOS or other operators.
-
-## Drive Bevy from TerraPhone over Zenoh
-
-TerraPhone exposes the Rust `terra-transport` client through UniFFI in the **iOS Simulator** build only. Use the **Bevy simulator · Zenoh** section to configure an endpoint and rover ID, then connect. This mode publishes either the velocity sliders or, after **Go to waypoint**, the phone follower's twist as `cmd_vel` on `terra/rover/<id>/cmd_vel`. The Zorvane rover runs its own velocity feedback loop. Local phone IMU/VIO/motor effort readouts do not provide remote feedback. Connecting starts at zero. Stop, switching modes and leaving the foreground close the session with a final zero. The Rust publisher also expires its 250 ms command lease if Swift stops refreshing it; Zorvane's independent 500 ms watchdog remains active. A physical-device build does not include this section.
-
-Demo on one Mac. Start the world from a [Zorvane](https://super-yojan.dev/Zorvane/) checkout:
-
-```sh
-TERRA_ROVER_COUNT=2 TERRA_ZENOH_LISTEN=tcp/0.0.0.0:7447 cargo run -p zorvane
-```
-
-Build/run TerraPhone in the iOS Simulator, select `tcp/127.0.0.1:7447` and rover `0`, connect, then move the velocity sliders. Stop and check that the rover stops. Choose rover `1` to drive the second rover. Endpoint and ID are stored in the Simulator; there is no automatic reconnect or automatic startup motion. A physical iPhone does not show this section, does not read a previously saved endpoint, and does not join Zorvane over the LAN. Use Bluetooth on that phone.
-
-The default topic prefix is `terra/rover`. Session-open status confirms a transport session, not rover discovery or movement acknowledgement. The connection status counts posed depth frames as they arrive. Fleet/state and RGB subscriptions remain follow-ups. Remote mode builds the local occupancy map from `terra/rover/<id>/camera/depth` only; it does not mix in simulated-room or ARKit observations.
-
-One-Mac occupancy demo, from a Zorvane checkout:
-
-```sh
-TERRA_ROVER_COUNT=1 TERRA_ZENOH_LISTEN=tcp/0.0.0.0:7447 cargo run -p zorvane
-```
-
-Build and run TerraPhone in the iOS Simulator (`./scripts/build-ios.sh`, then open `mobile/ios/TerraPhone.xcodeproj`). Select `tcp/127.0.0.1:7447` and rover `0`, then connect. The occupancy section starts at “Waiting for simulator depth and exposure pose”. After Zorvane publishes a depth frame, the grid fills with free and occupied cells as the rover sees the world. Move the velocity sliders; the blue marker and the map window follow the published body pose. Stop disconnects and keeps the last grid. Rover `1` maps that rover only. The depth stream is about 1.9 MiB/s at the default 256×192 resolution, before protocol overhead. Only the Simulator build subscribes to it. Depth keys stay `terra/rover/<id>/camera/depth`.
-
-Verification:
-
-```sh
-./scripts/build-ios.sh
-python3 scripts/check-zenoh-swift.py # requires eclipse-zenoh Python package
-cargo test -p terra-transport
-cargo test -p terra-transport -- --ignored
-```
-
-In a Zorvane checkout, the moved world tests are:
-
-```sh
-cargo test -p zorvane depth_packet_pose_round_trips_into_the_phone_decoder
-cargo test -p zorvane mobile_adapter_drives_avian -- --ignored
-```
-
-The Swift test exercises Swift → UniFFI → Rust → Zenoh against a real Python peer, checking the selected topic, payload, lease expiry and final zero. It also publishes one posed depth packet and checks that Swift integrates it into an occupied cell. `depth_packet_pose_round_trips_into_the_phone_decoder` checks that a Zorvane depth packet decodes to the same robotics pose the in-world map uses, then occupies the expected cell. The ignored transport test checks that the phone client consumes each posed depth sequence once. The Bevy integration test uses the same transport to move an Avian rover and verifies stopping on disconnect. Seeing the grid in the iOS Simulator still requires Zorvane to be running so the GPU depth camera can publish frames. The device app does not open that session.
-
-```mermaid
-stateDiagram-v2
-  [*] --> EnableOpen
-  EnableOpen --> AwaitCommand: switch closes
-  AwaitCommand --> Live: fresh command
-  Live --> Watchdog: 200 ms
-  Watchdog --> EnableOpen: switch opens
-```
-
-*Watchdog coasts and drops enable. It does not brake.*
 
 ## Bluetooth actuator control
 
@@ -260,7 +216,7 @@ tracking loss explicitly disarms. Commands are produced on one control queue at
 20 Hz with their monotonic production time. Bluetooth owns session and sequence
 and sends safe output during disarmed/arming states. Custom manual layouts disable
 waypoint/autonomy choices. The local simulated plant remains available on both
-targets. Bevy Zenoh controls remain available in the iOS Simulator.
+targets.
 
 The automatic connection refactor has passed unsigned iPhone/Simulator builds,
 Swift policy and bindings checks, Python rover-service tests, and local Rust/Zenoh
@@ -273,7 +229,7 @@ authoritative safety validation when handling the request.
 
 ## ARGOS dashboard connection on physical phones
 
-The simulator-only Bevy connection described above remains unchanged. A separate **Settings → Fleet connection** connection now attaches the local phone sensor controller to a Mac-hosted Zenoh router over Tailscale. See [real-phone setup and lifecycle](DASHBOARD_TAILSCALE.md). Bluetooth remains the actuator link and Connect never arms it.
+**Settings → Fleet connection** now attaches the local phone sensor controller to a Mac-hosted Zenoh router over Tailscale. See [real-phone setup and lifecycle](DASHBOARD_TAILSCALE.md). Bluetooth remains the actuator link and Connect never arms it.
 
 ## Automatic rover and router connection
 

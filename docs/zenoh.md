@@ -3,15 +3,15 @@
 > [!TIP]
 > **TL;DR**
 > Prefix: `terra/rover/<id>/…`
-> Simulator client publishes `cmd_vel` at 20 Hz.
+> The `RoverConnection` client publishes `cmd_vel` at 20 Hz. No TerraPhone app uses it.
 > Lease is 250 ms, then zeros.
-> iPhone does not open this socket. It uses Bluetooth.
+> TerraPhone iOS does not open this socket. It uses Bluetooth.
 
 ```mermaid
 flowchart LR
   ARGOS[ARGOS] -->|teleop goal safety| Z[Zorvane]
-  Sim[Simulator client] -->|cmd_vel| Z
-  Z -->|camera/depth| Sim
+  Client[RoverConnection client] -->|cmd_vel| Z
+  Z -->|camera/depth| Client
   Dash[Loopback dashboard] --> Local[127.0.0.1 only]
 ```
 
@@ -19,12 +19,8 @@ flowchart LR
 
 | Session | Who | Address |
 | --- | --- | --- |
-| `RoverConnection` | Simulator only | Any `tcp/` endpoint. Usually `tcp/127.0.0.1:7447`. |
+| `RoverConnection` | `terra-transport` tests and tools | Any `tcp/` endpoint. Usually `tcp/127.0.0.1:7447`. |
 | `ControlPlane` | `host_dashboard` | `tcp/127.0.0.1` only. `0.0.0.0` is rejected. |
-
-![Placeholder Zenoh section in the Simulator](assets/phone-simulator.svg)
-
-*Device builds delete `zenohEndpoint` on launch.*
 
 ## Keys
 

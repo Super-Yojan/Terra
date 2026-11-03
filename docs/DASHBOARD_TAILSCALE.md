@@ -11,14 +11,14 @@ ARGOS on Mac -> localhost:7448 -> Zenoh router <- Mac Tailscale IP:7448 <- Terra
 ## Mac setup
 
 1. Enable Tailscale on the Mac and iPhone, signed into the same tailnet. Tailnet access rules must permit the phone to reach the Mac on TCP port 7448. Allow the router's incoming connection if the macOS firewall prompts.
-2. From Terra, run `./scripts/dashboard-router.sh`. It listens only on localhost and the Mac's Tailscale IPv4 address. The port is 7448 to avoid the simulator's 7447 listener. Pass an address explicitly with `./scripts/dashboard-router.sh 100.x.y.z`, or use `--local` for loopback testing without Tailscale.
+2. From Terra, run `./scripts/dashboard/dashboard-router.sh`. It listens only on localhost and the Mac's Tailscale IPv4 address. The port is 7448 to avoid the simulator's 7447 listener. Pass an address explicitly with `./scripts/dashboard/dashboard-router.sh 100.x.y.z`, or use `--local` for loopback testing without Tailscale.
 3. Leave the router process running. In ARGOS Connection, use endpoint `tcp/127.0.0.1:7448`, prefix `terra/phone`, and turn **Geographic map** off for initial ARKit local-coordinate testing.
 
 The launcher uses the Rust dependency already pinned by Terra; a separate zenohd installation, MQTT broker, or AWS account is unnecessary. No public port forwarding is required.
 
 ## Phone setup
 
-Build updated bindings with `./scripts/build-ios.sh`, then build/run TerraPhone on the physical iPhone using your Apple signing team.
+Build updated bindings with `./scripts/ios/build-ios.sh`, then build/run TerraPhone on the physical iPhone using your Apple signing team.
 
 1. Enable Tailscale and keep TerraPhone in the foreground.
 2. For telemetry without actuators, choose **More → Controller → Phone IMU + VIO** and permit camera/motion access. For hardware, accept the rover pairing popup or let Terra reconnect to its remembered rover. Manual Bluetooth mode can attach to ARGOS without sensors; tracked pose and waypoint control require enabling phone feedback with a compatible actuator layout.
@@ -45,7 +45,7 @@ Use `tailscale status` and `tailscale ip -4` on the Mac. If Tailscale is stopped
 
 ## Repeating local verification
 
-Run `cargo test --workspace --locked` in Terra and ARGOS. After rebuilding both Apple bindings/libraries, run `./scripts/check-dashboard-swift.sh` from Terra. It expects ARGOS beside Terra (override `ARGOS_ROOT` otherwise), Swift on macOS, and the existing Python `eclipse-zenoh` package. It starts a temporary loopback router, exercises both generated Swift clients, and closes the router on completion.
+Run `cargo test --workspace --locked` in Terra and ARGOS. After rebuilding both Apple bindings/libraries, run `./scripts/dashboard/check-dashboard-swift.sh` from Terra. It expects ARGOS beside Terra (override `ARGOS_ROOT` otherwise), Swift on macOS, and the existing Python `eclipse-zenoh` package. It starts a temporary loopback router, exercises both generated Swift clients, and closes the router on completion.
 
 On October 8, 2026, Terra's 68 workspace tests passed (two existing live remote tests ignored), ARGOS's 15 passed, the paired Swift smoke passed, and TerraPhone device/Simulator plus ARGOS Mac builds succeeded. Builds used `CODE_SIGNING_ALLOWED=NO`; they do not establish device installation. This Mac's recorded Tailscale address was `100.112.151.78`, but Tailscale was stopped and its registered physical iPhone was unavailable. Enable Tailscale and confirm the current address before hardware testing.
 
