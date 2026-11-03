@@ -43,7 +43,7 @@ impl AutonomyArbiter {
         pose: Pose,
         now: f64,
     ) -> Result<String, &'static str> {
-        let radius = self.planner.config.radius;
+        let radius = self.planner.config.footprint.circumradius();
         let map = self.fresh_agent_map(map, now);
         let landmarks = self.task_landmarks.clone();
         let destination = self.outdoor_destination;
@@ -112,7 +112,7 @@ impl AutonomyArbiter {
         if !task.steps_left() {
             return Err("step_limit: no decisions left; call finish".into());
         }
-        let radius = self.planner.config.radius;
+        let radius = self.planner.config.footprint.circumradius();
         let map = self
             .fresh_agent_map(map, now)
             .ok_or("map_stale: no fresh map; wait and call get_map")?;

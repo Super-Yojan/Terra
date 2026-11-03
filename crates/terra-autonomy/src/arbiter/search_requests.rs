@@ -70,10 +70,10 @@ impl AutonomyArbiter {
             Some("report_capacity")
         } else if !self.detector_available(&r.target_class, input.now) {
             Some("detector_unavailable")
-        } else if input.pose.x - self.planner.config.radius < r.bounds.min_x
-            || input.pose.x + self.planner.config.radius > r.bounds.max_x
-            || input.pose.y - self.planner.config.radius < r.bounds.min_y
-            || input.pose.y + self.planner.config.radius > r.bounds.max_y
+        } else if input.pose.x - self.planner.config.footprint.circumradius() < r.bounds.min_x
+            || input.pose.x + self.planner.config.footprint.circumradius() > r.bounds.max_x
+            || input.pose.y - self.planner.config.footprint.circumradius() < r.bounds.min_y
+            || input.pose.y + self.planner.config.footprint.circumradius() > r.bounds.max_y
         {
             Some("outside_search_bounds")
         } else if !input.healthy
@@ -100,7 +100,7 @@ impl AutonomyArbiter {
             r.clone(),
             input.now,
             ConfirmationConfig::default(),
-            self.planner.config.radius,
+            self.planner.config.footprint.circumradius(),
         )?;
         self.follower.cancel();
         self.last_plan = None;

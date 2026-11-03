@@ -53,6 +53,12 @@
 
 mod astar;
 pub use astar::*;
+mod footprint;
+pub use footprint::{
+    Footprint, OCCUPIED, footprint_fits, footprint_rejection_at, rectangle_clearance,
+};
+mod hybrid_astar;
+pub use hybrid_astar::{HybridConfig, HybridGoal, HybridWaypoint, hybrid_astar_route};
 mod search;
 pub use search::*;
 mod maneuver;
@@ -93,14 +99,14 @@ impl Pose {
         [self.x, self.y, self.yaw].iter().all(|v| v.is_finite())
     }
 }
-/// Motion limits and circular footprint used by the local planner.
+/// Motion limits and the rectangular body footprint used by the local planner.
 ///
-/// All values must be finite and positive; radius is capped at 5 m and horizon at 10 s.
+/// All values must be finite and positive; the body is capped at 5 m and horizon at 10 s.
 /// Invalid configurations cause [`LocalPlanner::plan`] to return a blocked decision.
 ///
 /// # Defaults
 ///
-/// The default footprint radius is 0.65 m, speed limits are 2 m/s and 2 rad/s,
+/// The default footprint is Terra's 0.61 m square body with 5 cm margin, speed limits are 2 m/s and 2 rad/s,
 /// acceleration limits are 1 m/s² and 2 rad/s², braking is 1 m/s², and the
 /// prediction horizon is 2 s.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -111,8 +117,9 @@ pub struct PlannerConfig {
     /// Nonnegative cost per reverse metre/second.
     #[serde(default = "default_reverse_penalty")]
     pub reverse_penalty: f64,
-    /// Circular rover footprint radius in metres.
-    pub radius: f64,
+    /// Rover body rectangle and margin, checked at the rover's heading.
+    #[serde(default)]
+    pub footprint: Footprint,
     /// Maximum forward or reverse speed magnitude in metres per second.
     pub max_linear: f64,
     /// Maximum yaw rate magnitude in radians per second.
@@ -137,7 +144,7 @@ impl Default for PlannerConfig {
         Self {
             max_reverse: default_reverse(),
             reverse_penalty: default_reverse_penalty(),
-            radius: 0.65,
+            footprint: Footprint::default(),
             max_linear: 2.,
             max_angular: 2.,
             acceleration: 1.,
@@ -262,7 +269,6 @@ impl LocalPlanner {
         let config = &self.config;
         [
             config.max_reverse,
-            config.radius,
             config.max_linear,
             config.max_angular,
             config.acceleration,
@@ -275,7 +281,7 @@ impl LocalPlanner {
             && config.max_reverse <= 2.
             && config.reverse_penalty.is_finite()
             && config.reverse_penalty >= 0.
-            && config.radius <= 5.
+            && config.footprint.valid()
             && config.horizon <= 10.
     }
     /// Check the swept footprint through the motion horizon and the braking tail.
@@ -304,8 +310,22 @@ impl LocalPlanner {
             return (Some("invalid_input"), points);
         }
         let config = &self.config;
-        // Advance at most half a cell per step, with a 100 ms time-step ceiling.
-        let step = (map.resolution / (2. * trajectory.linear.abs().max(0.1))).min(0.1);
+        // No point of the body moves more than half a cell per step (translation
+        // plus a corner swinging round), with a 100 ms ceiling. Growing the body
+        // by a quarter cell then covers everything swept between samples.
+        let corner_speed =
+            trajectory.linear.abs() + trajectory.angular.abs() * config.footprint.circumradius();
+        let step = (map.resolution / (2. * corner_speed.max(0.1))).min(0.1);
+        let pad = map.resolution / 4.;
+        // A pure spin sweeps the disc around the body; tolerate unknown cells there
+        // as the circle planner did. Reversing never enters unknown space.
+        let unknown = if trajectory.linear == 0. && trajectory.angular != 0. {
+            footprint::Unknown::SpinDisc(pose)
+        } else if trajectory.linear >= 0. {
+            footprint::Unknown::UnderBody(pose)
+        } else {
+            footprint::Unknown::Refused
+        };
         let duration = config.horizon + trajectory.linear.abs() / config.braking;
         let record_interval = (duration / 14.).max(step);
         let mut next_record = 0.;
@@ -318,17 +338,7 @@ impl LocalPlanner {
             ]
         };
         while elapsed < duration {
-            let rejection = footprint_rejection(
-                map,
-                sample_pose.x,
-                sample_pose.y,
-                config.radius,
-                if trajectory.linear < 0. {
-                    None
-                } else {
-                    Some(pose)
-                },
-            );
+            let rejection = footprint::rejection(map, &config.footprint, sample_pose, pad, unknown);
             if record && (elapsed >= next_record || rejection.is_some()) {
                 points.push(offset(sample_pose));
                 next_record = elapsed + record_interval;
@@ -353,17 +363,7 @@ impl LocalPlanner {
             points.push(offset(sample_pose));
         }
         (
-            footprint_rejection(
-                map,
-                sample_pose.x,
-                sample_pose.y,
-                config.radius,
-                if trajectory.linear < 0. {
-                    None
-                } else {
-                    Some(pose)
-                },
-            ),
+            footprint::rejection(map, &config.footprint, sample_pose, pad, unknown),
             points,
         )
     }
@@ -701,24 +701,11 @@ pub fn reachable(map: &MapSnapshot, pose: Pose, radius: f64, x: f64, y: f64) -> 
 }
 /// Clearance to observed obstacle cell boundaries; unknown space is not evidence of clearance.
 ///
-/// Returns distance in metres from the circular footprint to the nearest occupied
-/// cell's rectangular boundary. Unknown cells and map edges do not contribute.
+/// Returns distance in metres from the body rectangle (with margin, at the pose's
+/// heading) to the nearest occupied cell; it can read up to half a cell diagonal
+/// low, never high. Unknown cells and map edges do not contribute.
 /// Returns `None` for invalid input or when no occupied cell is observed, and zero
-/// when the circular footprint touches or overlaps an observed obstacle.
-pub fn observed_clearance(map: &MapSnapshot, pose: Pose, radius: f64) -> Option<f64> {
-    if !valid_map(map) || !pose.finite() || !radius.is_finite() || radius <= 0. {
-        return None;
-    }
-    let mut best = f64::INFINITY;
-    for (i, v) in map.occupancy.iter().enumerate() {
-        if *v < 65 {
-            continue;
-        }
-        let x = map.origin_x + (i % map.width as usize) as f64 * map.resolution;
-        let y = map.origin_y + (i / map.width as usize) as f64 * map.resolution;
-        let dx = (x - pose.x).max(0.).max(pose.x - x - map.resolution);
-        let dy = (y - pose.y).max(0.).max(pose.y - y - map.resolution);
-        best = best.min(dx.hypot(dy) - radius);
-    }
-    best.is_finite().then_some(best.max(0.))
+/// when the body touches or overlaps an observed obstacle.
+pub fn observed_clearance(map: &MapSnapshot, pose: Pose, footprint: &Footprint) -> Option<f64> {
+    footprint::rectangle_clearance(map, footprint, pose, f64::INFINITY)
 }

@@ -684,7 +684,7 @@ impl AutonomyArbiter {
                         && terra_navigation::reachable(
                             m,
                             input.pose,
-                            self.planner.config.radius,
+                            self.planner.config.footprint.circumradius(),
                             p.x,
                             p.y,
                         )

@@ -6,7 +6,7 @@
 use terra_mapping::MapSnapshot;
 use terra_navigation::{Pose, astar_progress_route, route_segment_clear};
 
-/// Terra's footprint radius (0.85 m square body).
+/// Terra's circle planner radius (0.61 m square body plus clearance).
 const RADIUS: f64 = 0.65;
 /// L3 arrival radius minus a margin, as the arbiter passes it.
 const SNAP: f64 = 0.65;

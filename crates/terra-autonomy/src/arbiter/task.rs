@@ -489,7 +489,7 @@ impl AutonomyArbiter {
     /// Advance the task before motion is chosen. Holds unless a waypoint is being driven.
     pub(super) fn drive_task(&mut self, input: &ArbiterInput<'_>, decision: &mut TickDecision) {
         let now = input.now;
-        let radius = self.planner.config.radius;
+        let radius = self.planner.config.footprint.circumradius();
         let pose = input.pose;
         let fresh_map = input.map.filter(|_| self.map_is_fresh(input));
         let Some(task) = self.task.as_mut() else {

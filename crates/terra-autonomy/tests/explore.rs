@@ -513,7 +513,7 @@ fn through_unknown_stops_short_of_an_occupied_wall() {
     let mut arbiter = AutonomyArbiter::default();
     arbiter.explorer.config_mut().through_unknown = true;
     arbiter.set_level(explore("walled", 60.));
-    let radius = arbiter.planner.config.radius;
+    let radius = arbiter.planner.config.footprint.circumradius();
     let run = drive(&mut arbiter, &map, 200);
     for (pose, _) in &run {
         assert!(

@@ -490,7 +490,7 @@ impl AutonomyArbiter {
                 if let Some((x, y)) = frontier(
                     input.map.unwrap(),
                     input.pose,
-                    self.planner.config.radius,
+                    self.planner.config.footprint.circumradius(),
                     &excluded,
                 ) {
                     self.next_proposal += 1;
@@ -522,7 +522,7 @@ impl AutonomyArbiter {
         guidance_heading: &mut f64,
         decision: &mut TickDecision,
     ) -> Twist {
-        let radius = self.planner.config.radius;
+        let radius = self.planner.config.footprint.circumradius();
         let destination = (out.status.goal_id, out.status.x, out.status.y);
         let here = [input.pose.x, input.pose.y];
         // Drop reached route points; never use a distant point without checking line of sight.

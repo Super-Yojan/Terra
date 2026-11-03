@@ -1,14 +1,19 @@
 //! Session geometry validation and stale-authority configuration regression scenarios.
 use super::*;
 #[test]
-/// Checks half-diagonal plus clearance produces the planner radius and rejects
-/// negative clearance or nonfinite vehicle dimensions.
+/// Checks the dimensions become the planner's body rectangle (clearance as the
+/// margin on every side) and rejects negative clearance or nonfinite dimensions.
 fn navigation_dimensions_validate_and_derive_a_conservative_footprint() {
     let mut p = navigation_settings::Parameters::default();
     p.length = 0.8;
     p.width = 0.6;
     p.clearance = 0.1;
-    assert!((p.planner().radius - 0.6).abs() < 1e-10);
+    let footprint = p.planner().footprint;
+    assert_eq!(
+        (footprint.length, footprint.width, footprint.margin),
+        (0.8, 0.6, 0.1)
+    );
+    assert!((footprint.circumradius() - 0.6).abs() < 1e-10);
     assert!(p.valid());
     p.clearance = -0.1;
     assert!(!p.valid());
@@ -37,8 +42,9 @@ fn navigation_update_requires_fresh_neutral_idle_hardware_and_current_revisions(
     navigation_settings::apply(&mut b, &serde_json::to_vec(&p).unwrap(), 0.1);
     assert_eq!(b.navigation.revision, 1);
     assert_eq!(b.navigation.parameters.length, 0.8);
-    assert!(
-        (b.autonomy.planner.config.radius - b.navigation.parameters.planner().radius).abs() < 1e-10
+    assert_eq!(
+        b.autonomy.planner.config.footprint,
+        b.navigation.parameters.planner().footprint
     );
     let mut stale = payload.clone();
     stale["token"] = "second-in-batch".into();

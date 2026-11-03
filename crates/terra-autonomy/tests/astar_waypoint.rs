@@ -233,7 +233,11 @@ fn cached_waypoint_command_must_stay_admissible() {
         occupancy: vec![0; 120 * 80],
     };
     let mut arbiter = AutonomyArbiter::default();
-    arbiter.planner.config.radius = 0.2;
+    arbiter.planner.config.footprint = terra_navigation::Footprint {
+        length: 0.28,
+        width: 0.28,
+        margin: 0.,
+    };
     arbiter.set_level(LevelRequest {
         level: Level::Waypoint,
         token: "cache".into(),
@@ -283,7 +287,7 @@ fn cached_waypoint_command_must_stay_admissible() {
                 && terra_navigation::route_segment_clear(
                     &blocked,
                     pose,
-                    arbiter.planner.config.radius,
+                    arbiter.planner.config.footprint.circumradius(),
                     [pose.x, pose.y],
                     *point,
                 )
@@ -430,7 +434,11 @@ fn stalled_measured_speed_does_not_pin_waypoint_speed() {
         occupancy: vec![0; 120 * 80],
     };
     let mut arbiter = AutonomyArbiter::default();
-    arbiter.planner.config.radius = 0.2;
+    arbiter.planner.config.footprint = terra_navigation::Footprint {
+        length: 0.28,
+        width: 0.28,
+        margin: 0.,
+    };
     arbiter.set_level(LevelRequest {
         level: Level::Waypoint,
         token: "stall".into(),
@@ -569,13 +577,37 @@ fn drive_behind_box(goal: [f64; 2]) -> (bool, Pose, Vec<String>) {
         pose.yaw += measured.angular * 0.1;
         pose.x += measured.linear * pose.yaw.cos() * 0.1;
         pose.y += measured.linear * pose.yaw.sin() * 0.1;
-        // Terra's 0.65 m footprint never overlaps the box.
-        let nearest_x = pose.x.clamp(2.4, 2.6);
-        let nearest_y = pose.y.clamp(-0.6, 0.6);
-        assert!(
-            (pose.x - nearest_x).hypot(pose.y - nearest_y) > 0.65 - 0.05,
-            "footprint hit the box at {pose:?}"
-        );
+        // Terra's 0.61 m body rectangle, at its heading, never overlaps the box.
+        assert!(body_clear_of_box(pose), "body hit the box at {pose:?}");
     }
     (false, pose, reasons)
+}
+
+/// Whether Terra's 0.61 m square body at `pose` stays clear of the box
+/// x 2.4..2.6, y -0.6..0.6 (separating axes: box axes and body axes).
+fn body_clear_of_box(pose: Pose) -> bool {
+    let half = 0.61 / 2.;
+    let (sin, cos) = pose.yaw.sin_cos();
+    let corners = [(1., 1.), (1., -1.), (-1., -1.), (-1., 1.)].map(|(u, v): (f64, f64)| {
+        (
+            pose.x + half * (u * cos - v * sin),
+            pose.y + half * (u * sin + v * cos),
+        )
+    });
+    let box_corners = [(2.4, -0.6), (2.6, -0.6), (2.6, 0.6), (2.4, 0.6)];
+    let separated = |axis: (f64, f64)| {
+        let project = |p: &(f64, f64)| p.0 * axis.0 + p.1 * axis.1;
+        let (a_min, a_max) = corners
+            .iter()
+            .map(project)
+            .fold((f64::MAX, f64::MIN), |(lo, hi), v| (lo.min(v), hi.max(v)));
+        let (b_min, b_max) = box_corners
+            .iter()
+            .map(project)
+            .fold((f64::MAX, f64::MIN), |(lo, hi), v| (lo.min(v), hi.max(v)));
+        a_max < b_min || b_max < a_min
+    };
+    [(1., 0.), (0., 1.), (cos, sin), (-sin, cos)]
+        .into_iter()
+        .any(separated)
 }

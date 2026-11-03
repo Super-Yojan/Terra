@@ -16,7 +16,7 @@ pub struct Parameters {
     pub length: f64,
     /// Assumed body width, metres, validated in 0.1..=3.
     pub width: f64,
-    /// Additional radial clearance, metres, validated in 0..=1.
+    /// Safety margin kept on every side of the body rectangle, metres, validated in 0..=1.
     pub clearance: f64,
     /// Planner forward speed limit, m/s, validated in 0.05..=2.
     pub max_linear: f64,
@@ -36,15 +36,15 @@ fn default_reverse_penalty() -> f64 {
 }
 impl Default for Parameters {
     fn default() -> Self {
-        // Preserve the existing 0.65 m planner radius. Geometry is a planning assumption,
-        // not a hardware measurement; operators must enter the actual vehicle dimensions.
+        // Terra's measured 0.61 m square body with 5 cm on every side. Operators
+        // must enter the actual vehicle dimensions for other rovers.
         Self {
             turning: Default::default(),
             max_reverse: default_reverse(),
             reverse_penalty: default_reverse_penalty(),
-            length: 0.85,
-            width: 0.85,
-            clearance: 0.65 - 0.85_f64.hypot(0.85) / 2.,
+            length: 0.61,
+            width: 0.61,
+            clearance: 0.05,
             max_linear: 2.,
             max_angular: 2.,
             horizon: 2.,
@@ -72,11 +72,19 @@ impl Parameters {
             .iter()
             .all(|&(v, min, max)| v.is_finite() && (min..=max).contains(&v))
     }
-    /// Build planner settings with radius equal to half the body diagonal plus clearance.
+    /// The body rectangle the planners check, with `clearance` as the margin on every side.
+    pub fn footprint(&self) -> terra_navigation::Footprint {
+        terra_navigation::Footprint {
+            length: self.length,
+            width: self.width,
+            margin: self.clearance,
+        }
+    }
+    /// Build planner settings around the body rectangle.
     /// Other planner parameters retain portable defaults; this conversion assumes prior validation.
     pub fn planner(&self) -> terra_navigation::PlannerConfig {
         terra_navigation::PlannerConfig {
-            radius: self.length.hypot(self.width) / 2. + self.clearance,
+            footprint: self.footprint(),
             max_reverse: self.max_reverse,
             reverse_penalty: self.reverse_penalty,
             max_linear: self.max_linear,
@@ -102,9 +110,11 @@ pub struct State {
     seen: std::collections::VecDeque<String>,
 }
 impl State {
-    /// Return versioned navigation configuration status JSON, including radius, revision, and latest result.
+    /// Return versioned navigation configuration status JSON, including the footprint, revision, and latest result.
+    /// `footprint_radius` is the circle around the body, kept for older dashboards.
     pub fn status(&self) -> serde_json::Value {
-        serde_json::json!({"schema_version":1,"revision":self.revision,"parameters":self.parameters,"footprint_radius":self.parameters.planner().radius,"profile":self.profile,"token":self.token,"result":self.result})
+        let footprint = self.parameters.footprint();
+        serde_json::json!({"schema_version":1,"revision":self.revision,"parameters":self.parameters,"footprint":footprint,"footprint_radius":footprint.circumradius(),"profile":self.profile,"token":self.token,"result":self.result})
     }
 }
 #[derive(Deserialize)]

@@ -704,7 +704,11 @@ impl MobileController {
             }
         }
         let clearance = map.as_ref().and_then(|m| {
-            terra_navigation::observed_clearance(&m.0, pose.0, brain.autonomy.planner.config.radius)
+            terra_navigation::observed_clearance(
+                &m.0,
+                pose.0,
+                &brain.autonomy.planner.config.footprint,
+            )
         });
         if let Some(kind) = brain.near_miss.update(clearance) {
             output.events.push(terra_autonomy::DecisionEvent {

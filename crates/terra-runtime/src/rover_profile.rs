@@ -21,7 +21,7 @@ pub struct RoverProfile {
     pub width: f64,
     /// Wheel centre to centre across the axle, metres, 0.05..=3.
     pub track_width: f64,
-    /// Planner clearance added to half the body diagonal, metres, 0..=1.
+    /// Safety margin on every side of the body rectangle, metres, 0..=1.
     pub clearance: f64,
     /// Planner and controller forward speed limit, m/s, 0.05..=2.
     pub max_linear: f64,
@@ -89,14 +89,15 @@ impl DockProfile {
 }
 
 impl RoverProfile {
-    /// Terra (CrabTrapBot, two ESCs). Reproduces the runtime defaults exactly.
+    /// Terra (CrabTrapBot, two ESCs): 0.61 m square body with 5 cm margin.
+    /// Reproduces the runtime defaults exactly.
     pub fn terra() -> Self {
         Self {
             name: "terra".into(),
-            length: 0.85,
-            width: 0.85,
+            length: 0.61,
+            width: 0.61,
             track_width: 0.5,
-            clearance: 0.65 - 0.85_f64.hypot(0.85) / 2.,
+            clearance: 0.05,
             max_linear: 2.,
             max_angular: 2.,
             min_turn_radius: 0.5,
@@ -112,8 +113,8 @@ impl RoverProfile {
     /// over the wheels, 1 in wheels, so a 6 in (0.152 m) track. Speed,
     /// deadband and spin effort are estimates until measured on the rover.
     ///
-    /// No extra clearance: routing already pads the half diagonal by half a
-    /// 0.1 m cell, and any more closes 0.4 m gaps, which made indoor routes
+    /// No extra margin: collision checks already count every cell the body
+    /// touches, and any more closes 0.4 m gaps, which made indoor routes
     /// appear and vanish as one edge cell flipped.
     pub fn terra_mini() -> Self {
         Self {
@@ -261,9 +262,9 @@ mod tests {
         let nav = mini.navigation(&Default::default());
         assert!(nav.valid());
         assert!(
-            nav.planner().radius < 0.3,
+            nav.planner().footprint.circumradius() < 0.3,
             "radius={}",
-            nav.planner().radius
+            nav.planner().footprint.circumradius()
         );
         assert!(
             mini.controller(ControllerConfig::default())
@@ -315,7 +316,13 @@ mod tests {
             y: 0.6,
             ..Default::default()
         };
-        let route = terra_navigation::astar_route(&map, pose, nav.planner().radius, 3.45, 0.6);
+        let route = terra_navigation::astar_route(
+            &map,
+            pose,
+            nav.planner().footprint.circumradius(),
+            3.45,
+            0.6,
+        );
         assert!(route.is_ok(), "{route:?}");
     }
 }
