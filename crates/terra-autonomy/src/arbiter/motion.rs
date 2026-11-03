@@ -1,6 +1,20 @@
 //! Choose desired motion, then check it against occupancy and turning limits.
 use super::*;
 
+/// Hybrid A* expansions per control tick (about 1.5 ms in a release build).
+const ROUTE_EXPANSIONS_PER_TICK: u32 = 150;
+/// Expansions before a route search gives up (about 2 s of ticks).
+const ROUTE_MAX_EXPANSIONS: u32 = 30_000;
+/// Heuristic weight for waypoint routes: far fewer expansions, at most this
+/// factor longer than the best route.
+const ROUTE_HEURISTIC_WEIGHT: f64 = 2.0;
+/// Pure-pursuit lookahead along the route, metres.
+const ROUTE_LOOKAHEAD: f64 = 0.5;
+/// Distance at which a forward/reverse switch counts as reached, metres.
+const ROUTE_SWITCH_REACHED: f64 = 0.1;
+/// Further than this from the route, the rover replans from where it is, metres.
+const ROUTE_DEVIATION: f64 = 0.4;
+
 impl AutonomyArbiter {
     pub(super) fn search_bounded_map(&self, input: &ArbiterInput<'_>) -> Option<MapSnapshot> {
         if self.level == Level::TargetSearch {
@@ -105,6 +119,10 @@ impl AutonomyArbiter {
                 decision.source = "none";
                 self.last_plan = None;
                 self.planner_trace = None;
+            } else if decision.route_pending && intent == Twist::default() {
+                decision.held = true;
+                decision.reason = "route_planning";
+                decision.source = "none";
             }
             self.check_motion(
                 input,
@@ -241,7 +259,7 @@ impl AutonomyArbiter {
             // forward command; reverse runs unchecked.
             Level::Task if agent_twist.is_some() => {
                 decision.source = "task_agent_drive";
-                self.global_route.clear();
+                self.clear_route();
                 self.route_goal = None;
                 self.route_reaches_goal = false;
                 agent_twist.unwrap_or_default()
@@ -298,7 +316,7 @@ impl AutonomyArbiter {
                     )
                 } else {
                     if matches!(self.level, Level::Waypoint | Level::Task) {
-                        self.global_route.clear();
+                        self.clear_route();
                         self.route_goal = None;
                         self.route_reaches_goal = false;
                     }
@@ -522,87 +540,209 @@ impl AutonomyArbiter {
         guidance_heading: &mut f64,
         decision: &mut TickDecision,
     ) -> Twist {
-        let radius = self.planner.config.footprint.circumradius();
         let destination = (out.status.goal_id, out.status.x, out.status.y);
-        let here = [input.pose.x, input.pose.y];
-        // Drop reached route points; never use a distant point without checking line of sight.
-        while self.global_route.len() > 1
-            && (self.global_route[0][0] - here[0]).hypot(self.global_route[0][1] - here[1]) < 0.2
-        {
-            self.global_route.remove(0);
-        }
+        self.advance_route_progress(input.pose);
         let changed_goal = self.route_goal != Some(destination);
+        if changed_goal {
+            self.clear_route();
+            self.route_reaches_goal = false;
+        }
         let due = input.now - self.route_checked_at >= timing::ROUTE_RECHECK_SECONDS;
-        let segment_blocked = self.route_map_revision != input.map_revision
-            && !std::iter::once(here)
-                .chain(self.global_route.iter().copied())
-                .collect::<Vec<_>>()
-                .windows(2)
-                .all(|p| {
-                    terra_navigation::route_segment_clear(map, input.pose, radius, p[0], p[1])
-                });
-        // Approach routes stop at the frontier. Replan on the same
+        // Off the route (a localization jump, or drift) or a newly blocked route.
+        let off_route = self
+            .global_route
+            .get(self.route_progress)
+            .is_some_and(|w| (w.x - input.pose.x).hypot(w.y - input.pose.y) > ROUTE_DEVIATION);
+        let blocked = off_route
+            || self.route_map_revision != input.map_revision
+                && !self.route_still_clear(map, input.pose);
+        if blocked {
+            // Never keep driving a route that no longer fits or that the rover
+            // has left: hold until the replacement is ready.
+            self.clear_route();
+            self.route_reaches_goal = false;
+        }
+        // Approach routes stop at the edge of known space. Replan on the same
         // interval so a rolling map can extend them toward the goal.
         let needs_route = changed_goal
-            || (due
-                && (self.global_route.is_empty() || !self.route_reaches_goal || segment_blocked));
-        if needs_route {
-            self.last_plan = None;
-            self.planner_trace = None;
+            || blocked
+            || (due && (self.global_route.is_empty() || !self.route_reaches_goal));
+        if needs_route && self.route_job.is_none() {
             self.route_goal = Some(destination);
-            self.global_route = match terra_navigation::astar_progress_route(
+            match terra_navigation::RouteJob::new(
                 map,
                 input.pose,
-                radius,
                 out.status.x,
                 out.status.y,
+                &self.hybrid_config(),
                 // A goal against an obstacle moves to where the rover fits,
                 // still inside the arrival radius so reaching it arrives.
                 (self.follower.config().arrive_radius - 0.1).max(0.),
             ) {
-                Ok(route) => {
-                    self.route_reaches_goal = route.last().is_some_and(|point| {
-                        (point[0] - destination.1).abs() <= 1e-9
-                            && (point[1] - destination.2).abs() <= 1e-9
-                    });
-                    route
-                }
+                Ok(job) => self.route_job = Some(job),
                 Err(why) => {
+                    self.clear_route();
                     self.route_reaches_goal = false;
                     decision.route_failure = Some(why);
-                    Vec::new()
                 }
-            };
+            }
         }
         if due || changed_goal {
             self.route_checked_at = input.now;
             self.route_map_revision = input.map_revision;
         }
-        let target = self.global_route.iter().rev().copied().find(|point| {
-            terra_navigation::route_segment_clear(map, input.pose, radius, here, *point)
-        });
-        if let Some(point) = target {
-            *guidance_heading = (point[1] - input.pose.y).atan2(point[0] - input.pose.x);
-            // At the final position use the original follower for arrival and final yaw.
-            let (linear, angular) = if point == [out.status.x, out.status.y] {
-                (out.linear, out.angular)
-            } else {
-                self.follower.route_intent(
-                    input.pose.x,
-                    input.pose.y,
-                    input.pose.yaw,
-                    point[0],
-                    point[1],
-                )
+        if let Some(job) = &mut self.route_job
+            && let Some(result) = job.advance(ROUTE_EXPANSIONS_PER_TICK)
+        {
+            self.route_job = None;
+            self.last_plan = None;
+            self.planner_trace = None;
+            match result {
+                Ok(route) => {
+                    self.global_route = route.waypoints;
+                    self.route_progress = 0;
+                    self.route_reaches_goal = route.reaches_goal;
+                }
+                Err(why) => {
+                    self.clear_route();
+                    self.route_reaches_goal = false;
+                    decision.route_failure = Some(why);
+                }
+            }
+        }
+        if self.global_route.len() < 2 {
+            decision.route_pending = self.route_job.is_some();
+            return Twist::default();
+        }
+        self.follow_route(input.pose, out, guidance_heading)
+    }
+
+    /// Forget the route and any search in progress.
+    pub(super) fn clear_route(&mut self) {
+        self.global_route.clear();
+        self.route_progress = 0;
+        self.route_job = None;
+    }
+
+    /// Hybrid A* settings from the planner's body and the turning policy.
+    fn hybrid_config(&self) -> terra_navigation::HybridConfig {
+        terra_navigation::HybridConfig {
+            max_expansions: ROUTE_MAX_EXPANSIONS,
+            heuristic_weight: ROUTE_HEURISTIC_WEIGHT,
+            ..terra_navigation::HybridConfig::for_body(
+                self.planner.config.footprint,
+                &self.turning_config,
+            )
+        }
+    }
+
+    /// Move the progress marker to the nearest route sample a little way ahead.
+    fn advance_route_progress(&mut self, pose: Pose) {
+        let route = &self.global_route;
+        let window = (self.route_progress + 40).min(route.len());
+        if let Some((best, _)) = (self.route_progress..window)
+            .map(|i| (i, (route[i].x - pose.x).hypot(route[i].y - pose.y)))
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+        {
+            self.route_progress = best;
+        }
+    }
+
+    /// Whether the rest of the route still fits the body on this map.
+    fn route_still_clear(&self, map: &MapSnapshot, pose: Pose) -> bool {
+        self.global_route.iter().skip(self.route_progress).all(|w| {
+            let at = Pose {
+                x: w.x,
+                y: w.y,
+                yaw: w.yaw,
             };
-            Twist { linear, angular }
+            terra_navigation::footprint_fits(map, &self.planner.config.footprint, at, Some(pose))
+        })
+    }
+
+    /// Pure pursuit along the route with curvature capped by the turn radius.
+    /// Reverse sections are driven backwards; the target never looks past a
+    /// change of direction, so the rover stops at each switch before reversing.
+    fn follow_route(
+        &mut self,
+        pose: Pose,
+        out: terra_waypoint::WaypointOutput,
+        guidance_heading: &mut f64,
+    ) -> Twist {
+        let route = &self.global_route;
+        let last = route.len() - 1;
+        let dist = |i: usize| (route[i].x - pose.x).hypot(route[i].y - pose.y);
+        // The section being driven runs from `at` to `end`, all in one direction.
+        // Within reach of a direction switch, move on to the next section.
+        let mut at = self.route_progress.min(last - 1);
+        let (reverse, end) = loop {
+            let reverse = route[at + 1].reverse;
+            let mut end = at + 1;
+            while end < last && route[end + 1].reverse == reverse {
+                end += 1;
+            }
+            if end < last && dist(end) < ROUTE_SWITCH_REACHED {
+                at = end;
+                continue;
+            }
+            break (reverse, end);
+        };
+        self.route_progress = at;
+        let route = &self.global_route;
+        let length = |from: usize, to: usize| -> f64 {
+            route[from..=to]
+                .windows(2)
+                .map(|w| (w[1].x - w[0].x).hypot(w[1].y - w[0].y))
+                .sum()
+        };
+        // Lookahead target along this section.
+        let mut target = at + 1;
+        while target < end && length(at, target) < ROUTE_LOOKAHEAD {
+            target += 1;
+        }
+        let to_section_end = length(at, end) + (route[at].x - pose.x).hypot(route[at].y - pose.y);
+        // On the final forward stretch to the real goal, the waypoint follower
+        // handles arrival and the final heading.
+        if self.route_reaches_goal && end == last && !reverse && to_section_end <= ROUTE_LOOKAHEAD {
+            *guidance_heading = (out.status.y - pose.y).atan2(out.status.x - pose.x);
+            return Twist {
+                linear: out.linear,
+                angular: out.angular,
+            };
+        }
+        let goal = route[target];
+        *guidance_heading = goal.yaw;
+        let heading = pose.yaw + if reverse { std::f64::consts::PI } else { 0. };
+        let (dx, dy) = (goal.x - pose.x, goal.y - pose.y);
+        let ahead = dx * heading.cos() + dy * heading.sin();
+        let left = -dx * heading.sin() + dy * heading.cos();
+        let distance_sq = ahead * ahead + left * left;
+        let kappa_max = 1. / self.turning_config.min_turn_radius;
+        let curvature = if distance_sq < 1e-6 {
+            0.
         } else {
-            // Localization may move us away from every cached visible point,
-            // even without a map revision change. Retry A* at the bounded interval.
-            self.global_route.clear();
-            self.route_reaches_goal = false;
-            decision.route_failure = Some(decision.route_failure.unwrap_or("route_no_path"));
-            Twist::default()
+            (2. * left / distance_sq).clamp(-kappa_max, kappa_max)
+        };
+        let config = self.follower.config();
+        let mut speed = config.cruise;
+        if reverse {
+            speed = speed.min(self.planner.config.max_reverse);
+        }
+        // The turning limiter caps yaw rate: slow down so this arc stays drivable.
+        if curvature.abs() > 1e-9 {
+            speed = speed.min(self.turning_config.max_yaw_rate / curvature.abs());
+        }
+        // Slow toward a direction switch and toward the end of the route; stop
+        // only at the end (a switch is passed within ROUTE_SWITCH_REACHED).
+        if to_section_end < config.slow_radius {
+            speed *= (to_section_end / config.slow_radius).max(0.2);
+        }
+        if end == last && to_section_end < 0.05 {
+            speed = 0.;
+        }
+        Twist {
+            linear: if reverse { -speed } else { speed },
+            angular: speed * curvature,
         }
     }
 }

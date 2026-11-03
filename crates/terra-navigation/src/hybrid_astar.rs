@@ -54,6 +54,15 @@ pub struct HybridConfig {
     pub goal_heading_tolerance: f64,
     /// Expansions before the search gives up with `route_search_limit`.
     pub max_expansions: u32,
+    /// Heuristic weight, at least 1. Above 1 the search expands far fewer
+    /// states, and a route is at most this factor longer than the best one.
+    pub heuristic_weight: f64,
+    /// Clearance from observed obstacles the route prefers, metres. Closer
+    /// than this costs extra, so routes hug obstacles only when they must.
+    pub preferred_clearance: f64,
+    /// Extra cost per metre at zero clearance (scaled down linearly to none at
+    /// `preferred_clearance`).
+    pub clearance_penalty: f64,
 }
 
 impl Default for HybridConfig {
@@ -71,6 +80,9 @@ impl Default for HybridConfig {
             goal_tolerance: 0.15,
             goal_heading_tolerance: 0.1,
             max_expansions: 200_000,
+            heuristic_weight: 1.2,
+            preferred_clearance: 0.3,
+            clearance_penalty: 2.0,
         }
     }
 }
@@ -103,6 +115,12 @@ impl HybridConfig {
             && self.reverse_penalty.is_finite()
             && self.reverse_penalty >= 1.
             && (8..=360).contains(&self.heading_bins)
+            && self.preferred_clearance.is_finite()
+            && (0.0..=5.).contains(&self.preferred_clearance)
+            && self.clearance_penalty.is_finite()
+            && self.clearance_penalty >= 0.
+            && self.heuristic_weight.is_finite()
+            && (1.0..=5.).contains(&self.heuristic_weight)
             && self.max_expansions > 0
     }
 }
@@ -133,6 +151,8 @@ pub struct HybridWaypoint {
 /// The route starts at `start` (the body centre) and is sampled no further than
 /// one map cell apart. It ends within `goal_tolerance` of the goal position and,
 /// when `goal.yaw` is set, within `goal_heading_tolerance` of that heading.
+/// Unknown cells are blocked except under the starting body. This runs the whole
+/// search at once; use [`HybridSearch`] to spread it over control ticks.
 ///
 /// # Errors
 /// - `route_invalid_map`: invalid map or configuration, nonfinite start, or more
@@ -148,33 +168,12 @@ pub fn hybrid_astar_route(
     goal: HybridGoal,
     config: &HybridConfig,
 ) -> Result<Vec<HybridWaypoint>, &'static str> {
-    if !valid_map(map)
-        || map.occupancy.len() > MAX_CELLS
-        || !config.valid()
-        || !start.finite()
-        || goal.yaw.is_some_and(|yaw| !yaw.is_finite())
-    {
-        return Err("route_invalid_map");
+    let mut search = HybridSearch::new(map, start, goal, config, None)?;
+    loop {
+        if let Some(result) = search.advance(u32::MAX) {
+            return result;
+        }
     }
-    let start_cell = cell(map, start.x, start.y).ok_or("route_start_outside_map")?;
-    let goal_cell = cell(map, goal.x, goal.y).ok_or("route_goal_outside_map")?;
-    let search = Search::new(map, start, config);
-    if !search.body_clear(start.x, start.y, start.yaw, 0.) {
-        return Err("route_start_blocked");
-    }
-    if let Some(yaw) = goal.yaw
-        && !search.body_clear(goal.x, goal.y, yaw, 0.)
-    {
-        return Err("route_goal_blocked");
-    }
-    let heuristic = search.heuristic_field(goal_cell);
-    if !heuristic[index(map, goal_cell)].is_finite() {
-        return Err("route_goal_blocked");
-    }
-    if !heuristic[index(map, start_cell)].is_finite() {
-        return Err("route_no_path");
-    }
-    search.run(goal, &heuristic)
 }
 
 /// One expanded pose and the arc that reached it from its parent.
@@ -190,179 +189,192 @@ struct Node {
     length: f64,
 }
 
-struct Search<'a> {
-    map: &'a MapSnapshot,
-    config: &'a HybridConfig,
-    start: Pose,
+/// A Hybrid A* search that can be advanced a bounded number of expansions at a
+/// time, so a control loop can spread it over several ticks. It keeps its own
+/// copy of the map, so later map updates do not affect it.
+pub struct HybridSearch {
+    map: MapSnapshot,
+    config: HybridConfig,
+    goal: HybridGoal,
+    /// `Some(k)`: unknown cells are passable, at `k` times the cost.
+    unknown_cost: Option<f64>,
     /// Unknown cells under the starting body, which the rover may drive off.
     tolerated: HashSet<usize>,
     /// Lower-bound distance (cells, 8-connected) to the nearest blocked or unknown cell.
     blocked_distance: Vec<f64>,
+    /// 8-connected distance (cells) to the nearest observed obstacle or the map edge.
+    obstacle_distance: Vec<f64>,
+    /// Admissible distance to the goal from every cell, built incrementally.
+    heuristic: Vec<f64>,
+    /// Cells the inscribed circle could occupy, for the heuristic.
+    passable: Vec<bool>,
+    /// Pending heuristic cells; empty once the field is complete.
+    heuristic_open: BinaryHeap<Open>,
+    /// Cells where the body is certain to overlap unknown space (only when
+    /// unknown cells are allowed at a cost): the heuristic charges them that cost.
+    surely_unknown: Vec<bool>,
+    start_cell: usize,
     kappa: f64,
     step: f64,
+    nodes: Vec<Node>,
+    best: HashMap<usize, f64>,
+    closed: HashSet<usize>,
+    open: BinaryHeap<Open>,
+    expansions: u32,
+    finished: bool,
 }
 
-impl<'a> Search<'a> {
-    fn new(map: &'a MapSnapshot, start: Pose, config: &'a HybridConfig) -> Self {
+impl HybridSearch {
+    /// Validate the request and prepare the search. `unknown_cost`, when set
+    /// (at least 1), lets the route cross unknown cells at that cost multiple;
+    /// otherwise unknown cells block, except under the starting body.
+    ///
+    /// # Errors
+    /// The same as [`hybrid_astar_route`], found before any expansion where possible.
+    pub fn new(
+        map: &MapSnapshot,
+        start: Pose,
+        goal: HybridGoal,
+        config: &HybridConfig,
+        unknown_cost: Option<f64>,
+    ) -> Result<Self, &'static str> {
+        if !valid_map(map)
+            || map.occupancy.len() > MAX_CELLS
+            || !config.valid()
+            || !start.finite()
+            || !goal.x.is_finite()
+            || !goal.y.is_finite()
+            || goal.yaw.is_some_and(|yaw| !yaw.is_finite())
+            || unknown_cost.is_some_and(|k| !k.is_finite() || k < 1.)
+        {
+            return Err("route_invalid_map");
+        }
+        let start_cell = cell(map, start.x, start.y).ok_or("route_start_outside_map")?;
+        let goal_cell = cell(map, goal.x, goal.y).ok_or("route_goal_outside_map")?;
         let mut search = Self {
-            map,
-            config,
-            start,
+            map: map.clone(),
+            config: config.clone(),
+            goal,
+            unknown_cost,
             tolerated: HashSet::new(),
             blocked_distance: distance_field(map, |v| !(0..OCCUPIED).contains(&v)),
+            obstacle_distance: distance_field(map, |v| v >= OCCUPIED),
+            heuristic: vec![f64::INFINITY; map.occupancy.len()],
+            passable: Vec::new(),
+            heuristic_open: BinaryHeap::new(),
+            surely_unknown: Vec::new(),
+            start_cell: index(map, start_cell),
             kappa: 1. / config.min_turn_radius,
             // Long enough to leave the current cell from any heading.
             step: map.resolution * 1.6,
+            nodes: Vec::new(),
+            best: HashMap::new(),
+            closed: HashSet::new(),
+            open: BinaryHeap::new(),
+            expansions: 0,
+            finished: false,
         };
         let (a, b) = search.half_extents(0.);
+        let tolerated = &mut search.tolerated;
         for_each_overlapping_cell(map, start.x, start.y, start.yaw, a, b, |i| {
             if let Some(i) = i
                 && map.occupancy[i] < 0
             {
-                search.tolerated.insert(i);
+                tolerated.insert(i);
             }
             true
         });
-        search
-    }
-
-    fn half_extents(&self, pad: f64) -> (f64, f64) {
-        self.config.footprint.half_extents(pad)
-    }
-
-    /// Whether the body, grown by `pad` on every side, is clear at this pose.
-    fn body_clear(&self, x: f64, y: f64, yaw: f64, pad: f64) -> bool {
-        let (a, b) = self.half_extents(pad);
-        let Some(c) = cell(self.map, x, y) else {
-            return false;
-        };
-        // Far from everything blocked or unknown: no need to look at cells.
-        let lower_bound = (self.blocked_distance[index(self.map, c)] / OCTILE_OVER_EUCLID
-            - 2. * HALF_DIAGONAL)
-            * self.map.resolution;
-        if lower_bound > a.hypot(b) {
-            return true;
+        if search.body(start.x, start.y, start.yaw, 0.).is_none() {
+            return Err("route_start_blocked");
         }
-        for_each_overlapping_cell(self.map, x, y, yaw, a, b, |i| match i {
-            None => false,
-            Some(i) => {
-                let v = self.map.occupancy[i];
-                (0..OCCUPIED).contains(&v) || v < 0 && self.tolerated.contains(&i)
-            }
-        })
-    }
-
-    /// Whether the body stays clear along an arc of signed `length` from `from`.
-    fn arc_clear(&self, from: (f64, f64, f64), curvature: f64, length: f64) -> bool {
-        // Sample so no body point moves more than half a cell between checks, then
-        // grow the body by a quarter cell: the swept area is then fully covered.
-        let (a, b) = self.half_extents(0.);
-        let reach = 1. + a.hypot(b) * curvature.abs();
-        let spacing = (self.map.resolution / 2.) / reach;
-        let samples = (length.abs() / spacing).ceil().max(1.) as usize;
-        (1..=samples).all(|k| {
-            let (x, y, yaw) = drive(from, curvature, length * k as f64 / samples as f64);
-            self.body_clear(x, y, yaw, self.map.resolution / 4.)
-        })
-    }
-
-    /// Admissible 2D distance (metres) from every cell to the goal, through cells
-    /// the body's inscribed circle could occupy. Infinite where unreachable.
-    fn heuristic_field(&self, goal: (usize, usize)) -> Vec<f64> {
-        let (_, inscribed) = self.half_extents(0.);
-        let res = self.map.resolution;
-        let obstacle = distance_field(self.map, |v| v >= OCCUPIED);
-        let passable: Vec<bool> = obstacle
-            .iter()
-            .map(|d| (d + HALF_DIAGONAL) * res >= inscribed)
-            .collect();
-        let mut field = vec![f64::INFINITY; self.map.occupancy.len()];
-        let source = index(self.map, goal);
-        if !passable[source] {
-            return field;
+        if let Some(yaw) = goal.yaw
+            && search.body(goal.x, goal.y, yaw, 0.).is_none()
+        {
+            return Err("route_goal_blocked");
         }
-        field[source] = 0.;
-        let mut open = BinaryHeap::from([Open(0., source)]);
-        while let Some(Open(d, i)) = open.pop() {
-            if d > field[i] {
-                continue;
-            }
-            for (j, step) in neighbours(self.map, i) {
-                let next = d + step * res / OCTILE_OVER_EUCLID;
-                if passable[j] && next < field[j] {
-                    field[j] = next;
-                    open.push(Open(next, j));
-                }
-            }
+        search.passable = search.passable_cells();
+        if search.unknown_cost.is_some() {
+            // The body contains its inscribed circle, so a cell whose centre is
+            // within that radius (less a cell's half diagonal) of an unknown
+            // cell is a pose where the body overlaps unknown space.
+            let inscribed = search.config.footprint.inradius() / map.resolution - HALF_DIAGONAL;
+            let tolerated = &search.tolerated;
+            let to_unknown = distance_field(map, |v| v < 0);
+            search.surely_unknown = to_unknown
+                .iter()
+                .enumerate()
+                .map(|(i, d)| *d <= inscribed && !tolerated.contains(&i))
+                .collect();
         }
-        field
-    }
-
-    fn h(&self, heuristic: &[f64], x: f64, y: f64, goal: HybridGoal) -> f64 {
-        let Some(c) = cell(self.map, x, y) else {
-            return f64::INFINITY;
-        };
-        let straight = (goal.x - x).hypot(goal.y - y);
-        let grid = heuristic[index(self.map, c)] - 2. * HALF_DIAGONAL * self.map.resolution;
-        straight.max(grid)
-    }
-
-    fn bin(&self, x: f64, y: f64, yaw: f64) -> Option<usize> {
-        let c = cell(self.map, x, y)?;
-        let bins = self.config.heading_bins as usize;
-        let heading = ((yaw.rem_euclid(TAU) / TAU) * bins as f64) as usize % bins;
-        Some(index(self.map, c) * bins + heading)
-    }
-
-    fn arrived(&self, x: f64, y: f64, yaw: f64, goal: HybridGoal) -> bool {
-        (goal.x - x).hypot(goal.y - y) <= self.config.goal_tolerance
-            && goal
-                .yaw
-                .is_none_or(|g| wrap(yaw - g).abs() <= self.config.goal_heading_tolerance)
-    }
-
-    fn run(
-        &self,
-        goal: HybridGoal,
-        heuristic: &[f64],
-    ) -> Result<Vec<HybridWaypoint>, &'static str> {
-        let start = Node {
-            x: self.start.x,
-            y: self.start.y,
-            yaw: self.start.yaw,
+        let goal_index = index(map, goal_cell);
+        if !search.passable[goal_index] {
+            return Err("route_goal_blocked");
+        }
+        search.heuristic[goal_index] = 0.;
+        search.heuristic_open.push(Open(0., goal_index));
+        search.nodes.push(Node {
+            x: start.x,
+            y: start.y,
+            yaw: start.yaw,
             g: 0.,
             parent: None,
             curvature: 0.,
             length: 0.,
-        };
-        let mut nodes = vec![start];
-        let mut best: HashMap<usize, f64> = HashMap::new();
-        let mut closed: HashSet<usize> = HashSet::new();
-        let mut open = BinaryHeap::from([Open(self.h(heuristic, start.x, start.y, goal), 0)]);
+        });
+        Ok(search)
+    }
+
+    /// Expansions so far.
+    pub fn expansions(&self) -> u32 {
+        self.expansions
+    }
+
+    /// Run up to `budget` expansions. Returns `None` while still searching, then
+    /// the route or the reason there is none (`route_no_path`, `route_search_limit`).
+    pub fn advance(&mut self, budget: u32) -> Option<Result<Vec<HybridWaypoint>, &'static str>> {
+        if self.finished {
+            return Some(Err("route_no_path"));
+        }
+        if !self.heuristic_open.is_empty() || self.open.is_empty() && self.nodes.len() == 1 {
+            // Building the heuristic: a cell costs a few hundredths of an
+            // expansion, so a 200 x 200 map's field usually fits in one call.
+            if !self.extend_heuristic(budget.saturating_mul(300)) {
+                return None;
+            }
+            if !self.heuristic[self.start_cell].is_finite() {
+                self.finished = true;
+                return Some(Err("route_no_path"));
+            }
+            let h = self.h(self.start_x(), self.start_y());
+            self.open.push(Open(self.config.heuristic_weight * h, 0));
+        }
         let curvatures = [-1., -0.5, 0., 0.5, 1.].map(|k| k * self.kappa);
         let directions: &[f64] = if self.config.allow_reverse {
             &[1., -1.]
         } else {
             &[1.]
         };
-        let mut expansions = 0u32;
-        while let Some(Open(_, id)) = open.pop() {
-            let node = nodes[id];
+        let mut used = 0u32;
+        while let Some(Open(_, id)) = self.open.pop() {
+            let node = self.nodes[id];
             let Some(key) = self.bin(node.x, node.y, node.yaw) else {
                 continue;
             };
-            if !closed.insert(key) {
+            if !self.closed.insert(key) {
                 continue;
             }
-            if self.arrived(node.x, node.y, node.yaw, goal) {
-                return Ok(self.waypoints(&nodes, id, None));
+            if self.arrived(node.x, node.y, node.yaw) {
+                self.finished = true;
+                return Some(Ok(self.waypoints(id, None)));
             }
-            expansions += 1;
-            if expansions > self.config.max_expansions {
-                return Err("route_search_limit");
+            self.expansions += 1;
+            if self.expansions > self.config.max_expansions {
+                self.finished = true;
+                return Some(Err("route_search_limit"));
             }
-            if let Some(shortcut) = self.dubins_shortcut(&node, goal, expansions) {
-                return Ok(self.waypoints(&nodes, id, Some(shortcut)));
+            if let Some(shortcut) = self.dubins_shortcut(&node) {
+                self.finished = true;
+                return Some(Ok(self.waypoints(id, Some(shortcut))));
             }
             for &direction in directions {
                 for &curvature in &curvatures {
@@ -372,22 +384,28 @@ impl<'a> Search<'a> {
                     let Some(child_key) = self.bin(x, y, yaw) else {
                         continue;
                     };
-                    if closed.contains(&child_key) {
+                    if self.closed.contains(&child_key) {
                         continue;
                     }
-                    let g = node.g + self.cost(&node, curvature, length);
-                    if best.get(&child_key).is_some_and(|&b| b <= g) {
+                    let mut g =
+                        node.g + self.cost(&node, curvature, length) + self.closeness(x, y, length);
+                    if self.best.get(&child_key).is_some_and(|&b| b <= g) {
                         continue;
                     }
-                    if !self.arc_clear(from, curvature, length) {
+                    let Some(unknown) = self.arc(from, curvature, length) else {
                         continue;
+                    };
+                    if unknown {
+                        g = node.g
+                            + self.cost(&node, curvature, length) * self.unknown_cost.unwrap_or(1.)
+                            + self.closeness(x, y, length);
                     }
-                    let h = self.h(heuristic, x, y, goal);
+                    let h = self.h(x, y);
                     if !h.is_finite() {
                         continue;
                     }
-                    best.insert(child_key, g);
-                    nodes.push(Node {
+                    self.best.insert(child_key, g);
+                    self.nodes.push(Node {
                         x,
                         y,
                         yaw,
@@ -396,15 +414,149 @@ impl<'a> Search<'a> {
                         curvature,
                         length,
                     });
-                    open.push(Open(g + h, nodes.len() - 1));
+                    self.open.push(Open(
+                        g + self.config.heuristic_weight * h,
+                        self.nodes.len() - 1,
+                    ));
+                }
+            }
+            used += 1;
+            if used >= budget {
+                return None;
+            }
+        }
+        self.finished = true;
+        Some(Err("route_no_path"))
+    }
+
+    fn half_extents(&self, pad: f64) -> (f64, f64) {
+        self.config.footprint.half_extents(pad)
+    }
+
+    /// The body, grown by `pad`, at this pose: `None` if it is blocked, otherwise
+    /// whether it overlaps unknown cells the search was told it may cross.
+    fn body(&self, x: f64, y: f64, yaw: f64, pad: f64) -> Option<bool> {
+        let (a, b) = self.half_extents(pad);
+        let c = cell(&self.map, x, y)?;
+        // Far from everything blocked or unknown: no need to look at cells.
+        let lower_bound = (self.blocked_distance[index(&self.map, c)] / OCTILE_OVER_EUCLID
+            - 2. * HALF_DIAGONAL)
+            * self.map.resolution;
+        if lower_bound > a.hypot(b) {
+            return Some(false);
+        }
+        let mut unknown = false;
+        let clear = for_each_overlapping_cell(&self.map, x, y, yaw, a, b, |i| match i {
+            None => false,
+            Some(i) => {
+                let v = self.map.occupancy[i];
+                if (0..OCCUPIED).contains(&v) || v < 0 && self.tolerated.contains(&i) {
+                    true
+                } else if v < 0 && self.unknown_cost.is_some() {
+                    unknown = true;
+                    true
+                } else {
+                    false
+                }
+            }
+        });
+        clear.then_some(unknown)
+    }
+
+    /// The body along an arc of signed `length` from `from`: `None` if it hits
+    /// something, otherwise whether it crosses unknown cells.
+    fn arc(&self, from: (f64, f64, f64), curvature: f64, length: f64) -> Option<bool> {
+        // Sample so no body point moves more than half a cell between checks, then
+        // grow the body by a quarter cell: the swept area is then fully covered.
+        let (a, b) = self.half_extents(0.);
+        let reach = 1. + a.hypot(b) * curvature.abs();
+        let spacing = (self.map.resolution / 2.) / reach;
+        let samples = (length.abs() / spacing).ceil().max(1.) as usize;
+        let mut unknown = false;
+        for k in 1..=samples {
+            let (x, y, yaw) = drive(from, curvature, length * k as f64 / samples as f64);
+            unknown |= self.body(x, y, yaw, self.map.resolution / 4.)?;
+        }
+        Some(unknown)
+    }
+
+    /// Cells the body's inscribed circle could occupy: the heuristic searches
+    /// only these, so it never overestimates the remaining distance.
+    fn passable_cells(&self) -> Vec<bool> {
+        let (_, inscribed) = self.half_extents(0.);
+        let res = self.map.resolution;
+        let unknown_blocks = self.unknown_cost.is_none();
+        distance_field(&self.map, |v| v >= OCCUPIED || unknown_blocks && v < 0)
+            .iter()
+            .enumerate()
+            .map(|(i, d)| (d + HALF_DIAGONAL) * res >= inscribed || self.tolerated.contains(&i))
+            .collect()
+    }
+
+    /// Grow the admissible 2D distance-to-goal field by up to `cells` cells.
+    /// Returns true once it is complete. Unreached cells stay infinite.
+    fn extend_heuristic(&mut self, cells: u32) -> bool {
+        let res = self.map.resolution;
+        for _ in 0..cells {
+            let Some(Open(d, i)) = self.heuristic_open.pop() else {
+                return true;
+            };
+            if d > self.heuristic[i] {
+                continue;
+            }
+            for (j, step) in neighbours(&self.map, i) {
+                // Where the body surely overlaps unknown space, a step really
+                // costs the unknown multiple: still admissible.
+                let unknown = self.surely_unknown.get(j).copied().unwrap_or(false);
+                let factor = if unknown {
+                    self.unknown_cost.unwrap_or(1.)
+                } else {
+                    1.
+                };
+                let next = d + step * res / OCTILE_OVER_EUCLID * factor;
+                if self.passable[j] && next < self.heuristic[j] {
+                    self.heuristic[j] = next;
+                    self.heuristic_open.push(Open(next, j));
                 }
             }
         }
-        Err("route_no_path")
+        self.heuristic_open.is_empty()
+    }
+
+    fn start_x(&self) -> f64 {
+        self.nodes[0].x
+    }
+
+    fn start_y(&self) -> f64 {
+        self.nodes[0].y
+    }
+
+    fn h(&self, x: f64, y: f64) -> f64 {
+        let Some(c) = cell(&self.map, x, y) else {
+            return f64::INFINITY;
+        };
+        let straight = (self.goal.x - x).hypot(self.goal.y - y);
+        let grid = self.heuristic[index(&self.map, c)] - 2. * HALF_DIAGONAL * self.map.resolution;
+        straight.max(grid)
+    }
+
+    fn bin(&self, x: f64, y: f64, yaw: f64) -> Option<usize> {
+        let c = cell(&self.map, x, y)?;
+        let bins = self.config.heading_bins as usize;
+        let heading = ((yaw.rem_euclid(TAU) / TAU) * bins as f64) as usize % bins;
+        Some(index(&self.map, c) * bins + heading)
+    }
+
+    fn arrived(&self, x: f64, y: f64, yaw: f64) -> bool {
+        (self.goal.x - x).hypot(self.goal.y - y) <= self.config.goal_tolerance
+            && self
+                .goal
+                .yaw
+                .is_none_or(|g| wrap(yaw - g).abs() <= self.config.goal_heading_tolerance)
     }
 
     fn cost(&self, parent: &Node, curvature: f64, length: f64) -> f64 {
-        let c = self.config;
+        let c = &self.config;
         let reverse = length < 0.;
         let mut cost = length.abs() * (1. + c.steer_penalty * curvature.abs() / self.kappa);
         if reverse {
@@ -421,40 +573,50 @@ impl<'a> Search<'a> {
         cost
     }
 
+    /// Extra cost for an arc of `length` ending at `(x, y)` closer to observed
+    /// obstacles than the preferred clearance. Uses the circle around the body,
+    /// so it never undercharges a pose that is actually close.
+    fn closeness(&self, x: f64, y: f64, length: f64) -> f64 {
+        let c = &self.config;
+        if c.clearance_penalty == 0. || c.preferred_clearance == 0. {
+            return 0.;
+        }
+        let Some(cell_xy) = cell(&self.map, x, y) else {
+            return 0.;
+        };
+        let centre = self.obstacle_distance[index(&self.map, cell_xy)] / OCTILE_OVER_EUCLID
+            * self.map.resolution;
+        let clearance = (centre - c.footprint.circumradius()).max(0.);
+        if clearance >= c.preferred_clearance {
+            return 0.;
+        }
+        length.abs() * c.clearance_penalty * (1. - clearance / c.preferred_clearance)
+    }
+
     /// Near a goal with a heading, try a collision-free forward Dubins curve to it.
-    fn dubins_shortcut(
-        &self,
-        node: &Node,
-        goal: HybridGoal,
-        expansions: u32,
-    ) -> Option<Vec<(f64, f64)>> {
-        let yaw = goal.yaw?;
-        let near = (goal.x - node.x).hypot(goal.y - node.y) <= 10. * self.config.min_turn_radius;
-        if !near && !expansions.is_multiple_of(10) {
+    fn dubins_shortcut(&self, node: &Node) -> Option<Vec<(f64, f64)>> {
+        let yaw = self.goal.yaw?;
+        let near =
+            (self.goal.x - node.x).hypot(self.goal.y - node.y) <= 10. * self.config.min_turn_radius;
+        if !near && !self.expansions.is_multiple_of(10) {
             return None;
         }
         let path = dubins(
             (node.x, node.y, node.yaw),
-            (goal.x, goal.y, yaw),
+            (self.goal.x, self.goal.y, yaw),
             self.config.min_turn_radius,
         )?;
         let mut at = (node.x, node.y, node.yaw);
         for &(curvature, length) in &path {
-            if !self.arc_clear(at, curvature, length) {
-                return None;
-            }
+            self.arc(at, curvature, length)?;
             at = drive(at, curvature, length);
         }
         Some(path)
     }
 
     /// Route samples from the start to node `last`, then along `shortcut`.
-    fn waypoints(
-        &self,
-        nodes: &[Node],
-        last: usize,
-        shortcut: Option<Vec<(f64, f64)>>,
-    ) -> Vec<HybridWaypoint> {
+    fn waypoints(&self, last: usize, shortcut: Option<Vec<(f64, f64)>>) -> Vec<HybridWaypoint> {
+        let nodes = &self.nodes;
         let mut chain = vec![last];
         while let Some(parent) = nodes[*chain.last().unwrap()].parent {
             chain.push(parent);
@@ -516,24 +678,39 @@ fn index(map: &MapSnapshot, (column, row): (usize, usize)) -> usize {
 /// 8-connected distance, in cells, from each cell to the nearest blocked cell or
 /// the map edge. It is at least the straight-line distance between cell centres.
 fn distance_field(map: &MapSnapshot, blocked: impl Fn(i8) -> bool) -> Vec<f64> {
+    // Two-pass chamfer transform: one sweep down-right and one up-left with the
+    // 3x3 mask (1 and sqrt 2) gives the exact 8-connected distance.
     let (w, h) = (map.width as usize, map.height as usize);
-    let mut field = vec![f64::INFINITY; w * h];
-    let mut open = BinaryHeap::new();
-    for (i, distance) in field.iter_mut().enumerate() {
-        let (c, r) = (i % w, i / w);
-        let edge = (c + 1).min(r + 1).min(w - c).min(h - r) as f64;
-        *distance = if blocked(map.occupancy[i]) { 0. } else { edge };
-        open.push(Open(*distance, i));
-    }
-    while let Some(Open(d, i)) = open.pop() {
-        if d > field[i] {
-            continue;
-        }
-        for (j, step) in neighbours(map, i) {
-            if d + step < field[j] {
-                field[j] = d + step;
-                open.push(Open(d + step, j));
+    let mut field: Vec<f64> = (0..w * h)
+        .map(|i| {
+            let (c, r) = (i % w, i / w);
+            if blocked(map.occupancy[i]) {
+                0.
+            } else {
+                (c + 1).min(r + 1).min(w - c).min(h - r) as f64
             }
+        })
+        .collect();
+    let relax = |field: &mut Vec<f64>, c: usize, r: usize, mask: &[(i64, i64, f64)]| {
+        let mut best = field[r * w + c];
+        for &(dc, dr, cost) in mask {
+            let (nc, nr) = (c as i64 + dc, r as i64 + dr);
+            if nc >= 0 && nr >= 0 && (nc as usize) < w && (nr as usize) < h {
+                best = best.min(field[nr as usize * w + nc as usize] + cost);
+            }
+        }
+        field[r * w + c] = best;
+    };
+    let forward = [(-1, 0, 1.), (-1, -1, SQRT_2), (0, -1, 1.), (1, -1, SQRT_2)];
+    let backward = [(1, 0, 1.), (1, 1, SQRT_2), (0, 1, 1.), (-1, 1, SQRT_2)];
+    for r in 0..h {
+        for c in 0..w {
+            relax(&mut field, c, r, &forward);
+        }
+    }
+    for r in (0..h).rev() {
+        for c in (0..w).rev() {
+            relax(&mut field, c, r, &backward);
         }
     }
     field
@@ -664,6 +841,60 @@ mod tests {
             let path =
                 dubins((0.5, -0.5, 0.7), (x, y, yaw), 0.5).expect("some word reaches any pose");
             assert!(path.iter().all(|(c, _)| c.abs() <= 2. + 1e-9));
+        }
+    }
+
+    #[test]
+    fn chamfer_distance_matches_dijkstra() {
+        let (w, h) = (37usize, 23usize);
+        let occupancy: Vec<i8> = (0..w * h)
+            .map(|i| {
+                if (i * 7919 + i / 13) % 17 == 0 {
+                    100
+                } else {
+                    0
+                }
+            })
+            .collect();
+        let map = MapSnapshot {
+            width: w as u32,
+            height: h as u32,
+            resolution: 0.1,
+            origin_x: 0.,
+            origin_y: 0.,
+            occupancy,
+        };
+        let fast = distance_field(&map, |v| v >= OCCUPIED);
+        // Reference: Dijkstra from every blocked cell and the map edge.
+        let mut slow: Vec<f64> = (0..w * h)
+            .map(|i| {
+                let (c, r) = (i % w, i / w);
+                if map.occupancy[i] >= OCCUPIED {
+                    0.
+                } else {
+                    (c + 1).min(r + 1).min(w - c).min(h - r) as f64
+                }
+            })
+            .collect();
+        let mut open: BinaryHeap<Open> = (0..w * h).map(|i| Open(slow[i], i)).collect();
+        while let Some(Open(d, i)) = open.pop() {
+            if d > slow[i] {
+                continue;
+            }
+            for (j, step) in neighbours(&map, i) {
+                if d + step < slow[j] {
+                    slow[j] = d + step;
+                    open.push(Open(d + step, j));
+                }
+            }
+        }
+        for i in 0..w * h {
+            assert!(
+                (fast[i] - slow[i]).abs() < 1e-9,
+                "cell {i}: {} vs {}",
+                fast[i],
+                slow[i]
+            );
         }
     }
 

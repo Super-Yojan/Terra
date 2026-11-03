@@ -63,7 +63,8 @@ fn l3_follows_corner_route_and_preserves_original_destination() {
             break;
         }
         assert!(
-            !output.status.global_route.is_empty(),
+            !output.status.global_route.is_empty()
+                || tick <= 20 && output.status.reason == "route_planning",
             "{}",
             output.status.reason
         );
@@ -97,20 +98,7 @@ fn l3_holds_when_route_is_sealed() {
     for row in 0..40 {
         map.occupancy[row * 40 + 16] = 100;
     }
-    let output = arbiter.step(ArbiterInput {
-        now: 0.1,
-        pose: Pose {
-            x: 2.,
-            y: 2.,
-            yaw: 0.,
-        },
-        pose_time: 0.1,
-        map: Some(&map),
-        map_time: Some(0.1),
-        map_revision: 1,
-        measured: Twist::default(),
-        healthy: true,
-    });
+    let output = settle(&mut arbiter, |dt| input(&map, 0.1 + dt, 1));
     assert_eq!(output.twist, Twist::default());
     assert_eq!(output.status.reason, "route_no_path");
     assert_eq!(output.goal.state, GoalState::Active);
@@ -137,8 +125,7 @@ fn changed_map_invalidates_route_without_losing_the_goal() {
     );
     let mut map = map();
     assert!(
-        !arbiter
-            .step(input(&map, 0.1, 1))
+        !settle(&mut arbiter, |dt| input(&map, 0.1 + dt, 1))
             .status
             .global_route
             .is_empty()
@@ -146,11 +133,30 @@ fn changed_map_invalidates_route_without_losing_the_goal() {
     for row in 0..40 {
         map.occupancy[row * 40 + 16] = 100;
     }
-    let output = arbiter.step(input(&map, 0.4, 2));
+    // The blocked route is dropped at once: the rover holds while it replans.
+    let held = arbiter.step(input(&map, 0.4, 2));
+    assert_eq!(held.twist, Twist::default());
+    let output = settle(&mut arbiter, |dt| input(&map, 0.41 + dt, 2));
     assert_eq!(output.twist, Twist::default());
     assert_eq!(output.status.reason, "route_no_path");
     assert_eq!(output.goal.token.as_deref(), Some("keep-goal"));
     assert!(output.status.global_route.is_empty());
+}
+
+/// Routes are searched a bounded amount per tick: repeat the evidence (10 ms
+/// later each time) while the arbiter reports `route_planning` (at most 50 ticks).
+fn settle<'a>(
+    arbiter: &mut AutonomyArbiter,
+    mut evidence: impl FnMut(f64) -> ArbiterInput<'a>,
+) -> ArbiterOutput {
+    for tick in 0..50 {
+        // The arbiter's clock must move forward: 10 ms per repeat.
+        let output = arbiter.step(evidence(tick as f64 * 0.01));
+        if output.status.reason != "route_planning" {
+            return output;
+        }
+    }
+    panic!("route search did not finish within 50 ticks");
 }
 
 /// Build fresh healthy evidence at (2 m, 2 m), using the supplied clock time and map revision.
@@ -201,22 +207,22 @@ fn localization_jump_replans_without_a_map_revision_change() {
         },
         20.,
     );
-    let mut evidence = input(&map, 0.1, 1);
-    assert!(!arbiter.step(evidence).status.global_route.is_empty());
-    evidence = input(&map, 0.2, 1);
-    evidence.pose = Pose {
-        x: 5.,
-        y: 7.,
-        yaw: 0.,
+    assert!(
+        !settle(&mut arbiter, |dt| input(&map, 0.1 + dt, 1))
+            .status
+            .global_route
+            .is_empty()
+    );
+    // The rover is now far from its route: it drops it and replans from here.
+    let jumped = |dt| ArbiterInput {
+        pose: Pose {
+            x: 5.,
+            y: 7.,
+            yaw: 0.,
+        },
+        ..input(&map, 0.6 + dt, 1)
     };
-    assert_eq!(arbiter.step(evidence).status.reason, "route_no_path");
-    evidence = input(&map, 0.4, 1);
-    evidence.pose = Pose {
-        x: 5.,
-        y: 7.,
-        yaw: 0.,
-    };
-    let output = arbiter.step(evidence);
+    let output = settle(&mut arbiter, jumped);
     assert!(!output.status.global_route.is_empty());
     assert!(output.status.global_route.iter().any(|p| p[0] < 2.));
 }
@@ -258,12 +264,12 @@ fn cached_waypoint_command_must_stay_admissible() {
         y: 4.,
         yaw: 0.2,
     };
-    let first = arbiter.step(ArbiterInput {
-        now: 0.1,
+    let first = settle(&mut arbiter, |dt| ArbiterInput {
+        now: 0.1 + dt,
         pose,
-        pose_time: 0.1,
+        pose_time: 0.1 + dt,
         map: Some(&map),
-        map_time: Some(0.1),
+        map_time: Some(0.1 + dt),
         map_revision: 1,
         measured: Twist {
             linear: 1.,
@@ -373,7 +379,9 @@ fn l3_crosses_an_18_by_12_pitch_on_the_rolling_map() {
             arrived = true;
             break;
         }
-        if tick == 1 {
+        if !saw_progress && output.status.reason == "route_planning" {
+            assert!(tick <= 20, "still planning after {tick} ticks");
+        } else if !saw_progress {
             assert_ne!(output.twist, Twist::default(), "{}", output.status.reason);
             let end = output.status.global_route.last().copied().unwrap();
             assert!(

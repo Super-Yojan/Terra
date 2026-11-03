@@ -138,7 +138,11 @@ pub struct AutonomyArbiter {
     /// would otherwise pin every command near zero.
     commanded: Twist,
     planner_trace: Option<(f64, terra_navigation::PlannerTrace)>,
-    global_route: Vec<[f64; 2]>,
+    /// Hybrid A* route being followed, and how far along it the rover is.
+    global_route: Vec<terra_navigation::HybridWaypoint>,
+    route_progress: usize,
+    /// Route search spread over control ticks.
+    route_job: Option<terra_navigation::RouteJob>,
     route_goal: Option<(u64, f64, f64)>,
     route_map_revision: u64,
     route_checked_at: f64,
@@ -218,6 +222,8 @@ impl Default for AutonomyArbiter {
             commanded: Twist::default(),
             planner_trace: None,
             global_route: Vec::new(),
+            route_progress: 0,
+            route_job: None,
             route_goal: None,
             route_map_revision: 0,
             route_checked_at: f64::NEG_INFINITY,
@@ -280,6 +286,8 @@ struct TickDecision {
     /// A hold forces the final command to zero, even if intent is nonzero.
     held: bool,
     route_failure: Option<&'static str>,
+    /// A route search is still running over the next ticks.
+    route_pending: bool,
 }
 impl TickDecision {
     fn new(goal: WaypointStatus) -> Self {
@@ -292,6 +300,7 @@ impl TickDecision {
             twist: Twist::default(),
             held: false,
             route_failure: None,
+            route_pending: false,
         }
     }
 }

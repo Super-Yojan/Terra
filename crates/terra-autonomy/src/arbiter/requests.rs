@@ -168,7 +168,7 @@ impl AutonomyArbiter {
         self.planner.config = config;
         self.last_plan = None;
         self.planner_trace = None;
-        self.global_route.clear();
+        self.clear_route();
         self.route_goal = None;
         self.route_map_revision = 0;
         self.route_checked_at = 0.;

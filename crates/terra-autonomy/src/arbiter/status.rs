@@ -19,7 +19,15 @@ impl AutonomyArbiter {
                 && self.map_is_fresh(input)
                 && decision.goal.state == GoalState::Active
             {
-                self.global_route.clone()
+                // About every 0.3 m, plus the end: enough to draw the route.
+                let n = self.global_route.len();
+                self.global_route
+                    .iter()
+                    .enumerate()
+                    .skip(self.route_progress)
+                    .filter(|(i, _)| i % 3 == 0 || *i + 1 == n)
+                    .map(|(_, w)| [w.x, w.y])
+                    .collect()
             } else {
                 Vec::new()
             },

@@ -58,7 +58,11 @@ pub use footprint::{
     Footprint, OCCUPIED, footprint_fits, footprint_rejection_at, rectangle_clearance,
 };
 mod hybrid_astar;
-pub use hybrid_astar::{HybridConfig, HybridGoal, HybridWaypoint, hybrid_astar_route};
+pub use hybrid_astar::{
+    HybridConfig, HybridGoal, HybridSearch, HybridWaypoint, hybrid_astar_route,
+};
+mod route;
+pub use route::{HybridRoute, RouteJob};
 mod search;
 pub use search::*;
 mod maneuver;

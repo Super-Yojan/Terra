@@ -88,6 +88,8 @@ pub(crate) enum Unknown {
     UnderBody(Pose),
     /// Within the disc the body sweeps spinning in place at this pose.
     SpinDisc(Pose),
+    /// Anywhere: only observed obstacles and the map edge block.
+    Anywhere,
 }
 
 pub(crate) fn rejection(
@@ -114,6 +116,7 @@ pub(crate) fn rejection(
         }
         let allowed = match unknown {
             Unknown::Refused => false,
+            Unknown::Anywhere => true,
             Unknown::UnderBody(s) => cell_overlaps(map, i, s, footprint.half_extents(pad)),
             Unknown::SpinDisc(s) => {
                 let width = map.width as usize;
