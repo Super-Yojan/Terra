@@ -65,7 +65,7 @@ On October 8, 2026, Terra's 68 workspace tests passed (two existing live remote 
 
 ### Scene telemetry and remote driving
 
-While phone tracking is active, Terra publishes `localization` (1 Hz) and the existing observed `map/occupancy` snapshots (up to 5 Hz) below the configured `prefix/<rover-id>`. The thinned `pointcloud` (about 3 Hz) is sent only while a point capture runs. It uses LiDAR depth on supported phones and sparse ARKit features otherwise. Occupancy requires scene depth; feature points alone are not advertised as observed free space. Location permission affects geographic alignment only.
+While phone tracking is active, Terra publishes `localization` (1 Hz) and the existing observed `map/occupancy` snapshots (up to 5 Hz) below the configured `prefix/<rover-id>`. The phone no longer streams the thinned `pointcloud` topic; a point capture (below) sends its labelled frames on `pointcloud/full`. Occupancy requires scene depth; feature points alone are not advertised as observed free space. Location permission affects geographic alignment only.
 
 ARGOS requests `autonomy` with a token and reads `autonomy/status` before enabling manual input. `teleop` carries bounded linear/angular speed, run ID, authority revision, operator session and increasing sequence. Idle phone controls do not continuously republish neutral over remote intent; a held local input retains priority and release publishes neutral once. The arbiter retains its existing 0.5-second operator timeout, sensor-health gating and emergency stop. Physical movement still requires the phone's normal hardware setup/arming; ARGOS takeover does not arm hardware.
 

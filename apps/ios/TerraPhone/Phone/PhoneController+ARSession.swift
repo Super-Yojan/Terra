@@ -140,7 +140,7 @@ extension PhoneController {
         do {
             try controller.pushVio(sample: VioReading(timestamp: frame.timestamp, positionX: Double(roverPosition.x), positionY: Double(roverPosition.y), positionZ: Double(roverPosition.z), quaternionX: Double(q.x), quaternionY: Double(q.y), quaternionZ: Double(q.z), quaternionW: Double(q.w), velocityX: Double(filteredVelocity.x), velocityY: Double(filteredVelocity.y), velocityZ: Double(filteredVelocity.z), tracked: tracked && velocityReady))
             timingLastVio = frame.timestamp; timingVioPushedAt = CACurrentMediaTime()
-            if tracked { updatePhoneGround(frame: frame, position: position, bodyUp: orientation.act(SIMD3(0, 0, 1))); updatePhoneMap(frame: frame, position: position, roverPosition: roverPosition, bodyOrientation: orientation); publishPhoneCloud(frame: frame, position: position) }
+            if tracked { updatePhoneGround(frame: frame, position: position, bodyUp: orientation.act(SIMD3(0, 0, 1))); updatePhoneMap(frame: frame, position: position, roverPosition: roverPosition, bodyOrientation: orientation) }
             else { DispatchQueue.main.async { self.mapStatus = "Tracking lost · map paused" } }
         } catch { fail(error, context: "AR frame at \(frame.timestamp)") }
     }

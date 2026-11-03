@@ -1,6 +1,6 @@
 use crate::*;
 use outdoor::{CourseFix, GpsFix, HeadingFix};
-fn invalid(s: &str) -> ControllerError {
+pub(crate) fn invalid(s: &str) -> ControllerError {
     ControllerError::InvalidInput { message: s.into() }
 }
 pub(crate) use terra_runtime::outdoor::evidence;
@@ -29,6 +29,7 @@ impl MobileController {
             .map_err(|_| ControllerError::Internal)?
             .outdoor
             .invalidate_sensors();
+        self.brain.inbox.clear_outdoor();
         Ok(())
     }
     /// Called only by platforms implementing measured GPS and mount-aware true heading ingestion.
@@ -40,28 +41,22 @@ impl MobileController {
             .supported = true;
         Ok(())
     }
+    /// Queue a fix for the next `step`; `now` is the clock its freshness is judged against.
     pub fn push_gps(&self, sample: GpsFix, now: f64) -> Result<(), ControllerError> {
         self.brain
-            .lock()
-            .map_err(|_| ControllerError::Internal)?
-            .outdoor
-            .gps(sample, now)
-            .map_err(invalid)
+            .inbox
+            .push(crate::inbox::Sample::Gps(sample, now))
     }
+    /// Queue a fix for the next `step`; `now` is the clock its freshness is judged against.
     pub fn push_heading(&self, sample: HeadingFix, now: f64) -> Result<(), ControllerError> {
         self.brain
-            .lock()
-            .map_err(|_| ControllerError::Internal)?
-            .outdoor
-            .heading(sample, now)
-            .map_err(invalid)
+            .inbox
+            .push(crate::inbox::Sample::Heading(sample, now))
     }
+    /// Queue a fix for the next `step`; `now` is the clock its freshness is judged against.
     pub fn push_course(&self, sample: CourseFix, now: f64) -> Result<(), ControllerError> {
         self.brain
-            .lock()
-            .map_err(|_| ControllerError::Internal)?
-            .outdoor
-            .course(sample, now)
-            .map_err(invalid)
+            .inbox
+            .push(crate::inbox::Sample::Course(sample, now))
     }
 }

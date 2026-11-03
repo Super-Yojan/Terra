@@ -18,11 +18,13 @@ mod connection;
 mod depth;
 mod detector;
 mod drive_loop;
+mod inbox;
 pub use autonomy::{FpvEffect, WebrtcSignal};
 pub use connection::*;
 pub use depth::*;
 pub use detector::*;
 pub use drive_loop::*;
+pub use inbox::SensorQueueStats;
 mod observability;
 pub use observability::ObservationAttachment;
 pub mod outdoor;
@@ -357,13 +359,44 @@ impl From<terra_runtime::RuntimeError> for ControllerError {
         }
     }
 }
+/// Controller state plus the sensor samples waiting to be applied to it.
+///
+/// Sensor pushes only touch the inbox, so they never wait for a running tick.
+/// [`Self::lock`] applies every queued sample, in timestamp order, before it
+/// hands out the state, so each method sees all samples pushed before the call.
+struct BrainCell {
+    state: Mutex<Brain>,
+    inbox: inbox::SensorInbox,
+}
+impl BrainCell {
+    fn new(brain: Brain) -> Self {
+        Self {
+            state: Mutex::new(brain),
+            inbox: Default::default(),
+        }
+    }
+    fn lock(&self) -> std::sync::LockResult<std::sync::MutexGuard<'_, Brain>> {
+        let mut brain = self.state.lock()?;
+        for sample in self.inbox.drain() {
+            if let Err(error) = apply_sample(&mut brain, sample) {
+                self.inbox.reject(error.to_string());
+            }
+        }
+        Ok(brain)
+    }
+    /// Lock without waiting and without applying queued samples. Only for reads
+    /// that do not depend on sensor data.
+    fn try_lock(&self) -> std::sync::TryLockResult<std::sync::MutexGuard<'_, Brain>> {
+        self.state.try_lock()
+    }
+}
 #[derive(uniffi::Object)]
 /// Shared sensor estimator, autonomy arbiter, and velocity controller.
 /// Methods serialize state access with a mutex. Supply timestamped sensors,
 /// submit intent, and call [`Self::step`] on the same monotonic clock.
 /// Returned efforts still require an independently armed hardware adapter.
 pub struct MobileController {
-    brain: Mutex<Brain>,
+    brain: BrainCell,
     /// Video signaling only. It cannot arm the rover or change the velocity target.
     fpv: Mutex<fpv_signaling::SignalingSession>,
     observation: observability::ObservationState,
@@ -383,7 +416,7 @@ impl MobileController {
             fpv: Mutex::new(fpv_signaling::SignalingSession::phone()),
             observation: Default::default(),
             mcp: Default::default(),
-            brain: Mutex::new(Brain {
+            brain: BrainCell::new(Brain {
                 runtime: terra_runtime::Runtime::new(
                     terra_runtime::RuntimeConfig {
                         estimator: settings.estimator(),
@@ -411,67 +444,26 @@ impl MobileController {
             }),
         }))
     }
-    /// Validate and ingest one body-frame IMU reading.
+    /// Queue one body-frame IMU reading for the next [`Self::step`]. Safe to call
+    /// from any thread; it never waits for a running tick. The sample is validated
+    /// when it is applied; a rejected sample is dropped and counted (see
+    /// [`Self::sensor_queue_stats`]).
     ///
     /// # Errors
     /// Returns `InvalidInput` for invalid sensor values or sample ordering and
     /// `Internal` if shared state cannot be locked.
     pub fn push_imu(&self, sample: ImuReading) -> Result<(), ControllerError> {
-        let mut brain = self.brain.lock().map_err(|_| ControllerError::Internal)?;
-        brain.runtime.ingest(terra_runtime::RuntimeEvent::Imu {
-            sample: ImuSample {
-                timestamp: sample.timestamp,
-                acceleration: Vector3 {
-                    x: sample.acceleration_forward,
-                    y: sample.acceleration_left,
-                    z: sample.acceleration_up,
-                },
-                angular_velocity: Vector3 {
-                    x: sample.gyro_roll,
-                    y: sample.gyro_pitch,
-                    z: sample.gyro_yaw,
-                },
-            },
-            received_at: sample.timestamp,
-        })?;
-        Ok(())
+        self.brain.inbox.push(inbox::Sample::Imu(sample))
     }
-    /// Ingest VIO and, when tracked, update the planar world pose.
+    /// Queue one VIO reading for the next [`Self::step`]; when tracked it updates the
+    /// planar world pose as it is applied. Never waits for a running tick.
     /// The tracked quaternion is normalized before extracting heading.
     ///
     /// # Errors
     /// Returns `InvalidInput` for invalid readings or sample ordering and
     /// `Internal` for a poisoned mutex. Pose assignment precedes estimator validation.
     pub fn push_vio(&self, sample: VioReading) -> Result<(), ControllerError> {
-        let event = terra_runtime::RuntimeEvent::Vio {
-            sample: VioSample {
-                timestamp: sample.timestamp,
-                position: Vector3 {
-                    x: sample.position_x,
-                    y: sample.position_y,
-                    z: sample.position_z,
-                },
-                orientation: Quaternion {
-                    x: sample.quaternion_x,
-                    y: sample.quaternion_y,
-                    z: sample.quaternion_z,
-                    w: sample.quaternion_w,
-                },
-                velocity: Vector3 {
-                    x: sample.velocity_x,
-                    y: sample.velocity_y,
-                    z: sample.velocity_z,
-                },
-                tracked: sample.tracked,
-            },
-            received_at: sample.timestamp,
-        };
-        self.brain
-            .lock()
-            .map_err(|_| ControllerError::Internal)?
-            .runtime
-            .ingest(event)?;
-        Ok(())
+        self.brain.inbox.push(inbox::Sample::Vio(sample))
     }
     /// Select the same actuation profile used by simulator adapters.
     pub fn set_actuation_mode(&self, feedback: bool) -> Result<(), ControllerError> {
@@ -941,6 +933,7 @@ impl MobileController {
     /// Returns `Internal` for a poisoned mutex. Recorder-close errors are ignored.
     pub fn reset(&self) -> Result<(), ControllerError> {
         let mut brain = self.brain.lock().map_err(|_| ControllerError::Internal)?;
+        self.brain.inbox.clear();
         brain.runtime.reset()?;
         brain.last_tick = 0.;
         brain.dashboard = None;
@@ -950,6 +943,74 @@ impl MobileController {
             let _ = r.close();
         }
         Ok(())
+    }
+    /// Queue depths and how many sensor samples were dropped or rejected.
+    pub fn sensor_queue_stats(&self) -> SensorQueueStats {
+        self.brain.inbox.stats()
+    }
+}
+
+/// Apply one queued sensor sample to the runtime. Called by `step` with the
+/// controller locked, in timestamp order.
+fn apply_sample(brain: &mut Brain, sample: inbox::Sample) -> Result<(), ControllerError> {
+    match sample {
+        inbox::Sample::Imu(sample) => {
+            brain.runtime.ingest(terra_runtime::RuntimeEvent::Imu {
+                sample: ImuSample {
+                    timestamp: sample.timestamp,
+                    acceleration: Vector3 {
+                        x: sample.acceleration_forward,
+                        y: sample.acceleration_left,
+                        z: sample.acceleration_up,
+                    },
+                    angular_velocity: Vector3 {
+                        x: sample.gyro_roll,
+                        y: sample.gyro_pitch,
+                        z: sample.gyro_yaw,
+                    },
+                },
+                received_at: sample.timestamp,
+            })?;
+            Ok(())
+        }
+        inbox::Sample::Vio(sample) => {
+            let event = terra_runtime::RuntimeEvent::Vio {
+                sample: VioSample {
+                    timestamp: sample.timestamp,
+                    position: Vector3 {
+                        x: sample.position_x,
+                        y: sample.position_y,
+                        z: sample.position_z,
+                    },
+                    orientation: Quaternion {
+                        x: sample.quaternion_x,
+                        y: sample.quaternion_y,
+                        z: sample.quaternion_z,
+                        w: sample.quaternion_w,
+                    },
+                    velocity: Vector3 {
+                        x: sample.velocity_x,
+                        y: sample.velocity_y,
+                        z: sample.velocity_z,
+                    },
+                    tracked: sample.tracked,
+                },
+                received_at: sample.timestamp,
+            };
+            brain.runtime.ingest(event)?;
+            Ok(())
+        }
+        inbox::Sample::Gps(fix, now) => {
+            brain.outdoor.gps(fix, now).map_err(outdoor_bridge::invalid)
+        }
+        inbox::Sample::Heading(fix, now) => brain
+            .outdoor
+            .heading(fix, now)
+            .map_err(outdoor_bridge::invalid),
+        inbox::Sample::Course(fix, now) => brain
+            .outdoor
+            .course(fix, now)
+            .map_err(outdoor_bridge::invalid),
     }
 }
 #[derive(Clone, Debug, uniffi::Record)]

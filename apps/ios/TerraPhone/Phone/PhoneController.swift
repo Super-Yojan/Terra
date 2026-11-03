@@ -226,7 +226,6 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
     var mode: Mode = .stopped
     var target = (forward: 0.0, yaw: 0.0)
     private var lastLocalTarget = (forward: 0.0, yaw: 0.0)
-    var lastCloudTime = -Double.infinity
     var lastFloorTime = -Double.infinity
     // Control-queue state; the mesh walk itself runs on floorQueue. The epoch
     // changes whenever the map or ground offset resets, so a walk that was in

@@ -19,6 +19,12 @@ flowchart LR
 
 *[Build steps](../phone/build.md). Deployment target is iOS 17.*
 
+## Sensor queue
+
+`pushImu`, `pushVio`, `pushGps`, `pushHeading` and `pushCourse` only queue the sample, so they are safe to call from any sensor thread and never wait for a running control tick. Each sensor has its own bounded queue (IMU 256, VIO 64, GPS/heading/course 32); a full queue drops its oldest sample. The next time the controller locks its state (every `step`, and any call that reads state) it applies all queued samples in timestamp order, so a call always sees every sample pushed before it.
+
+A sample the runtime rejects when it is applied (older than one already applied, or invalid) is dropped and counted instead of stopping the controller; if a sensor really stops, the freshness checks still make the output neutral. Only a nonfinite timestamp is refused at push time. `sensorQueueStats()` reports queue depths, overflow drops, rejections and the last rejection reason.
+
 [API](https://super-yojan.dev/Terra/api/terra_mobile/index.html)
 
 | Swift name | Rust |

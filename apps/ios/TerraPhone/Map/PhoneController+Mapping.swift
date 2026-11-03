@@ -63,51 +63,6 @@ extension PhoneController {
             try? occupancyMap?.clear(); lastFloorTime = -Double.infinity; floorEpoch &+= 1
         }
     }
-    func publishPhoneCloud(frame: ARFrame, position: SIMD3<Float>) {
-        guard frame.timestamp - lastCloudTime >= 0.3, let controller else { return }
-        lastCloudTime = frame.timestamp
-        var points: [[Double]] = []
-        var source = "features"
-        guard let offset = mapGroundOffset else { return }
-        if let depth = frame.sceneDepth {
-            source = "lidar"
-            let buffer = depth.depthMap
-            if CVPixelBufferGetPixelFormatType(buffer) == kCVPixelFormatType_DepthFloat32,
-               CVPixelBufferLockBaseAddress(buffer, .readOnly) == kCVReturnSuccess {
-                defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
-                let width = CVPixelBufferGetWidth(buffer), height = CVPixelBufferGetHeight(buffer)
-                let stride = CVPixelBufferGetBytesPerRow(buffer)
-                let k = frame.camera.intrinsics
-                let sx = Double(width) / Double(frame.camera.imageResolution.width), sy = Double(height) / Double(frame.camera.imageResolution.height)
-                let fx = Double(k.columns.0.x)*sx, fy = Double(k.columns.1.y)*sy
-                let cx = (Double(k.columns.2.x)+0.5)*sx-0.5, cy = (Double(k.columns.2.y)+0.5)*sy-0.5
-                let orientation = simd_quatf(worldFromAR) * simd_quatf(frame.camera.transform) * simd_quatf(angle: .pi, axis: SIMD3(1,0,0))
-                let step = max(1, Int(ceil(sqrt(Double(width*height)/1800))))
-                if let base = CVPixelBufferGetBaseAddress(buffer) {
-                    for v in Swift.stride(from: 0, to: height, by: step) {
-                        let row = base.advanced(by: v*stride).assumingMemoryBound(to: Float.self)
-                        for u in Swift.stride(from: 0, to: width, by: step) {
-                            let d = row[u]
-                            guard d.isFinite, d >= 0.15, d <= 8 else { continue }
-                            let optical = SIMD3<Float>(Float((Double(u)-cx)/fx)*d, Float((Double(v)-cy)/fy)*d, d)
-                            let p = position + orientation.act(optical)
-                            points.append([Double(p.x), Double(p.y), Double(p.z)+offset])
-                        }
-                    }
-                }
-            }
-        } else if let features = frame.rawFeaturePoints {
-            let step = max(1, Int(ceil(Double(features.points.count)/1800)))
-            for i in Swift.stride(from: 0, to: features.points.count, by: step) {
-                let p = worldFromAR * features.points[i]
-                if p.x.isFinite && p.y.isFinite && p.z.isFinite { points.append([Double(p.x),Double(p.y),Double(p.z)+offset]) }
-            }
-        }
-        let value: [String: Any] = ["version":1,"sequence":UInt64(frame.timestamp*1000),"frameID":localizationPolicy.identifier,"source":source,"points":points]
-        if let data = try? JSONSerialization.data(withJSONObject: value) {
-            try? controller.publishPointCloud(payload: String(decoding: data, as: UTF8.self))
-        }
-    }
     func updatePhoneMap(frame: ARFrame, position: SIMD3<Float>, roverPosition: SIMD3<Float>, bodyOrientation: simd_quatf) {
         guard frame.timestamp - lastMapTime >= 0.1 else { return }
         guard let depth = frame.sceneDepth, let map = occupancyMap else {
