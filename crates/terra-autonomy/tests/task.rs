@@ -250,11 +250,7 @@ fn motor_commands_and_unreachable_points_are_refused_and_fed_back() {
         None,
     );
     let q = sim.next_query(5);
-    assert!(
-        q.prompt.contains("not reachable seen free space"),
-        "{}",
-        q.prompt
-    );
+    assert!(q.prompt.contains("is on an obstacle"), "{}", q.prompt);
 
     // A third bad reply in a row fails the task.
     sim.arbiter

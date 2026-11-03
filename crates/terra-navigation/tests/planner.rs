@@ -57,13 +57,35 @@ fn unknown_space_and_frontier() {
             angular: 0.
         }
     ));
-    assert!(frontier(&m, Pose::default(), 0.35, &[]).is_none());
+    assert!(
+        frontier(
+            &m,
+            Pose::default(),
+            &terra_navigation::Footprint {
+                length: 0.495,
+                width: 0.495,
+                margin: 0.
+            },
+            &[]
+        )
+        .is_none()
+    );
     for y in 15..25 {
         for x in 15..25 {
             m.occupancy[y * 40 + x] = 0;
         }
     }
-    let f = frontier(&m, Pose::default(), 0.35, &[]).unwrap();
+    let f = frontier(
+        &m,
+        Pose::default(),
+        &terra_navigation::Footprint {
+            length: 0.495,
+            width: 0.495,
+            margin: 0.,
+        },
+        &[],
+    )
+    .unwrap();
     assert!(f.0.is_finite());
     assert!(f.1.is_finite());
 }
@@ -130,14 +152,20 @@ fn frontier_can_leave_known_robot_footprint_when_grid_under_body_is_unobserved()
         for x in 0..40 {
             let px = -5. + (x as f64 + 0.5) * 0.25;
             let py = -5. + (y as f64 + 0.5) * 0.25;
-            if px.hypot(py) < 0.65 {
+            // Under the 0.919 m square body (half 0.46 m) at heading 0.
+            if px.abs() < 0.46 && py.abs() < 0.46 {
                 m.occupancy[y * 40 + x] = -1;
             }
         }
     }
     let pose = Pose::default();
-    let target = frontier(&m, pose, 0.65, &[]).expect("reachable observed region ahead");
-    assert!(reachable(&m, pose, 0.65, target.0, target.1));
+    let body = terra_navigation::Footprint {
+        length: 0.9192,
+        width: 0.9192,
+        margin: 0.,
+    };
+    let target = frontier(&m, pose, &body, &[]).expect("reachable observed region ahead");
+    assert!(reachable(&m, pose, &body, target.0, target.1));
 }
 
 /// Recording diagnostics must preserve the chosen command, identify its candidate,

@@ -1,7 +1,7 @@
 use crate::{FrontierCandidate, GoalScorer};
 use std::collections::VecDeque;
 use terra_mapping::MapSnapshot;
-use terra_navigation::{Pose, footprint_clear, grid_cell};
+use terra_navigation::{FitGrid, Footprint, Pose, grid_cell};
 /// Return observed free area in square metres and the fraction of cells no longer unknown.
 ///
 /// Free occupancy is 0–64; negative cells are unknown. Returns `None` for empty
@@ -47,12 +47,12 @@ pub fn map_coverage(map: &MapSnapshot) -> Option<(f64, f64)> {
 pub fn select_frontier(
     map: &MapSnapshot,
     pose: Pose,
-    radius: f64,
+    footprint: &Footprint,
     excluded: &[(f64, f64)],
     exclude_radius: f64,
     scorer: &dyn GoalScorer,
 ) -> Option<FrontierCandidate> {
-    select_frontier_in(map, map, pose, radius, excluded, exclude_radius, scorer)
+    select_frontier_in(map, map, pose, footprint, excluded, exclude_radius, scorer)
 }
 /// [`select_frontier`] with unknown cells passable on the way to the frontier.
 ///
@@ -63,7 +63,7 @@ pub fn select_frontier(
 pub fn select_frontier_through_unknown(
     map: &MapSnapshot,
     pose: Pose,
-    radius: f64,
+    footprint: &Footprint,
     excluded: &[(f64, f64)],
     exclude_radius: f64,
     scorer: &dyn GoalScorer,
@@ -73,7 +73,7 @@ pub fn select_frontier_through_unknown(
         &passable,
         map,
         pose,
-        radius,
+        footprint,
         excluded,
         exclude_radius,
         scorer,
@@ -84,15 +84,20 @@ fn select_frontier_in(
     clearance: &MapSnapshot,
     observed: &MapSnapshot,
     pose: Pose,
-    radius: f64,
+    footprint: &Footprint,
     excluded: &[(f64, f64)],
     exclude_radius: f64,
     scorer: &dyn GoalScorer,
 ) -> Option<FrontierCandidate> {
     let map = observed;
-    if !pose.finite() || !radius.is_finite() || radius <= 0. || radius > 5. {
+    if !pose.finite() || !footprint.valid() {
         return None;
     }
+    // Heading-free: a cell counts if the body fits there at some heading. The
+    // circle around the body sizes the gain window and the minimum distance.
+    let radius = footprint.circumradius();
+    let mut traverse = FitGrid::new(clearance, footprint, Some(pose));
+    let mut standing = FitGrid::new(clearance, footprint, None);
     let exclude_radius = if exclude_radius.is_finite() && exclude_radius > 0. {
         exclude_radius
     } else {
@@ -110,18 +115,18 @@ fn select_frontier_in(
         seen[index] = true;
         let px = map.origin_x + (x as f64 + 0.5) * map.resolution;
         let py = map.origin_y + (y as f64 + 0.5) * map.resolution;
-        if !footprint_clear(clearance, px, py, radius, Some(pose)) {
+        if !traverse.fits(x, y) {
             continue;
         }
         let gain = unknown_cells_around(map, x, y, radius);
         let distance = (px - pose.x).hypot(py - pose.y);
-        if footprint_clear(clearance, px, py, radius, None)
-            && map.occupancy[index] >= 0
+        if map.occupancy[index] >= 0
             && gain > 0
             && distance > radius.max(0.8)
             && excluded
                 .iter()
                 .all(|&(a, b)| (px - a).hypot(py - b) > exclude_radius)
+            && standing.fits(x, y)
         {
             let mut candidate = FrontierCandidate {
                 x: px,

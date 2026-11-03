@@ -28,7 +28,12 @@ fn nav() -> SearchNavigator {
             max_x: 4.,
             max_y: 4.,
         },
-        0.3,
+        // Circumscribed radius 0.3 m, as the circle these tests were written for.
+        terra_navigation::Footprint {
+            length: 0.4243,
+            width: 0.4243,
+            margin: 0.,
+        },
     )
     .unwrap()
 }
@@ -41,7 +46,17 @@ fn goals_are_reachable_and_contained() {
     let SearchNavigationDecision::Goal { x, y } = n.next_goal(&m, Pose::default(), 1, 0.) else {
         panic!("goal required")
     };
-    assert!(terra_navigation::reachable(&m, Pose::default(), 0.3, x, y));
+    assert!(terra_navigation::reachable(
+        &m,
+        Pose::default(),
+        &terra_navigation::Footprint {
+            length: 0.4243,
+            width: 0.4243,
+            margin: 0.
+        },
+        x,
+        y
+    ));
     assert!(x.abs() + 0.3 <= 4. && y.abs() + 0.3 <= 4.);
 }
 /// Moving the local observation window must not erase previously observed cells
@@ -119,6 +134,16 @@ fn u_shaped_obstacle_uses_intermediate_reachable_route() {
     let SearchNavigationDecision::Goal { x, y } = d else {
         panic!("reachable escape expected")
     };
-    assert!(terra_navigation::reachable(&m, Pose::default(), 0.3, x, y));
+    assert!(terra_navigation::reachable(
+        &m,
+        Pose::default(),
+        &terra_navigation::Footprint {
+            length: 0.4243,
+            width: 0.4243,
+            margin: 0.
+        },
+        x,
+        y
+    ));
     assert!(x < 0.5, "route must exit the open side");
 }

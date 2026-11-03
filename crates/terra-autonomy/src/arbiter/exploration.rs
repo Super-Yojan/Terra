@@ -42,8 +42,7 @@ impl AutonomyArbiter {
     }
     /// `Some` when exploration itself is holding or finished. `None` when the follower should move.
     pub(super) fn drive_explore(&mut self, input: &ArbiterInput<'_>) -> Option<&'static str> {
-        self.explorer
-            .set_footprint(self.planner.config.footprint.circumradius());
+        self.explorer.set_footprint(self.planner.config.footprint);
         self.update_explore_bias();
         self.explore_scan = None;
         let preview = self

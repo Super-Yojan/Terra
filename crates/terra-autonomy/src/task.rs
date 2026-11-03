@@ -14,7 +14,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use terra_mapping::MapSnapshot;
-use terra_navigation::{Pose, astar_route, footprint_clear};
+use terra_navigation::{FitGrid, Footprint, HybridConfig, HybridGoal, Pose, hybrid_astar_route};
 
 use crate::valid_token;
 
@@ -362,19 +362,16 @@ pub(crate) struct Reach {
 }
 
 impl Reach {
-    pub fn build(map: &MapSnapshot, pose: Pose, radius: f64) -> Option<Self> {
+    pub fn build(map: &MapSnapshot, pose: Pose, footprint: &Footprint) -> Option<Self> {
         let width = map.width as usize;
         let height = map.height as usize;
         if width == 0 || height == 0 || map.occupancy.len() != width * height || !pose.finite() {
             return None;
         }
         let start = terra_navigation::grid_cell(map, pose.x, pose.y)?;
-        let center = |c: usize, r: usize| {
-            (
-                map.origin_x + (c as f64 + 0.5) * map.resolution,
-                map.origin_y + (r as f64 + 0.5) * map.resolution,
-            )
-        };
+        // A cell counts if the body fits there at some heading.
+        let mut traverse = FitGrid::new(map, footprint, Some(pose));
+        let mut standing = FitGrid::new(map, footprint, None);
         let mut distance = vec![u32::MAX; width * height];
         let mut goal = vec![false; width * height];
         let mut seen = vec![false; width * height];
@@ -382,13 +379,12 @@ impl Reach {
         seen[start.1 * width + start.0] = true;
         while let Some((c, r, d)) = queue.pop_front() {
             let index = r * width + c;
-            let (x, y) = center(c, r);
             // The rover's own cell is the start even when its footprint touches unknown.
-            if (c, r) != start && !footprint_clear(map, x, y, radius, Some(pose)) {
+            if (c, r) != start && !traverse.fits(c, r) {
                 continue;
             }
             distance[index] = d;
-            goal[index] = footprint_clear(map, x, y, radius, None);
+            goal[index] = standing.fits(c, r);
             for (dx, dy) in [(1isize, 0isize), (-1, 0), (0, 1), (0, -1)] {
                 let nc = c as isize + dx;
                 let nr = r as isize + dy;
@@ -641,14 +637,16 @@ fn frontier_points(
 pub(crate) fn summarize(
     map: &MapSnapshot,
     pose: Pose,
-    radius: f64,
+    footprint: &Footprint,
     landmarks: &[TaskLandmark],
     destination: Option<(f64, f64)>,
     now: f64,
 ) -> MapSummary {
     let mut text = String::new();
     let mut targets = Vec::new();
-    let reach = Reach::build(map, pose, radius);
+    // Distances below are sized by the circle around the body.
+    let radius = footprint.circumradius();
+    let reach = Reach::build(map, pose, footprint);
     let (mut free, mut occupied, mut unknown) = (0, 0, 0);
     for v in &map.occupancy {
         match *v {
@@ -983,14 +981,15 @@ pub(crate) fn parse_decision(text: &str) -> Result<ParsedDecision, String> {
     }
 }
 
-/// Resolve one requested waypoint from `from` to an approach point A* can route to.
+/// Resolve one requested waypoint from `from` to an approach point Hybrid A*
+/// can route to, and the heading the rover arrives with.
 pub(crate) fn resolve_waypoint(
     map: &MapSnapshot,
     from: Pose,
-    radius: f64,
+    route: &HybridConfig,
     targets: &[TaskTarget],
     requested: &RequestedWaypoint,
-) -> Result<TaskWaypoint, String> {
+) -> Result<(TaskWaypoint, f64), String> {
     let (point, label) = match requested {
         RequestedWaypoint::Target(id) => {
             let target = targets
@@ -1005,7 +1004,14 @@ pub(crate) fn resolve_waypoint(
             )
         }
         RequestedWaypoint::Point(x, y) => {
-            let reach = Reach::build(map, from, radius).ok_or("rover is outside the map")?;
+            // A point on an obstacle is a mistake, not a place to go near.
+            if terra_navigation::grid_cell(map, *x, *y).is_some_and(|(c, r)| {
+                map.occupancy[r * map.width as usize + c] >= terra_navigation::OCCUPIED
+            }) {
+                return Err(format!("({x:.1}, {y:.1}) is on an obstacle"));
+            }
+            let reach =
+                Reach::build(map, from, &route.footprint).ok_or("rover is outside the map")?;
             let point = reach
                 .nearest_goal(map, *x, *y, TASK_SNAP_RADIUS)
                 .ok_or_else(|| {
@@ -1016,13 +1022,22 @@ pub(crate) fn resolve_waypoint(
             (point, "point".into())
         }
     };
-    astar_route(map, from, radius, point[0], point[1])
-        .map_err(|why| format!("{label} at ({:.1}, {:.1}): {why}", point[0], point[1]))?;
-    Ok(TaskWaypoint {
+    let goal = HybridGoal {
         x: point[0],
         y: point[1],
-        label,
-    })
+        yaw: None,
+    };
+    let path = hybrid_astar_route(map, from, goal, route)
+        .map_err(|why| format!("{label} at ({:.1}, {:.1}): {why}", point[0], point[1]))?;
+    let arrival = path.last().map_or(from.yaw, |w| w.yaw);
+    Ok((
+        TaskWaypoint {
+            x: point[0],
+            y: point[1],
+            label,
+        },
+        arrival,
+    ))
 }
 
 /// Validate a plan from the rover's pose. The first waypoint must resolve; a later
@@ -1030,19 +1045,20 @@ pub(crate) fn resolve_waypoint(
 pub(crate) fn resolve_plan(
     map: &MapSnapshot,
     pose: Pose,
-    radius: f64,
+    route: &HybridConfig,
     targets: &[TaskTarget],
     requested: &[RequestedWaypoint],
 ) -> Result<(Vec<TaskWaypoint>, Option<String>), String> {
     let mut plan = Vec::new();
     let mut from = pose;
     for (i, item) in requested.iter().enumerate() {
-        match resolve_waypoint(map, from, radius, targets, item) {
-            Ok(w) => {
+        match resolve_waypoint(map, from, route, targets, item) {
+            Ok((w, arrival)) => {
+                // The next leg starts facing the way this one arrives.
                 from = Pose {
                     x: w.x,
                     y: w.y,
-                    yaw: pose.yaw,
+                    yaw: arrival,
                 };
                 plan.push(w);
             }
@@ -1062,17 +1078,20 @@ pub(crate) fn step_prompt(
     elapsed: f64,
     budget: f64,
     pose: Pose,
-    radius: f64,
+    footprint: &Footprint,
     map_text: &str,
     history: &VecDeque<TaskHistoryEntry>,
 ) -> String {
     let mut text = format!(
         "TASK from the operator: {}\n\nStep {step} of at most {max_steps}. Time used {elapsed:.0} s of {budget:.0} s.\n\
-ROVER: at ({:.1}, {:.1}), heading {:.0} deg, footprint radius {radius:.2} m.\n\n",
+ROVER: at ({:.1}, {:.1}), heading {:.0} deg, body {:.2} x {:.2} m with {:.2} m margin; it turns only along arcs, never in place.\n\n",
         instruction.trim(),
         pose.x,
         pose.y,
         wrap(pose.yaw).to_degrees(),
+        footprint.length,
+        footprint.width,
+        footprint.margin,
     );
     text.push_str(map_text);
     text.push_str("\nHISTORY (oldest first):\n");
@@ -1193,6 +1212,19 @@ mod tests {
         assert!(parse_decision(r#"{"decision":"spin"}"#).is_err());
     }
 
+    /// Square body whose circumscribed radius is 0.4 m, as these tests were written for.
+    fn body() -> Footprint {
+        Footprint {
+            length: 0.5657,
+            width: 0.5657,
+            margin: 0.,
+        }
+    }
+
+    fn route() -> HybridConfig {
+        HybridConfig::for_body(body(), &terra_control::TurningConfig::default())
+    }
+
     #[test]
     fn summary_lists_frontiers_and_obstacles_with_reachable_approaches() {
         let map = room();
@@ -1201,13 +1233,17 @@ mod tests {
             y: 5.,
             yaw: 0.,
         };
-        let summary = summarize(&map, pose, 0.4, &[], None, 0.);
+        let summary = summarize(&map, pose, &body(), &[], None, 0.);
         assert!(summary.text.contains("F1"), "{}", summary.text);
         assert!(summary.text.contains("O1"), "{}", summary.text);
         assert!(summary.text.contains('R'));
         for target in &summary.targets {
             if let Some([x, y]) = target.approach {
-                assert!(astar_route(&map, pose, 0.4, x, y).is_ok(), "{target:?}");
+                let goal = HybridGoal { x, y, yaw: None };
+                assert!(
+                    hybrid_astar_route(&map, pose, goal, &route()).is_ok(),
+                    "{target:?}"
+                );
             }
         }
         // The wall's approach point is on free space beside it.
@@ -1224,20 +1260,40 @@ mod tests {
             y: 5.,
             yaw: 0.,
         };
-        let w =
-            resolve_waypoint(&map, pose, 0.4, &[], &RequestedWaypoint::Point(3.0, 5.0)).unwrap();
+        let (w, _) = resolve_waypoint(
+            &map,
+            pose,
+            &route(),
+            &[],
+            &RequestedWaypoint::Point(3.0, 5.0),
+        )
+        .unwrap();
         assert!((w.x - 3.0).abs() <= TASK_SNAP_RADIUS && (w.y - 5.0).abs() <= TASK_SNAP_RADIUS);
         assert!(
-            resolve_waypoint(&map, pose, 0.4, &[], &RequestedWaypoint::Point(6.1, 5.0)).is_err()
-        );
-        assert!(
-            resolve_waypoint(&map, pose, 0.4, &[], &RequestedWaypoint::Point(9.0, 5.0)).is_err()
+            resolve_waypoint(
+                &map,
+                pose,
+                &route(),
+                &[],
+                &RequestedWaypoint::Point(6.1, 5.0)
+            )
+            .is_err()
         );
         assert!(
             resolve_waypoint(
                 &map,
                 pose,
-                0.4,
+                &route(),
+                &[],
+                &RequestedWaypoint::Point(9.0, 5.0)
+            )
+            .is_err()
+        );
+        assert!(
+            resolve_waypoint(
+                &map,
+                pose,
+                &route(),
                 &[],
                 &RequestedWaypoint::Target("F9".into())
             )
@@ -1246,7 +1302,7 @@ mod tests {
         let (plan, note) = resolve_plan(
             &map,
             pose,
-            0.4,
+            &route(),
             &[],
             &[
                 RequestedWaypoint::Point(3., 3.),
@@ -1266,7 +1322,7 @@ mod tests {
             y: 5.,
             yaw: std::f64::consts::FRAC_PI_2,
         };
-        let summary = summarize(&map, pose, 0.4, &[], None, 0.);
+        let summary = summarize(&map, pose, &body(), &[], None, 0.);
         let mut history = VecDeque::new();
         for i in 0..10 {
             push_history(&mut history, i, "arrived", format!("entry {i}"));
@@ -1278,7 +1334,7 @@ mod tests {
             12.,
             300.,
             pose,
-            0.4,
+            &body(),
             &summary.text,
             &history,
         );

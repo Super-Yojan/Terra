@@ -83,21 +83,27 @@ pub struct SearchController {
     pub receipt: Option<(String, bool)>,
 }
 impl SearchController {
-    /// Start a validated search at finite nonnegative `now` seconds using default confirmation thresholds and a 0.35 m radius.
+    /// Start a validated search at finite nonnegative `now` seconds using default confirmation
+    /// thresholds and a 0.495 m square body (0.35 m circumscribed radius).
     ///
     /// Returns `invalid_search` for malformed request/time/configuration, or a navigation configuration error.
     pub fn start(request: SearchRequest, now: f64) -> Result<Self, SearchError> {
-        Self::with_config(request, now, ConfirmationConfig::default(), 0.35)
+        let body = terra_navigation::Footprint {
+            length: 0.495,
+            width: 0.495,
+            margin: 0.,
+        };
+        Self::with_config(request, now, ConfirmationConfig::default(), body)
     }
-    /// Start a search with explicit confirmation thresholds and footprint radius in metres.
+    /// Start a search with explicit confirmation thresholds and the rover body.
     ///
-    /// Requires a valid request, nonnegative finite `now` seconds, valid thresholds, and a navigator-valid radius.
+    /// Requires a valid request, nonnegative finite `now` seconds, valid thresholds, and a navigator-valid body.
     /// Returns `invalid_search` or the navigator construction error on rejection.
     pub fn with_config(
         request: SearchRequest,
         now: f64,
         config: ConfirmationConfig,
-        radius: f64,
+        footprint: terra_navigation::Footprint,
     ) -> Result<Self, SearchError> {
         if !request.valid() || !now.is_finite() || now < 0. || !config.valid() {
             return Err("invalid_search");
@@ -110,7 +116,7 @@ impl SearchController {
                 max_x: b.max_x,
                 max_y: b.max_y,
             },
-            radius,
+            footprint,
         )?;
         let token = request.token.clone();
         Ok(Self {

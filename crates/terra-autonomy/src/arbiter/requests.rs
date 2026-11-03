@@ -681,13 +681,7 @@ impl AutonomyArbiter {
                 {
                     // Revalidate reachability on the latest occupancy snapshot, independently of the proposal revision.
                     if let Some(m) = input.map
-                        && terra_navigation::reachable(
-                            m,
-                            input.pose,
-                            self.planner.config.footprint.circumradius(),
-                            p.x,
-                            p.y,
-                        )
+                        && self.route_confirms(m, input.pose, p.x, p.y)
                     {
                         ok = self
                             .follower

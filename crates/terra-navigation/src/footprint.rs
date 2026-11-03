@@ -6,6 +6,7 @@
 //! starting pose, so the rover can drive off its own unobserved underbody.
 use crate::{Pose, valid_map};
 use serde::{Deserialize, Serialize};
+use std::f64::consts::SQRT_2;
 use terra_mapping::MapSnapshot;
 
 /// Occupancy at or above this value is an obstacle.
@@ -174,6 +175,149 @@ fn overlaps(dx: f64, dy: f64, (sin, cos): (f64, f64), a: f64, b: f64, half: f64)
         && across <= b + spread
         && dx.abs() <= x_reach + half
         && dy.abs() <= y_reach + half
+}
+
+/// Headings tried when the heading is free: a rectangle repeats every 180 degrees.
+const FIT_HEADINGS: usize = 8;
+
+/// Whether the body fits at `(x, y)` at one of 8 headings (22.5 degree steps).
+/// Unknown cells under the body at `start` are allowed; with `None`, every
+/// unknown cell blocks.
+pub fn footprint_fits_some_heading(
+    map: &MapSnapshot,
+    footprint: &Footprint,
+    x: f64,
+    y: f64,
+    start: Option<Pose>,
+) -> bool {
+    let unknown = start.map_or(Unknown::Refused, Unknown::UnderBody);
+    fits_some_heading(map, footprint, x, y, unknown)
+}
+
+pub(crate) fn fits_some_heading(
+    map: &MapSnapshot,
+    footprint: &Footprint,
+    x: f64,
+    y: f64,
+    unknown: Unknown,
+) -> bool {
+    (0..FIT_HEADINGS).any(|k| {
+        let yaw = k as f64 * std::f64::consts::PI / FIT_HEADINGS as f64;
+        rejection(map, footprint, Pose { x, y, yaw }, 0., unknown).is_none()
+    })
+}
+
+/// Per-cell answer to "does the body fit here at some heading", cached, with a
+/// distance field so most cells need no rectangle test: far from every blocking
+/// cell the body fits at any heading, and within its inner radius of one it
+/// fits at none.
+pub struct FitGrid<'a> {
+    map: &'a MapSnapshot,
+    footprint: Footprint,
+    start: Option<Pose>,
+    /// Distance (cells, 8-connected) to the nearest blocking cell or map edge.
+    distance: Vec<f64>,
+    /// 0 = not yet known, 1 = fits, 2 = does not fit.
+    cache: Vec<u8>,
+}
+
+impl<'a> FitGrid<'a> {
+    /// Unknown cells under the body at `start` count as free; with `None`, all
+    /// unknown cells block.
+    pub fn new(map: &'a MapSnapshot, footprint: &Footprint, start: Option<Pose>) -> Self {
+        let n = map.occupancy.len();
+        let mut tolerated = vec![false; n];
+        if let Some(s) = start {
+            let (a, b) = footprint.half_extents(0.);
+            for_each_overlapping_cell(map, s.x, s.y, s.yaw, a, b, |i| {
+                if let Some(i) = i {
+                    tolerated[i] = true;
+                }
+                true
+            });
+        }
+        let distance = if valid_map(map) {
+            distance_field(map, |i, v| v >= OCCUPIED || v < 0 && !tolerated[i])
+        } else {
+            Vec::new()
+        };
+        Self {
+            map,
+            footprint: *footprint,
+            start,
+            distance,
+            cache: vec![0; n],
+        }
+    }
+
+    /// Whether the body fits centred on cell `(column, row)` at some heading.
+    pub fn fits(&mut self, column: usize, row: usize) -> bool {
+        let width = self.map.width as usize;
+        if self.distance.is_empty() || column >= width || row >= self.map.height as usize {
+            return false;
+        }
+        let i = row * width + column;
+        if self.cache[i] != 0 {
+            return self.cache[i] == 1;
+        }
+        let res = self.map.resolution;
+        let d = self.distance[i];
+        let half_diagonal = std::f64::consts::FRAC_1_SQRT_2;
+        // Straight-line distance between cell centres lies in [d / 1.0824, d].
+        let fits = if (d / 1.082_392_2 - 2. * half_diagonal) * res > self.footprint.circumradius() {
+            true
+        } else if (d + half_diagonal) * res < self.footprint.inradius() {
+            false
+        } else {
+            let x = self.map.origin_x + (column as f64 + 0.5) * res;
+            let y = self.map.origin_y + (row as f64 + 0.5) * res;
+            footprint_fits_some_heading(self.map, &self.footprint, x, y, self.start)
+        };
+        self.cache[i] = if fits { 1 } else { 2 };
+        fits
+    }
+}
+
+/// 8-connected distance, in cells, from each cell to the nearest cell for which
+/// `blocked(index, occupancy)` holds, or to the map edge. It is at least the
+/// straight-line distance between cell centres.
+pub(crate) fn distance_field(map: &MapSnapshot, blocked: impl Fn(usize, i8) -> bool) -> Vec<f64> {
+    // Two-pass chamfer transform: one sweep down-right and one up-left with the
+    // 3x3 mask (1 and sqrt 2) gives the exact 8-connected distance.
+    let (w, h) = (map.width as usize, map.height as usize);
+    let mut field: Vec<f64> = (0..w * h)
+        .map(|i| {
+            let (c, r) = (i % w, i / w);
+            if blocked(i, map.occupancy[i]) {
+                0.
+            } else {
+                (c + 1).min(r + 1).min(w - c).min(h - r) as f64
+            }
+        })
+        .collect();
+    let relax = |field: &mut Vec<f64>, c: usize, r: usize, mask: &[(i64, i64, f64)]| {
+        let mut best = field[r * w + c];
+        for &(dc, dr, cost) in mask {
+            let (nc, nr) = (c as i64 + dc, r as i64 + dr);
+            if nc >= 0 && nr >= 0 && (nc as usize) < w && (nr as usize) < h {
+                best = best.min(field[nr as usize * w + nc as usize] + cost);
+            }
+        }
+        field[r * w + c] = best;
+    };
+    let forward = [(-1, 0, 1.), (-1, -1, SQRT_2), (0, -1, 1.), (1, -1, SQRT_2)];
+    let backward = [(1, 0, 1.), (1, 1, SQRT_2), (0, 1, 1.), (-1, 1, SQRT_2)];
+    for r in 0..h {
+        for c in 0..w {
+            relax(&mut field, c, r, &forward);
+        }
+    }
+    for r in (0..h).rev() {
+        for c in (0..w).rev() {
+            relax(&mut field, c, r, &backward);
+        }
+    }
+    field
 }
 
 /// Visit every cell the rectangle (centre, yaw, half extents `a` × `b`) overlaps,

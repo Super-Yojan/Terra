@@ -5,7 +5,7 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 use terra_mapping::MapSnapshot;
-use terra_navigation::{Pose, footprint_clear, grid_cell, reachable};
+use terra_navigation::{Footprint, Pose, footprint_clear, grid_cell, reachable};
 /// Lifecycle phase of a frontier exploration run.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -77,8 +77,8 @@ impl Default for ExplorationStatus {
 /// Knobs for one explorer. The time budget is per run, not part of this struct.
 #[derive(Clone, Debug)]
 pub struct ExplorationConfig {
-    /// Circumscribed radius passed to the shared clearance check. The arbiter overwrites this from the planner.
-    pub footprint_radius: f64,
+    /// Rover body for the shared clearance checks. The arbiter overwrites this from the planner.
+    pub footprint: Footprint,
     /// Seconds a goal may stay blocked (planner hold or no route) before it is blacklisted.
     pub stuck_timeout: f64,
     /// Seconds a goal may go without getting [`Self::progress_epsilon`] closer before it is blacklisted.
@@ -126,7 +126,7 @@ pub struct ExplorationConfig {
 impl Default for ExplorationConfig {
     fn default() -> Self {
         Self {
-            footprint_radius: 0.65,
+            footprint: Footprint::default(),
             stuck_timeout: terra_types::timing::EXPLORATION_STUCK_SECONDS,
             no_progress_timeout: terra_types::timing::EXPLORATION_NO_PROGRESS_SECONDS,
             blacklist_seconds: terra_types::timing::EXPLORATION_BLACKLIST_SECONDS,
@@ -285,10 +285,10 @@ impl Explorer {
     pub fn set_scorer(&mut self, scorer: Box<dyn GoalScorer>) {
         self.scorer = scorer;
     }
-    /// Set a finite footprint radius in `(0, 5]` metres; ignore invalid values.
-    pub fn set_footprint(&mut self, radius: f64) {
-        if radius.is_finite() && radius > 0. && radius <= 5. {
-            self.config.footprint_radius = radius;
+    /// Set the rover body; ignore an invalid footprint.
+    pub fn set_footprint(&mut self, footprint: Footprint) {
+        if footprint.valid() {
+            self.config.footprint = footprint;
         }
     }
     /// Return whether exploration is currently running.
@@ -551,7 +551,7 @@ impl Explorer {
         select(
             map,
             pose,
-            self.config.footprint_radius,
+            &self.config.footprint,
             excluded,
             self.config.exclude_radius,
             self.scorer.as_ref(),
@@ -576,7 +576,7 @@ impl Explorer {
         let clearance = passable.as_ref().or(tick.map);
         if let Some(map) = tick.map
             && let Some((cx, cy)) = grid_cell(map, target.x, target.y)
-            && unknown_cells_around(map, cx, cy, self.config.footprint_radius) == 0
+            && unknown_cells_around(map, cx, cy, self.config.footprint.circumradius()) == 0
         {
             self.target = None;
             self.blocked_since = None;
@@ -592,19 +592,13 @@ impl Explorer {
             return;
         }
         if clearance.is_some_and(|map| {
-            !footprint_clear(map, target.x, target.y, self.config.footprint_radius, None)
+            !footprint_clear(map, &self.config.footprint, target.x, target.y, None)
         }) {
             self.block_target(tick.now, "target_occupied");
             return;
         }
         let unreachable = clearance.is_none_or(|map| {
-            !reachable(
-                map,
-                tick.pose,
-                self.config.footprint_radius,
-                target.x,
-                target.y,
-            )
+            !reachable(map, tick.pose, &self.config.footprint, target.x, target.y)
         });
         if unreachable || tick.planner_blocked {
             let since = *self.blocked_since.get_or_insert(tick.now);
@@ -655,7 +649,7 @@ impl Explorer {
                     unknown_within(
                         map,
                         pose,
-                        self.config.footprint_radius + self.config.scan_radius,
+                        self.config.footprint.circumradius() + self.config.scan_radius,
                     )
                 });
                 if !blind {

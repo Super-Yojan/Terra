@@ -55,7 +55,8 @@ mod astar;
 pub use astar::*;
 mod footprint;
 pub use footprint::{
-    Footprint, OCCUPIED, footprint_fits, footprint_rejection_at, rectangle_clearance,
+    FitGrid, Footprint, OCCUPIED, footprint_fits, footprint_fits_some_heading,
+    footprint_rejection_at, rectangle_clearance,
 };
 mod hybrid_astar;
 pub use hybrid_astar::{
@@ -558,12 +559,12 @@ pub fn grid_cell(m: &MapSnapshot, x: f64, y: f64) -> Option<(usize, usize)> {
 /// pose; this low-level helper does not validate those arguments independently.
 pub fn footprint_clear(
     m: &MapSnapshot,
+    footprint: &Footprint,
     x: f64,
     y: f64,
-    radius: f64,
     current: Option<Pose>,
 ) -> bool {
-    clear(m, x, y, radius, current)
+    footprint::footprint_fits_some_heading(m, footprint, x, y, current)
 }
 /// Copy of `map` with every unknown cell marked free. Observed cells and map bounds are kept.
 ///
@@ -596,13 +597,16 @@ pub fn unknown_as_free(map: &MapSnapshot) -> MapSnapshot {
 pub fn frontier(
     map: &MapSnapshot,
     pose: Pose,
-    radius: f64,
+    footprint: &Footprint,
     excluded: &[(f64, f64)],
 ) -> Option<(f64, f64)> {
-    if !pose.finite() || !radius.is_finite() || radius <= 0. || radius > 5. {
+    if !pose.finite() || !footprint.valid() {
         return None;
     }
+    let radius = footprint.circumradius();
     let start = cell(map, pose.x, pose.y)?;
+    let mut traverse = FitGrid::new(map, footprint, Some(pose));
+    let mut observed = FitGrid::new(map, footprint, None);
     let mut seen = vec![false; map.occupancy.len()];
     let mut queue = VecDeque::from([(start.0, start.1, 0usize)]);
     let mut best: Option<(f64, (f64, f64))> = None;
@@ -614,7 +618,7 @@ pub fn frontier(
         seen[index] = true;
         let px = map.origin_x + (x as f64 + 0.5) * map.resolution;
         let py = map.origin_y + (y as f64 + 0.5) * map.resolution;
-        if !clear(map, px, py, radius, Some(pose)) {
+        if !traverse.fits(x, y) {
             continue;
         }
         let reach = (radius / map.resolution).ceil() as isize + 2;
@@ -633,10 +637,10 @@ pub fn frontier(
                 }
             }
         }
-        if clear(map, px, py, radius, None)
-            && unknown_neighbors > 0
+        if unknown_neighbors > 0
             && (px - pose.x).hypot(py - pose.y) > radius.max(0.8)
             && excluded.iter().all(|&(a, b)| (px - a).hypot(py - b) > 1.)
+            && observed.fits(x, y)
         {
             // Favor nearby observation opportunities; keep the first equal-scoring cell.
             let score = unknown_neighbors as f64 / (1. + distance_cells as f64);
@@ -662,21 +666,17 @@ pub fn frontier(
 /// Returns `false` for invalid inputs, a radius outside `0.0 < radius <= 5.0`,
 /// a blocked target, or absence of a connected path. Use [`astar_route`] when a
 /// polyline with checked connecting segments is required.
-pub fn reachable(map: &MapSnapshot, pose: Pose, radius: f64, x: f64, y: f64) -> bool {
+pub fn reachable(map: &MapSnapshot, pose: Pose, footprint: &Footprint, x: f64, y: f64) -> bool {
     let Some(start) = cell(map, pose.x, pose.y) else {
         return false;
     };
     let Some(target) = cell(map, x, y) else {
         return false;
     };
-    if !pose.finite()
-        || !radius.is_finite()
-        || radius <= 0.
-        || radius > 5.
-        || !clear(map, x, y, radius, None)
-    {
+    if !pose.finite() || !footprint.valid() || !footprint_clear(map, footprint, x, y, None) {
         return false;
     }
+    let mut grid = FitGrid::new(map, footprint, Some(pose));
     let mut seen = vec![false; map.occupancy.len()];
     let mut queue = VecDeque::from([start]);
     while let Some((column, row)) = queue.pop_front() {
@@ -685,9 +685,7 @@ pub fn reachable(map: &MapSnapshot, pose: Pose, radius: f64, x: f64, y: f64) -> 
             continue;
         }
         seen[index] = true;
-        let cell_x = map.origin_x + (column as f64 + 0.5) * map.resolution;
-        let cell_y = map.origin_y + (row as f64 + 0.5) * map.resolution;
-        if !clear(map, cell_x, cell_y, radius, Some(pose)) {
+        if !grid.fits(column, row) {
             continue;
         }
         if (column, row) == target {

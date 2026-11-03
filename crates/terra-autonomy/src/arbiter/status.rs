@@ -10,7 +10,7 @@ impl AutonomyArbiter {
     ) -> AutonomyStatus {
         AutonomyStatus {
             sensor_hold: None,
-            global_route: if matches!(self.level, Level::Waypoint | Level::Task)
+            global_route: if self.routed_level()
                 && decision.route_failure.is_none()
                 && valid_time
                 && !self.stopped

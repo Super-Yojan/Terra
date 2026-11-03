@@ -8,6 +8,8 @@ const ROUTE_MAX_EXPANSIONS: u32 = 30_000;
 /// Heuristic weight for waypoint routes: far fewer expansions, at most this
 /// factor longer than the best route.
 const ROUTE_HEURISTIC_WEIGHT: f64 = 2.0;
+/// Expansions for a one-off synchronous route check (about 100 ms at most).
+const BOUNDED_ROUTE_EXPANSIONS: u32 = 10_000;
 /// Pure-pursuit lookahead along the route, metres.
 const ROUTE_LOOKAHEAD: f64 = 0.5;
 /// Distance at which a forward/reverse switch counts as reached, metres.
@@ -304,9 +306,7 @@ impl AutonomyArbiter {
                     };
                 }
                 // L5 task waypoints use the same A* route as L3.
-                if matches!(self.level, Level::Waypoint | Level::Task)
-                    && out.status.state == GoalState::Active
-                {
+                if self.routed_level() && out.status.state == GoalState::Active {
                     self.waypoint_route_intent(
                         input,
                         planning_map.unwrap(),
@@ -315,7 +315,7 @@ impl AutonomyArbiter {
                         decision,
                     )
                 } else {
-                    if matches!(self.level, Level::Waypoint | Level::Task) {
+                    if self.routed_level() {
                         self.clear_route();
                         self.route_goal = None;
                         self.route_reaches_goal = false;
@@ -508,7 +508,7 @@ impl AutonomyArbiter {
                 if let Some((x, y)) = frontier(
                     input.map.unwrap(),
                     input.pose,
-                    self.planner.config.footprint.circumradius(),
+                    &self.planner.config.footprint,
                     &excluded,
                 ) {
                     self.next_proposal += 1;
@@ -617,11 +617,42 @@ impl AutonomyArbiter {
         self.follow_route(input.pose, out, guidance_heading)
     }
 
+    /// Levels whose goals are driven along a Hybrid A* route. Waypoint Direct
+    /// deliberately follows its goal without map planning.
+    pub(super) fn routed_level(&self) -> bool {
+        matches!(
+            self.level,
+            Level::Waypoint
+                | Level::Task
+                | Level::Supervised
+                | Level::Explore
+                | Level::TargetSearch
+        )
+    }
+
     /// Forget the route and any search in progress.
     pub(super) fn clear_route(&mut self) {
         self.global_route.clear();
         self.route_progress = 0;
         self.route_job = None;
+    }
+
+    /// Hybrid A* settings for a one-off synchronous check (approval, task
+    /// planning): the same body and turning, with a tighter expansion cap. A
+    /// goal counts as reached inside the follower's arrival radius, as when driving.
+    pub(super) fn bounded_route_config(&self) -> terra_navigation::HybridConfig {
+        let base = self.hybrid_config();
+        terra_navigation::HybridConfig {
+            max_expansions: BOUNDED_ROUTE_EXPANSIONS,
+            goal_tolerance: (self.follower.config().arrive_radius - 0.1).max(base.goal_tolerance),
+            ..base
+        }
+    }
+
+    /// Whether Hybrid A* finds a drivable route from `pose` to `(x, y)`.
+    pub(super) fn route_confirms(&self, map: &MapSnapshot, pose: Pose, x: f64, y: f64) -> bool {
+        let goal = terra_navigation::HybridGoal { x, y, yaw: None };
+        terra_navigation::hybrid_astar_route(map, pose, goal, &self.bounded_route_config()).is_ok()
     }
 
     /// Hybrid A* settings from the planner's body and the turning policy.

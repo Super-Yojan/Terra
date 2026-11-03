@@ -1,6 +1,6 @@
 //! Mission-scoped observed map and deterministic routes. No target truth is accepted here.
 //!
-use crate::{Pose, reachable};
+use crate::{Footprint, Pose, reachable};
 use terra_mapping::MapSnapshot;
 /// Axis-aligned mission area in world metres, including the rover footprint.
 #[derive(Clone, Copy, Debug)]
@@ -41,19 +41,19 @@ pub enum SearchNavigationDecision {
 /// # Examples
 ///
 /// ```
-/// use terra_navigation::{SearchBounds, SearchNavigator};
+/// use terra_navigation::{Footprint, SearchBounds, SearchNavigator};
 ///
 /// let bounds = SearchBounds {
 ///     min_x: -10.0, min_y: -10.0, max_x: 10.0, max_y: 10.0,
 /// };
-/// let mut navigator = SearchNavigator::new(bounds, 0.65)?;
+/// let mut navigator = SearchNavigator::new(bounds, Footprint::default())?;
 /// assert_eq!(navigator.observed_cells(), 0);
 /// navigator.replan(); // Observations and recovery history would be retained.
 /// # Ok::<(), &'static str>(())
 /// ```
 pub struct SearchNavigator {
     bounds: SearchBounds,
-    radius: f64,
+    footprint: Footprint,
     map: Option<MapSnapshot>,
     last_revision: Option<u64>,
     last_time: Option<f64>,
@@ -64,27 +64,22 @@ pub struct SearchNavigator {
     failures: u8,
 }
 impl SearchNavigator {
-    /// Create a mission with a finite positive radius of at most 5 m.
+    /// Create a mission for a rover with this body footprint.
     ///
-    /// Each bounds dimension must exceed the footprint diameter and be at most 100 m.
+    /// Each bounds dimension must exceed the diameter of the circle around the
+    /// body (room to turn at any heading) and be at most 100 m.
     ///
     /// # Errors
     ///
-    /// Returns `invalid search geometry` when a boundary or radius is nonfinite,
-    /// the radius is outside `(0, 5]` m, or either bounds dimension is invalid.
+    /// Returns `invalid search geometry` when a boundary is nonfinite, the
+    /// footprint is invalid, or either bounds dimension is invalid.
     /// Map memory is allocated later by [`Self::next_goal`], using the first map's resolution.
-    pub fn new(bounds: SearchBounds, radius: f64) -> Result<Self, &'static str> {
-        if ![
-            bounds.min_x,
-            bounds.min_y,
-            bounds.max_x,
-            bounds.max_y,
-            radius,
-        ]
-        .iter()
-        .all(|v| v.is_finite())
-            || radius <= 0.
-            || radius > 5.
+    pub fn new(bounds: SearchBounds, footprint: Footprint) -> Result<Self, &'static str> {
+        let radius = footprint.circumradius();
+        if ![bounds.min_x, bounds.min_y, bounds.max_x, bounds.max_y]
+            .iter()
+            .all(|v| v.is_finite())
+            || !footprint.valid()
             || bounds.max_x - bounds.min_x <= 2. * radius
             || bounds.max_y - bounds.min_y <= 2. * radius
             || bounds.max_x - bounds.min_x > 100.
@@ -94,7 +89,7 @@ impl SearchNavigator {
         }
         Ok(Self {
             bounds,
-            radius,
+            footprint,
             map: None,
             last_revision: None,
             last_time: None,
@@ -243,10 +238,15 @@ impl SearchNavigator {
         if let Err(reason) = self.merge(m, revision) {
             return SearchNavigationDecision::Blocked { reason };
         }
-        if pose.x - self.radius < self.bounds.min_x
-            || pose.x + self.radius > self.bounds.max_x
-            || pose.y - self.radius < self.bounds.min_y
-            || pose.y + self.radius > self.bounds.max_y
+        // The body rectangle at its heading must stay inside the bounds.
+        let (a, b) = self.footprint.half_extents(0.);
+        let (sin, cos) = pose.yaw.sin_cos();
+        let reach_x = a * cos.abs() + b * sin.abs();
+        let reach_y = a * sin.abs() + b * cos.abs();
+        if pose.x - reach_x < self.bounds.min_x
+            || pose.x + reach_x > self.bounds.max_x
+            || pose.y - reach_y < self.bounds.min_y
+            || pose.y + reach_y > self.bounds.max_y
         {
             return SearchNavigationDecision::Blocked {
                 reason: "outside_search_bounds",
@@ -269,7 +269,7 @@ impl SearchNavigator {
         if let Some(&(x, y)) = self.route.first() {
             if (pose.x - x).hypot(pose.y - y) < 0.3 {
                 self.route.remove(0);
-            } else if !reachable(m, pose, self.radius, x, y) {
+            } else if crate::cell(m, x, y).is_some() && !reachable(m, pose, &self.footprint, x, y) {
                 self.invalidate_goal(now);
             }
         }
@@ -284,7 +284,7 @@ impl SearchNavigator {
         // Choose frontiers globally from memory; validate follower waypoints locally below.
         let memory = self.map.as_ref().unwrap();
         let excluded: Vec<_> = self.excluded.iter().map(|p| (p.0, p.1)).collect();
-        let Some(target) = crate::frontier(memory, pose, self.radius, &excluded) else {
+        let Some(target) = crate::frontier(memory, pose, &self.footprint, &excluded) else {
             return if !excluded.is_empty() {
                 SearchNavigationDecision::Blocked {
                     reason: "frontier_cooldown",
@@ -293,40 +293,22 @@ impl SearchNavigator {
                 SearchNavigationDecision::Exhausted
             };
         };
-        self.route = match crate::astar_route(memory, pose, self.radius, target.0, target.1) {
-            Ok(route) => approach_waypoints(&route),
-            Err(_) => Vec::new(),
-        };
-        // Only hand the follower a waypoint reachable in the current observed map.
-        if let Some(&(x, y)) = self.route.first() {
-            if reachable(m, pose, self.radius, x, y) {
-                self.goal = Some(target);
-                if self.anchor.is_none() {
-                    self.anchor = Some((pose, now));
-                }
-                return SearchNavigationDecision::Goal { x, y };
-            }
+        // The follower routes to the frontier itself (Hybrid A* in the local map,
+        // heading toward it when it lies beyond). Hand it over only if the body
+        // can reach it through the remembered map.
+        if !reachable(memory, pose, &self.footprint, target.0, target.1) {
+            return SearchNavigationDecision::Blocked {
+                reason: "route_outside_local_map",
+            };
         }
-        SearchNavigationDecision::Blocked {
-            reason: "route_outside_local_map",
+        self.route = vec![target];
+        self.goal = Some(target);
+        if self.anchor.is_none() {
+            self.anchor = Some((pose, now));
         }
-    }
-}
-/// Sample the compacted polyline into steps the search follower can consume
-/// one at a time. The first sample is ahead of the rover, matching the old
-/// cell-center route that omitted the starting pose.
-fn approach_waypoints(route: &[[f64; 2]]) -> Vec<(f64, f64)> {
-    let mut waypoints = Vec::new();
-    for segment in route.windows(2) {
-        let distance = (segment[1][0] - segment[0][0]).hypot(segment[1][1] - segment[0][1]);
-        let steps = (distance / 0.25).ceil().max(1.0) as usize;
-        for step in 1..=steps {
-            let fraction = step as f64 / steps as f64;
-            waypoints.push((
-                segment[0][0] + (segment[1][0] - segment[0][0]) * fraction,
-                segment[0][1] + (segment[1][1] - segment[0][1]) * fraction,
-            ));
+        SearchNavigationDecision::Goal {
+            x: target.0,
+            y: target.1,
         }
     }
-    waypoints
 }

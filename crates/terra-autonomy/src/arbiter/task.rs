@@ -489,7 +489,8 @@ impl AutonomyArbiter {
     /// Advance the task before motion is chosen. Holds unless a waypoint is being driven.
     pub(super) fn drive_task(&mut self, input: &ArbiterInput<'_>, decision: &mut TickDecision) {
         let now = input.now;
-        let radius = self.planner.config.footprint.circumradius();
+        let footprint = self.planner.config.footprint;
+        let route = self.bounded_route_config();
         let pose = input.pose;
         let fresh_map = input.map.filter(|_| self.map_is_fresh(input));
         let Some(task) = self.task.as_mut() else {
@@ -531,7 +532,7 @@ impl AutonomyArbiter {
                             "map went stale before the reply was checked".into(),
                             now,
                         ),
-                        Some(map) => match resolve_plan(map, pose, radius, &targets, &waypoints) {
+                        Some(map) => match resolve_plan(map, pose, &route, &targets, &waypoints) {
                             Err(why) => task.failed_step("invalid", why, now),
                             Ok((plan, note)) => {
                                 let names = task.follow(plan, note, rationale, now);
@@ -688,7 +689,7 @@ impl AutonomyArbiter {
                 let summary = summarize(
                     map,
                     pose,
-                    radius,
+                    &footprint,
                     &self.task_landmarks,
                     self.outdoor_destination,
                     now,
@@ -701,7 +702,7 @@ impl AutonomyArbiter {
                     elapsed,
                     task.spec.budget(),
                     pose,
-                    radius,
+                    &footprint,
                     &summary.text,
                     &task.history,
                 );

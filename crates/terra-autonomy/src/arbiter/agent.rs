@@ -43,12 +43,12 @@ impl AutonomyArbiter {
         pose: Pose,
         now: f64,
     ) -> Result<String, &'static str> {
-        let radius = self.planner.config.footprint.circumradius();
+        let footprint = self.planner.config.footprint;
         let map = self.fresh_agent_map(map, now);
         let landmarks = self.task_landmarks.clone();
         let destination = self.outdoor_destination;
         let task = self.task.as_mut().ok_or("no_task")?;
-        let summary = map.map(|m| summarize(m, pose, radius, &landmarks, destination, now));
+        let summary = map.map(|m| summarize(m, pose, &footprint, &landmarks, destination, now));
         let map_text = summary
             .as_ref()
             .map(|s| s.text.as_str())
@@ -61,7 +61,7 @@ impl AutonomyArbiter {
             status.elapsed_seconds,
             status.budget_seconds,
             pose,
-            radius,
+            &footprint,
             map_text,
             &task.history,
         );
@@ -112,7 +112,7 @@ impl AutonomyArbiter {
         if !task.steps_left() {
             return Err("step_limit: no decisions left; call finish".into());
         }
-        let radius = self.planner.config.footprint.circumradius();
+        let route = self.bounded_route_config();
         let map = self
             .fresh_agent_map(map, now)
             .ok_or("map_stale: no fresh map; wait and call get_map")?;
@@ -121,7 +121,7 @@ impl AutonomyArbiter {
                 .map_err(str::to_owned)?;
         }
         let task = self.task.as_mut().expect("checked by agent_control");
-        match resolve_plan(map, pose, radius, &task.agent_targets, waypoints) {
+        match resolve_plan(map, pose, &route, &task.agent_targets, waypoints) {
             Err(why) => {
                 task.note("invalid", why.clone());
                 Err(why)

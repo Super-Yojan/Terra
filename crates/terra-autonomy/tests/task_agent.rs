@@ -146,10 +146,7 @@ fn go_to_is_checked_like_a_model_reply_then_driven_on_the_l3_route() {
 
     // Inside the wall and an unknown id are refused, and nothing moves.
     let refused = sim.go(&[RequestedWaypoint::Point(7.1, 6.)]).unwrap_err();
-    assert!(
-        refused.contains("not reachable seen free space"),
-        "{refused}"
-    );
+    assert!(refused.contains("is on an obstacle"), "{refused}");
     assert!(sim.go(&[RequestedWaypoint::Target("F99".into())]).is_err());
     assert_eq!(sim.tick().twist, Twist::default());
 

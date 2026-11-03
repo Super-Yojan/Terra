@@ -7,7 +7,7 @@ use terra_mapping::MapSnapshot;
 use terra_navigation::{Pose, astar_route, frontier, reachable};
 
 use crate::geom::{self, cell_center, cell_index};
-use crate::scene::{CameraModel, FOOTPRINT_RADIUS, SceneObject};
+use crate::scene::{CameraModel, FOOTPRINT, FOOTPRINT_RADIUS, SceneObject};
 
 #[derive(Clone, Copy, Debug)]
 pub struct Detection {
@@ -191,7 +191,7 @@ fn approach_point(map: &MapSnapshot, pose: Pose, target: [f64; 2]) -> Option<[f6
         da.total_cmp(&db).then(a.0.cmp(&b.0)).then(a.1.cmp(&b.1))
     });
     candidates.into_iter().find_map(|(_, _, point)| {
-        if !reachable(map, pose, FOOTPRINT_RADIUS, point[0], point[1]) {
+        if !reachable(map, pose, &FOOTPRINT, point[0], point[1]) {
             return None;
         }
         astar_route(map, pose, FOOTPRINT_RADIUS, point[0], point[1])
@@ -350,14 +350,14 @@ pub fn verified_frontier_viewpoint(map: &MapSnapshot, pose: Pose) -> Option<[f64
     while x < pose.x + 8.5 {
         let point = [tidy(x), tidy(pose.y)];
         if geom::near_unknown(map, point[0], point[1], 1.0)
-            && reachable(map, pose, FOOTPRINT_RADIUS, point[0], point[1])
+            && reachable(map, pose, &FOOTPRINT, point[0], point[1])
             && astar_route(map, pose, FOOTPRINT_RADIUS, point[0], point[1]).is_ok()
         {
             return Some(point);
         }
         x += 0.1;
     }
-    if let Some((x, y)) = frontier(map, pose, FOOTPRINT_RADIUS, &[]) {
+    if let Some((x, y)) = frontier(map, pose, &FOOTPRINT, &[]) {
         if astar_route(map, pose, FOOTPRINT_RADIUS, x, y).is_ok() {
             return Some([tidy(x), tidy(y)]);
         }
@@ -401,7 +401,7 @@ fn local_viewpoint(map: &MapSnapshot, pose: Pose, cluster: &[(f64, f64)]) -> Opt
     dir_y /= norm;
     for extra in [0.15_f64, 0.4, 0.7, 1.0] {
         let point = [mean[0] + dir_x * extra, mean[1] + dir_y * extra];
-        if reachable(map, pose, FOOTPRINT_RADIUS, point[0], point[1])
+        if reachable(map, pose, &FOOTPRINT, point[0], point[1])
             && astar_route(map, pose, FOOTPRINT_RADIUS, point[0], point[1]).is_ok()
         {
             return Some(point);

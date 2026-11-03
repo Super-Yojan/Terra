@@ -13,7 +13,7 @@
 //! The heuristic is the larger of the straight-line distance and an
 //! obstacle-aware 2D distance, both scaled so they never overestimate. With a goal
 //! heading, a Dubins curve to the goal is tried as a shortcut near the goal.
-use crate::footprint::{OCCUPIED, for_each_overlapping_cell};
+use crate::footprint::{OCCUPIED, distance_field, for_each_overlapping_cell};
 use crate::{Footprint, Pose, cell, valid_map};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
@@ -257,8 +257,8 @@ impl HybridSearch {
             goal,
             unknown_cost,
             tolerated: HashSet::new(),
-            blocked_distance: distance_field(map, |v| !(0..OCCUPIED).contains(&v)),
-            obstacle_distance: distance_field(map, |v| v >= OCCUPIED),
+            blocked_distance: distance_field(map, |_, v| !(0..OCCUPIED).contains(&v)),
+            obstacle_distance: distance_field(map, |_, v| v >= OCCUPIED),
             heuristic: vec![f64::INFINITY; map.occupancy.len()],
             passable: Vec::new(),
             heuristic_open: BinaryHeap::new(),
@@ -299,7 +299,7 @@ impl HybridSearch {
             // cell is a pose where the body overlaps unknown space.
             let inscribed = search.config.footprint.inradius() / map.resolution - HALF_DIAGONAL;
             let tolerated = &search.tolerated;
-            let to_unknown = distance_field(map, |v| v < 0);
+            let to_unknown = distance_field(map, |_, v| v < 0);
             search.surely_unknown = to_unknown
                 .iter()
                 .enumerate()
@@ -486,7 +486,7 @@ impl HybridSearch {
         let (_, inscribed) = self.half_extents(0.);
         let res = self.map.resolution;
         let unknown_blocks = self.unknown_cost.is_none();
-        distance_field(&self.map, |v| v >= OCCUPIED || unknown_blocks && v < 0)
+        distance_field(&self.map, |_, v| v >= OCCUPIED || unknown_blocks && v < 0)
             .iter()
             .enumerate()
             .map(|(i, d)| (d + HALF_DIAGONAL) * res >= inscribed || self.tolerated.contains(&i))
@@ -675,47 +675,6 @@ fn index(map: &MapSnapshot, (column, row): (usize, usize)) -> usize {
     row * map.width as usize + column
 }
 
-/// 8-connected distance, in cells, from each cell to the nearest blocked cell or
-/// the map edge. It is at least the straight-line distance between cell centres.
-fn distance_field(map: &MapSnapshot, blocked: impl Fn(i8) -> bool) -> Vec<f64> {
-    // Two-pass chamfer transform: one sweep down-right and one up-left with the
-    // 3x3 mask (1 and sqrt 2) gives the exact 8-connected distance.
-    let (w, h) = (map.width as usize, map.height as usize);
-    let mut field: Vec<f64> = (0..w * h)
-        .map(|i| {
-            let (c, r) = (i % w, i / w);
-            if blocked(map.occupancy[i]) {
-                0.
-            } else {
-                (c + 1).min(r + 1).min(w - c).min(h - r) as f64
-            }
-        })
-        .collect();
-    let relax = |field: &mut Vec<f64>, c: usize, r: usize, mask: &[(i64, i64, f64)]| {
-        let mut best = field[r * w + c];
-        for &(dc, dr, cost) in mask {
-            let (nc, nr) = (c as i64 + dc, r as i64 + dr);
-            if nc >= 0 && nr >= 0 && (nc as usize) < w && (nr as usize) < h {
-                best = best.min(field[nr as usize * w + nc as usize] + cost);
-            }
-        }
-        field[r * w + c] = best;
-    };
-    let forward = [(-1, 0, 1.), (-1, -1, SQRT_2), (0, -1, 1.), (1, -1, SQRT_2)];
-    let backward = [(1, 0, 1.), (1, 1, SQRT_2), (0, 1, 1.), (-1, 1, SQRT_2)];
-    for r in 0..h {
-        for c in 0..w {
-            relax(&mut field, c, r, &forward);
-        }
-    }
-    for r in (0..h).rev() {
-        for c in (0..w).rev() {
-            relax(&mut field, c, r, &backward);
-        }
-    }
-    field
-}
-
 fn neighbours(map: &MapSnapshot, i: usize) -> impl Iterator<Item = (usize, f64)> {
     let (w, h) = (map.width as i64, map.height as i64);
     let (c, r) = ((i as i64) % w, (i as i64) / w);
@@ -864,7 +823,7 @@ mod tests {
             origin_y: 0.,
             occupancy,
         };
-        let fast = distance_field(&map, |v| v >= OCCUPIED);
+        let fast = distance_field(&map, |_, v| v >= OCCUPIED);
         // Reference: Dijkstra from every blocked cell and the map edge.
         let mut slow: Vec<f64> = (0..w * h)
             .map(|i| {

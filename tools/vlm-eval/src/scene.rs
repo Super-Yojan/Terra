@@ -8,6 +8,13 @@ use crate::geom::Counts;
 
 /// Planner footprint used by `astar_route` in this pack. Matches Terra's default.
 pub const FOOTPRINT_RADIUS: f64 = 0.65;
+/// Body for the heading-free reachability and frontier checks: a square whose
+/// circumscribed radius is [`FOOTPRINT_RADIUS`].
+pub const FOOTPRINT: terra_navigation::Footprint = terra_navigation::Footprint {
+    length: 0.9192,
+    width: 0.9192,
+    margin: 0.,
+};
 /// Check 4 tolerance from issue #49.
 pub const WAYPOINT_TOLERANCE_M: f64 = 0.5;
 /// Prompt rule, not a calibrated detector threshold.

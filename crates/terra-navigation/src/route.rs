@@ -20,8 +20,6 @@ use terra_mapping::MapSnapshot;
 /// Cost multiple for crossing unknown cells; routes prefer observed space but
 /// may cross unseen space when it is much shorter.
 pub const UNKNOWN_COST: f64 = 3.;
-/// Headings tried when asking whether the body fits somewhere.
-const FIT_HEADINGS: usize = 16;
 
 /// A drivable route and whether it ends at the requested goal.
 #[derive(Clone, Debug, PartialEq)]
@@ -180,17 +178,7 @@ impl RouteJob {
 /// Whether the body fits at `(x, y)` at some heading, counting only observed
 /// obstacles and the map edge.
 fn fits_somewhere(map: &MapSnapshot, config: &HybridConfig, x: f64, y: f64) -> bool {
-    (0..FIT_HEADINGS).any(|k| {
-        let yaw = k as f64 * std::f64::consts::TAU / FIT_HEADINGS as f64;
-        footprint::rejection(
-            map,
-            &config.footprint,
-            Pose { x, y, yaw },
-            0.,
-            Unknown::Anywhere,
-        )
-        .is_none()
-    })
+    footprint::fits_some_heading(map, &config.footprint, x, y, Unknown::Anywhere)
 }
 
 /// The nearest cell centre within `snap` metres of `(x, y)` where the body fits.

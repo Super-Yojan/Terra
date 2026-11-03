@@ -1,6 +1,16 @@
 use terra_exploration::*;
 use terra_mapping::MapSnapshot;
 use terra_navigation::Pose;
+
+/// Square body whose circumscribed radius is `r`: the circle these tests were written for.
+fn body(r: f64) -> terra_navigation::Footprint {
+    let side = r * std::f64::consts::SQRT_2;
+    terra_navigation::Footprint {
+        length: side,
+        width: side,
+        margin: 0.,
+    }
+}
 /// Build a 40 × 40 grid at 0.25 m resolution, centred on the origin, filled with the supplied occupancy value.
 fn map(fill: i8) -> MapSnapshot {
     MapSnapshot {
@@ -52,15 +62,16 @@ fn tick<'a>(
 fn frontier_selection_matches_navigation_and_respects_a_scorer() {
     let grid = with_known_core(true);
     let pose = Pose::default();
-    let selected = select_frontier(&grid, pose, 0.35, &[], 1., &InformationGainScorer).unwrap();
-    let legacy = terra_navigation::frontier(&grid, pose, 0.35, &[]).unwrap();
+    let selected =
+        select_frontier(&grid, pose, &body(0.35), &[], 1., &InformationGainScorer).unwrap();
+    let legacy = terra_navigation::frontier(&grid, pose, &body(0.35), &[]).unwrap();
     assert_eq!((selected.x, selected.y), legacy);
     assert!(selected.information_gain > 0);
     assert!(selected.score > 0.);
     let prefer_east = select_frontier(
         &grid,
         pose,
-        0.35,
+        &body(0.35),
         &[],
         1.,
         &FnScorer(|candidate: &FrontierCandidate| candidate.x),
@@ -70,7 +81,7 @@ fn frontier_selection_matches_navigation_and_respects_a_scorer() {
     let skipped = select_frontier(
         &grid,
         pose,
-        0.35,
+        &body(0.35),
         &[(prefer_east.x, prefer_east.y)],
         1.,
         &InformationGainScorer,
@@ -86,7 +97,7 @@ fn unreachable_frontier_is_blacklisted_and_does_not_stick() {
     explorer.config_mut().stuck_timeout = 1.;
     explorer.config_mut().blacklist_seconds = 30.;
     explorer.config_mut().max_attempts = 3;
-    explorer.config_mut().footprint_radius = 0.35;
+    explorer.config_mut().footprint = body(0.35);
     assert!(explorer.start(60., "run-1"));
     let action = explorer.step(tick(0., Some(&grid), false, false, false, 0., 0., 0.));
     let ExploreAction::Seek { x, y } = action else {
@@ -132,7 +143,7 @@ fn repeated_blocks_end_instead_of_holding_forever() {
     explorer.config_mut().stuck_timeout = 0.;
     explorer.config_mut().blacklist_seconds = 10.;
     explorer.config_mut().max_attempts = 1;
-    explorer.config_mut().footprint_radius = 0.35;
+    explorer.config_mut().footprint = body(0.35);
     explorer.config_mut().exclude_radius = 50.;
     assert!(explorer.start(60., "run-1"));
     let ExploreAction::Seek { x, y } =
@@ -152,7 +163,7 @@ fn repeated_blocks_end_instead_of_holding_forever() {
 fn budget_expiry_stops_a_live_frontier() {
     let grid = with_known_core(true);
     let mut explorer = Explorer::default();
-    explorer.config_mut().footprint_radius = 0.35;
+    explorer.config_mut().footprint = body(0.35);
     assert!(explorer.start(1., "run-1"));
     let ExploreAction::Seek { x, y } =
         explorer.step(tick(0., Some(&grid), false, false, false, 0., 0., 0.))
@@ -315,7 +326,7 @@ fn a_rover_in_its_blind_zone_looks_around_before_choosing() {
         select_frontier(
             &wedge,
             Pose::default(),
-            0.65,
+            &body(0.65),
             &[],
             1.,
             &InformationGainScorer
@@ -387,7 +398,7 @@ fn through_unknown_finds_a_frontier_in_the_camera_wedge() {
     let wedge = front_camera_wedge();
     let pose = Pose::default();
     let candidate =
-        select_frontier_through_unknown(&wedge, pose, 0.65, &[], 1., &InformationGainScorer)
+        select_frontier_through_unknown(&wedge, pose, &body(0.65), &[], 1., &InformationGainScorer)
             .expect("a frontier through unknown space");
     assert!(candidate.distance_m > 0.8);
     assert!(candidate.information_gain > 0);
@@ -418,12 +429,17 @@ fn through_unknown_never_passes_an_occupied_wall() {
     let chosen = select_frontier_through_unknown(
         &walled,
         Pose::default(),
-        0.65,
+        &body(0.65),
         &[],
         1.,
         &InformationGainScorer,
     );
-    assert!(chosen.is_none_or(|c| c.x + 0.65 < 1.5), "{chosen:?}");
+    // The body fits at the candidate at some heading, so at least its inner
+    // half-width stays short of the wall.
+    assert!(
+        chosen.is_none_or(|c| c.x + body(0.65).inradius() < 1.5),
+        "{chosen:?}"
+    );
     // Unknown cells become free; observed cells and the grid stay as they were.
     let passable = terra_navigation::unknown_as_free(&walled);
     assert!(passable.occupancy.iter().all(|cell| *cell >= 0));
@@ -442,7 +458,7 @@ fn through_unknown_never_passes_an_occupied_wall() {
 fn a_frontier_that_got_mapped_is_dropped_without_a_blacklist() {
     let grid = with_known_core(true);
     let mut explorer = Explorer::default();
-    explorer.config_mut().footprint_radius = 0.35;
+    explorer.config_mut().footprint = body(0.35);
     assert!(explorer.start(60., "run-1"));
     let ExploreAction::Seek { x, y } =
         explorer.step(tick(0., Some(&grid), false, false, false, 0., 0., 0.))
@@ -464,7 +480,7 @@ fn a_frontier_that_got_mapped_is_dropped_without_a_blacklist() {
 fn a_cut_off_route_gets_the_stuck_window_before_blacklisting() {
     let grid = with_known_core(true);
     let mut explorer = Explorer::default();
-    explorer.config_mut().footprint_radius = 0.35;
+    explorer.config_mut().footprint = body(0.35);
     explorer.config_mut().stuck_timeout = 2.;
     assert!(explorer.start(60., "run-1"));
     let ExploreAction::Seek { x, y } =
@@ -509,7 +525,7 @@ fn a_cut_off_route_gets_the_stuck_window_before_blacklisting() {
 fn all_frontiers_blacklisted_retries_instead_of_holding() {
     let grid = with_known_core(true);
     let mut explorer = Explorer::default();
-    explorer.config_mut().footprint_radius = 0.35;
+    explorer.config_mut().footprint = body(0.35);
     explorer.config_mut().stuck_timeout = 0.;
     explorer.config_mut().max_attempts = 3;
     explorer.config_mut().exclude_radius = 50.;
@@ -574,7 +590,7 @@ fn all_frontiers_blacklisted_retries_instead_of_holding() {
 fn no_progress_uses_its_own_longer_window() {
     let grid = with_known_core(true);
     let mut explorer = Explorer::default();
-    explorer.config_mut().footprint_radius = 0.35;
+    explorer.config_mut().footprint = body(0.35);
     explorer.config_mut().stuck_timeout = 5.;
     explorer.config_mut().no_progress_timeout = 12.;
     assert!(explorer.start(60., "run-1"));
