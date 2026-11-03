@@ -106,7 +106,7 @@ fn outside_and_unknown_goals_route_toward_the_frontier() {
     );
     // Report timing for this larger window without imposing a timing assertion here.
     let started = Instant::now();
-    let route = astar_progress_route(&map, pose, 0.65, 16., 0.).unwrap();
+    let route = astar_progress_route(&map, pose, 0.65, 16., 0., 0.65).unwrap();
     eprintln!(
         "20 m window progress route: {:.2} ms",
         started.elapsed().as_secs_f64() * 1000.
@@ -131,7 +131,7 @@ fn outside_and_unknown_goals_route_toward_the_frontier() {
             unknown.occupancy[row * 200 + col] = 0;
         }
     }
-    let toward_unknown = astar_progress_route(&unknown, pose, 0.65, 5., 0.).unwrap();
+    let toward_unknown = astar_progress_route(&unknown, pose, 0.65, 5., 0., 0.65).unwrap();
     let end = toward_unknown.last().copied().unwrap();
     assert!((end[0] - 5.).hypot(end[1]) < 5.);
     assert_eq!(
@@ -141,7 +141,7 @@ fn outside_and_unknown_goals_route_toward_the_frontier() {
 
     // An explicitly occupied target must not trigger the partial-progress fallback.
     unknown.occupancy[100 * 200 + 140] = 100;
-    assert!(astar_progress_route(&unknown, pose, 0.65, 4.05, 0.05).is_err());
+    assert!(astar_progress_route(&unknown, pose, 0.65, 4.05, 0.05, 0.65).is_err());
 }
 
 /// Clear endpoints do not guarantee a clear connecting segment. Retain the safe
