@@ -39,6 +39,19 @@ ARKit establishes a local frame on each tracking run. Do not assume it is compas
 - Physical phones publish lightweight `<prefix>/<id>/pose` JSON. ARGOS also keeps its existing simulator depth-header subscription. This adds no image/video streaming.
 - Automated loopback tests verify routing, telemetry expiry, disconnect and command acknowledgement. They do not establish real iPhone signing, foreground sensor performance, Tailscale latency, firewall access, or physical rover motion. Verify these on hardware before a study.
 
+## Save the current occupancy map
+
+While the phone is connected and mapping, save its latest map. By default the script connects to the GCP fleet router the apps use (`tls/argos.34.135.204.210.sslip.io:7448`, prefix `terra/phone`, user `terra`):
+
+```sh
+export TERRA_ROUTER_PASSWORD=...                       # the fleet password
+uv run scripts/dashboard/save-occupancy-map.py         # rover 0
+uv run scripts/dashboard/save-occupancy-map.py --rover 1 --out maps/run1
+uv run scripts/dashboard/save-occupancy-map.py --endpoint tcp/127.0.0.1:7448 --user ""   # local Mac router
+```
+
+It waits for the next full `terra/phone/<id>/map/occupancy` message (sent on change and at least every two seconds) and writes `<name>.json`, the payload as published, and `<name>.png`, with free cells white, occupied black and unknown grey (+Y up).
+
 ## Troubleshooting
 
 Use `tailscale status` and `tailscale ip -4` on the Mac. If Tailscale is stopped, enable it before starting the router. The phone needs the Mac's Tailscale address, never phone localhost. If the router cannot bind the Tailscale address, check that the tunnel is enabled. If the session opens but no rover appears, check the matching topic prefix, active phone sensor controller, and app foreground state.
