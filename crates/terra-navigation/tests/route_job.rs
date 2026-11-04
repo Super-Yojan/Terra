@@ -287,3 +287,20 @@ fn per_tick_cost_on_saved_maps() {
         }
     }
 }
+
+/// What the phone sees when a goal is set: only the camera's wedge ahead is
+/// known, starting about 0.35 m out, and the ground right around the rover is
+/// unknown. The blind zone around the start lets the route leave it.
+#[test]
+fn a_rover_at_the_tip_of_its_camera_wedge_gets_a_route() {
+    let mut map = blank(-1);
+    for i in 0..40_000 {
+        let (x, y) = centre(i);
+        if x > 0.35 && x < 6. && y.abs() < x * 30f64.to_radians().tan() {
+            map.occupancy[i] = 0;
+        }
+    }
+    let (route, _) = plan(&map, rover(), 3., 0.5);
+    let route = route.expect("a route must start from the blind zone");
+    assert!(route.waypoints.len() >= 2);
+}

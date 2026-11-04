@@ -549,6 +549,7 @@ impl AutonomyArbiter {
         if changed_goal {
             self.clear_route();
             self.route_reaches_goal = false;
+            self.route_last_failure = None;
             self.reset_recovery();
         } else if let Some(twist) = self.recovery_step(input, map, decision) {
             return twist;
@@ -592,6 +593,7 @@ impl AutonomyArbiter {
                 Err(why) => {
                     self.clear_route();
                     self.route_reaches_goal = false;
+                    self.route_last_failure = Some(why);
                     decision.route_failure = Some(why);
                 }
             }
@@ -611,6 +613,7 @@ impl AutonomyArbiter {
                     self.global_route = route.waypoints;
                     self.route_progress = 0;
                     self.route_reaches_goal = route.reaches_goal;
+                    self.route_last_failure = None;
                 }
                 Err("route_start_blocked") if self.recover_from_start_blocked(input) => {
                     return Twist::default();
@@ -618,12 +621,17 @@ impl AutonomyArbiter {
                 Err(why) => {
                     self.clear_route();
                     self.route_reaches_goal = false;
+                    self.route_last_failure = Some(why);
                     decision.route_failure = Some(why);
                 }
             }
         }
         if self.global_route.len() < 2 {
-            decision.route_pending = self.route_job.is_some();
+            // While retrying after a failure, keep reporting why it failed.
+            match self.route_last_failure {
+                Some(why) if decision.route_failure.is_none() => decision.route_failure = Some(why),
+                _ => decision.route_pending = self.route_job.is_some(),
+            }
             return Twist::default();
         }
         self.follow_route(input.pose, out, guidance_heading)

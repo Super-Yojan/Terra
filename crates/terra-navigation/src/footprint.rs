@@ -60,6 +60,29 @@ impl Footprint {
     pub fn inradius(&self) -> f64 {
         self.length.min(self.width) / 2. + self.margin
     }
+    /// The camera's blind zone around the start: unknown cells whose centres lie
+    /// within this distance of the starting position are tolerated, because the
+    /// phone cannot see the ground right around (or under) the rover. Occupied
+    /// cells there still block.
+    pub fn blind_zone_radius(&self) -> f64 {
+        self.circumradius() + BLIND_ZONE_MARGIN
+    }
+}
+
+/// How far beyond the circle around the body the start blind zone reaches, metres.
+pub const BLIND_ZONE_MARGIN: f64 = 0.25;
+
+/// Whether cell `i`'s centre lies in the blind zone around `start`.
+pub(crate) fn in_blind_zone(
+    map: &MapSnapshot,
+    footprint: &Footprint,
+    i: usize,
+    start: Pose,
+) -> bool {
+    let width = map.width as usize;
+    let cx = map.origin_x + ((i % width) as f64 + 0.5) * map.resolution;
+    let cy = map.origin_y + ((i / width) as f64 + 0.5) * map.resolution;
+    (cx - start.x).hypot(cy - start.y) <= footprint.blind_zone_radius()
 }
 
 /// Why the body (grown by `pad` on every side) cannot stand at `pose`, or `None`
@@ -118,7 +141,10 @@ pub(crate) fn rejection(
         let allowed = match unknown {
             Unknown::Refused => false,
             Unknown::Anywhere => true,
-            Unknown::UnderBody(s) => cell_overlaps(map, i, s, footprint.half_extents(pad)),
+            Unknown::UnderBody(s) => {
+                cell_overlaps(map, i, s, footprint.half_extents(pad))
+                    || in_blind_zone(map, footprint, i, s)
+            }
             Unknown::SpinDisc(s) => {
                 let width = map.width as usize;
                 let cx = map.origin_x + ((i % width) as f64 + 0.5) * map.resolution;
@@ -246,7 +272,9 @@ pub fn backoff_clear(map: &MapSnapshot, footprint: &Footprint, pose: Pose, dista
             None => false,
             Some(i) => {
                 let v = map.occupancy[i];
-                (0..OCCUPIED).contains(&v) || touching.contains(&i)
+                (0..OCCUPIED).contains(&v)
+                    || touching.contains(&i)
+                    || v < 0 && in_blind_zone(map, footprint, i, pose)
             }
         })
     })
@@ -272,7 +300,7 @@ impl<'a> FitGrid<'a> {
     pub fn new(map: &'a MapSnapshot, footprint: &Footprint, start: Option<Pose>) -> Self {
         let n = map.occupancy.len();
         let mut tolerated = vec![false; n];
-        if let Some(s) = start {
+        if let Some(s) = start.filter(|_| valid_map(map)) {
             let (a, b) = footprint.half_extents(0.);
             for_each_overlapping_cell(map, s.x, s.y, s.yaw, a, b, |i| {
                 if let Some(i) = i {
@@ -280,6 +308,9 @@ impl<'a> FitGrid<'a> {
                 }
                 true
             });
+            for (i, t) in tolerated.iter_mut().enumerate() {
+                *t |= in_blind_zone(map, footprint, i, s);
+            }
         }
         let distance = if valid_map(map) {
             distance_field(map, |i, v| v >= OCCUPIED || v < 0 && !tolerated[i])
@@ -538,8 +569,15 @@ mod tests {
             here,
             0.3
         ));
-        // Unknown ground 0.6 m behind is in the way of a 0.3 m back-off.
-        assert!(!backoff_clear(&map_with(&[(13, 20, -1)]), &body, here, 0.3));
+        // 0.65 m behind: unknown ground there is the camera's blind zone and may
+        // be entered, but an occupied cell blocks a 0.3 m back-off.
+        assert!(backoff_clear(&map_with(&[(13, 20, -1)]), &body, here, 0.3));
+        assert!(!backoff_clear(
+            &map_with(&[(13, 20, 100)]),
+            &body,
+            here,
+            0.3
+        ));
     }
 
     #[test]

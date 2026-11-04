@@ -293,6 +293,21 @@ impl HybridSearch {
             }
             true
         });
+        // The camera's blind zone around the start (see Footprint::blind_zone_radius).
+        let reach = (config.footprint.blind_zone_radius() / map.resolution).ceil() as i64 + 1;
+        if let Some((c0, r0)) = cell(map, start.x, start.y) {
+            for r in (r0 as i64 - reach).max(0)..=(r0 as i64 + reach).min(map.height as i64 - 1) {
+                for c in (c0 as i64 - reach).max(0)..=(c0 as i64 + reach).min(map.width as i64 - 1)
+                {
+                    let i = r as usize * map.width as usize + c as usize;
+                    if map.occupancy[i] < 0
+                        && crate::footprint::in_blind_zone(map, &config.footprint, i, start)
+                    {
+                        tolerated.insert(i);
+                    }
+                }
+            }
+        }
         if search.body(start.x, start.y, start.yaw, 0.).is_none() {
             return Err("route_start_blocked");
         }

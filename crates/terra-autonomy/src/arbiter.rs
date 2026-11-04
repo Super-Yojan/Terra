@@ -143,6 +143,9 @@ pub struct AutonomyArbiter {
     route_progress: usize,
     /// Route search spread over control ticks.
     route_job: Option<terra_navigation::RouteJob>,
+    /// Why the last search for the current goal failed; reported while a
+    /// retry runs, so a failing route never hides behind `route_planning`.
+    route_last_failure: Option<&'static str>,
     route_goal: Option<(u64, f64, f64)>,
     route_map_revision: u64,
     route_checked_at: f64,
@@ -230,6 +233,7 @@ impl Default for AutonomyArbiter {
             global_route: Vec::new(),
             route_progress: 0,
             route_job: None,
+            route_last_failure: None,
             route_goal: None,
             route_map_revision: 0,
             route_checked_at: f64::NEG_INFINITY,
