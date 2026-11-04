@@ -561,11 +561,14 @@ fn through_unknown_stops_short_of_an_occupied_wall() {
     let mut arbiter = AutonomyArbiter::default();
     arbiter.explorer.config_mut().through_unknown = true;
     arbiter.set_level(explore("walled", 60.));
-    let radius = arbiter.planner.config.footprint.circumradius();
+    let body = arbiter.planner.config.footprint;
     let run = drive(&mut arbiter, &map, 200);
     for (pose, _) in &run {
+        // Furthest x the rectangle (with its margin) reaches at this heading.
+        let reach = (body.length / 2. + body.margin) * pose.yaw.cos().abs()
+            + (body.width / 2. + body.margin) * pose.yaw.sin().abs();
         assert!(
-            pose.x + radius < wall.start,
+            pose.x + reach < wall.start,
             "footprint reached the wall at {pose:?}"
         );
     }

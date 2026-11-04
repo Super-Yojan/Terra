@@ -409,14 +409,21 @@ impl AutonomyArbiter {
         );
         self.clear();
         self.level = r.level;
-        let config = if r.level == Level::TargetSearch {
-            WaypointConfig {
+        // The default 0.75 m arrival radius is for coarse waypoints. Frontiers are
+        // often picked well under a metre away, so with it Explore counted a
+        // frontier as reached after a few centimetres and moved on to the next.
+        let config = match r.level {
+            Level::TargetSearch => WaypointConfig {
                 arrive_radius: 0.1,
                 slow_radius: 0.5,
                 ..WaypointConfig::default()
-            }
-        } else {
-            WaypointConfig::default()
+            },
+            Level::Explore => WaypointConfig {
+                arrive_radius: 0.2,
+                slow_radius: 0.6,
+                ..WaypointConfig::default()
+            },
+            _ => WaypointConfig::default(),
         };
         self.follower = WaypointController::new(config).unwrap();
         self.paused = false;

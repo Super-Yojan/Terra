@@ -38,10 +38,13 @@ Each tick the current frontier is judged:
 
 | Case | Result | `frontier_blocked` `why` |
 | --- | --- | --- |
+| Reached: within 0.2 m | Done. Next frontier, no blacklist (no event). | — |
 | No unknown cells left around it | Done. Next frontier, no blacklist (`frontier_mapped`). | — |
 | The frontier itself no longer fits the footprint | Blacklisted now. | `target_occupied` |
 | No route, or the local planner holds | Blacklisted after `stuck_timeout` (5 s). | `unreachable` / `planner_blocked` |
 | Not 0.2 m closer | Blacklisted after `no_progress_timeout` (12 s). Terra turns on a 0.5 m radius, so it drives away from a goal behind it first. | `no_progress` |
+
+Explore uses its own 0.2 m arrival radius. With the follower's default 0.75 m, a frontier picked 0.8 m away counted as reached after a few centimetres, and the rover kept switching to new frontiers without getting to any.
 
 A blacklisted frontier is skipped for `blacklist_seconds` (30 s) while other frontiers exist. If none is left, the best blacklisted one is retried at once (`frontier_retry_early`) instead of parking the rover. After `max_attempts` (default 3) a point stays out for the rest of the run. `frontier_retry` (Hold) now only shows when nothing at all can be retried. The look-around and `no_frontiers_left` come after that.
 

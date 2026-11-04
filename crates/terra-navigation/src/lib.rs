@@ -56,7 +56,7 @@
 mod footprint;
 pub use footprint::{
     FitGrid, Footprint, OCCUPIED, backoff_clear, footprint_fits, footprint_fits_some_heading,
-    footprint_rejection_at, rectangle_clearance,
+    footprint_rejection_at, pull_forward_clear, rectangle_clearance,
 };
 mod hybrid_astar;
 pub use hybrid_astar::{

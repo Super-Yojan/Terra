@@ -16,6 +16,9 @@ const ROUTE_LOOKAHEAD: f64 = 0.5;
 const ROUTE_MIN_SPEED: f64 = 0.1;
 /// Distance at which a forward/reverse switch counts as reached, metres.
 const ROUTE_SWITCH_REACHED: f64 = 0.1;
+/// At a forward/reverse switch the heading must also be this close to the
+/// route's, radians; otherwise the rover replans from where it is.
+const ROUTE_SWITCH_HEADING: f64 = 0.35;
 /// Further than this from the route, the rover replans from where it is, metres.
 const ROUTE_DEVIATION: f64 = 0.4;
 
@@ -634,7 +637,40 @@ impl AutonomyArbiter {
             }
             return Twist::default();
         }
+        if self.cusp_heading_off(input.pose) {
+            // Driving the next leg from this heading leaves the planned path,
+            // often straight into what the switch was meant to clear.
+            self.clear_route();
+            self.route_reaches_goal = false;
+            self.route_checked_at = f64::NEG_INFINITY;
+            decision.route_pending = true;
+            return Twist::default();
+        }
         self.follow_route(input.pose, out, guidance_heading)
+    }
+
+    /// Whether the rover has reached the next forward/reverse switch facing well
+    /// away from the route's heading there (it under- or over-steered the arc).
+    fn cusp_heading_off(&self, pose: Pose) -> bool {
+        let route = &self.global_route;
+        let last = route.len() - 1;
+        let mut at = self.route_progress.min(last - 1);
+        loop {
+            let reverse = route[at + 1].reverse;
+            let mut end = at + 1;
+            while end < last && route[end + 1].reverse == reverse {
+                end += 1;
+            }
+            if end >= last
+                || (route[end].x - pose.x).hypot(route[end].y - pose.y) >= ROUTE_SWITCH_REACHED
+            {
+                return false;
+            }
+            if wrap_heading(route[end].yaw - pose.yaw).abs() > ROUTE_SWITCH_HEADING {
+                return true;
+            }
+            at = end;
+        }
     }
 
     /// Levels whose goals are driven along a Hybrid A* route. Waypoint Direct
@@ -824,10 +860,8 @@ fn window_centre(commanded: Twist, measured: Twist) -> Twist {
 
 /// Operator or agent reverse runs without the map or the local planner.
 fn reverse_drive(source: &str, intent: Twist) -> bool {
-    // Recovery checks its own back-off (it may start touching an obstacle).
-    intent.linear < 0.
-        && matches!(
-            source,
-            "assisted_operator" | "task_agent_drive" | "recovery"
-        )
+    // Recovery checks its own back-off, either way (it may start touching an
+    // obstacle, which the local planner would refuse).
+    source == "recovery" && intent.linear != 0.
+        || intent.linear < 0. && matches!(source, "assisted_operator" | "task_agent_drive")
 }

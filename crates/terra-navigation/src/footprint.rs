@@ -239,6 +239,26 @@ pub(crate) fn fits_some_heading(
 /// away from an obstacle the body already overlaps, for example map noise in
 /// front of the rover.
 pub fn backoff_clear(map: &MapSnapshot, footprint: &Footprint, pose: Pose, distance: f64) -> bool {
+    straight_clear(map, footprint, pose, -distance)
+}
+
+/// Like [`backoff_clear`] driving forward: whether pulling straight ahead by
+/// `distance` keeps the body off every blocking cell, except cells it already
+/// touches behind its centre. For a rover whose rear grazes an obstacle.
+pub fn pull_forward_clear(
+    map: &MapSnapshot,
+    footprint: &Footprint,
+    pose: Pose,
+    distance: f64,
+) -> bool {
+    straight_clear(map, footprint, pose, distance)
+}
+
+/// Straight motion by `travel` metres (negative reverses), excusing the cells
+/// the body already touches on the side it moves away from.
+fn straight_clear(map: &MapSnapshot, footprint: &Footprint, pose: Pose, travel: f64) -> bool {
+    let distance = travel.abs();
+    let sign = if travel < 0. { -1. } else { 1. };
     if !valid_map(map)
         || !pose.finite()
         || !footprint.valid()
@@ -255,8 +275,9 @@ pub fn backoff_clear(map: &MapSnapshot, footprint: &Footprint, pose: Pose, dista
         if let Some(i) = i {
             let cx = map.origin_x + ((i % width) as f64 + 0.5) * map.resolution;
             let cy = map.origin_y + ((i / width) as f64 + 0.5) * map.resolution;
-            // Only cells ahead of the centre: reversing leaves them behind.
-            if (cx - pose.x) * cos + (cy - pose.y) * sin > 0. {
+            // Only cells on the side being left: ahead of the centre when
+            // reversing, behind it when pulling forward.
+            if sign * ((cx - pose.x) * cos + (cy - pose.y) * sin) < 0. {
                 touching.insert(i);
             }
         }
@@ -266,8 +287,8 @@ pub fn backoff_clear(map: &MapSnapshot, footprint: &Footprint, pose: Pose, dista
     let (a, b) = footprint.half_extents(map.resolution / 4.);
     let steps = (distance / (map.resolution / 2.)).ceil().max(1.) as usize;
     (1..=steps).all(|k| {
-        let back = distance * k as f64 / steps as f64;
-        let (x, y) = (pose.x - back * cos, pose.y - back * sin);
+        let moved = sign * distance * k as f64 / steps as f64;
+        let (x, y) = (pose.x + moved * cos, pose.y + moved * sin);
         for_each_overlapping_cell(map, x, y, pose.yaw, a, b, |i| match i {
             None => false,
             Some(i) => {

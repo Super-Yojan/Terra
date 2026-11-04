@@ -1,12 +1,14 @@
 //! Getting unstuck on a routed level (Waypoint, Task, Supervised, Explore,
-//! TargetSearch) when the local planner keeps holding with `obstacle_blocked`.
+//! TargetSearch) when the local planner keeps holding with `obstacle_blocked`,
+//! or keeps the rover crawling: slowed below [`STALL_SPEED`] and barely
+//! turning, which is a hold in all but name.
 //!
 //! 1. Blocked for [`BLOCKED_SECONDS`]: drop the route and replan from here.
 //!    Hybrid A* includes reverse moves, so the new route may back out.
 //! 2. Still blocked after that, or no route can start from here
 //!    (`route_start_blocked`): reverse in a straight line, slowly, up to
-//!    [`BACKOFF_DISTANCE`], checked by the local planner like any motion. Then
-//!    replan.
+//!    [`BACKOFF_DISTANCE`], then replan. When the rear is what is against an
+//!    obstacle, pull straight forward instead.
 //! 3. Still blocked after backing off, or it cannot reverse: hold with
 //!    `boxed_in` (a route failure). Start over after [`BOXED_IN_RETRY_SECONDS`],
 //!    or at once for a new goal.
@@ -16,6 +18,11 @@ use super::*;
 
 /// How long the local planner must hold before recovery starts, seconds.
 pub(super) const BLOCKED_SECONDS: f64 = 1.0;
+/// Below this forward speed (metres/second), with almost no turning, a rover
+/// with an active goal counts as blocked even though nothing reports a hold.
+pub(super) const STALL_SPEED: f64 = 0.03;
+/// Turning slower than this (radians/second) does not count as moving.
+const STALL_YAW_RATE: f64 = 0.05;
 /// Back-off speed, metres/second.
 pub(super) const BACKOFF_SPEED: f64 = 0.08;
 /// Furthest a back-off reverses, metres.
@@ -31,8 +38,13 @@ pub(super) enum Recovery {
     Idle,
     /// Replanned from where the rover stood.
     Replanned,
-    /// Reversing from `from`, started at `since`.
-    BackingOff { from: Pose, since: f64 },
+    /// Backing off from `from`, started at `since`: in reverse, or forward
+    /// when only the rear is against something.
+    BackingOff {
+        from: Pose,
+        since: f64,
+        forward: bool,
+    },
     /// Backed off and replanned.
     BackedOff,
     /// Nothing worked; holding until `until`.
@@ -61,7 +73,7 @@ impl AutonomyArbiter {
                 self.start_backoff(input);
                 Some(self.backoff(input, map, decision))
             }
-            Recovery::BackingOff { from, since } => {
+            Recovery::BackingOff { from, since, .. } => {
                 let reversed = (input.pose.x - from.x).hypot(input.pose.y - from.y);
                 if reversed >= BACKOFF_DISTANCE || input.now - since >= BACKOFF_SECONDS {
                     self.recovery = Recovery::BackedOff;
@@ -109,7 +121,12 @@ impl AutonomyArbiter {
             self.reset_recovery();
             return;
         }
-        if decision.reason == "obstacle_blocked" {
+        let stalled = matches!(decision.reason, "active" | "assisted")
+            && decision.goal.state == GoalState::Active
+            && decision.twist.linear.abs() < STALL_SPEED
+            && decision.twist.angular.abs() < STALL_YAW_RATE
+            && !matches!(self.recovery, Recovery::BackingOff { .. });
+        if decision.reason == "obstacle_blocked" || stalled {
             self.blocked_since.get_or_insert(input.now);
             self.progress_since = None;
         } else {
@@ -136,6 +153,7 @@ impl AutonomyArbiter {
         self.recovery = Recovery::BackingOff {
             from: input.pose,
             since: input.now,
+            forward: false,
         };
         self.blocked_since = None;
         self.clear_route();
@@ -152,21 +170,37 @@ impl AutonomyArbiter {
         map: &MapSnapshot,
         decision: &mut TickDecision,
     ) -> Twist {
-        let Recovery::BackingOff { from, .. } = self.recovery else {
+        let Recovery::BackingOff {
+            from,
+            since,
+            forward,
+        } = self.recovery
+        else {
             return Twist::default();
         };
         let left = BACKOFF_DISTANCE - (input.pose.x - from.x).hypot(input.pose.y - from.y);
         // The rest of the back-off plus room to stop.
         let speed = BACKOFF_SPEED.min(self.planner.config.max_reverse);
         let check = left.max(0.) + speed * speed / (2. * self.planner.config.braking);
-        if !terra_navigation::backoff_clear(map, &self.planner.config.footprint, input.pose, check)
-        {
+        let footprint = &self.planner.config.footprint;
+        let reverse_ok =
+            !forward && terra_navigation::backoff_clear(map, footprint, input.pose, check);
+        // Reversing is blocked (the rear is against something): pull forward
+        // instead, and keep going that way for the rest of the back-off.
+        let forward =
+            !reverse_ok && terra_navigation::pull_forward_clear(map, footprint, input.pose, check);
+        if !reverse_ok && !forward {
             self.boxed_in(input, decision);
             return Twist::default();
         }
+        self.recovery = Recovery::BackingOff {
+            from,
+            since,
+            forward,
+        };
         decision.source = "recovery";
         Twist {
-            linear: -speed,
+            linear: if forward { speed } else { -speed },
             angular: 0.,
         }
     }
