@@ -14,7 +14,7 @@
 //! assert!(map.snapshot().occupancy.iter().all(|&cell| cell == -1));
 //! map.recenter(2.0, 1.0)?;
 //! // Recentring preserves dimensions and leaves new cells unobserved.
-//! assert_eq!(map.snapshot().width, 200);
+//! assert_eq!(map.snapshot().width, 300);
 //! # Ok::<(), terra_mapping::MapError>(())
 //! ```
 
@@ -29,9 +29,9 @@ use terra_types::{Quaternion, Vector3};
 /// Rolling grid dimensions, depth sampling, and obstacle classification limits.
 #[derive(Clone, Copy, Debug)]
 pub struct MapConfig {
-    /// Grid columns; defaults to 200.
+    /// Grid columns; defaults to 300 (30 m at 0.1 m).
     pub width: u32,
-    /// Grid rows; defaults to 200.
+    /// Grid rows; defaults to 300.
     pub height: u32,
     /// Cell side length in metres; defaults to 0.1.
     pub resolution: f64,
@@ -47,8 +47,8 @@ pub struct MapConfig {
 impl Default for MapConfig {
     fn default() -> Self {
         Self {
-            width: 200,
-            height: 200,
+            width: 300,
+            height: 300,
             resolution: 0.1,
             min_obstacle_height: 0.15,
             max_obstacle_height: 2.0,
@@ -164,7 +164,13 @@ pub struct LocalOccupancyMap {
     last_timestamp: Option<f64>,
     floor: Option<Arc<FloorSurface>>,
     barrier: Option<Arc<BarrierSurface>>,
+    /// Centre last requested by [`Self::recenter`], to spot local frame jumps.
+    last_center: Option<(f64, f64)>,
+    frame_jumps: u64,
 }
+/// A recentre farther than this from the previous one is a local frame jump
+/// (VIO relocalization or a reset), not travel, in metres.
+pub const FRAME_JUMP_M: f64 = 1.0;
 impl LocalOccupancyMap {
     /// Allocate an unknown grid centered on world `(0, 0)`.
     ///
@@ -185,7 +191,13 @@ impl LocalOccupancyMap {
             last_timestamp: None,
             floor: None,
             barrier: None,
+            last_center: None,
+            frame_jumps: 0,
         })
+    }
+    /// Times [`Self::recenter`] cleared the map after a local frame jump.
+    pub fn frame_jumps(&self) -> u64 {
+        self.frame_jumps
     }
     /// Erase observations, timestamp history and the mesh surfaces while
     /// retaining geometry and origin.
@@ -220,6 +232,10 @@ impl LocalOccupancyMap {
     }
     /// Shift by whole cells, preserving overlapping world cells. Newly exposed cells are unknown.
     ///
+    /// Callers recentre on the rover every frame. A centre more than
+    /// [`FRAME_JUMP_M`] from the previous one is treated as a local frame jump
+    /// and clears the map (see [`Self::clear`]) before shifting.
+    ///
     /// The requested center `(x, y)` is in world metres; shifts round to the
     /// nearest cell. A shift beyond the window discards all old evidence.
     /// Timestamp history is retained.
@@ -230,6 +246,18 @@ impl LocalOccupancyMap {
     pub fn recenter(&mut self, x: f64, y: f64) -> Result<(), MapError> {
         if !x.is_finite() || !y.is_finite() || x.abs() > 1e9 || y.abs() > 1e9 {
             return Err(MapError::InvalidPose);
+        }
+        // The map is recentred on every frame, a few centimetres apart. A step
+        // over a metre means the local frame itself moved (an ARKit
+        // relocalization), so old cells would sit in the wrong place and show
+        // as ghost obstacles: start over instead.
+        if self
+            .last_center
+            .replace((x, y))
+            .is_some_and(|(px, py)| (x - px).hypot(y - py) > FRAME_JUMP_M)
+        {
+            self.clear();
+            self.frame_jumps += 1;
         }
         let resolution = self.config.resolution;
         let column_shift = ((x - self.config.width as f64 * resolution / 2.0 - self.origin_x)
@@ -857,6 +885,23 @@ mod tests {
         assert_eq!(map.snapshot().occupancy[10 * 20 + 19], -1);
         map.recenter(100.0, 100.0).unwrap();
         assert!(map.snapshot().occupancy.iter().all(|x| *x == -1));
+    }
+    /// Small per-frame recentres keep evidence; a step over a metre is a local
+    /// frame jump that clears the map, and integration can restart afterwards.
+    #[test]
+    fn frame_jump_clears_the_map() {
+        let (mut map, camera_intrinsics, p) = setup();
+        map.integrate_depth(0.0, camera_intrinsics, p, &[2.0])
+            .unwrap();
+        map.recenter(0.05, 0.0).unwrap();
+        map.recenter(0.1, 0.0).unwrap();
+        assert!(map.snapshot().occupancy.iter().any(|x| *x > 50));
+        assert_eq!(map.frame_jumps(), 0);
+        map.recenter(2.85, 0.0).unwrap();
+        assert!(map.snapshot().occupancy.iter().all(|x| *x == -1));
+        assert_eq!(map.frame_jumps(), 1);
+        map.integrate_depth(0.0, camera_intrinsics, p, &[2.0])
+            .unwrap();
     }
     /// NaN and out-of-range returns provide no free evidence, duplicate timestamps
     /// are rejected, and depth storage must match the calibrated image dimensions.

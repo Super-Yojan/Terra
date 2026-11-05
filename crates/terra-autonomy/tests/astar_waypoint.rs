@@ -335,7 +335,7 @@ fn l3_crosses_an_18_by_12_pitch_on_the_rolling_map() {
     let config = MapConfig::default();
     assert_eq!(
         (config.width, config.height, config.resolution),
-        (200, 200, 0.1)
+        (300, 300, 0.1)
     );
     let mut arbiter = AutonomyArbiter::default();
     arbiter.set_level(LevelRequest {
