@@ -67,7 +67,9 @@ pub use route::{HybridRoute, RouteJob};
 mod search;
 pub use search::*;
 mod maneuver;
+mod memory;
 pub use maneuver::ManeuverSegment;
+pub use memory::{LongRangeMemory, MEMORY_CELLS, MEMORY_RESOLUTION};
 fn direction(v: f64) -> &'static str {
     if v < 0. {
         "reverse"

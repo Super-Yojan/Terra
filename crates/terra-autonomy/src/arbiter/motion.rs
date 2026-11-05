@@ -579,11 +579,24 @@ impl AutonomyArbiter {
             || (due && (self.global_route.is_empty() || !self.route_reaches_goal));
         if needs_route && self.route_job.is_none() {
             self.route_goal = Some(destination);
+            // A goal beyond the rolling map is approached along a coarse path
+            // through remembered space, not clamped straight to the map edge.
+            let body = self.hybrid_config().footprint.circumradius();
+            let (gx, gy) = self
+                .memory
+                .subgoal(
+                    map,
+                    (input.pose.x, input.pose.y),
+                    (out.status.x, out.status.y),
+                    body + 0.5,
+                    body,
+                )
+                .unwrap_or((out.status.x, out.status.y));
             match terra_navigation::RouteJob::new(
                 map,
                 input.pose,
-                out.status.x,
-                out.status.y,
+                gx,
+                gy,
                 &self.hybrid_config(),
                 // A goal against an obstacle moves to where the rover fits,
                 // still inside the arrival radius so reaching it arrives.
