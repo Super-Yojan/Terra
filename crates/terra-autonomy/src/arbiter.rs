@@ -147,6 +147,9 @@ pub struct AutonomyArbiter {
     /// retry runs, so a failing route never hides behind `route_planning`.
     route_last_failure: Option<&'static str>,
     route_goal: Option<(u64, f64, f64)>,
+    /// Coarse 100 m memory of the rolling map, for goals beyond its edge.
+    memory: terra_navigation::LongRangeMemory,
+    memory_revision: Option<u64>,
     route_map_revision: u64,
     route_checked_at: f64,
     route_reaches_goal: bool,
@@ -235,6 +238,8 @@ impl Default for AutonomyArbiter {
             route_job: None,
             route_last_failure: None,
             route_goal: None,
+            memory: Default::default(),
+            memory_revision: None,
             route_map_revision: 0,
             route_checked_at: f64::NEG_INFINITY,
             route_reaches_goal: false,
@@ -377,6 +382,12 @@ impl AutonomyArbiter {
             .step(input.pose.x, input.pose.y, input.pose.yaw)
             .status;
         let mut decision = TickDecision::new(goal);
+        if let Some(map) = input.map
+            && self.memory_revision != Some(input.map_revision)
+        {
+            self.memory_revision = Some(input.map_revision);
+            self.memory.absorb(map);
+        }
         let bounded_map = self
             .search_bounded_map(&input)
             .or_else(|| self.explore_planning_map(&input));
