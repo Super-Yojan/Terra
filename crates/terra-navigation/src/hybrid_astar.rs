@@ -11,8 +11,9 @@
 //! Unknown cells count as blocked, except those under the starting footprint.
 //!
 //! The heuristic is the larger of the straight-line distance and an
-//! obstacle-aware 2D distance, both scaled so they never overestimate. With a goal
-//! heading, a Dubins curve to the goal is tried as a shortcut near the goal.
+//! obstacle-aware 2D distance, both scaled so they never overestimate. Near the
+//! goal, a direct curve to it is tried as a shortcut: a Dubins curve with a goal
+//! heading, otherwise one turn and a straight line.
 use crate::footprint::{OCCUPIED, distance_field, for_each_overlapping_cell};
 use crate::{Footprint, Pose, cell, valid_map};
 use serde::{Deserialize, Serialize};
@@ -630,25 +631,45 @@ impl HybridSearch {
         length.abs() * c.clearance_penalty * (1. - clearance / c.preferred_clearance)
     }
 
-    /// Near a goal with a heading, try a collision-free forward Dubins curve to it.
+    /// Try a collision-free forward curve from `node` straight onto the goal:
+    /// a Dubins curve when the goal has a heading, otherwise one turn toward
+    /// the goal and then a straight line. Without this, the search can only
+    /// line up with the goal by chaining its fixed arcs, which zig-zags (an S
+    /// into the goal) because headings come in fixed steps.
     fn dubins_shortcut(&self, node: &Node) -> Option<Vec<(f64, f64)>> {
-        let yaw = self.goal.yaw?;
         let near =
             (self.goal.x - node.x).hypot(self.goal.y - node.y) <= 10. * self.config.min_turn_radius;
         if !near && !self.expansions.is_multiple_of(10) {
             return None;
         }
-        let path = dubins(
-            (node.x, node.y, node.yaw),
-            (self.goal.x, self.goal.y, yaw),
-            self.config.min_turn_radius,
-        )?;
-        let mut at = (node.x, node.y, node.yaw);
-        for &(curvature, length) in &path {
-            self.arc(at, curvature, length)?;
+        let from = (node.x, node.y, node.yaw);
+        let radius = self.config.min_turn_radius;
+        let Some(yaw) = self.goal.yaw else {
+            // Prefer a gentler turn when it fits: easier to track, and faster
+            // under the yaw-rate cap.
+            return [2. * radius, radius].into_iter().find_map(|r| {
+                let path = turn_then_straight(from, (self.goal.x, self.goal.y), r)?;
+                // Through observed space only: crossing unknown costs extra in
+                // the search, and a shortcut must not skip that.
+                self.path_clear(from, &path, false).then_some(path)
+            });
+        };
+        let path = dubins(from, (self.goal.x, self.goal.y, yaw), radius)?;
+        self.path_clear(from, &path, true).then_some(path)
+    }
+
+    /// Whether the body fits along these arcs from `from`; crossing unknown
+    /// cells the search may cross counts as clear only if `unknown_ok`.
+    fn path_clear(&self, from: (f64, f64, f64), path: &[(f64, f64)], unknown_ok: bool) -> bool {
+        let mut at = from;
+        for &(curvature, length) in path {
+            match self.arc(at, curvature, length) {
+                Some(unknown) if unknown_ok || !unknown => {}
+                _ => return false,
+            }
             at = drive(at, curvature, length);
         }
-        Some(path)
+        true
     }
 
     /// Route samples from the start to node `last`, then along `shortcut`.
@@ -752,6 +773,42 @@ impl PartialOrd for Open {
     }
 }
 
+/// Shortest forward path from `from` to the point `to` that turns at `radius`
+/// (left or right) and then drives straight, as (curvature, length) arcs.
+/// `None` when the point is inside both turning circles.
+fn turn_then_straight(
+    from: (f64, f64, f64),
+    to: (f64, f64),
+    radius: f64,
+) -> Option<Vec<(f64, f64)>> {
+    let (x, y, yaw) = from;
+    let (sin, cos) = yaw.sin_cos();
+    [1f64, -1.]
+        .into_iter()
+        .filter_map(|side| {
+            // Turning centre to the left (side 1) or right (side -1).
+            let (cx, cy) = (x - side * radius * sin, y + side * radius * cos);
+            let (vx, vy) = (to.0 - cx, to.1 - cy);
+            let d = vx.hypot(vy);
+            if d < radius {
+                return None;
+            }
+            // Angle (from the centre) of the point where the straight leg leaves the circle.
+            let beta = vy.atan2(vx);
+            let leave = beta - side * (radius / d).acos();
+            let start = yaw - side * PI / 2.;
+            let sweep = (side * (leave - start)).rem_euclid(TAU);
+            let sweep = if TAU - sweep < 1e-9 { 0. } else { sweep };
+            let straight = (d * d - radius * radius).max(0.).sqrt();
+            Some((
+                sweep * radius + straight,
+                [(side / radius, sweep * radius), (0., straight)],
+            ))
+        })
+        .min_by(|a, b| a.0.total_cmp(&b.0))
+        .map(|(_, arcs)| arcs.into_iter().filter(|(_, len)| *len > 1e-9).collect())
+}
+
 /// Shortest forward Dubins path from `from` to `to` with turn radius `radius`,
 /// as (curvature, length) arcs. Every candidate word is integrated and kept only
 /// if it really lands on the goal pose.
@@ -838,6 +895,36 @@ mod tests {
                 dubins((0.5, -0.5, 0.7), (x, y, yaw), 0.5).expect("some word reaches any pose");
             assert!(path.iter().all(|(c, _)| c.abs() <= 2. + 1e-9));
         }
+    }
+
+    #[test]
+    fn turn_then_straight_lands_on_the_point() {
+        for (x, y) in [
+            (3., 0.),
+            (2., 1.5),
+            (-1., 2.),
+            (0.5, -2.),
+            (-3., -0.1),
+            (4., 0.3),
+        ] {
+            for r in [0.5, 1.] {
+                let from = (0.2, -0.1, 0.4);
+                let path = turn_then_straight(from, (x, y), r).expect("outside the circles");
+                assert!(path.len() <= 2, "{path:?}");
+                let end = path.iter().fold(from, |at, &(c, len)| drive(at, c, len));
+                assert!((end.0 - x).hypot(end.1 - y) < 1e-6, "{x} {y} {r}: {end:?}");
+                assert!(
+                    path.iter()
+                        .all(|(c, len)| c.abs() <= 1. / r + 1e-9 && *len > 0.)
+                );
+            }
+        }
+        // Straight ahead needs no turn at all.
+        let path = turn_then_straight((0., 0., 0.), (3., 0.), 0.5).unwrap();
+        assert!(path.len() == 1 && path[0].0 == 0. && (path[0].1 - 3.).abs() < 1e-9);
+        // Just beside the rover, inside the left circle: it loops round to the right.
+        let path = turn_then_straight((0., 0., 0.), (0., 0.3), 0.5).unwrap();
+        assert!(path[0].0 < 0., "{path:?}");
     }
 
     #[test]

@@ -289,3 +289,48 @@ fn a_goal_behind_is_reached_by_turning_round_not_by_reversing_all_the_way() {
     // It ends up driving forward into the goal.
     assert!(!route.last().unwrap().reverse);
 }
+
+#[test]
+fn open_map_routes_turn_once_without_an_s() {
+    // A goal off to the side in open space: one turn toward it, then straight.
+    // Chaining the search's fixed arcs instead used to weave left-right into it.
+    let map = open_map();
+    let config = HybridConfig {
+        heuristic_weight: 2.,
+        ..HybridConfig::default()
+    };
+    for deg in [7., 20., 27., 40., -33.] {
+        let a: f64 = f64::to_radians(deg);
+        let goal = HybridGoal {
+            x: 3. * a.cos(),
+            y: 2.5 * a.sin(),
+            yaw: None,
+        };
+        let route = hybrid_astar_route(
+            &map,
+            Pose {
+                x: -0.5,
+                y: 0.,
+                yaw: 0.,
+            },
+            goal,
+            &config,
+        )
+        .expect("open map");
+        let turns: Vec<f64> = route
+            .iter()
+            .map(|p| p.curvature)
+            .filter(|k| k.abs() > 1e-9)
+            .collect();
+        assert!(
+            turns.windows(2).all(|w| w[0].signum() == w[1].signum()),
+            "{deg}°: turns both ways {turns:?}"
+        );
+        let length: f64 = route
+            .windows(2)
+            .map(|w| (w[1].x - w[0].x).hypot(w[1].y - w[0].y))
+            .sum();
+        let direct = (goal.x + 0.5).hypot(goal.y);
+        assert!(length < direct * 1.05, "{deg}°: {length} vs {direct}");
+    }
+}
