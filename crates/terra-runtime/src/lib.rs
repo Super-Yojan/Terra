@@ -216,6 +216,8 @@ pub struct Runtime {
     sensor_held: bool,
     /// Start of the current unbroken `sensor_unhealthy` hold.
     sensor_hold_since: Option<f64>,
+    /// When the wheels last started pushing without the rover moving.
+    drive_stall_since: Option<f64>,
     /// When data came back fresh after a long hold; motion waits out
     /// [`SENSOR_SETTLE_SECONDS`] from here.
     sensor_settle_since: Option<f64>,
@@ -239,6 +241,10 @@ struct DockLocal {
 }
 /// How long a `sensor_unhealthy` hold stays in the status after it clears.
 const SENSOR_HOLD_DISPLAY_SECONDS: f64 = 10.;
+/// Forward command, m/s, from which a rover that does not move counts as stalled.
+const DRIVE_STALL_MIN_COMMAND: f64 = 0.05;
+/// Measured forward speed, m/s, below which a pushing rover counts as stalled.
+const DRIVE_STALL_SPEED: f64 = 0.03;
 /// A hold at least this long must see fresh data for
 /// [`SENSOR_SETTLE_SECONDS`] before motion resumes. Shorter holds resume on
 /// the next fresh tick, as before.
@@ -307,6 +313,7 @@ impl Runtime {
             sensor_holds: 0,
             sensor_held: false,
             sensor_hold_since: None,
+            drive_stall_since: None,
             sensor_settle_since: None,
             sensor_goal_dropped: false,
             last_snapshot: RuntimeSnapshot { value: json!({}) },
@@ -844,6 +851,32 @@ impl Runtime {
                 ..hold.clone()
             });
     }
+    /// What the wheels are doing this tick, for the dashboard: the commanded
+    /// and measured forward speed, wheel efforts, whether the rover is backing
+    /// up, and how long it has pushed without moving.
+    fn drive_status(&mut self, now: f64, motor: &MotorOutput) -> serde_json::Value {
+        let pushing = motor.stop_reason == StopReason::None
+            && motor.target_forward.abs() >= DRIVE_STALL_MIN_COMMAND
+            && motor.left.abs().max(motor.right.abs()) > 0.0;
+        if pushing && motor.estimated_forward.abs() < DRIVE_STALL_SPEED {
+            self.drive_stall_since.get_or_insert(now);
+        } else {
+            self.drive_stall_since = None;
+        }
+        let commanded = if motor.stop_reason == StopReason::None {
+            motor.target_forward
+        } else {
+            0.0
+        };
+        json!({
+            "commanded_linear": commanded,
+            "measured_forward": motor.estimated_forward,
+            "left_effort": motor.left,
+            "right_effort": motor.right,
+            "reversing": commanded < 0.0,
+            "stalled_s": self.drive_stall_since.map_or(0.0, |since| now - since),
+        })
+    }
     pub fn step(&mut self, now: f64) -> Result<RuntimeOutput, RuntimeError> {
         if !now.is_finite() || now < 0.0 || self.last_step.is_some_and(|last| now < last) {
             return Err(invalid("invalid control time"));
@@ -974,8 +1007,9 @@ impl Runtime {
             self.controller.step(estimate)
         };
         self.sequence += 1;
+        let drive = self.drive_status(now, &motor);
         let quality = pose_quality::value(self, now);
-        let value = json!({"status":output.status,"command_origin":output.command_origin,"pose_quality":quality,"navigation":self.navigation.status(),"outdoor":outdoor_status,"connectivity":{"policy":self.connectivity,"revision":self.connectivity_revision},"goal":output.goal,"proposal":output.proposal,"exploration":output.exploration,"search":output.search,"pending_reports":output.pending_reports,"twist":output.twist,"runtime":{"schema_version":1,"tilt":self.tilt.status(now),"mode":effective_mode,"configured_mode":self.mode,"source_revision":SOURCE_REVISION,"configuration_identity":self.configuration_identity()}});
+        let value = json!({"status":output.status,"command_origin":output.command_origin,"pose_quality":quality,"navigation":self.navigation.status(),"outdoor":outdoor_status,"connectivity":{"policy":self.connectivity,"revision":self.connectivity_revision},"goal":output.goal,"proposal":output.proposal,"exploration":output.exploration,"search":output.search,"pending_reports":output.pending_reports,"twist":output.twist,"drive":drive,"runtime":{"schema_version":1,"tilt":self.tilt.status(now),"mode":effective_mode,"configured_mode":self.mode,"source_revision":SOURCE_REVISION,"configuration_identity":self.configuration_identity()}});
         self.autonomy_json = value.to_string();
         self.last_snapshot = RuntimeSnapshot { value };
         let mut events = std::mem::take(&mut self.events);

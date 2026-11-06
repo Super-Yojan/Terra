@@ -39,6 +39,15 @@ pub struct RoverProfile {
     pub wheel_deadband: f64,
     /// Open-loop wheel effort for a managed in-place spin, 0..=1.
     pub spin_effort: f64,
+    /// Effort multiplier for a wheel turning backward, 1..=4: the drive backs
+    /// up weaker than it drives forward (RC ESCs often cap reverse power).
+    /// Older profiles without it get 1.
+    #[serde(default = "one")]
+    pub reverse_effort_scale: f64,
+    /// Breakaway effort for a wheel turning backward, 0..=0.9; the larger of
+    /// this and `wheel_deadband` applies. Older profiles without it get 0.
+    #[serde(default)]
+    pub reverse_deadband: f64,
     /// Dump outlet and gate servo. Older profiles without it get the defaults.
     #[serde(default)]
     pub dock: DockProfile,
@@ -62,6 +71,10 @@ pub struct DockProfile {
     pub gate_closed: f64,
     /// Seconds the gate stays open per dump, 0.2..=10.
     pub gate_open_seconds: f64,
+}
+
+fn one() -> f64 {
+    1.
 }
 
 impl Default for DockProfile {
@@ -90,7 +103,7 @@ impl DockProfile {
 
 impl RoverProfile {
     /// Terra (CrabTrapBot, two ESCs): 0.61 m square body with 5 cm margin.
-    /// Reproduces the runtime defaults exactly.
+    /// Reproduces the runtime defaults, except that backing up gets more effort.
     pub fn terra() -> Self {
         Self {
             name: "terra".into(),
@@ -106,6 +119,11 @@ impl RoverProfile {
             skid_factor: 2.4,
             wheel_deadband: 0.,
             spin_effort: 0.35,
+            // Not measured: at the 0.15 m/s reverse cap the forward gains ask
+            // for about 0.1 effort, which stalled when backing up (2026-11-06).
+            // Tune on hardware.
+            reverse_effort_scale: 2.,
+            reverse_deadband: 0.12,
             dock: DockProfile::default(),
         }
     }
@@ -131,6 +149,8 @@ impl RoverProfile {
             skid_factor: 2.,
             wheel_deadband: 0.3,
             spin_effort: 0.6,
+            reverse_effort_scale: 1.,
+            reverse_deadband: 0.,
             dock: DockProfile::default(),
         }
     }
@@ -154,6 +174,8 @@ impl RoverProfile {
                 (self.skid_factor, 1., 5.),
                 (self.wheel_deadband, 0., 0.9),
                 (self.spin_effort, 0., 1.),
+                (self.reverse_effort_scale, 1., 4.),
+                (self.reverse_deadband, 0., 0.9),
             ]
             .iter()
             .all(|&(v, min, max)| v.is_finite() && (min..=max).contains(&v))
@@ -217,6 +239,8 @@ impl RoverProfile {
             max_yaw_rate: self.max_angular,
             spin_effort: self.spin_effort,
             wheel_deadband: self.wheel_deadband,
+            reverse_effort_scale: self.reverse_effort_scale,
+            reverse_deadband: self.reverse_deadband,
             ..base
         }
     }
@@ -229,7 +253,8 @@ mod tests {
         (a - b).abs() < 1e-9
     }
 
-    /// Selecting Terra changes nothing: same planner, turning and gains as before profiles.
+    /// Selecting Terra keeps the planner, turning and gains from before
+    /// profiles; only backing up gets the reverse compensation.
     #[test]
     fn terra_profile_matches_runtime_defaults() {
         let terra = RoverProfile::terra();
@@ -252,6 +277,8 @@ mod tests {
         ] {
             assert!(close(a, b), "{a} != {b}");
         }
+        assert!(c.reverse_effort_scale > 1. && c.reverse_deadband > 0.);
+        assert!(c.validate().is_ok());
     }
 
     /// terra-mini plans with its own small footprint and a valid controller.
@@ -281,6 +308,15 @@ mod tests {
         })
         .unwrap();
         assert_eq!(old.dock, DockProfile::default());
+        let old: RoverProfile = serde_json::from_value({
+            let mut v = serde_json::to_value(RoverProfile::terra()).unwrap();
+            let o = v.as_object_mut().unwrap();
+            o.remove("reverse_effort_scale");
+            o.remove("reverse_deadband");
+            v
+        })
+        .unwrap();
+        assert_eq!((old.reverse_effort_scale, old.reverse_deadband), (1., 0.));
         let mut bad = mini.clone();
         bad.dock.outlet_ahead = Some(0.);
         assert!(!bad.valid());
