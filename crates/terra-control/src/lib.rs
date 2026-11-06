@@ -64,6 +64,14 @@ pub struct ControllerConfig {
     /// and below `max_effort`. A moving wheel command is lifted past it; see
     /// [`VelocityController::step`]. 0 sends feedback effort unchanged.
     pub wheel_deadband: f64,
+    /// Effort multiplier for a wheel turning backward, in `[1, 4]`. Many RC
+    /// ESCs cap reverse power, so the same command backs up slower than it
+    /// drives forward. 1 treats both directions alike.
+    pub reverse_effort_scale: f64,
+    /// Breakaway effort for a wheel turning backward, in `[0, 0.9]` and below
+    /// `max_effort`. A backward wheel command is lifted past the larger of
+    /// this and `wheel_deadband`. 0 adds nothing beyond `wheel_deadband`.
+    pub reverse_deadband: f64,
 }
 impl Default for ControllerConfig {
     fn default() -> Self {
@@ -83,6 +91,8 @@ impl Default for ControllerConfig {
             // Not measured: enough to break CrabTrapBot's skid-steer scrub. Tune on hardware.
             spin_effort: 0.35,
             wheel_deadband: 0.0,
+            reverse_effort_scale: 1.0,
+            reverse_deadband: 0.0,
         }
     }
 }
@@ -120,6 +130,9 @@ impl ControllerConfig {
             || !(0.0..=1.0).contains(&self.spin_effort)
             || !(0.0..=0.9).contains(&self.wheel_deadband)
             || self.wheel_deadband >= self.max_effort
+            || !(1.0..=4.0).contains(&self.reverse_effort_scale)
+            || !(0.0..=0.9).contains(&self.reverse_deadband)
+            || self.reverse_deadband >= self.max_effort
         {
             return Err(InputError::InvalidConfiguration);
         }
@@ -221,6 +234,10 @@ impl VelocityController {
     /// `sign(e) · (deadband + (max_effort − deadband) · |e| / max_effort)`, so a
     /// small command still turns the wheel. Efforts under 0.01 stay zero. The
     /// integrals work on the uncompensated effort.
+    ///
+    /// A backward wheel effort is first multiplied by `reverse_effort_scale`
+    /// and lifted past `max(wheel_deadband, reverse_deadband)`, then clamped to
+    /// `max_effort`, because the drive backs up weaker than it drives forward.
     pub fn step(&mut self, estimate: VelocityEstimate) -> MotorOutput {
         let now = estimate.timestamp;
         let dt = self.last_step.map_or(0.01, |last| now - last);
@@ -328,15 +345,23 @@ impl VelocityController {
 }
 impl VelocityController {
     fn past_deadband(&self, effort: f64) -> f64 {
-        let deadband = self.config.wheel_deadband;
-        if deadband == 0.0 {
+        let max = self.config.max_effort;
+        let (deadband, scale) = if effort < 0.0 {
+            (
+                self.config.wheel_deadband.max(self.config.reverse_deadband),
+                self.config.reverse_effort_scale,
+            )
+        } else {
+            (self.config.wheel_deadband, 1.0)
+        };
+        if deadband == 0.0 && scale == 1.0 {
             return effort;
         }
         if effort.abs() < 0.01 {
             return 0.0;
         }
-        let max = self.config.max_effort;
-        effort.signum() * (deadband + (max - deadband) * (effort.abs() / max).min(1.0))
+        let magnitude = (scale * effort.abs() / max).min(1.0);
+        effort.signum() * (deadband + (max - deadband) * magnitude)
     }
 }
 #[cfg(test)]
@@ -501,6 +526,60 @@ mod tests {
             assert!(
                 ControllerConfig {
                     wheel_deadband,
+                    ..Default::default()
+                }
+                .validate()
+                .is_err()
+            );
+        }
+    }
+
+    /// Backing up gets the reverse scale and breakaway; driving forward at the
+    /// same speed is unchanged, and full reverse stays within `max_effort`.
+    #[test]
+    fn reverse_wheels_get_more_effort_than_forward() {
+        let config = ControllerConfig {
+            reverse_effort_scale: 2.0,
+            reverse_deadband: 0.15,
+            ..Default::default()
+        };
+        let mut c = VelocityController::new(config).unwrap();
+        let mut plain = VelocityController::new(ControllerConfig::default()).unwrap();
+        for (i, forward) in [0.15, -0.15].into_iter().enumerate() {
+            let t = i as f64 * 0.01;
+            for ctl in [&mut c, &mut plain] {
+                ctl.reset();
+                ctl.set_target(VelocityTarget {
+                    timestamp: t,
+                    forward,
+                    yaw_rate: 0.0,
+                })
+                .unwrap();
+            }
+            let (out, base) = (
+                c.step(estimate(t, 0.0, 0.0)),
+                plain.step(estimate(t, 0.0, 0.0)),
+            );
+            if forward > 0.0 {
+                assert_eq!(out.left, base.left, "forward unchanged");
+            } else {
+                // Uncompensated ≈ -0.095; scaled ×2 past a 0.15 breakaway ≈ -0.31.
+                assert!(base.left > -0.1, "base={}", base.left);
+                assert!(out.left < -0.3 && out.left > -0.35, "left={}", out.left);
+                assert_eq!(out.left, out.right);
+            }
+        }
+        assert_eq!(c.past_deadband(-1.0), -1.0);
+        assert_eq!(c.past_deadband(-0.6), -1.0);
+        assert_eq!(c.past_deadband(-0.005), 0.0);
+        assert_eq!(plain.past_deadband(-0.3), -0.3);
+        for (reverse_effort_scale, reverse_deadband) in
+            [(0.5, 0.0), (5.0, 0.0), (1.0, 0.95), (f64::NAN, 0.0)]
+        {
+            assert!(
+                ControllerConfig {
+                    reverse_effort_scale,
+                    reverse_deadband,
                     ..Default::default()
                 }
                 .validate()

@@ -127,6 +127,11 @@ impl ControlSettings {
             anti_windup: self.anti_windup,
             spin_effort: self.spin_effort,
             wheel_deadband: 0.0,
+            // Until a rover profile is selected (Android has no picker yet),
+            // back up with Terra's reverse compensation.
+            reverse_effort_scale: terra_runtime::rover_profile::RoverProfile::terra()
+                .reverse_effort_scale,
+            reverse_deadband: terra_runtime::rover_profile::RoverProfile::terra().reverse_deadband,
         }
     }
     fn estimator(&self) -> EstimatorConfig {
@@ -783,6 +788,7 @@ impl MobileController {
             }).to_string());
             let mut status = serde_json::to_value(&output.status).unwrap();
             status["runtime"] = runtime_output.snapshot.value["runtime"].clone();
+            status["drive"] = runtime_output.snapshot.value["drive"].clone();
             status["connectivity"] = serde_json::json!({"policy":brain.connectivity,"revision":brain.connectivity_revision});
             status["navigation"] = brain.navigation.status();
             status["navigation"]["outdoor"] = outdoor_status.clone();
