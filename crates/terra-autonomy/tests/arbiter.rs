@@ -53,7 +53,19 @@ fn takeover_clears_old_lease_and_stop_is_latched() {
         },
         false,
     );
-    assert_eq!(a.step(input(0.5)).status.safety, "emergency_stop");
+    let held = a.step(input(0.5)).status;
+    assert_eq!(held.safety, "emergency_stop");
+    assert_eq!(held.request_reason.as_deref(), Some("unhealthy_reset"));
+    a.set_safety_refusing(
+        SafetyRequest {
+            action: SafetyAction::Reset,
+            token: "r-1b".into(),
+        },
+        Some("still_tilted"),
+    );
+    let held = a.step(input(0.55)).status;
+    assert_eq!(held.safety, "emergency_stop");
+    assert_eq!(held.request_reason.as_deref(), Some("still_tilted"));
     a.set_safety(
         SafetyRequest {
             action: SafetyAction::Reset,
@@ -590,4 +602,49 @@ fn supervised_approved_action_can_finish_offline_without_approving_the_next() {
         next.proposal.is_some(),
         "next action still awaits explicit approval"
     );
+}
+
+/// A goal sent while a safety stop is held is refused as `safety_stopped`,
+/// not `authority_required`, so the dashboard can say "reset first".
+#[test]
+fn goal_while_stopped_names_the_stop() {
+    let mut a = AutonomyArbiter::default();
+    a.set_level(LevelRequest {
+        level: Level::Waypoint,
+        token: "lvl".into(),
+        budget_seconds: None,
+        budget_minutes: None,
+    });
+    a.set_safety(
+        SafetyRequest {
+            action: SafetyAction::Stop,
+            token: "stop".into(),
+        },
+        true,
+    );
+    let goal = |token: &str| terra_waypoint::GoalCommand::Local {
+        x: 1.,
+        y: 0.,
+        yaw: None,
+        token: Some(token.into()),
+    };
+    assert!(!a.accept_goal(&goal("g-stopped"), 50.));
+    let status = a.step(input(0.1)).status;
+    assert_eq!(status.request_reason.as_deref(), Some(SAFETY_STOPPED));
+    a.set_safety(
+        SafetyRequest {
+            action: SafetyAction::Reset,
+            token: "reset".into(),
+        },
+        true,
+    );
+    a.set_level(LevelRequest {
+        level: Level::Teleop,
+        token: "lvl-0".into(),
+        budget_seconds: None,
+        budget_minutes: None,
+    });
+    assert!(!a.accept_goal(&goal("g-teleop"), 50.));
+    let status = a.step(input(0.2)).status;
+    assert_eq!(status.request_reason.as_deref(), Some("authority_required"));
 }

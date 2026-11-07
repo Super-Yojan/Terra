@@ -82,6 +82,12 @@ fn manual_drive_stops_when_the_rover_tips_over_and_waits_for_reset() {
     let out = drive(&mut r, 2.0);
     assert_eq!(out.motor.left, 0.);
     assert_eq!(out.autonomy.status.reason, "tilt_stop");
+    // The refusal names the cause, so the dashboard can say "right the rover".
+    assert_eq!(
+        out.autonomy.status.request_reason.as_deref(),
+        Some("still_tilted")
+    );
+    assert_eq!(out.snapshot.value["runtime"]["tilt"]["still_tilted"], true);
 
     // Set back on its wheels: still held until the operator resets.
     vio(&mut r, 5.0, 1.);

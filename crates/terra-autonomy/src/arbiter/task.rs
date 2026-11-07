@@ -325,7 +325,9 @@ impl AutonomyArbiter {
             Some("invalid_task")
         } else if r.run_id.as_ref().is_some_and(|run| run != &self.run_id) {
             Some("wrong_run")
-        } else if self.level != Level::Task || self.stopped {
+        } else if self.stopped {
+            Some(SAFETY_STOPPED)
+        } else if self.level != Level::Task {
             Some("authority_required")
         } else if let Some(missing) = self.task_answerer_missing(&r.spec) {
             Some(missing)
@@ -375,9 +377,7 @@ impl AutonomyArbiter {
             None => Some("no_task"),
             Some(t) if t.spec.task_id != a.task_id => Some("wrong_task"),
             Some(t) if t.phase.terminal() => Some("task_ended"),
-            Some(_) if a.action != TaskActionKind::Cancel && self.stopped => {
-                Some("authority_required")
-            }
+            Some(_) if a.action != TaskActionKind::Cancel && self.stopped => Some(SAFETY_STOPPED),
             Some(t) if a.action == TaskActionKind::ApproveDrive && t.drive_request.is_none() => {
                 Some("no_drive_request")
             }

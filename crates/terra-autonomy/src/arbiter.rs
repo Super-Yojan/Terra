@@ -22,6 +22,10 @@ use terra_types::timing;
 /// [`AutonomyArbiter::set_map_freshness_timeout`]. Pose/operator/detector timeouts
 /// are independent. Observations exactly this old are stale.
 pub use terra_types::timing::MAP_FRESHNESS_SECONDS as DEFAULT_MAP_FRESHNESS_TIMEOUT_SECONDS;
+/// Refusal reason for a goal, search or task request while a safety stop is
+/// held (operator stop, keyboard stop or tilt stop). The operator resets the
+/// stop first. Older builds sent `authority_required` for this too.
+pub const SAFETY_STOPPED: &str = "safety_stopped";
 use terra_waypoint::{GoalCommand, GoalState, WaypointConfig, WaypointController, WaypointStatus};
 
 /// Trusted command provenance, assigned at ingress rather than decoded from a packet.

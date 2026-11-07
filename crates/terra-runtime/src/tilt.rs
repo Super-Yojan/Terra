@@ -201,6 +201,7 @@ impl TiltMonitor {
     pub fn status(&self, now: f64) -> Value {
         json!({
             "latched": self.latched(),
+            "still_tilted": self.still_tilted(),
             "tilt_deg": self.latest.map(|l| round1(l.0)),
             "absolute_tilt_deg": self.latest.map(|l| round1(l.1)),
             "sample_age_s": self.latest.map(|l| now - l.2),
