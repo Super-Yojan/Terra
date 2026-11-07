@@ -28,6 +28,18 @@ const OCCUPIED: i8 = 65;
 /// (out of view under the phone, or nearer than the depth minimum), metres.
 pub const DOCK_BLIND_MARGIN: f64 = 0.5;
 
+fn default_target_clear_margin() -> f64 {
+    0.3
+}
+
+fn default_open_range_timeout() -> f64 {
+    15.
+}
+
+/// How far past `blind_range` a dock started too close reverses before it
+/// waits for a lock, metres.
+const OPEN_RANGE_MARGIN: f64 = 0.15;
+
 /// Geometry, tolerances and speeds for docking. Defaults fit Terra (CrabTrapBot).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DockConfig {
@@ -84,6 +96,15 @@ pub struct DockConfig {
     /// Inside this body-x range of the bucket centre the camera may lose it;
     /// the rover finishes on odometry and settle reports the result unverified.
     pub blind_range: f64,
+    /// Occupied cells within this distance of the bucket's estimated rim are
+    /// the bucket itself, not an obstacle in the corridor, metres. Covers the
+    /// error of a centre estimate frozen since the camera lost the bucket.
+    #[serde(default = "default_target_clear_margin")]
+    pub target_clear_margin: f64,
+    /// Seconds a dock started inside `blind_range` may spend reversing out to
+    /// where the camera can see the bucket before it fails `too_close`.
+    #[serde(default = "default_open_range_timeout")]
+    pub open_range_timeout: f64,
     /// A blind finish still counts as verified when the last in-line camera fix
     /// came within this much travel of it, metres: an outlet over the camera
     /// always finishes blind, with the bucket under the phone.
@@ -149,6 +170,8 @@ impl DockConfig {
             fix_timeout: 1.5,
             reacquire_seconds: 2.,
             blind_range: length / 2. + target_radius + DOCK_BLIND_MARGIN,
+            target_clear_margin: default_target_clear_margin(),
+            open_range_timeout: default_open_range_timeout(),
             blind_verify_travel: 0.7,
             settle_seconds: 0.5,
             settle_timeout: 2.,
@@ -189,6 +212,8 @@ impl DockConfig {
             self.match_radius,
             self.lock_match_radius,
             self.blend,
+            self.target_clear_margin,
+            self.open_range_timeout,
         ];
         positive.iter().all(|v| v.is_finite() && *v > 0.)
             && [
@@ -326,6 +351,8 @@ pub struct Dock {
     still_since: Option<f64>,
     blocked_since: Option<f64>,
     backoff_from: Option<(f64, f64)>,
+    /// When a dock started inside the blind range began reversing out.
+    opening_since: Option<f64>,
     errors: DockErrors,
     in_tolerance: bool,
     now: f64,
@@ -371,6 +398,7 @@ impl Dock {
             still_since: None,
             blocked_since: None,
             backoff_from: None,
+            opening_since: None,
             errors: DockErrors::default(),
             in_tolerance: false,
             now,
@@ -382,6 +410,12 @@ impl Dock {
 
     pub fn active(&self) -> bool {
         !self.phase.terminal()
+    }
+
+    /// Backing off, or reversing out of a start too close to see the bucket.
+    pub fn reversing(&self) -> bool {
+        self.phase == DockPhase::Backoff
+            || (self.phase == DockPhase::Lock && self.opening_since.is_some())
     }
 
     pub fn target(&self) -> &DockTarget {
@@ -406,6 +440,7 @@ impl Dock {
         self.phase_since = self.now;
         self.still_since = None;
         self.blocked_since = None;
+        self.opening_since = None;
         match phase {
             DockPhase::Aligned => self.event("dock_aligned", reason),
             DockPhase::Dumping => self.event("dock_gate_opened", reason),
@@ -547,6 +582,20 @@ impl Dock {
                     self.enter(DockPhase::Creep, "locked");
                     return self.step(now, pose, measured, map, approval, None);
                 }
+                // Started (or backed off) inside the blind range: the camera
+                // cannot see the bucket from here, so waiting would only time
+                // out. Reverse straight out first; the lock clock starts once
+                // the bucket can be in view.
+                if self.lock_count == 0 && bx <= self.config.blind_range + OPEN_RANGE_MARGIN {
+                    let since = *self.opening_since.get_or_insert(now);
+                    if now - since > self.config.open_range_timeout {
+                        self.enter(DockPhase::Failed, "too_close");
+                        return stop;
+                    }
+                    self.phase_since = now;
+                    return self.reverse(heading, "dock_open_range");
+                }
+                self.opening_since = None;
                 if now - self.phase_since > self.config.lock_timeout {
                     self.enter(DockPhase::Failed, "no_fix");
                     return stop;
@@ -719,22 +768,26 @@ impl Dock {
                         ..stop
                     };
                 }
-                // Backing off never waits on the map (see `reverse_requested`).
-                let linear = -self.config.backoff_speed;
-                let mut angular =
-                    (1.5 * heading).clamp(-self.config.max_turn, self.config.max_turn);
-                if !self.config.can_spin {
-                    let cap = linear.abs() / self.config.min_turn_radius;
-                    angular = angular.clamp(-cap, cap);
-                }
-                DockTick {
-                    twist: Twist { linear, angular },
-                    in_place: false,
-                    gate_open: false,
-                    reason: "dock_backoff",
-                }
+                self.reverse(heading, "dock_backoff")
             }
             DockPhase::Done | DockPhase::Failed | DockPhase::Cancelled => stop,
+        }
+    }
+
+    /// Reverse at backoff speed, steering the nose toward the bucket.
+    /// Backing off never waits on the map (see `reverse_requested`).
+    fn reverse(&self, heading: f64, reason: &'static str) -> DockTick {
+        let linear = -self.config.backoff_speed;
+        let mut angular = (1.5 * heading).clamp(-self.config.max_turn, self.config.max_turn);
+        if !self.config.can_spin {
+            let cap = linear.abs() / self.config.min_turn_radius;
+            angular = angular.clamp(-cap, cap);
+        }
+        DockTick {
+            twist: Twist { linear, angular },
+            in_place: false,
+            gate_open: false,
+            reason,
         }
     }
 
@@ -791,20 +844,24 @@ impl Dock {
         }
     }
 
-    /// Any occupied cell in the body-frame box `x ∈ [from, to]`, `|y| ≤ half width`.
+    /// Any occupied cell in the body-frame box `x ∈ [from, to]`, `|y| ≤ half width`,
+    /// other than cells within `target_clear_margin` of the bucket rim (the bucket itself).
     fn corridor_blocked(&self, pose: Pose, map: Option<&MapSnapshot>, from: f64, to: f64) -> bool {
         let Some(map) = map else { return false };
         if to <= from || map.resolution <= 0. {
             return false;
         }
         let step = map.resolution * 0.5;
+        let clear = self.config.target_radius + self.config.target_clear_margin;
         let (sin, cos) = pose.yaw.sin_cos();
         let mut x = from;
         while x <= to {
             let mut y = -self.config.half_width;
             while y <= self.config.half_width {
                 let (wx, wy) = (pose.x + x * cos - y * sin, pose.y + x * sin + y * cos);
-                if let Some((c, r)) = terra_navigation::grid_cell(map, wx, wy)
+                let near_target = (wx - self.target.x).hypot(wy - self.target.y) <= clear;
+                if !near_target
+                    && let Some((c, r)) = terra_navigation::grid_cell(map, wx, wy)
                     && map.occupancy[r * map.width as usize + c] >= OCCUPIED
                 {
                     return true;
@@ -1321,6 +1378,101 @@ mod tests {
         sim.run(&mut dock, 60., DumpApproval::Auto);
         assert_eq!(dock.phase, DockPhase::Done, "{:?}", dock.status(sim.now));
         assert!(outlet_error(&sim, &config) <= BALL_IN_BUCKET);
+    }
+
+    fn ring_map(centre: (f64, f64), radius: f64) -> MapSnapshot {
+        let mut map = MapSnapshot {
+            width: 60,
+            height: 40,
+            resolution: 0.1,
+            origin_x: -1.,
+            origin_y: -2.,
+            occupancy: vec![0; 2400],
+        };
+        for r in 0..40 {
+            for c in 0..60 {
+                let x = map.origin_x + (c as f64 + 0.5) * 0.1;
+                let y = map.origin_y + (r as f64 + 0.5) * 0.1;
+                if (x - centre.0).hypot(y - centre.1) <= radius {
+                    map.occupancy[r * 60 + c] = 100;
+                }
+            }
+        }
+        map
+    }
+
+    /// Field run 3866429a: the camera lost the bucket at ~1.06 m and the
+    /// mapped bucket sat closer than the frozen centre estimate, so the
+    /// corridor check stopped the rover 0.33 m short with `path_blocked`.
+    #[test]
+    fn mapped_bucket_closer_than_the_estimate_does_not_block() {
+        // Camera reports the bucket at 2.0 m; depth mapped its wall ~0.2 m nearer.
+        let mut sim = Sim::new(Pose::default(), (2.0, 0.));
+        sim.map = Some(ring_map((1.8, 0.), 0.2));
+        let config = DockConfig::default();
+        sim.blind = config.blind_range + 0.1;
+        let mut dock =
+            Dock::start(config.clone(), 1, "t".into(), target(2.0, 0.), sim.pose, 0.).unwrap();
+        sim.run(&mut dock, 40., DumpApproval::Operator);
+        assert_ne!(dock.reason, "path_blocked", "{:?}", dock.status(sim.now));
+        assert_eq!(dock.phase, DockPhase::Aligned, "{:?}", dock.status(sim.now));
+        assert!(outlet_error(&sim, &config) <= BALL_IN_BUCKET);
+    }
+
+    /// Field run 3866429a: three docks started 0.33 m short, inside the blind
+    /// range, waited 5 s for a sighting that could never come and failed
+    /// `no_fix`. Now the dock reverses out until the bucket is in view first.
+    #[test]
+    fn start_inside_blind_range_reverses_out_then_docks() {
+        let config = DockConfig::default();
+        let bucket = config.outlet_ahead + 0.33;
+        let mut sim = Sim::new(Pose::default(), (bucket, 0.));
+        sim.blind = config.blind_range;
+        let mut dock = Dock::start(
+            config.clone(),
+            1,
+            "t".into(),
+            target(bucket, 0.),
+            sim.pose,
+            0.,
+        )
+        .unwrap();
+        let tick = dock.step(
+            0.01,
+            sim.pose,
+            Twist::default(),
+            None,
+            DumpApproval::Auto,
+            None,
+        );
+        assert_eq!(tick.reason, "dock_open_range");
+        assert!(tick.twist.linear < 0.);
+        assert!(dock.reversing());
+        sim.run(&mut dock, 60., DumpApproval::Auto);
+        assert_eq!(dock.phase, DockPhase::Done, "{:?}", dock.status(sim.now));
+        assert!(outlet_error(&sim, &config) <= BALL_IN_BUCKET);
+    }
+
+    #[test]
+    fn reversing_out_gives_up_when_the_rover_cannot_back_away() {
+        let config = DockConfig::default();
+        let pose = Pose::default();
+        let mut dock = Dock::start(
+            config.clone(),
+            1,
+            "t".into(),
+            target(config.outlet_ahead + 0.3, 0.),
+            pose,
+            0.,
+        )
+        .unwrap();
+        let mut t = 0.;
+        while dock.active() && t < 30. {
+            t += 0.1;
+            dock.step(t, pose, Twist::default(), None, DumpApproval::Auto, None);
+        }
+        assert_eq!(dock.reason, "too_close");
+        assert!(t > config.open_range_timeout);
     }
 
     /// The bucket's own occupied cells are not an obstacle in the corridor.
