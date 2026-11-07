@@ -58,7 +58,9 @@ impl AutonomyArbiter {
         }
         let reason = if r.run_id != self.run_id {
             Some("wrong_run")
-        } else if self.level != Level::TargetSearch || self.stopped {
+        } else if self.stopped {
+            Some(SAFETY_STOPPED)
+        } else if self.level != Level::TargetSearch {
             Some("authority_required")
         } else if self.search.as_ref().is_some_and(|s| !s.phase().terminal()) {
             Some("search_active")

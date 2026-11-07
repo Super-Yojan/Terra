@@ -586,16 +586,22 @@ impl AutonomyArbiter {
         {
             return self.receipt.as_ref().is_some_and(|r| r.1);
         }
-        if self.stopped
-            || !matches!(
-                self.level,
-                Level::Waypoint | Level::WaypointDirect | Level::Supervised
-            )
-        {
+        let refusal = if self.stopped {
+            // A held safety stop, not a level problem: the operator resets first.
+            Some(SAFETY_STOPPED)
+        } else if !matches!(
+            self.level,
+            Level::Waypoint | Level::WaypointDirect | Level::Supervised
+        ) {
+            Some("authority_required")
+        } else {
+            None
+        };
+        if let Some(reason) = refusal {
             if let Some(t) = token.clone() {
-                self.acknowledge(t, fingerprint, false, "authority_required");
+                self.acknowledge(t, fingerprint, false, reason);
             }
-            self.event("goal_rejected", token, "authority_required");
+            self.event("goal_rejected", token, reason);
             return false;
         }
         let ok = self.follower.accept(g, extent).unwrap_or(false);
@@ -628,11 +634,16 @@ impl AutonomyArbiter {
     ///
     /// Stops clear motion intent immediately. Receipts and events expose acceptance or rejection.
     pub fn set_safety(&mut self, r: SafetyRequest, healthy: bool) {
+        self.set_safety_refusing(r, (!healthy).then_some("unhealthy_reset"));
+    }
+    /// [`Self::set_safety`] with the reason a reset must be refused, if any,
+    /// such as `still_tilted` or `pose_not_ready`. Stops are never refused.
+    pub fn set_safety_refusing(&mut self, r: SafetyRequest, refusal: Option<&'static str>) {
         let fp = format!("safety:{:?}", r.action);
         if !valid_token(&r.token) || self.duplicate(&r.token, &fp) {
             return;
         }
-        let ok = r.action == SafetyAction::Stop || healthy;
+        let ok = r.action == SafetyAction::Stop || refusal.is_none();
         if ok {
             if r.action == SafetyAction::Stop && self.explorer.is_running() {
                 self.explorer.stop(EndReason::OperatorStop);
@@ -650,7 +661,7 @@ impl AutonomyArbiter {
             if ok {
                 "operator_safety"
             } else {
-                "unhealthy_reset"
+                refusal.unwrap_or("unhealthy_reset")
             },
         );
     }

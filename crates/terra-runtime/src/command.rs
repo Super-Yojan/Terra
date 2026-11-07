@@ -165,11 +165,18 @@ impl Runtime {
                 .map(|r| {
                     let reset = r.action == terra_autonomy::SafetyAction::Reset;
                     // A tilt stop clears only once the rover is upright again.
-                    let ready = !(reset && self.tilt.latched() && self.tilt.still_tilted())
-                        && (self.autonomy.is_manual()
-                            || self.estimator.estimate(now).health == Health::Ready);
+                    // Name the cause so the dashboard can tell the operator what to do.
+                    let refusal = if reset && self.tilt.latched() && self.tilt.still_tilted() {
+                        Some("still_tilted")
+                    } else if !self.autonomy.is_manual()
+                        && self.estimator.estimate(now).health != Health::Ready
+                    {
+                        Some("pose_not_ready")
+                    } else {
+                        None
+                    };
                     let token = r.token.clone();
-                    self.autonomy.set_safety(r, ready);
+                    self.autonomy.set_safety_refusing(r, refusal);
                     let ok = self.autonomy.request_receipt() == Some((token.as_str(), true));
                     if ok && reset && self.tilt.clear() {
                         self.autonomy.set_tilt_stop(false);
