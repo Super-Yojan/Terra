@@ -76,7 +76,14 @@ noise while parked does not undo it.
 
 When the camera loses the bucket while it is still farther than the blind range (dock range +
 0.5 m), the dock stops with reason `dock_reacquire` after 1.5 s and waits up to 2 s more for a
-fix before it backs off with `lost_fix`. Inside the blind range it finishes on odometry. Rovers that cannot spin
+fix before it backs off with `lost_fix`. Inside the blind range it finishes on odometry.
+
+A dock started inside the blind range (closer than the camera can see the bucket) reverses straight
+out with reason `dock_open_range` until it is 0.15 m past the blind range, then waits for its lock.
+It fails `too_close` if it cannot get out within 15 s. Before this, such a dock waited 5 s and failed
+`no_fix` (field run 3866429a, three tries at 0.33 m).
+
+Rovers that cannot spin
 (Terra, `allow_in_place: false`) steer within their minimum turn radius and back off in a reverse
 arc when the bearing is too large; spinners turn in place.
 
@@ -110,5 +117,9 @@ closes it when the 250 ms lease lapses.
 - A dock starts only within 3 m of the bucket and with the bucket roughly ahead; something else
   (the operator, L3, the MCP `approach_bucket`) has to bring the rover there.
 - The corridor check only sees occupied cells in the occupancy grid between the rover and the
-  bucket's near wall; unknown cells pass.
+  bucket's near wall; unknown cells pass. Cells within 0.3 m of the estimated rim
+  (`target_clear_margin`) count as the bucket itself: once the camera loses the bucket the centre
+  estimate is frozen, and its mapped wall can sit closer than the estimate. Without this margin the
+  rover stopped itself 0.33 m short with `path_blocked` (field run 3866429a). The cost is that an
+  obstacle right against the bucket is not seen by the corridor check.
 - L4 does not start docks on its own yet.

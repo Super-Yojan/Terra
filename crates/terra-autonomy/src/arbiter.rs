@@ -356,7 +356,8 @@ impl AutonomyArbiter {
     /// Backing up never needs the occupancy map. The phone camera faces
     /// forward, so the map holds no fresh evidence behind the rover anyway.
     /// True when this tick's request is reverse motion: L1 operator input,
-    /// an L5 agent drive, or a bucket dock backing off. Stop, sensor health,
+    /// an L5 agent drive, or a bucket dock backing off (or reversing out
+    /// of a start too close to see the bucket). Stop, sensor health,
     /// the turning limiter and the relay lease still apply.
     fn reverse_requested(&self, now: f64) -> bool {
         let operator_reverse = self.level == Level::AssistedTeleop
@@ -364,10 +365,7 @@ impl AutonomyArbiter {
                 r.linear < 0. && fresh(now, Some(*t), timing::OPERATOR_COMMAND_FRESHNESS_SECONDS)
             });
         let agent_reverse = self.task_agent_twist(now).is_some_and(|t| t.linear < 0.);
-        let dock_backoff = self
-            .dock
-            .as_ref()
-            .is_some_and(|d| d.phase == crate::dock::DockPhase::Backoff);
+        let dock_backoff = self.dock.as_ref().is_some_and(|d| d.reversing());
         operator_reverse || agent_reverse || dock_backoff
     }
 
