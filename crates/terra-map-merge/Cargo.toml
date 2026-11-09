@@ -1,0 +1,7 @@
+[package]
+name = "terra-map-merge"
+version.workspace = true
+edition.workspace = true
+description = "Fuse several rovers' occupancy grids into one world-frame grid and score map agreement."
+
+[dependencies]
