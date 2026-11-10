@@ -38,6 +38,7 @@ export const sections: NavSection[] = [
             { path: "/getting-started", label: "Getting started" },
             { path: "/zenoh", label: "Zenoh" },
             { path: "/simulation", label: "Simulation" },
+            { path: "/map-fusion", label: "Map fusion" },
         ],
     },
     {
@@ -52,6 +53,7 @@ export const sections: NavSection[] = [
             { path: "/crates/terra-transport", label: "terra-transport" },
             { path: "/crates/fpv-signaling", label: "fpv-signaling" },
             { path: "/crates/terra-mapping", label: "terra-mapping" },
+            { path: "/crates/terra-map-merge", label: "terra-map-merge" },
             { path: "/crates/terra-navigation", label: "terra-navigation" },
             { path: "/crates/terra-exploration", label: "terra-exploration" },
             { path: "/crates/terra-autonomy", label: "terra-autonomy" },

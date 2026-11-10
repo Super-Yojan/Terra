@@ -38,6 +38,7 @@ flowchart LR
 | [terra-transport](terra-transport.md) | Zenoh client and loopback plane. |
 | [fpv-signaling](fpv-signaling.md) | Shared WebRTC FPV signaling. No media. |
 | [terra-mapping](terra-mapping.md) | Rolling occupancy grid. |
+| [terra-map-merge](terra-map-merge.md) | Fuse several rovers' grids. |
 | [terra-navigation](terra-navigation.md) | Local planner and supervised frontiers. |
 | [terra-exploration](terra-exploration.md) | Time-bounded autonomous exploration. |
 | [terra-autonomy](terra-autonomy.md) | Five levels and a safety hold. |
