@@ -268,6 +268,8 @@ pub struct Runtime {
     control_limits: (f64, f64),
     mode: ActuationMode,
     configuration: RuntimeConfig,
+    /// [`Self::configuration_identity`], refreshed when an input to it changes.
+    identity: String,
     grid: mapping::MappingState,
     queue: VecDeque<(String, Vec<u8>, f64)>,
     events: Vec<Value>,
@@ -307,7 +309,7 @@ impl Runtime {
         outdoor.set_supported(config.outdoor_supported);
         let mut navigation = navigation::State::default();
         navigation.parameters = config.navigation;
-        Ok(Self {
+        let mut runtime = Self {
             estimator: VelocityEstimator::new(config.estimator)?,
             controller: VelocityController::new(config.controller)?,
             autonomy,
@@ -339,6 +341,7 @@ impl Runtime {
             ),
             mode: config.mode,
             configuration,
+            identity: String::new(),
             grid: mapping::MappingState::new(config.mapping)?,
             queue: Default::default(),
             events: vec![],
@@ -351,10 +354,14 @@ impl Runtime {
             dock_local: Default::default(),
             gate_test: None,
             tilt: Default::default(),
-        })
+        };
+        runtime.refresh_identity();
+        Ok(runtime)
     }
+    /// Runtime identity for a recording header; each tick's status adds the
+    /// tilt and the effective mode.
     pub fn metadata(&self) -> Value {
-        json!({"schema_version":1,"configured_mode":self.mode,"source_revision":SOURCE_REVISION,"configuration_identity":self.configuration_identity()})
+        json!({"schema_version":1,"configured_mode":self.mode,"source_revision":SOURCE_REVISION,"configuration_identity":self.identity})
     }
     pub fn run_id(&self) -> &str {
         &self.run_id
@@ -481,11 +488,13 @@ impl Runtime {
     /// and mount-aware true heading.
     pub fn enable_outdoor_gps(&mut self) {
         self.outdoor.set_supported(true);
+        self.refresh_identity();
     }
     /// Navigation settings, the navigation source or the local frame changed:
     /// settings and outdoor requests reviewed against the old revision are refused.
     pub(crate) fn settings_changed(&mut self) {
         self.navigation.revision = self.navigation.revision.saturating_add(1);
+        self.refresh_identity();
     }
     /// The fleet link was dropped without the operator closing it: fleet
     /// teleop intent ends, an accepted onboard mission stays.
@@ -551,13 +560,18 @@ impl Runtime {
         Ok(())
     }
     pub fn configuration_identity(&self) -> String {
+        self.identity.clone()
+    }
+    /// Recompute [`Self::configuration_identity`]; call after any change to
+    /// the controller, mapper, navigation, connectivity, mode or outdoor support.
+    fn refresh_identity(&mut self) {
         let mut config = self.configuration.clone();
         config.mapping = self.grid.config();
         config.navigation = self.navigation.parameters.clone();
         config.connectivity = self.connectivity.policy.clone();
         config.mode = self.mode;
         config.outdoor_supported = self.outdoor.supported();
-        config.identity()
+        self.identity = config.identity();
     }
     /// Drive and plan as the rover in `profile`: planner footprint, turning,
     /// speed limits and velocity-loop gains change together. The velocity loop
@@ -596,6 +610,7 @@ impl Runtime {
     pub fn attach_mapping(&mut self, map: mapping::MappingState) {
         self.grid = map;
         self.map = None;
+        self.refresh_identity();
     }
     /// Take the attached mapper's newest snapshot when it integrated a frame
     /// since the current map.
@@ -711,6 +726,7 @@ impl Runtime {
                     self.autonomy.clear_operator_intent();
                     self.autonomy.invalidate_remote_authority();
                     self.mode = mode;
+                    self.refresh_identity();
                     self.events
                         .push(json!({"kind":"actuation.mode_changed","mode":mode}));
                 }
@@ -890,7 +906,9 @@ impl Runtime {
         let motor = self.motor_output(&output, estimate, effective_mode, now)?;
         self.sequence += 1;
         let drive = self.drive_status(now, &motor);
-        let runtime = json!({"schema_version":1,"tilt":self.tilt.status(now),"mode":effective_mode,"configured_mode":self.mode,"source_revision":SOURCE_REVISION,"configuration_identity":self.configuration_identity()});
+        let mut runtime = self.metadata();
+        runtime["tilt"] = self.tilt.status(now);
+        runtime["mode"] = json!(effective_mode);
         let status = self.publish_status(&output, outdoor_status, runtime, now);
         let mut events = std::mem::take(&mut self.events);
         events.extend(

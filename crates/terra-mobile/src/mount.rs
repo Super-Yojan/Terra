@@ -298,7 +298,7 @@ fn fit_turn_offset(samples: Vec<TurnOffsetSample>) -> Option<TurnOffsetFit> {
     let mut accumulated = 0.0;
     for i in 1..samples.len() {
         let delta = samples[i].rover_heading - samples[i - 1].rover_heading;
-        accumulated += delta.sin().atan2(delta.cos());
+        accumulated += terra_types::wrap_angle(delta);
         angles[i] = accumulated;
     }
     let span = accumulated.abs();

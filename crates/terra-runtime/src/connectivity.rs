@@ -82,6 +82,7 @@ impl Runtime {
             self.pause_for_router_loss();
         }
         self.connectivity.revision = self.connectivity.revision.saturating_add(1);
+        self.refresh_identity();
         self.events.push(json!({"kind":"connectivity.policy_changed","policy":self.connectivity.policy,"revision":self.connectivity.revision}));
         Ok(())
     }
