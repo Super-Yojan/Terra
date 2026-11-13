@@ -1,5 +1,4 @@
 use serde_json::json;
-use terra_navigation::Pose;
 use terra_runtime::*;
 use terra_types::*;
 fn runtime(mode: ActuationMode) -> Runtime {
@@ -358,7 +357,6 @@ fn configuration_identity_tracks_profile_changes() {
     .unwrap();
     assert_ne!(before, r.configuration_identity());
     assert_eq!(r.pose().map(|p| p.0.x), None);
-    let _ = Pose::default();
 }
 #[test]
 fn switching_actuation_mode_does_not_replay_local_input() {

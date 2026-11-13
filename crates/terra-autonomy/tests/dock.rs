@@ -119,7 +119,7 @@ fn teleop_dock_waits_for_operator_then_dumps() {
     assert_eq!(phase(&out), Some(DockPhase::Done));
     assert!(gate);
     assert!(!out.gate_open);
-    assert!(out.events.iter().any(|e| e.kind == "dock_done") || gate);
+    assert!(out.events.iter().any(|e| e.kind == "dock_done"));
 }
 
 #[test]

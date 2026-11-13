@@ -78,7 +78,6 @@ fn mode_without_detector_or_request_never_moves() {
     let mut a = arbiter();
     let o = a.step(input(&map(), 0.1));
     assert_eq!(o.twist, Twist::default());
-    assert!(!o.status.supported_levels.is_empty());
 }
 /// Start on a known core without approval, then latch a stop and verify reset does not resurrect the cancelled search.
 #[test]

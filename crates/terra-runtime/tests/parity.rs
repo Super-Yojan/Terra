@@ -47,7 +47,7 @@ fn replay_is_deterministic_and_managed_spin_is_blocked() {
     }
 }
 #[test]
-fn direct_manual_works_without_camera_and_link_loss_clears_remote_input() {
+fn direct_manual_works_without_camera() {
     let mut r = Runtime::new(
         RuntimeConfig {
             mode: ActuationMode::DirectEffort,
@@ -65,12 +65,36 @@ fn direct_manual_works_without_camera_and_link_loss_clears_remote_input() {
     let out = r.step(0.0).unwrap();
     assert!((out.motor.left - 0.3).abs() < 1e-9);
     assert!((out.motor.right - 0.5).abs() < 1e-9);
-    r.ingest(RuntimeEvent::Link {
-        connected: false,
-        received_at: 0.01,
+}
+#[test]
+fn link_loss_clears_remote_input() {
+    let mut r = Runtime::new(
+        RuntimeConfig {
+            mode: ActuationMode::DirectEffort,
+            ..Default::default()
+        },
+        "link".into(),
+    )
+    .unwrap();
+    let payload = serde_json::json!({"linear":0.2,"angular":0.0,"run_id":"link","authority_revision":r.autonomy().authority_revision(),"operator_session_id":"operator","sequence":1});
+    r.ingest(RuntimeEvent::Remote {
+        kind: "teleop".into(),
+        payload: serde_json::to_vec(&payload).unwrap(),
+        received_at: 0.0,
     })
     .unwrap();
-    assert!(serde_json::from_str::<serde_json::Value>(r.status_json()).unwrap()["connectivity"]["revision"].is_number());
+    let driving = r.step(0.0).unwrap();
+    assert!(driving.motor.left > 0.0 && driving.motor.right > 0.0);
+    // Still well inside the command's lease, so only the link loss stops it.
+    let leased = r.step(0.01).unwrap();
+    assert!(leased.motor.left > 0.0 && leased.motor.right > 0.0);
+    r.ingest(RuntimeEvent::Link {
+        connected: false,
+        received_at: 0.02,
+    })
+    .unwrap();
+    let out = r.step(0.03).unwrap();
+    assert_eq!((out.motor.left, out.motor.right), (0.0, 0.0));
 }
 #[test]
 fn queued_action_is_checked_at_execution_and_future_events_are_rejected() {

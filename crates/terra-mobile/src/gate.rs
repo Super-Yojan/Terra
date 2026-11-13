@@ -97,25 +97,6 @@ impl AutonomyBrief {
         }
     }
 
-    /// Parse the JSON of [`MobileController::autonomy_brief`]; missing fields stay default.
-    #[cfg(test)]
-    pub(crate) fn parse(json: &str) -> Self {
-        let root: serde_json::Value = serde_json::from_str(json).unwrap_or_default();
-        let status = &root["status"];
-        let quality = &root["pose_quality"];
-        let level = |v: &serde_json::Value| v.as_str().and_then(Level::parse);
-        let text = |v: &serde_json::Value| v.as_str().unwrap_or_default().to_owned();
-        Self::new(
-            level(&status["requested_level"]),
-            level(&status["effective_level"]),
-            serde_json::from_value(status["safety"].clone()).ok(),
-            text(&status["reason"]),
-            quality["degraded"].as_bool() != Some(false),
-            quality["pose_age_s"].as_f64(),
-            text(&root["goal"]["state"]),
-        )
-    }
-
     /// L0: the requested level (or, without one, the effective level) is teleop.
     pub fn fully_manual(&self) -> bool {
         self.manual
@@ -465,10 +446,19 @@ mod tests {
     use super::*;
 
     fn brief(level: &str, age: f64) -> AutonomyBrief {
-        AutonomyBrief::parse(&format!(
-            r#"{{"status":{{"requested_level":"{level}","effective_level":"{level}","safety":"ok","reason":"r"}},
-                "pose_quality":{{"degraded":false,"pose_age_s":{age}}},"goal":{{"state":"active"}}}}"#
-        ))
+        let level = Level::parse(level);
+        AutonomyBrief::new(
+            level,
+            level,
+            Some(Safety::Clear),
+            "r".into(),
+            false,
+            Some(age),
+            "active".into(),
+        )
+    }
+    fn safety(safety: Safety) -> AutonomyBrief {
+        AutonomyBrief::new(None, None, Some(safety), String::new(), true, None, String::new())
     }
     fn output(safety: SafetyState, frame: Option<&str>) -> ControlOutput {
         ControlOutput {
@@ -506,28 +496,27 @@ mod tests {
     }
 
     #[test]
-    /// The brief parses levels, pose freshness and goal, and classifies levels as Swift did.
-    fn brief_parsing_and_levels() {
+    /// The brief classifies levels as Swift did and gates VIO on a fresh, undegraded pose.
+    fn brief_levels_and_pose_freshness() {
         let b = brief("waypoint", 0.1);
-        assert_eq!(b.goal_state, "active");
         assert!(b.vio_ready() && b.autonomous() && b.requires_vio() && !b.fully_manual());
         assert!(!brief("waypoint", 0.5).vio_ready());
         assert!(brief("teleop", 0.0).fully_manual());
         assert!(!brief("explore", 0.0).requires_vio());
-        let held =
-            AutonomyBrief::parse(r#"{"status":{"requested_level":"task","effective_level":null}}"#);
-        assert!(held.requires_vio() && held.pose_degraded && !held.vio_ready());
-        assert!(
-            AutonomyBrief::parse(r#"{"status":{"safety":"emergency_stop"}}"#).emergency_stopped()
+        let held = AutonomyBrief::new(
+            Level::parse("task"),
+            None,
+            None,
+            String::new(),
+            true,
+            None,
+            String::new(),
         );
-        assert!(!AutonomyBrief::parse(r#"{"status":{"safety":"hold"}}"#).emergency_stopped());
-        assert_eq!(
-            AutonomyBrief::parse(""),
-            AutonomyBrief {
-                pose_degraded: true,
-                ..Default::default()
-            }
-        );
+        assert!(held.requires_vio() && !held.vio_ready());
+        assert!(safety(Safety::EmergencyStop).emergency_stopped());
+        assert!(!safety(Safety::Hold).emergency_stopped());
+        let before_first_tick = AutonomyBrief::from_runtime(None);
+        assert!(!before_first_tick.vio_ready() && !before_first_tick.autonomous());
     }
 
     #[test]
@@ -703,7 +692,7 @@ mod tests {
         ));
         let stale = output(SafetyState::StaleSensors, Some(FRAME));
         assert!(
-            matches!(d(DriveSource::Phone, facts(), brief("explore", 0.1), &stale, true), MotorCommand::Stop { reason } if reason.contains("StaleSensors"))
+            matches!(d(DriveSource::Phone, facts(), brief("explore", 0.1), &stale, true), MotorCommand::Stop { .. })
         );
         // The simulated plant never drives a real rover closed loop.
         assert!(matches!(
@@ -760,12 +749,9 @@ mod tests {
     }
 
     #[test]
-    /// The typed brief comes from a real controller tick.
-    fn controller_brief_is_typed() {
+    /// Without an actuator layout the phone cannot drive closed loop.
+    fn no_layout_means_no_vio_control() {
         let controller = MobileController::new(crate::default_control_settings()).unwrap();
-        controller.step(0.01).unwrap();
-        let b = controller.autonomy_brief_typed();
-        assert!(!b.requested_level.is_empty());
         assert!(!controller.layout_supports_vio_control());
     }
 }

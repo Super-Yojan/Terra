@@ -551,7 +551,7 @@ mod tests {
     }
     #[test]
     /// Uses a loopback peer to observe rover-scoped motion, expiry of the 250 ms lease,
-    /// then a final zero on disconnect. Ignored by default because local TCP sockets are required.
+    /// then a final zero on disconnect.
     fn publishes_selected_rover_expires_lease_and_disconnects_with_zero() {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let endpoint = format!("tcp/127.0.0.1:{}", listener.local_addr().unwrap().port());
@@ -671,7 +671,7 @@ mod tests {
     }
     #[test]
     /// Publishes successive one-pixel depth packets over loopback and verifies consume-once
-    /// retrieval plus frame-count status. Ignored by default because TCP sockets are required.
+    /// retrieval plus frame-count status.
     fn returns_each_posed_depth_frame_once() {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let endpoint = format!("tcp/127.0.0.1:{}", listener.local_addr().unwrap().port());
