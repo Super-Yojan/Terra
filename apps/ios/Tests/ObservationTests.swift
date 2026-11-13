@@ -30,15 +30,15 @@ import Foundation
   let stop = records[2]["attributes"] as! [String: Any]
   precondition(records[2]["kind"] as? String == "safety.requested")
   precondition(stop["action"] as? String == "emergency_stop" && stop["source"] as? String == "operator")
-  precondition((records[3]["attributes"] as! [String: Any])["action"] as? String == "reset_emergency_stop")
-  let status: [String: Any] = ["session": 7, "active_revision": 2, "last_sequence": 14,
-      "emergency_stop": true, "stop_reason": "emergency_stop", "armed": false,
+  precondition((records[3]["attributes"] as! [String: Any])["action"] as? String == "reset_stop")
+  let status: [String: Any] = ["connected": true, "active_revision": 2, "output_active": false,
+      "stop_reason": "emergency_stop", "control_mode": "manual",
       "owner": "must-not-log", "token": "must-not-log"]
   observer.recordHardwareStatus(status)
   observer.recordHardwareStatus(status)
   precondition(records.count == 5, "unchanged hardware state should not flood the journal")
   let hardware = records[4]["attributes"] as! [String: Any]
-  precondition(hardware["emergency_stop"] as? Bool == true && hardware["last_sequence"] as? Int == 14)
+  precondition(hardware["stop_reason"] as? String == "emergency_stop" && hardware["active_revision"] as? Int == 2)
   precondition(hardware["owner"] == nil && hardware["token"] == nil)
  }
 }

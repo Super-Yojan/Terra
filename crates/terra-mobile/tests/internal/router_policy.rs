@@ -34,6 +34,7 @@ fn delayed_remote_goal_and_reset_cannot_cross_loss_generation() {
 #[test]
 fn display_overrides_are_returned_without_mutating_motion_limits() {
     let c = MobileController::new(default_control_settings()).unwrap();
+    let map_timeout = c.brain.lock().unwrap().autonomy().map_freshness_timeout();
     c.set_connectivity_policy_settings(
         r#"{"gps_display_freshness_seconds":10,"fleet_display_stale_seconds":120}"#.into(),
     )
@@ -41,5 +42,8 @@ fn display_overrides_are_returned_without_mutating_motion_limits() {
     let value: serde_json::Value = serde_json::from_str(&c.connectivity_policy_settings()).unwrap();
     assert_eq!(value["gps_display_freshness_seconds"], 10.);
     assert_eq!(value["fleet_display_stale_seconds"], 120.);
-    assert_eq!(terra_types::timing::MAP_FRESHNESS_SECONDS, 0.5);
+    assert_eq!(
+        c.brain.lock().unwrap().autonomy().map_freshness_timeout(),
+        map_timeout
+    );
 }

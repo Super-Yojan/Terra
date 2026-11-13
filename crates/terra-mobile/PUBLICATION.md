@@ -69,7 +69,3 @@ It survives UI/control resets and the Bluetooth-manual to phone
 `prepare`/preserve-runtime path for the entire `PhoneController` lifetime.
 Rust reset drops the dashboard and cached map; reattachment resets gates.
 No synthetic run/frame identifiers or shared sequence APIs are introduced here.
-
-The source-level Swift regression checks that publication revision only
-initializes once and increments at the map callsite, never in `prepare`:
-`swift apps/ios/Tests/PhoneMapPublicationTests.swift` (from the repository root).
