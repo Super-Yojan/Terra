@@ -5,8 +5,8 @@
 //! orientation and [`MotorOutput`] carries normalized wheel effort. This crate
 //! holds the vocabulary used by estimation, control, and hardware adapters.
 
-pub mod connectivity_policy;
 pub mod point_capture;
+pub mod requests;
 pub mod timing;
 pub mod turning;
 

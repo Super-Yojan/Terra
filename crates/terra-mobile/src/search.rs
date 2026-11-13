@@ -82,18 +82,14 @@ pub struct MobileSearchSnapshot {
     /// Serialized completion report when available.
     pub report_json: Option<String>,
 }
-fn search_error(message: &str) -> ControllerError {
-    ControllerError::InvalidInput {
-        message: message.into(),
-    }
-}
 pub(crate) fn dispatch_search(
     b: &mut Brain,
     kind: &str,
     bytes: &[u8],
     timestamp: f64,
 ) -> Result<(), ControllerError> {
-    b.runtime.recording_healthy = b.recorder.as_ref().is_none_or(|r| !r.failed());
+    let recording = b.recording_healthy();
+    b.runtime.set_recording_healthy(recording);
     terra_runtime::search::dispatch_search(&mut b.runtime, kind, bytes, timestamp)
         .map_err(Into::into)
 }
@@ -111,9 +107,13 @@ impl MobileController {
         self.brain
             .lock()
             .map_err(|_| ControllerError::Internal)?
-            .autonomy
-            .set_detector_capability(classes, version, timestamp)
-            .map_err(search_error)
+            .runtime
+            .ingest(terra_runtime::RuntimeEvent::Detector {
+                classes,
+                version,
+                received_at: timestamp,
+            })?;
+        Ok(())
     }
     /// Validate and submit a search using current pose, map, detector, and authority.
     /// `timestamp` is monotonic seconds. Returns `InvalidInput` for malformed or
@@ -156,9 +156,9 @@ impl MobileController {
         self.brain
             .lock()
             .map_err(|_| ControllerError::Internal)?
-            .autonomy
-            .accept_target_observation(
-                terra_autonomy::TargetObservation {
+            .runtime
+            .ingest(terra_runtime::RuntimeEvent::Target {
+                sample: terra_autonomy::TargetObservation {
                     run_id: o.run_id,
                     search_id: o.search_id,
                     frame_id: o.frame_id,
@@ -169,9 +169,9 @@ impl MobileController {
                     received_at: o.received_at,
                     evidence_id: o.evidence_id,
                 },
-                timestamp,
-            )
-            .map_err(search_error)
+                received_at: timestamp,
+            })?;
+        Ok(())
     }
     /// Add one object detection to the run's object map, which the dashboard
     /// shows on the `objects` topic. Latitude and longitude are added here when
@@ -185,6 +185,7 @@ impl MobileController {
         self.brain
             .lock()
             .map_err(|_| ControllerError::Internal)?
+            .runtime
             .observe_object(
                 terra_autonomy::objects::ObjectSighting {
                     class: d.class_name,
@@ -205,8 +206,8 @@ impl MobileController {
         self.brain
             .lock()
             .map(|b| {
-                b.objects
-                    .telemetry(b.dashboard.as_ref().map_or(0, |d| d.rover_id), &b.run_id)
+                b.objects()
+                    .telemetry(b.dashboard.as_ref().map_or(0, |d| d.rover_id), b.run_id())
                     .to_string()
             })
             .unwrap_or_default()
@@ -216,8 +217,8 @@ impl MobileController {
         self.brain
             .lock()
             .map_err(|_| ControllerError::Internal)?
-            .objects
-            .clear();
+            .runtime
+            .clear_objects();
         Ok(())
     }
     /// Read search status at monotonic `timestamp` seconds without stepping motors.

@@ -6,6 +6,10 @@
 //! run, not chosen here. These values preserve the previous behavior; they are not
 //! a claim that the defaults have been validated for every physical rover.
 //!
+//! Only limits shared across crates live here; a limit one crate uses lives
+//! with it (hardware and control-request ages in terra-runtime, the remote
+//! authority cache in terra-transport).
+//!
 //! Freshness checks use age < limit. Interval/expiry checks generally use >=.
 //! Sensor timestamps must share the control clock and cannot be in the future.
 
@@ -21,10 +25,6 @@ pub const DETECTOR_FRESHNESS_SECONDS: f64 = 0.5;
 /// Maximum displayed planner-trace age; this is a diagnostic lifetime.
 pub const PLANNER_TRACE_FRESHNESS_SECONDS: f64 = 0.5;
 
-/// Maximum age of relay status used for source/configuration admission.
-pub const HARDWARE_FRESHNESS_SECONDS: f64 = 0.5;
-/// Execution-time admission age for settings and other control requests.
-pub const CONTROL_REQUEST_FRESHNESS_SECONDS: f64 = 0.5;
 /// IMU and VIO estimator defaults. The IMU limit was 0.1 s; the 2026-10-27 sensor timing
 /// runs saw a Debug build push it past that while iOS delivered every sample within 3 ms.
 pub const IMU_FRESHNESS_SECONDS: f64 = 0.5;
@@ -92,7 +92,3 @@ pub const SEARCH_OBSERVATION_FRESHNESS_SECONDS: f64 = 0.5;
 pub const SEARCH_STUCK_SECONDS: f64 = 10.0;
 /// Exclusion period for failed target-search locations.
 pub const SEARCH_BLACKLIST_SECONDS: f64 = 30.0;
-
-/// Maximum cached authority age when issuing a new remote mission request.
-/// This does not extend manual intent leases or any onboard sensor limit.
-pub const REMOTE_AUTHORITY_CACHE_SECONDS: f64 = 90.0;

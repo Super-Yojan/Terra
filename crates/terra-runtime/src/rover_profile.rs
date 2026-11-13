@@ -2,7 +2,26 @@
 //! managed turning policy and the velocity loop's gains together, so a small
 //! rover is neither planned as a large one nor driven with a large one's gains.
 use serde::{Deserialize, Serialize};
+use std::ops::RangeInclusive;
 use terra_control::ControllerConfig;
+
+/// Body length and width, metres.
+pub(crate) const BODY_SIZE_M: RangeInclusive<f64> = 0.1..=3.;
+/// Safety margin on every side of the body, metres.
+pub(crate) const CLEARANCE_M: RangeInclusive<f64> = 0.0..=1.;
+/// Planner and controller forward speed limit, m/s.
+pub(crate) const MAX_LINEAR_MPS: RangeInclusive<f64> = 0.05..=2.;
+/// Planner and controller yaw-rate limit, rad/s.
+pub(crate) const MAX_ANGULAR_RADPS: RangeInclusive<f64> = 0.1..=2.;
+/// Rover centre to dump outlet, metres.
+pub(crate) const OUTLET_AHEAD_M: RangeInclusive<f64> = 0.05..=3.;
+/// Normalized servo position.
+pub(crate) const GATE_POSITION: RangeInclusive<f64> = -1.0..=1.0;
+
+/// A finite value inside `range`.
+pub(crate) fn within(value: f64, range: &RangeInclusive<f64>) -> bool {
+    value.is_finite() && range.contains(&value)
+}
 
 /// Body size, speed limits and motor response of one rover.
 ///
@@ -91,13 +110,10 @@ impl Default for DockProfile {
 
 impl DockProfile {
     pub fn valid(&self) -> bool {
-        self.outlet_ahead
-            .is_none_or(|v| v.is_finite() && (0.05..=3.).contains(&v))
-            && [self.gate_open, self.gate_closed]
-                .iter()
-                .all(|v| v.is_finite() && (-1.0..=1.0).contains(v))
-            && self.gate_open_seconds.is_finite()
-            && (0.2..=10.).contains(&self.gate_open_seconds)
+        self.outlet_ahead.is_none_or(|v| within(v, &OUTLET_AHEAD_M))
+            && within(self.gate_open, &GATE_POSITION)
+            && within(self.gate_closed, &GATE_POSITION)
+            && within(self.gate_open_seconds, &(0.2..=10.))
     }
 }
 
@@ -164,21 +180,21 @@ impl RoverProfile {
         !self.name.is_empty()
             && self.name.len() <= 64
             && [
-                (self.length, 0.1, 3.),
-                (self.width, 0.1, 3.),
-                (self.track_width, 0.05, 3.),
-                (self.clearance, 0., 1.),
-                (self.max_linear, 0.05, 2.),
-                (self.max_angular, 0.1, 2.),
-                (self.top_speed, 0.1, 10.),
-                (self.skid_factor, 1., 5.),
-                (self.wheel_deadband, 0., 0.9),
-                (self.spin_effort, 0., 1.),
-                (self.reverse_effort_scale, 1., 4.),
-                (self.reverse_deadband, 0., 0.9),
+                (self.length, BODY_SIZE_M),
+                (self.width, BODY_SIZE_M),
+                (self.track_width, 0.05..=3.),
+                (self.clearance, CLEARANCE_M),
+                (self.max_linear, MAX_LINEAR_MPS),
+                (self.max_angular, MAX_ANGULAR_RADPS),
+                (self.top_speed, 0.1..=10.),
+                (self.skid_factor, 1.0..=5.),
+                (self.wheel_deadband, 0.0..=0.9),
+                (self.spin_effort, 0.0..=1.),
+                (self.reverse_effort_scale, 1.0..=4.),
+                (self.reverse_deadband, 0.0..=0.9),
             ]
             .iter()
-            .all(|&(v, min, max)| v.is_finite() && (min..=max).contains(&v))
+            .all(|(v, range)| within(*v, range))
             && self.min_turn_radius.is_finite()
             && self.min_turn_radius > 0.
             && self.min_turn_radius <= 5.
@@ -239,6 +255,12 @@ impl RoverProfile {
             max_yaw_rate: self.max_angular,
             spin_effort: self.spin_effort,
             wheel_deadband: self.wheel_deadband,
+            ..self.reverse_compensation(base)
+        }
+    }
+    /// `base` with this rover's backing-up compensation.
+    pub fn reverse_compensation(&self, base: ControllerConfig) -> ControllerConfig {
+        ControllerConfig {
             reverse_effort_scale: self.reverse_effort_scale,
             reverse_deadband: self.reverse_deadband,
             ..base

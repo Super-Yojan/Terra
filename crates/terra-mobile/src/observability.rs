@@ -114,14 +114,18 @@ impl ObservationState {
         if time != last.1 {
             return;
         }
-        self.event("control", "control.output", serde_json::json!({"left_effort":output.left,"right_effort":output.right,"estimated_forward":output.estimated_forward,"estimated_yaw_rate":output.estimated_yaw_rate,"target_forward":output.target_forward,"target_yaw_rate":output.target_yaw_rate,"stop_reason":format!("{:?}",output.stop_reason)}), &brain.run_id, time);
+        self.event("control", "control.output", serde_json::json!({"left_effort":output.left,"right_effort":output.right,"estimated_forward":output.estimated_forward,"estimated_yaw_rate":output.estimated_yaw_rate,"target_forward":output.target_forward,"target_yaw_rate":output.target_yaw_rate,"stop_reason":format!("{:?}",output.stop_reason)}), &brain.run_id(), time);
     }
-    pub(super) fn tick(&self, brain: &Brain, time: f64, estimate: &terra_types::VelocityEstimate) {
+    pub(super) fn tick(
+        &self,
+        brain: &Brain,
+        time: f64,
+        estimate: &terra_types::VelocityEstimate,
+        status: &serde_json::Value,
+    ) {
         let Ok(mut last) = self.last.try_lock() else {
             return;
         };
-        let status: serde_json::Value =
-            serde_json::from_str(&brain.autonomy_json).unwrap_or_default();
         let key = serde_json::json!([
             status["status"]["safety"],
             status["status"]["reason"],
@@ -131,7 +135,7 @@ impl ObservationState {
         .to_string();
         let transition = key != last.0;
         if transition {
-            self.event("autonomy","autonomy.transition",serde_json::json!({"previous":last.0,"reason":status["status"]["reason"],"status":status,"pose_age":brain.pose.map(|p|time-p.1),"map_age":brain.map.as_ref().map(|m|time-m.1),"imu_age":brain.imu_time.map(|t|time-t),"map_timeout":brain.autonomy.map_freshness_timeout(),"pose_timeout":super::pose_quality::FRESHNESS_SECONDS,"router_connected":brain.dashboard.as_ref().map(|d|!d.failed()),"recorder_failed":brain.recorder.as_ref().is_some_and(|r|r.failed())}),&brain.run_id,time);
+            self.event("autonomy","autonomy.transition",serde_json::json!({"previous":last.0,"reason":status["status"]["reason"],"status":status,"pose_age":brain.pose().map(|p|time-p.1),"map_age":brain.map().map(|m|time-m.1),"imu_age":brain.imu_time().map(|t|time-t),"map_timeout":brain.autonomy.map_freshness_timeout(),"pose_timeout":super::pose_quality::FRESHNESS_SECONDS,"router_connected":brain.dashboard.as_ref().map(|d|!d.failed()),"recorder_failed":brain.recorder.as_ref().is_some_and(|r|r.failed())}),&brain.run_id(),time);
             last.0 = key;
         }
         let interval = self
@@ -143,7 +147,7 @@ impl ObservationState {
                 terra_observability::ObservationSettings::default().control_sample_seconds
             });
         if transition || time - last.1 >= interval {
-            self.event("control","control.summary",serde_json::json!({"state":status,"estimated_forward":estimate.forward,"estimated_yaw_rate":estimate.yaw_rate,"sensor_health":format!("{:?}",estimate.health),"pose":brain.pose.map(|p|serde_json::json!({"x":p.0.x,"y":p.0.y,"yaw":p.0.yaw})),"map_revision":brain.map.as_ref().map(|m|m.2)}),&brain.run_id,time);
+            self.event("control","control.summary",serde_json::json!({"state":status,"estimated_forward":estimate.forward,"estimated_yaw_rate":estimate.yaw_rate,"sensor_health":format!("{:?}",estimate.health),"pose":brain.pose().map(|p|serde_json::json!({"x":p.0.x,"y":p.0.y,"yaw":p.0.yaw})),"map_revision":brain.map().map(|m|m.2)}),&brain.run_id(),time);
             last.1 = time;
         }
     }
@@ -376,7 +380,7 @@ impl MobileController {
     pub fn observation_run_id(&self) -> String {
         self.brain
             .try_lock()
-            .map(|b| b.run_id.clone())
+            .map(|b| b.run_id().to_owned())
             .unwrap_or_default()
     }
     /// Configure the independent uploader. Invoke off the control queue; credentials are memory-only.

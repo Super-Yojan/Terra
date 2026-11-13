@@ -1,5 +1,5 @@
 //! Shared map ownership for runtime and platform frame-ingestion adapters.
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use terra_mapping::*;
 /// Latest accepted depth frame, kept only while a point capture is armed.
 #[derive(Default)]
@@ -7,91 +7,91 @@ struct CaptureSlot {
     armed: bool,
     latest: Option<DepthCapture>,
 }
+/// Lock a shared slot. A panic while it was held leaves plain data that is
+/// still structurally sound, so the next caller carries on with it.
+fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(PoisonError::into_inner)
+}
 #[derive(Clone)]
-pub struct MappingState(
-    Arc<Mutex<LocalOccupancyMap>>,
-    MapConfig,
-    Arc<Mutex<CaptureSlot>>,
+pub struct MappingState {
+    map: Arc<Mutex<LocalOccupancyMap>>,
+    config: MapConfig,
+    /// Exposure time of the newest integrated frame.
+    latest: Arc<Mutex<Option<f64>>>,
+    capture: Arc<Mutex<CaptureSlot>>,
     /// Second, independent copy slot for the phone's on-device classification
     /// view, so it never steals frames from a dashboard capture.
-    Arc<Mutex<CaptureSlot>>,
-);
+    debug: Arc<Mutex<CaptureSlot>>,
+}
 impl MappingState {
     pub fn new(config: MapConfig) -> Result<Self, MapError> {
-        Ok(Self(
-            Arc::new(Mutex::new(LocalOccupancyMap::new(config)?)),
+        Ok(Self {
+            map: Arc::new(Mutex::new(LocalOccupancyMap::new(config)?)),
             config,
-            Default::default(),
-            Default::default(),
-        ))
+            latest: Default::default(),
+            capture: Default::default(),
+            debug: Default::default(),
+        })
     }
     pub fn config(&self) -> MapConfig {
-        self.1
+        self.config
     }
     pub fn clear(&self) {
-        self.0.lock().unwrap().clear();
+        lock(&self.map).clear();
+        *lock(&self.latest) = None;
+    }
+    /// Exposure time of the newest frame integrated since the last clear.
+    pub fn last_timestamp(&self) -> Option<f64> {
+        *lock(&self.latest)
     }
     pub fn recenter(&self, x: f64, y: f64) -> Result<(), MapError> {
-        self.0
-            .lock()
-            .map_err(|_| MapError::InvalidFrame)?
-            .recenter(x, y)
+        lock(&self.map).recenter(x, y)
     }
     pub fn snapshot(&self) -> MapSnapshot {
-        self.0.lock().unwrap().snapshot()
+        lock(&self.map).snapshot()
     }
     /// Install the mesh floor that vetoes obstacle returns; see
     /// [`LocalOccupancyMap::set_floor_surface`].
     pub fn set_floor_surface(&self, floor: Option<std::sync::Arc<FloorSurface>>) {
-        if let Ok(mut map) = self.0.lock() {
-            map.set_floor_surface(floor);
-        }
+        lock(&self.map).set_floor_surface(floor);
     }
     pub fn floor_surface(&self) -> Option<std::sync::Arc<FloorSurface>> {
-        self.0.lock().ok()?.floor_surface()
+        lock(&self.map).floor_surface()
     }
     /// Install the mesh walls, windows and doors that stop rays; see
     /// [`LocalOccupancyMap::set_barrier_surface`].
     pub fn set_barrier_surface(&self, barrier: Option<std::sync::Arc<BarrierSurface>>) {
-        if let Ok(mut map) = self.0.lock() {
-            map.set_barrier_surface(barrier);
-        }
+        lock(&self.map).set_barrier_surface(barrier);
     }
     pub fn barrier_surface(&self) -> Option<std::sync::Arc<BarrierSurface>> {
-        self.0.lock().ok()?.barrier_surface()
+        lock(&self.map).barrier_surface()
     }
     /// Start keeping a copy of each accepted depth frame. Copies cost a full
     /// depth image per frame, so they are made only while armed.
     pub fn arm_capture(&self) {
-        if let Ok(mut slot) = self.2.lock() {
-            slot.armed = true;
-        }
+        lock(&self.capture).armed = true;
     }
     /// Stop copying frames and drop any copy not yet taken.
     pub fn disarm_capture(&self) {
-        if let Ok(mut slot) = self.2.lock() {
-            *slot = CaptureSlot::default();
-        }
+        *lock(&self.capture) = CaptureSlot::default();
     }
     pub fn capture_armed(&self) -> bool {
-        self.2.lock().is_ok_and(|slot| slot.armed)
+        lock(&self.capture).armed
     }
     /// Take the newest accepted frame since the previous take, if armed.
     pub fn take_capture(&self) -> Option<DepthCapture> {
-        self.2.lock().ok()?.latest.take()
+        lock(&self.capture).latest.take()
     }
     /// Arm or disarm the on-device debug copy; see [`Self::arm_capture`].
     pub fn set_debug_capture(&self, armed: bool) {
-        if let Ok(mut slot) = self.3.lock() {
-            *slot = CaptureSlot {
-                armed,
-                latest: None,
-            };
-        }
+        *lock(&self.debug) = CaptureSlot {
+            armed,
+            latest: None,
+        };
     }
     /// Take the newest accepted frame for the debug view, if armed.
     pub fn take_debug_capture(&self) -> Option<DepthCapture> {
-        self.3.lock().ok()?.latest.take()
+        lock(&self.debug).latest.take()
     }
     pub fn integrate_depth(
         &self,
@@ -131,24 +131,24 @@ impl MappingState {
         classifier: DepthClassifier,
     ) -> Result<(), MapError> {
         let (floor, barrier) = {
-            let mut map = self.0.lock().map_err(|_| MapError::InvalidFrame)?;
+            let mut map = lock(&self.map);
             map.integrate_classified(t, k, c, pixels, classifier)?;
             (map.floor_surface(), map.barrier_surface())
         };
+        *lock(&self.latest) = Some(t);
         let copy = || DepthCapture {
             timestamp: t,
             intrinsics: k,
             pose: c,
             classifier,
-            config: self.1,
+            config: self.config,
             depth: pixels.to_vec(),
             floor: floor.clone(),
             barrier: barrier.clone(),
         };
-        for slot in [&self.2, &self.3] {
-            if let Ok(mut slot) = slot.lock()
-                && slot.armed
-            {
+        for slot in [&self.capture, &self.debug] {
+            let mut slot = lock(slot);
+            if slot.armed {
                 slot.latest = Some(copy());
             }
         }

@@ -1,5 +1,6 @@
 //! Bounded control-intent inbox. Stops are protected from eviction and drained last.
 use std::time::Instant;
+use terra_types::requests::{MAX_QUEUED_REQUESTS, MAX_REQUEST_BYTES, RequestKind};
 
 #[cfg(test)]
 #[path = "../tests/internal/inbox.rs"]
@@ -9,21 +10,15 @@ mod tests;
 /// Tuple of topic suffix, uninterpreted payload bytes, and local receipt instant.
 /// Consumers validate payloads and calculate age from the instant before acting.
 pub(crate) type ControlAction = (String, Vec<u8>, Instant);
+/// The token of a well-formed emergency stop: exactly `action` and a valid
+/// `token`, so a padded payload cannot claim a stop's eviction protection.
 fn stop_token(a: &ControlAction) -> Option<String> {
-    if a.0 == "hardware" {
-        let v: serde_json::Value = serde_json::from_slice(&a.1).ok()?;
-        let token = v["token"].as_str()?;
-        return (v["action"] == "disarm" && (1..=64).contains(&token.len()))
-            .then(|| format!("hardware:{token}"));
-    }
-    if a.0 != "safety" {
-        return None;
-    }
+    let kind = RequestKind::find(&a.0)?;
     let v: serde_json::Value = serde_json::from_slice(&a.1).ok()?;
     let o = v.as_object()?;
     let token = o.get("token")?.as_str()?;
-    (o.len() == 2
-        && v["action"] == "stop"
+    (kind.stop(&v)
+        && o.len() == 2
         && (1..=64).contains(&token.len())
         && token
             .bytes()
@@ -33,11 +28,10 @@ fn stop_token(a: &ControlAction) -> Option<String> {
 fn is_stop(a: &ControlAction) -> bool {
     stop_token(a).is_some()
 }
-/// Append intent to a queue bounded to 256 entries, preserving distinct stops.
-/// `kind` is a topic suffix; payload validation remains the consumer’s job.
-/// Recognized safety stops and hardware disarms deduplicate by stop token.
-/// When full, evicts the first non-stop; if all queued entries are stops, drops
-/// the new action. `received` is the local monotonic receipt instant.
+/// Append intent to a queue bounded to [`MAX_QUEUED_REQUESTS`], preserving
+/// distinct stops. Payload validation remains the consumer's job.
+/// Recognized safety stops deduplicate by stop token. When full, evicts the
+/// first non-stop; if all queued entries are stops, drops the new action.
 pub(crate) fn enqueue_control_action(
     q: &mut std::collections::VecDeque<ControlAction>,
     kind: String,
@@ -48,7 +42,7 @@ pub(crate) fn enqueue_control_action(
     if let Some(token) = stop_token(&action) {
         q.retain(|a| stop_token(a).as_deref() != Some(&token));
     }
-    if q.len() >= 256 {
+    if q.len() >= MAX_QUEUED_REQUESTS {
         if let Some(i) = q.iter().position(|a| !is_stop(a)) {
             q.remove(i);
         } else {
@@ -68,28 +62,9 @@ pub(crate) fn drain_control_actions(
     actions
 }
 
-/// Operator intents only. Sensor evidence is supplied by the onboard adapter.
-/// Match the explicit autonomy, safety, goal, teleop, hardware, navigation-settings,
-/// and search intent suffixes. Returns false for sensor, telemetry, and WebRTC
-/// signaling topics. Signaling has its own queue and size cap. This allowlist
-/// alone does not validate a payload or grant authority.
-pub(crate) fn is_control_topic(kind: &str) -> bool {
-    matches!(
-        kind,
-        "autonomy"
-            | "safety"
-            | "goal"
-            | "goal/decision"
-            | "navigation/source"
-            | "navigation/resume"
-            | "teleop"
-            | "hardware"
-            | "navigation/settings"
-            | "search"
-            | "search/action"
-            | "search/report/ack"
-            | "task"
-            | "task/action"
-            | "dock"
-    )
+/// Whether an inbound sample is an operator request worth queueing: a topic
+/// from [`terra_types::requests`] within the size cap. Sensor, telemetry and
+/// WebRTC topics are not. This does not validate the payload or grant authority.
+pub(crate) fn admits(kind: &str, payload: &[u8]) -> bool {
+    RequestKind::find(kind).is_some() && payload.len() <= MAX_REQUEST_BYTES
 }

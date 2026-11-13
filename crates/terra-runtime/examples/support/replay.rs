@@ -61,7 +61,7 @@ pub fn trace() -> Vec<f64> {
                 r.link(true);
             }
             if tick == 60 || tick == 90 {
-                let payload = json!({"action":if tick==60{"stop"}else{"reset"},"token":format!("safety-{tick}"),"run_id":r.run_id,"authority_revision":r.autonomy.authority_revision()});
+                let payload = json!({"action":if tick==60{"stop"}else{"reset"},"token":format!("safety-{tick}"),"run_id":r.run_id(),"authority_revision":r.autonomy.authority_revision()});
                 r.ingest(RuntimeEvent::Remote {
                     kind: "safety".into(),
                     payload: serde_json::to_vec(&payload).unwrap(),

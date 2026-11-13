@@ -231,7 +231,7 @@ impl ControlPlane {
                 let bytes = sample.payload().to_bytes();
                 // Video signaling never enters the control inbox. A large SDP
                 // cannot evict a stop, and a webrtc payload cannot be decoded
-                // as teleop, hardware, or safety.
+                // as teleop or safety.
                 if crate::signaling::webrtc_inbound(kind) {
                     if bytes.is_empty()
                         || bytes.len() > crate::signaling::WEBRTC_SIGNALING_MAX_BYTES
@@ -256,10 +256,7 @@ impl ControlPlane {
                     }
                     return;
                 }
-                if !crate::inbox::is_control_topic(kind) {
-                    return;
-                }
-                if bytes.len() > 2048 {
+                if !crate::inbox::admits(kind, &bytes) {
                     return;
                 }
                 let mut queue = queue.lock().unwrap();

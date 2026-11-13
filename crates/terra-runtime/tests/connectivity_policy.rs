@@ -1,4 +1,4 @@
-use terra_types::connectivity_policy::{ConnectivityPolicySettings, RouterLossPolicy};
+use terra_runtime::connectivity::{ConnectivityPolicySettings, RouterLossPolicy};
 #[test]
 fn display_policy_roundtrips_without_changing_motion_freshness() {
     let p = ConnectivityPolicySettings::default();

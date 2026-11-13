@@ -112,17 +112,6 @@ pub struct WebrtcSignal {
     pub payload: String,
 }
 
-pub(crate) fn accepted_mission(b: &Brain) -> bool {
-    b.connectivity.autonomous_router_loss
-        == connectivity_policy::RouterLossPolicy::ContinueAcceptedMission
-        && if b.outdoor.selected {
-            b.outdoor.active() && b.outdoor.phase() == "planning" && b.autonomy.outdoor_authority()
-        } else {
-            b.autonomy
-                .accepted_onboard_mission(b.pose.unwrap_or_default().0)
-        }
-}
-
 /// Validate network authority before strict request decoding. Local phone APIs
 /// bypass this ingress and continue to use their own admission checks.
 #[cfg(test)]
@@ -136,17 +125,21 @@ pub(crate) fn remote_action(
 }
 
 impl MobileController {
+    /// Whether an attached, working fleet link owns velocity intent, so local
+    /// manual input and targets are refused.
+    pub(crate) fn fleet_owns_intent(&self) -> bool {
+        self.brain.lock().is_ok_and(|b| b.fleet_owns_intent())
+    }
     pub(crate) fn apply_dashboard_link_loss(&self, b: &mut Brain, timestamp: f64) {
-        if b.router_loss_handled {
-            return;
+        if let Some(decision) = b.runtime.lose_link() {
+            self.observation.event(
+                "router",
+                "connection.loss_decision",
+                decision,
+                b.run_id(),
+                timestamp,
+            );
         }
-        let mission = accepted_mission(b);
-        b.runtime.link(false);
-        self.observation.event("router", "connection.loss_decision", serde_json::json!({
-            "policy": b.connectivity, "policy_revision": b.connectivity_revision,
-            "accepted_mission_continues": mission,
-            "mission": serde_json::from_str::<serde_json::Value>(&b.autonomy_json).ok().map(|v| v["goal"].clone()),
-        }), &b.run_id, timestamp);
     }
     fn install_dashboard(
         &self,
@@ -160,7 +153,7 @@ impl MobileController {
         // ARGOS rejects a pose/quality report without a numeric rover_id and
         // then falls back to its own yaw-rate guess, so every turn showed as
         // degraded pose (#111).
-        brain.runtime.rover_id = Some(service.rover_id);
+        brain.runtime.set_rover_id(Some(service.rover_id));
         brain.dashboard = Some(service);
         Ok(())
     }
@@ -194,13 +187,13 @@ impl MobileController {
     pub fn connectivity_policy_settings(&self) -> String {
         self.brain
             .lock()
-            .map(|b| serde_json::to_string(&b.connectivity).expect("validated policy"))
+            .map(|b| serde_json::to_string(b.connectivity()).expect("validated policy"))
             .unwrap_or_default()
     }
     pub fn accepted_onboard_mission(&self) -> bool {
         self.brain
             .lock()
-            .map(|b| accepted_mission(&b))
+            .map(|b| b.accepted_onboard_mission())
             .unwrap_or(false)
     }
     pub fn set_connectivity_policy_settings(
@@ -212,7 +205,7 @@ impl MobileController {
                 message: "connectivity policy too large".into(),
             });
         }
-        let policy: connectivity_policy::ConnectivityPolicySettings =
+        let policy: terra_runtime::connectivity::ConnectivityPolicySettings =
             serde_json::from_str(&settings_json).map_err(|_| ControllerError::InvalidInput {
                 message: "invalid connectivity policy".into(),
             })?;
@@ -224,9 +217,9 @@ impl MobileController {
         self.observation.event(
             "router",
             "connectivity.policy_changed",
-            serde_json::json!({"policy": b.connectivity, "revision": b.connectivity_revision}),
-            &b.run_id,
-            b.imu_time.unwrap_or(0.),
+            serde_json::json!({"policy": b.connectivity(), "revision": b.connectivity_revision()}),
+            b.run_id(),
+            b.imu_time().unwrap_or(0.),
         );
         Ok(())
     }
@@ -234,7 +227,7 @@ impl MobileController {
     pub fn handle_dashboard_link_loss(&self) -> Result<(), ControllerError> {
         {
             let mut b = self.brain.lock().map_err(|_| ControllerError::Internal)?;
-            let timestamp = b.imu_time.unwrap_or(0.);
+            let timestamp = b.imu_time().unwrap_or(0.);
             self.apply_dashboard_link_loss(&mut b, timestamp);
         }
         self.detach_dashboard_link()
@@ -317,8 +310,8 @@ impl MobileController {
             });
         }
         let brain = self.brain.lock().map_err(|_| ControllerError::Internal)?;
-        value["run_id"] = serde_json::json!(brain.run_id);
-        value["connectivity_policy"] = serde_json::json!(brain.connectivity);
+        value["run_id"] = serde_json::json!(brain.run_id());
+        value["connectivity_policy"] = serde_json::json!(brain.connectivity());
         if let Some(dashboard) = brain.dashboard.as_ref() {
             dashboard.publish("localization", value.to_string());
         }
@@ -392,7 +385,7 @@ impl MobileController {
     /// Returns `Internal` for a poisoned mutex.
     pub fn detach_dashboard_link(&self) -> Result<(), ControllerError> {
         let mut b = self.brain.lock().map_err(|_| ControllerError::Internal)?;
-        b.autonomy.clear_remote_intent();
+        b.runtime.autonomy.clear_remote_intent();
         let service = b.dashboard.take();
         drop(b);
         // Network teardown must not stall the phone control/Bluetooth producer.
@@ -450,17 +443,8 @@ impl MobileController {
     /// network link. May block during teardown. Returns `Internal` for lock failure.
     pub fn disconnect_dashboard(&self) -> Result<(), ControllerError> {
         let mut brain = self.brain.lock().map_err(|_| ControllerError::Internal)?;
-        brain.outdoor.pause("authority_lost");
         let service = brain.dashboard.take();
-        brain.sequence += 1;
-        let token = format!("dashboard-detach-{}", brain.sequence);
-        brain.autonomy.set_level(terra_autonomy::LevelRequest {
-            level: terra_autonomy::Level::Teleop,
-            token,
-            budget_seconds: None,
-            budget_minutes: None,
-        });
-        brain.controller.reset();
+        brain.runtime.disconnect_operator();
         drop(brain);
         drop(service);
         Ok(())
@@ -469,16 +453,18 @@ impl MobileController {
     /// Used when validating configuration changes. Returns `InvalidInput` for
     /// malformed JSON or more than 4096 bytes, and `Internal` for lock failure.
     pub fn publish_hardware_status(&self, payload: String) -> Result<(), ControllerError> {
-        if payload.len() > 4096 || serde_json::from_str::<serde_json::Value>(&payload).is_err() {
-            return Err(ControllerError::InvalidInput {
+        let status = (payload.len() <= 4096)
+            .then(|| serde_json::from_str::<serde_json::Value>(&payload).ok())
+            .flatten()
+            .ok_or_else(|| ControllerError::InvalidInput {
                 message: "invalid hardware status".into(),
-            });
-        }
+            })?;
         let mut b = self.brain.lock().map_err(|_| ControllerError::Internal)?;
-        b.hardware_observation = Some((
-            serde_json::from_str(&payload).unwrap(),
-            b.imu_time.unwrap_or(b.last_tick).max(b.last_tick),
-        ));
+        let received_at = b.imu_time().unwrap_or(b.last_tick).max(b.last_tick);
+        b.runtime.ingest(terra_runtime::RuntimeEvent::Hardware {
+            status: terra_runtime::HardwareStatus::from_json(&status),
+            received_at,
+        })?;
         if let Some(d) = b.dashboard.as_ref() {
             d.publish("hardware/status", payload);
         }
@@ -624,6 +610,7 @@ impl MobileController {
         self.brain
             .lock()
             .map_err(|_| ControllerError::Internal)?
+            .runtime
             .autonomy
             .set_origin(latitude, longitude);
         Ok(())
@@ -639,35 +626,23 @@ impl MobileController {
         timestamp: f64,
         revision: u64,
     ) -> Result<(), ControllerError> {
-        if !timestamp.is_finite()
-            || timestamp < 0.
-            || grid.width == 0
-            || grid.height == 0
-            || grid.width > 1000
-            || grid.height > 1000
-            || grid.occupancy.len() != grid.width as usize * grid.height as usize
-            || !grid.resolution.is_finite()
-            || grid.resolution < 0.01
-            || !grid.origin_x.is_finite()
-            || !grid.origin_y.is_finite()
-        {
-            return Err(InputError::OutOfRange.into());
-        }
         self.brain
             .lock()
             .map_err(|_| ControllerError::Internal)?
-            .map = Some((
-            terra_mapping::MapSnapshot {
-                width: grid.width,
-                height: grid.height,
-                resolution: grid.resolution,
-                origin_x: grid.origin_x,
-                origin_y: grid.origin_y,
-                occupancy: grid.occupancy,
-            },
-            timestamp,
-            revision,
-        ));
+            .runtime
+            .ingest(terra_runtime::RuntimeEvent::Map {
+                snapshot: terra_mapping::MapSnapshot {
+                    width: grid.width,
+                    height: grid.height,
+                    resolution: grid.resolution,
+                    origin_x: grid.origin_x,
+                    origin_y: grid.origin_y,
+                    occupancy: grid.occupancy,
+                },
+                timestamp,
+                sequence: revision,
+                received_at: timestamp,
+            })?;
         Ok(())
     }
     /// Copy the cached JSON status from the most recent control tick.
@@ -675,7 +650,7 @@ impl MobileController {
     pub fn autonomy_status(&self) -> String {
         self.brain
             .lock()
-            .map(|b| b.autonomy_json.clone())
+            .map(|b| b.status_json().to_owned())
             .unwrap_or_default()
     }
     /// The same JSON shape as [`Self::autonomy_status`] cut to
@@ -686,7 +661,7 @@ impl MobileController {
     pub fn autonomy_brief(&self) -> String {
         self.brain
             .lock()
-            .map(|b| b.autonomy_brief.clone())
+            .map(|b| b.brief_json().to_owned())
             .unwrap_or_default()
     }
     /// Create a bounded run recorder at `path` and start a new run identity.
@@ -706,7 +681,7 @@ impl MobileController {
                 "run_id": run_id,
                 "platform": "phone",
                 "runtime": brain.runtime.metadata(),
-                "planner": brain.navigation.parameters.planner(),
+                "planner": brain.navigation().parameters.planner(),
                 "collision_observation": "unavailable",
             }),
             8192,
@@ -722,8 +697,6 @@ impl MobileController {
         brain.recorder = Some(recorder);
 
         brain.runtime.begin_run(run_id)?;
-        brain.run_start = None;
-        brain.sequence = 0;
         Ok(())
     }
     /// Take and close the current recorder; succeeds when none is active.
@@ -802,13 +775,7 @@ mod dashboard_tests {
         assert_eq!(status["goal"]["state"], "idle");
         assert_eq!(controller.dashboard_status(), "disconnected");
         assert_eq!(
-            controller
-                .brain
-                .lock()
-                .unwrap()
-                .estimator
-                .estimate(1.)
-                .health,
+            controller.brain.lock().unwrap().estimate(1.).health,
             Health::Ready
         );
         controller.disconnect_dashboard().unwrap();

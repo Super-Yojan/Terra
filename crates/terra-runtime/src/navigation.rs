@@ -12,7 +12,7 @@ pub struct Parameters {
     pub max_reverse: f64,
     #[serde(default = "default_reverse_penalty")]
     pub reverse_penalty: f64,
-    /// Assumed body length, metres, validated in 0.1..=3.
+    /// Assumed body length, metres, validated in 0.1..=3 like a rover profile.
     pub length: f64,
     /// Assumed body width, metres, validated in 0.1..=3.
     pub width: f64,
@@ -35,18 +35,24 @@ fn default_reverse_penalty() -> f64 {
     0.05
 }
 impl Default for Parameters {
+    /// Terra's body, turning and speed limits from
+    /// [`RoverProfile::terra`](crate::rover_profile::RoverProfile::terra).
+    /// Operators must enter the actual vehicle dimensions for other rovers.
     fn default() -> Self {
-        // Terra's measured 0.61 m square body with 5 cm on every side. Operators
-        // must enter the actual vehicle dimensions for other rovers.
+        let terra = crate::rover_profile::RoverProfile::terra();
         Self {
-            turning: Default::default(),
+            turning: terra_types::turning::TurningConfig {
+                min_turn_radius: terra.min_turn_radius,
+                allow_in_place: terra.allow_in_place,
+                ..Default::default()
+            },
             max_reverse: default_reverse(),
             reverse_penalty: default_reverse_penalty(),
-            length: 0.61,
-            width: 0.61,
-            clearance: 0.05,
-            max_linear: 2.,
-            max_angular: 2.,
+            length: terra.length,
+            width: terra.width,
+            clearance: terra.clearance,
+            max_linear: terra.max_linear,
+            max_angular: terra.max_angular,
             horizon: 2.,
             explore_through_unknown: false,
         }
@@ -55,6 +61,9 @@ impl Default for Parameters {
 impl Parameters {
     /// Return whether every geometry and avoidance parameter is finite and within its supported range.
     pub fn valid(&self) -> bool {
+        use crate::rover_profile::{
+            BODY_SIZE_M, CLEARANCE_M, MAX_ANGULAR_RADPS, MAX_LINEAR_MPS, within,
+        };
         self.turning.validate().is_ok()
             && self.max_reverse.is_finite()
             && self.max_reverse > 0.
@@ -62,15 +71,15 @@ impl Parameters {
             && self.reverse_penalty.is_finite()
             && (0.0..=10.).contains(&self.reverse_penalty)
             && [
-                (self.length, 0.1, 3.),
-                (self.width, 0.1, 3.),
-                (self.clearance, 0., 1.),
-                (self.max_linear, 0.05, 2.),
-                (self.max_angular, 0.1, 2.),
-                (self.horizon, 0.5, 5.),
+                (self.length, BODY_SIZE_M),
+                (self.width, BODY_SIZE_M),
+                (self.clearance, CLEARANCE_M),
+                (self.max_linear, MAX_LINEAR_MPS),
+                (self.max_angular, MAX_ANGULAR_RADPS),
+                (self.horizon, 0.5..=5.),
             ]
             .iter()
-            .all(|&(v, min, max)| v.is_finite() && (min..=max).contains(&v))
+            .all(|(v, range)| within(*v, range))
     }
     /// The body rectangle the planners check, with `clearance` as the margin on every side.
     pub fn footprint(&self) -> terra_navigation::Footprint {
@@ -115,7 +124,7 @@ pub struct State {
     pub result: Option<String>,
     /// Rover profile that last set these parameters, if any.
     pub profile: Option<String>,
-    seen: std::collections::VecDeque<String>,
+    seen: crate::replay::ReplayGuard<64>,
 }
 impl State {
     /// Return versioned navigation configuration status JSON, including the footprint, revision, and latest result.
@@ -139,32 +148,25 @@ struct Request {
 /// age in seconds. Invalid envelopes are ignored; unique valid tokens record
 /// an acceptance or rejection result and cannot be replayed.
 pub fn apply(b: &mut super::Runtime, bytes: &[u8], age: f64, now: f64) -> bool {
-    if bytes.len() > 2048 {
+    if bytes.len() > terra_types::requests::MAX_REQUEST_BYTES {
         return false;
     }
     let Ok(r) = serde_json::from_slice::<Request>(bytes) else {
         return false;
     };
-    if !terra_autonomy::valid_token(&r.token) || b.navigation.seen.contains(&r.token) {
+    if !terra_autonomy::valid_token(&r.token) || !b.navigation.seen.admit(&r.token) {
         return false;
     }
-    if b.navigation.seen.len() >= 64 {
-        b.navigation.seen.pop_front();
-    }
-    b.navigation.seen.push_back(r.token.clone());
     b.navigation.token = Some(r.token);
-    let status: serde_json::Value = serde_json::from_str(&b.autonomy_json).unwrap_or_default();
-    let a = &status["status"];
+    // The last published tick must already show this authority, safety and goal.
+    let tick = b.brief.as_ref();
     let pose = b.pose.map(|p| p.0).unwrap_or_default();
     let reason = if !r.parameters.valid() {
         Some("invalid dimensions or avoidance limits")
-    } else if !age.is_finite()
-        || !(0.0..terra_types::timing::CONTROL_REQUEST_FRESHNESS_SECONDS).contains(&age)
-    {
+    } else if !age.is_finite() || !(0.0..super::CONTROL_REQUEST_FRESHNESS_SECONDS).contains(&age) {
         Some("settings request expired")
     } else if r.run_id != b.run_id
-        || a["run_id"] != r.run_id
-        || a["revision"] != r.authority_revision
+        || tick.is_none_or(|t| t.run_id != r.run_id || t.revision != r.authority_revision)
         || r.settings_revision != b.navigation.revision
     {
         Some("vehicle run or configuration revision changed")
@@ -173,21 +175,16 @@ pub fn apply(b: &mut super::Runtime, bytes: &[u8], age: f64, now: f64) -> bool {
         .navigation_configuration_allowed(&r.run_id, r.authority_revision, pose)
     {
         Some("live vehicle authority changed or a goal is active")
-    } else if !matches!(
-        terra_autonomy::Safety::deserialize(&a["safety"]),
-        Ok(terra_autonomy::Safety::Clear | terra_autonomy::Safety::Hold)
-    ) {
-        Some("vehicle safety state does not permit configuration")
-    } else if !b.hardware_observation.as_ref().is_some_and(|(h, at)| {
-        (0.0..terra_types::timing::HARDWARE_FRESHNESS_SECONDS).contains(&(now - *at))
-            && h["ready"] == true
-            && h["output_active"] == false
+    } else if !tick.is_some_and(|t| {
+        matches!(
+            t.safety,
+            terra_autonomy::Safety::Clear | terra_autonomy::Safety::Hold
+        )
     }) {
+        Some("vehicle safety state does not permit configuration")
+    } else if !b.hardware.is_some_and(|h| h.fresh_and_idle(now)) {
         Some("fresh ready hardware with neutral output required")
-    } else if !matches!(
-        status["goal"]["state"].as_str(),
-        Some("idle" | "arrived" | "cancelled")
-    ) {
+    } else if tick.is_some_and(|t| t.goal.state == terra_waypoint::GoalState::Active) {
         Some("cancel the active goal before changing settings")
     } else if b.navigation.revision == u64::MAX {
         Some("configuration revision exhausted")
@@ -204,7 +201,7 @@ pub fn apply(b: &mut super::Runtime, bytes: &[u8], age: f64, now: f64) -> bool {
     b.controller.reset();
     b.navigation.parameters = r.parameters;
     b.navigation.revision += 1;
-    b.outdoor.revision = b.outdoor.revision.saturating_add(1);
+    b.bump_navigation_revision();
     b.navigation.result = Some("accepted".into());
     true
 }

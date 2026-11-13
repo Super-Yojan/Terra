@@ -35,7 +35,7 @@ fn sensors(r: &mut Runtime, t: f64) {
     .unwrap();
 }
 fn remote(r: &mut Runtime, kind: &str, mut v: serde_json::Value, t: f64) {
-    v["run_id"] = json!(r.run_id);
+    v["run_id"] = json!(r.run_id());
     v["authority_revision"] = json!(r.autonomy.authority_revision());
     r.ingest(RuntimeEvent::Remote {
         kind: kind.into(),
@@ -171,7 +171,7 @@ fn accepted_mission_survives_link_loss_with_fresh_onboard_evidence() {
 fn future_and_reordered_samples_cannot_replace_measured_pose() {
     let mut r = runtime(ActuationMode::VelocityFeedback);
     sensors(&mut r, 1.);
-    let before = r.pose.unwrap().0;
+    let before = r.pose().unwrap().0;
     assert!(
         r.ingest(RuntimeEvent::Vio {
             sample: VioSample {
@@ -188,7 +188,7 @@ fn future_and_reordered_samples_cannot_replace_measured_pose() {
         })
         .is_err()
     );
-    assert_eq!(r.pose.unwrap().0.x, before.x);
+    assert_eq!(r.pose().unwrap().0.x, before.x);
     assert!(
         r.ingest(RuntimeEvent::Imu {
             sample: ImuSample {
@@ -254,11 +254,8 @@ fn identical_depth_and_ground_planes_produce_identical_maps() {
         })
         .unwrap();
     }
-    assert_eq!(
-        a.map.as_ref().unwrap().0.occupancy,
-        b.map.as_ref().unwrap().0.occupancy
-    );
-    assert!(a.map.as_ref().unwrap().0.occupancy.iter().any(|v| *v >= 0));
+    assert_eq!(a.map().unwrap().0.occupancy, b.map().unwrap().0.occupancy);
+    assert!(a.map().unwrap().0.occupancy.iter().any(|v| *v >= 0));
 }
 #[test]
 fn ground_calibration_retains_existing_stability_and_mount_rules() {
@@ -364,7 +361,7 @@ fn configuration_identity_tracks_profile_changes() {
     })
     .unwrap();
     assert_ne!(before, r.configuration_identity());
-    assert_eq!(r.pose.map(|p| p.0.x), None);
+    assert_eq!(r.pose().map(|p| p.0.x), None);
     let _ = Pose::default();
 }
 #[test]
@@ -406,7 +403,7 @@ fn autonomous_guidance_uses_feedback_even_with_a_direct_manual_profile() {
         20000.,
     );
     assert_eq!(
-        r.step(0.).unwrap().snapshot.value["runtime"]["mode"],
+        r.step(0.).unwrap().status["runtime"]["mode"],
         "velocity_feedback"
     );
 }
@@ -415,11 +412,11 @@ fn autonomous_guidance_uses_feedback_even_with_a_direct_manual_profile() {
 fn changing_connectivity_policy_during_loss_pauses_the_accepted_mission() {
     let mut r = runtime(ActuationMode::DirectEffort);
     r.link(false);
-    let revision = r.connectivity_revision;
-    let mut policy = r.connectivity.clone();
-    policy.autonomous_router_loss = terra_types::connectivity_policy::RouterLossPolicy::Pause;
+    let revision = r.connectivity_revision();
+    let mut policy = r.connectivity().clone();
+    policy.autonomous_router_loss = terra_runtime::connectivity::RouterLossPolicy::Pause;
     r.set_connectivity_policy(policy).unwrap();
-    assert_eq!(r.connectivity_revision, revision + 1);
+    assert_eq!(r.connectivity_revision(), revision + 1);
     assert!(
         r.step(0.0)
             .unwrap()
@@ -456,7 +453,6 @@ fn rejected_domain_requests_do_not_emit_successful_admission() {
         )
         .is_err()
     );
-    r.navigation.result = Some("accepted".into());
     remote(
         &mut r,
         "navigation/settings",

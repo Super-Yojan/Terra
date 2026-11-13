@@ -62,7 +62,7 @@ pub use waypoint::*;
 /// Shared presentation and router-loss defaults. Local sensor limits are independent.
 #[uniffi::export]
 pub fn default_connectivity_policy_settings() -> String {
-    serde_json::to_string(&connectivity_policy::ConnectivityPolicySettings::default())
+    serde_json::to_string(&terra_runtime::connectivity::ConnectivityPolicySettings::default())
         .expect("finite policy defaults")
 }
 
@@ -112,7 +112,9 @@ pub struct ControlSettings {
 }
 impl ControlSettings {
     fn controller(&self) -> ControllerConfig {
-        ControllerConfig {
+        // Until a rover profile is selected (Android has no picker yet),
+        // back up with Terra's reverse compensation.
+        terra_runtime::rover_profile::RoverProfile::terra().reverse_compensation(ControllerConfig {
             linear_kp: self.linear_kp,
             linear_ki: self.linear_ki,
             yaw_kp: self.yaw_kp,
@@ -126,13 +128,8 @@ impl ControlSettings {
             max_step: self.max_step,
             anti_windup: self.anti_windup,
             spin_effort: self.spin_effort,
-            wheel_deadband: 0.0,
-            // Until a rover profile is selected (Android has no picker yet),
-            // back up with Terra's reverse compensation.
-            reverse_effort_scale: terra_runtime::rover_profile::RoverProfile::terra()
-                .reverse_effort_scale,
-            reverse_deadband: terra_runtime::rover_profile::RoverProfile::terra().reverse_deadband,
-        }
+            ..ControllerConfig::default()
+        })
     }
     fn estimator(&self) -> EstimatorConfig {
         EstimatorConfig {
@@ -335,7 +332,6 @@ struct Brain {
     runtime: terra_runtime::Runtime,
     recorder: Option<terra_experiment::RunRecorder>,
     near_miss: terra_experiment::NearMiss,
-    run_start: Option<f64>,
     map_gate: publication::MapGate,
     cloud_gate: publication::CloudGate,
     dashboard: Option<terra_transport::ControlPlane>,
@@ -352,9 +348,20 @@ impl std::ops::Deref for Brain {
         &self.runtime
     }
 }
-impl std::ops::DerefMut for Brain {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.runtime
+impl Brain {
+    /// An attached, working fleet link owns velocity intent; local sticks
+    /// and targets must not overwrite it.
+    fn fleet_owns_intent(&self) -> bool {
+        self.dashboard.as_ref().is_some_and(|d| !d.failed())
+    }
+    /// No recorder, or one that has not failed.
+    fn recording_healthy(&self) -> bool {
+        self.recorder.as_ref().is_none_or(|r| !r.failed())
+    }
+}
+fn fleet_owns_intent() -> ControllerError {
+    ControllerError::InvalidInput {
+        message: "fleet connection owns velocity intent".into(),
     }
 }
 impl From<terra_runtime::RuntimeError> for ControllerError {
@@ -438,7 +445,6 @@ impl MobileController {
                 )?,
                 recorder: None,
                 near_miss: Default::default(),
-                run_start: None,
                 map_gate: Default::default(),
                 cloud_gate: Default::default(),
                 dashboard: None,
@@ -578,10 +584,8 @@ impl MobileController {
         timestamp: f64,
     ) -> Result<(), ControllerError> {
         let mut b = self.brain.lock().map_err(|_| ControllerError::Internal)?;
-        if b.dashboard.as_ref().is_some_and(|d| !d.failed()) {
-            return Err(ControllerError::InvalidInput {
-                message: "fleet connection owns velocity intent".into(),
-            });
+        if b.fleet_owns_intent() {
+            return Err(fleet_owns_intent());
         }
         b.runtime.ingest(terra_runtime::RuntimeEvent::LocalManual {
             forward,
@@ -599,30 +603,19 @@ impl MobileController {
     /// velocity magnitudes; returns `Internal` for a poisoned mutex.
     pub fn set_target(&self, target: TwistSetpoint) -> Result<(), ControllerError> {
         let mut brain = self.brain.lock().map_err(|_| ControllerError::Internal)?;
-        if brain.dashboard.is_some() {
-            return Err(ControllerError::InvalidInput {
-                message: "fleet connection owns velocity intent".into(),
-            });
+        if brain.fleet_owns_intent() {
+            return Err(fleet_owns_intent());
         }
-        if !target.timestamp.is_finite()
-            || !target.forward.is_finite()
-            || !target.yaw_rate.is_finite()
-            || target.forward.abs() > 5.
-            || target.yaw_rate.abs() > 5.
-        {
-            return Err(InputError::OutOfRange.into());
-        }
-        brain.autonomy.accept_operator(
-            terra_autonomy::TeleopRequest {
-                linear: target.forward,
-                angular: target.yaw_rate,
-                run_id: None,
-                authority_revision: None,
-                operator_session_id: None,
-                sequence: None,
-            },
-            target.timestamp,
-        );
+        brain
+            .runtime
+            .ingest(terra_runtime::RuntimeEvent::LocalVelocity {
+                target: VelocityTarget {
+                    timestamp: target.timestamp,
+                    forward: target.forward,
+                    yaw_rate: target.yaw_rate,
+                },
+                received_at: target.timestamp,
+            })?;
         Ok(())
     }
     /// Run one sensor, remote-intent, autonomy, telemetry, and motor-control tick.
@@ -635,10 +628,7 @@ impl MobileController {
     /// target as `InvalidInput`. Timing and freshness stops are returned as output.
     pub fn step(&self, timestamp: f64) -> Result<ControlOutput, ControllerError> {
         let mut brain = self.brain.lock().map_err(|_| ControllerError::Internal)?;
-        let estimate = brain.estimator.estimate(timestamp);
-        let pose = brain.pose.unwrap_or_default();
-        let map = brain.map.clone();
-        if brain.dashboard.as_ref().is_some_and(|d| d.failed()) && !brain.router_loss_handled {
+        if brain.dashboard.as_ref().is_some_and(|d| d.failed()) {
             self.apply_dashboard_link_loss(&mut brain, timestamp);
         }
         let incoming = brain
@@ -656,53 +646,32 @@ impl MobileController {
                 received_at: timestamp - age,
             })?;
         }
-        brain.runtime.recording_healthy = brain.recorder.as_ref().is_none_or(|r| !r.failed());
+        let recording = brain.recording_healthy();
+        brain.runtime.set_recording_healthy(recording);
         let runtime_output = brain.runtime.step(timestamp)?;
+        let start = brain.run_start().unwrap_or(timestamp);
+        let run_id = brain.run_id().to_owned();
         for event in &runtime_output.events {
             if let Some(recorder) = brain.recorder.as_ref() {
-                let _=recorder.record(serde_json::json!({"kind":"runtime.event","event":event,"time":timestamp-brain.run_start.unwrap_or(timestamp),"source_time":timestamp,"run_id":brain.run_id}));
+                let _=recorder.record(serde_json::json!({"kind":"runtime.event","event":event,"time":timestamp-start,"source_time":timestamp,"run_id":run_id}));
             }
             self.observation.event(
                 "runtime",
                 event["kind"].as_str().unwrap_or("runtime.event"),
                 event.clone(),
-                &brain.run_id,
+                &run_id,
                 timestamp,
             );
         }
         let mut output = runtime_output.autonomy;
+        let status = runtime_output.status;
         // The dock owns the gate: open only on its request, closed otherwise.
         let gate = brain.runtime.gate_servo(output.gate_open);
         if let (Some((id, position)), Some(layout)) = (gate, brain.actuators.as_mut()) {
             let _ = layout.set_servo(id, position);
         }
-        let outdoor_motion = output.status.safety == terra_autonomy::Safety::Clear;
-        let mut outdoor_status = brain.outdoor.status(
-            timestamp,
-            outdoor_bridge::evidence(&brain, timestamp),
-            &brain.run_id,
-        );
-        if brain.outdoor.selected {
-            if brain.outdoor.phase() == "planning"
-                && terra_autonomy::Reason::known(&output.status.reason)
-                    .is_some_and(terra_autonomy::Reason::is_route_blocked)
-            {
-                outdoor_status["hold_reason"] = serde_json::json!("route_blocked");
-            }
-            // Explore and task keep their own hold reason: the outdoor mission does not gate them.
-            if !outdoor_motion
-                && output.status.safety != terra_autonomy::Safety::EmergencyStop
-                && !brain.autonomy.reads_outdoor_destination()
-            {
-                output.status.reason = outdoor_status["hold_reason"]
-                    .as_str()
-                    .unwrap_or(brain.outdoor.phase())
-                    .to_string();
-            }
-            if let Some(goal) = brain.outdoor.mission_status() {
-                output.goal = goal;
-            }
-        }
+        let pose = brain.pose().unwrap_or_default();
+        let map = brain.map().cloned();
         let clearance = map.as_ref().and_then(|m| {
             terra_navigation::observed_clearance(&m.0, pose.0, &brain.autonomy.footprint())
         });
@@ -714,27 +683,20 @@ impl MobileController {
                 level: output.status.requested_level,
             });
         }
-        let start = *brain.run_start.get_or_insert(timestamp);
-        brain.sequence += 1;
-        let wire_proposal = output.proposal.clone().map(|mut p| {
-            p.expires_at -= start;
-            p
-        });
-        let map_run = brain.run_id.clone();
         let map_publication = if brain.dashboard.is_some() {
             map.as_ref().map(|(grid, time, sequence)| {
                 if !publication::fresh_map_sample(timestamp, *time) {
                     return publication::Publication::Skip;
                 }
-                if !brain.map_gate.is_newer(&map_run, *sequence) {
+                if !brain.map_gate.is_newer(&run_id, *sequence) {
                     return publication::Publication::Skip;
                 }
-                if !publication::map_visualization_valid(grid, &map_run) {
-                    brain.map_gate.reject_source(map_run.clone(), *sequence);
+                if !publication::map_visualization_valid(grid, &run_id) {
+                    brain.map_gate.reject_source(run_id.clone(), *sequence);
                     return publication::Publication::Skip;
                 }
                 let content = (
-                    brain.run_id.clone(),
+                    run_id.clone(),
                     grid.width,
                     grid.height,
                     grid.resolution,
@@ -744,7 +706,7 @@ impl MobileController {
                 );
                 brain.map_gate.observe(
                     content,
-                    map_run.clone(),
+                    run_id.clone(),
                     *sequence,
                     std::time::Instant::now(),
                     std::time::Duration::from_millis(200),
@@ -753,7 +715,6 @@ impl MobileController {
         } else {
             None
         };
-        let quality = pose_quality::value(&brain, timestamp);
         let mut map_full_rejected = false;
         // Telemetry expires after 500 ms, so the cached body is resent every
         // step and only re-serialized when the object map changes.
@@ -761,32 +722,35 @@ impl MobileController {
             && brain
                 .objects_published
                 .as_ref()
-                .is_none_or(|(revision, _)| *revision != brain.objects.revision)
+                .is_none_or(|(revision, _)| *revision != brain.objects().revision)
         {
             brain.objects_published = Some((
-                brain.objects.revision,
-                brain.objects.telemetry(rover, &brain.run_id).to_string(),
+                brain.objects().revision,
+                brain.objects().telemetry(rover, &run_id).to_string(),
             ));
         }
         if let Some(d) = brain.dashboard.as_ref() {
             d.publish("experiment/status",serde_json::json!({
-                "run_id": brain.run_id,
+                "run_id": run_id,
                 "run_elapsed": timestamp-start,
                 "schema_version": 1,
                 "utc": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs_f64(),
-                "recording": brain.recorder.as_ref().is_some_and(|r|!r.failed()),
-                "runtime": runtime_output.snapshot.value["runtime"],
+                "recording": recording && brain.recorder.is_some(),
+                "runtime": status["runtime"],
             }).to_string());
-            let mut status = serde_json::to_value(&output.status).unwrap();
-            status["runtime"] = runtime_output.snapshot.value["runtime"].clone();
-            status["drive"] = runtime_output.snapshot.value["drive"].clone();
-            status["connectivity"] = serde_json::json!({"policy":brain.connectivity,"revision":brain.connectivity_revision});
-            status["navigation"] = brain.navigation.status();
-            status["navigation"]["outdoor"] = outdoor_status.clone();
-            d.publish("navigation/outdoor", outdoor_status.to_string());
-            status["pose_quality"] = quality.clone();
-            d.publish("pose/quality", quality.to_string());
-            d.publish("autonomy/status", status.to_string());
+            let mut autonomy = serde_json::to_value(&output.status).unwrap();
+            autonomy["runtime"] = status["runtime"].clone();
+            autonomy["drive"] = runtime_output.drive.clone();
+            autonomy["connectivity"] = serde_json::json!({
+                "policy": status["connectivity"]["policy"],
+                "revision": status["connectivity"]["revision"],
+            });
+            autonomy["navigation"] = status["navigation"].clone();
+            autonomy["navigation"]["outdoor"] = status["outdoor"].clone();
+            d.publish("navigation/outdoor", status["outdoor"].to_string());
+            autonomy["pose_quality"] = status["pose_quality"].clone();
+            d.publish("pose/quality", status["pose_quality"].to_string());
+            d.publish("autonomy/status", autonomy.to_string());
             d.publish(
                 "search/status",
                 serde_json::to_string(&output.search).unwrap(),
@@ -803,10 +767,7 @@ impl MobileController {
                 d.publish("objects", objects.clone());
             }
             d.publish("goal/status", serde_json::to_string(&output.goal).unwrap());
-            d.publish(
-                "goal/proposal",
-                serde_json::to_string(&wire_proposal).unwrap(),
-            );
+            d.publish("goal/proposal", status["proposal"].to_string());
             if let Some(exploration) = &output.exploration {
                 d.publish(
                     "exploration/status",
@@ -822,10 +783,7 @@ impl MobileController {
                         map_full_rejected = !d.publish_visualization(
                             "map/occupancy",
                             terra_autonomy::occupancy_telemetry(
-                                d.rover_id,
-                                &brain.run_id,
-                                *sequence,
-                                grid,
+                                d.rover_id, &run_id, *sequence, grid,
                             )
                             .to_string(),
                         );
@@ -833,21 +791,18 @@ impl MobileController {
                     Some(publication::Publication::Heartbeat(sequence)) => d.publish(
                         "map/occupancy/heartbeat",
                         serde_json::json!({"schema_version":1,"rover_id":d.rover_id,
-                            "run_id":brain.run_id,"sequence":sequence})
+                            "run_id":run_id,"sequence":sequence})
                         .to_string(),
                     ),
                     _ => {}
                 }
             }
-            if brain.pose.is_some()
-                && estimate.health == Health::Ready
-                && timestamp - pose.1 <= 0.35
-            {
+            if brain.pose_ready(timestamp) {
                 d.publish(
                     "pose",
                     serde_json::json!({
                         "rover_id": d.rover_id,
-                        "sequence": brain.sequence,
+                        "sequence": brain.sequence(),
                         "x": pose.0.x,
                         "y": pose.0.y,
                         "yaw": pose.0.yaw,
@@ -857,61 +812,32 @@ impl MobileController {
             }
         }
         brain.map_gate.full_enqueued(!map_full_rejected);
-        brain.autonomy_json = serde_json::json!({
-            "status": output.status,
-            "command_origin": output.command_origin,
-            "runtime": runtime_output.snapshot.value["runtime"],
-            "pose_quality": quality,
-            "outdoor": outdoor_status,
-            "navigation": brain.navigation.status(),
-            "connectivity": {"policy": brain.connectivity, "revision": brain.connectivity_revision,
-                "accepted_onboard_mission": autonomy::accepted_mission(&brain)},
-            "goal": output.goal,
-            "proposal": wire_proposal,
-            "exploration": output.exploration,
-            "search": output.search,
-            "task": output.task,
-            "pending_reports": output.pending_reports,
-            "twist": output.twist,
-        })
-        .to_string();
-        brain.autonomy_brief = serde_json::json!({
-            "status": {
-                "run_id": output.status.run_id,
-                "requested_level": output.status.requested_level,
-                "effective_level": output.status.effective_level,
-                "safety": output.status.safety,
-                "reason": output.status.reason,
-            },
-            "pose_quality": quality,
-            "goal": {"state": output.goal.state},
-        })
-        .to_string();
         for event in &output.events {
             self.observation.event(
                 "autonomy",
                 "decision.event",
                 serde_json::to_value(event).unwrap_or_default(),
-                &brain.run_id,
+                &run_id,
                 timestamp,
             );
         }
-        self.observation.tick(&brain, timestamp, &estimate);
+        let estimate = brain.estimate(timestamp);
+        self.observation.tick(&brain, timestamp, &estimate, &status);
         if let Some(r) = brain.recorder.as_ref() {
             let _ = r.record(serde_json::json!({
                 "kind": "control_tick",
                 "time": timestamp-start,
                 "source_time": timestamp,
-                "sequence": brain.sequence,
+                "sequence": brain.sequence(),
                 "clearance": clearance,
                 "selected": output.twist,
                 "source_command": output.intent,
                 "status": output.status,
                 "goal": output.goal,
-                "proposal": wire_proposal,
-                "run_id": brain.run_id,
+                "proposal": status["proposal"],
+                "run_id": run_id,
                 "exploration": output.exploration,
-            "search": output.search,
+                "search": output.search,
                 "task": output.task,
                 "events": output.events,
             }));
@@ -1002,16 +928,23 @@ fn apply_sample(brain: &mut Brain, sample: inbox::Sample) -> Result<(), Controll
             Ok(())
         }
         inbox::Sample::Gps(fix, now) => {
-            brain.outdoor.gps(fix, now).map_err(outdoor_bridge::invalid)
+            Ok(brain.runtime.ingest(terra_runtime::RuntimeEvent::Gps {
+                sample: fix.into(),
+                received_at: now,
+            })?)
         }
-        inbox::Sample::Heading(fix, now) => brain
-            .outdoor
-            .heading(fix, now)
-            .map_err(outdoor_bridge::invalid),
-        inbox::Sample::Course(fix, now) => brain
-            .outdoor
-            .course(fix, now)
-            .map_err(outdoor_bridge::invalid),
+        inbox::Sample::Heading(fix, now) => {
+            Ok(brain.runtime.ingest(terra_runtime::RuntimeEvent::Heading {
+                sample: fix.into(),
+                received_at: now,
+            })?)
+        }
+        inbox::Sample::Course(fix, now) => {
+            Ok(brain.runtime.ingest(terra_runtime::RuntimeEvent::Course {
+                sample: fix.into(),
+                received_at: now,
+            })?)
+        }
     }
 }
 #[derive(Clone, Debug, uniffi::Record)]
@@ -1097,6 +1030,90 @@ mod tests {
         let mut settings = default_control_settings();
         settings.max_effort = 1.5;
         assert!(MobileController::new(settings).is_err());
+    }
+    /// The published status keeps its shape: the apps and dashboards read
+    /// these fields, and the brief is the same record cut down.
+    #[test]
+    fn status_and_brief_keep_their_published_fields() {
+        let controller = MobileController::new(default_control_settings()).unwrap();
+        assert_eq!(controller.autonomy_status(), "");
+        assert_eq!(controller.autonomy_brief(), "");
+        controller.step(0.0).unwrap();
+        controller.step(0.01).unwrap();
+        let status: serde_json::Value =
+            serde_json::from_str(&controller.autonomy_status()).unwrap();
+        let keys =
+            |v: &serde_json::Value| v.as_object().unwrap().keys().cloned().collect::<Vec<_>>();
+        assert_eq!(
+            keys(&status),
+            [
+                "command_origin",
+                "connectivity",
+                "exploration",
+                "goal",
+                "navigation",
+                "outdoor",
+                "pending_reports",
+                "pose_quality",
+                "proposal",
+                "runtime",
+                "search",
+                "status",
+                "task",
+                "twist"
+            ]
+        );
+        assert_eq!(
+            keys(&status["connectivity"]),
+            ["accepted_onboard_mission", "policy", "revision"]
+        );
+        assert_eq!(
+            keys(&status["runtime"]),
+            [
+                "configuration_identity",
+                "configured_mode",
+                "mode",
+                "schema_version",
+                "source_revision",
+                "tilt"
+            ]
+        );
+        assert_eq!(
+            keys(&status["pose_quality"]),
+            [
+                "degraded",
+                "imu_age_s",
+                "pose_age_s",
+                "reason",
+                "rover_id",
+                "run_id",
+                "schema_version",
+                "sequence"
+            ]
+        );
+        assert_eq!(
+            status["pose_quality"]["sequence"], 2,
+            "one sequence step per tick"
+        );
+        let brief: serde_json::Value = serde_json::from_str(&controller.autonomy_brief()).unwrap();
+        assert_eq!(keys(&brief), ["goal", "pose_quality", "status"]);
+        assert_eq!(
+            keys(&brief["status"]),
+            [
+                "effective_level",
+                "reason",
+                "requested_level",
+                "run_id",
+                "safety"
+            ]
+        );
+        assert_eq!(brief["status"]["safety"], status["status"]["safety"]);
+        assert_eq!(brief["goal"]["state"], status["goal"]["state"]);
+        assert_eq!(brief["pose_quality"], status["pose_quality"]);
+        let typed = controller.autonomy_brief_typed();
+        assert_eq!(typed.requested_level, "teleop");
+        assert_eq!(typed.goal_state, "idle");
+        assert!(typed.pose_degraded);
     }
     #[test]
     /// A preset from `rover_profile_presets` sets the planner footprint and is

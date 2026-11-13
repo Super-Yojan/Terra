@@ -48,7 +48,7 @@ fn dock_starts_only_on_a_confirmed_bucket() {
     let mut r = Runtime::new(RuntimeConfig::default(), "run-1".into()).unwrap();
     pose_at(&mut r, 0.1);
     sight(&mut r, 1, "orange", 0.1);
-    let id = r.objects.objects()[0].id;
+    let id = r.objects().objects()[0].id;
     let start = format!(r#"{{"action":"start","object_id":{id},"token":"d1"}}"#);
     // One sighting is not a confirmed object yet.
     assert!(r.local_action("dock", start.as_bytes(), 0.1).is_err());

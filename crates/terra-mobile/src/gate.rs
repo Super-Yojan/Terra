@@ -11,8 +11,6 @@ use crate::{ControlOutput, ControllerError, MobileController, SafetyState};
 use std::sync::{Arc, Mutex};
 
 use terra_autonomy::Level;
-/// Pose older than this is not fresh enough for closed-loop motion.
-const MAX_POSE_AGE: f64 = 0.35;
 
 /// The fields of [`MobileController::autonomy_brief`] the phone acts on,
 /// parsed once in Rust instead of in Swift or Kotlin every tick.
@@ -45,13 +43,40 @@ pub struct AutonomyBrief {
 }
 
 impl AutonomyBrief {
+    /// The runtime's brief of the latest tick; before the first tick every
+    /// field is empty and the pose counts as degraded.
+    pub(crate) fn from_runtime(brief: Option<&terra_runtime::Brief>) -> Self {
+        let Some(b) = brief else {
+            return Self {
+                pose_degraded: true,
+                ..Self::default()
+            }
+            .derive();
+        };
+        Self {
+            requested_level: b.requested_level.as_str().into(),
+            effective_level: b.effective_level.map(|l| l.as_str().into()),
+            safety: b.safety.as_str().into(),
+            reason: b.reason.clone(),
+            pose_degraded: b.pose_degraded,
+            pose_age_s: b.pose_age_s,
+            goal_state: serde_json::to_value(b.goal.state)
+                .ok()
+                .and_then(|v| v.as_str().map(str::to_owned))
+                .unwrap_or_default(),
+            ..Self::default()
+        }
+        .derive()
+    }
+
     /// Parse the JSON of [`MobileController::autonomy_brief`]; missing fields stay default.
+    #[cfg(test)]
     pub(crate) fn parse(json: &str) -> Self {
         let root: serde_json::Value = serde_json::from_str(json).unwrap_or_default();
         let status = &root["status"];
         let quality = &root["pose_quality"];
         let text = |v: &serde_json::Value| v.as_str().unwrap_or_default().to_owned();
-        let mut brief = Self {
+        Self {
             requested_level: text(&status["requested_level"]),
             effective_level: status["effective_level"].as_str().map(str::to_owned),
             safety: text(&status["safety"]),
@@ -60,13 +85,18 @@ impl AutonomyBrief {
             pose_age_s: quality["pose_age_s"].as_f64(),
             goal_state: text(&root["goal"]["state"]),
             ..Self::default()
-        };
-        brief.manual = brief.fully_manual();
-        brief.autonomous_level = brief.autonomous();
-        brief.vio_level = brief.requires_vio();
-        brief.pose_fresh = brief.vio_ready();
-        brief.router_emergency_stop = brief.emergency_stopped();
-        brief
+        }
+        .derive()
+    }
+
+    /// Fill in the fields derived from the reported ones.
+    fn derive(mut self) -> Self {
+        self.manual = self.fully_manual();
+        self.autonomous_level = self.autonomous();
+        self.vio_level = self.requires_vio();
+        self.pose_fresh = self.vio_ready();
+        self.router_emergency_stop = self.emergency_stopped();
+        self
     }
 
     /// L0: the requested level (or, without one, the effective level) is teleop.
@@ -101,12 +131,12 @@ impl AutonomyBrief {
         self.safety == terra_autonomy::Safety::EmergencyStop.as_str()
     }
 
-    /// Pose is not degraded and at most 0.35 s old.
+    /// Pose is not degraded and fresh (see [`terra_runtime::pose_quality::fresh`]).
     pub fn vio_ready(&self) -> bool {
         !self.pose_degraded
             && self
                 .pose_age_s
-                .is_some_and(|age| age.is_finite() && (0.0..=MAX_POSE_AGE).contains(&age))
+                .is_some_and(terra_runtime::pose_quality::fresh)
     }
 }
 
@@ -114,7 +144,10 @@ impl AutonomyBrief {
 impl MobileController {
     /// [`Self::autonomy_brief`] as a typed record.
     pub fn autonomy_brief_typed(&self) -> AutonomyBrief {
-        AutonomyBrief::parse(&self.autonomy_brief())
+        self.brain
+            .lock()
+            .map(|b| AutonomyBrief::from_runtime(b.brief()))
+            .unwrap_or_else(|_| AutonomyBrief::from_runtime(None))
     }
 
     /// Whether the current actuator layout has differential drive routes (L3 needs them).

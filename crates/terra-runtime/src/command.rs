@@ -1,45 +1,27 @@
 use crate::*;
+use terra_types::requests::{self, MAX_REQUEST_BYTES, RequestKind, Strip};
+
+/// The `token` of a request payload, if it is a JSON object with one.
+fn request_token(bytes: &[u8]) -> Option<String> {
+    let v: Value = serde_json::from_slice(bytes).ok()?;
+    v["token"].as_str().map(str::to_owned)
+}
+
 impl Runtime {
+    /// Check a network request against current authority and its receipt
+    /// `age`, then strip the authority envelope its decoder does not take.
     pub fn remote_action(
         &self,
         kind: &str,
         bytes: &[u8],
         age: f64,
     ) -> Result<Vec<u8>, &'static str> {
-        if bytes.len() > 4096 {
+        if bytes.len() > MAX_REQUEST_BYTES {
             return Err("request_too_large");
         }
         let mut v: Value = serde_json::from_slice(bytes).map_err(|_| "invalid_json")?;
-        if !matches!(
-            kind,
-            "autonomy"
-                | "teleop"
-                | "safety"
-                | "goal"
-                | "goal/decision"
-                | "navigation/settings"
-                | "navigation/source"
-                | "navigation/resume"
-                | "search"
-                | "search/action"
-                | "search/report/ack"
-                | "task"
-                | "task/action"
-                | "dock"
-        ) {
-            return Err("unsupported_request");
-        }
-        let neutral = (kind == "goal" && v["cancel"] == true)
-            || (kind == "safety" && v["action"] == "stop")
-            || (kind == "search/action"
-                && matches!(v["action"].as_str(), Some("pause" | "cancel")))
-            || kind == "search/report/ack"
-            || (kind == "task/action" && v["action"] == "cancel")
-            || (kind == "dock" && v["action"] == "cancel")
-            || (kind == "teleop"
-                && v["linear"].as_f64() == Some(0.)
-                && v["angular"].as_f64() == Some(0.));
-        if !neutral {
+        let request = RequestKind::find(kind).ok_or("unsupported_request")?;
+        if !request.neutral(&v) {
             if !age.is_finite()
                 || !(0.0..terra_types::timing::OPERATOR_COMMAND_FRESHNESS_SECONDS).contains(&age)
             {
@@ -51,44 +33,36 @@ impl Runtime {
                 return Err("current_authority_required");
             }
         }
-        let strip = matches!(kind, "autonomy" | "safety")
-            || (kind == "goal" && (!self.outdoor.selected || v["cancel"] == true));
+        // A local-frame goal or a cancel is not bound to the outdoor review.
+        let strip = if kind == requests::GOAL && (!self.outdoor.selected || v["cancel"] == true) {
+            Strip::Authority
+        } else {
+            request.strip
+        };
         let o = v.as_object_mut().ok_or("invalid_json")?;
-        if strip {
+        if strip != Strip::Nothing {
+            o.remove("authority_revision");
+        }
+        if strip == Strip::Authority {
             o.remove("run_id");
-            o.remove("authority_revision");
-        } else if matches!(
-            kind,
-            "goal/decision"
-                | "search"
-                | "search/action"
-                | "search/report/ack"
-                | "goal"
-                | "task"
-                | "task/action"
-                | "dock"
-        ) {
-            o.remove("authority_revision");
         }
         serde_json::to_vec(&v).map_err(|_| "invalid_json")
     }
+    /// Run every queued network request, emergency stops last.
     pub(crate) fn apply_pending(&mut self, now: f64) {
         let mut queue = std::mem::take(&mut self.queue)
             .into_iter()
             .collect::<Vec<_>>();
         queue.sort_by_key(|(kind, payload, _)| {
-            kind == "safety"
-                && serde_json::from_slice::<Value>(payload)
-                    .ok()
-                    .is_some_and(|v| v["action"] == "stop")
+            RequestKind::find(kind)
+                .is_some_and(|k| serde_json::from_slice::<Value>(payload).is_ok_and(|v| k.stop(&v)))
         });
         for (kind, payload, at) in queue {
             let bytes = match self.remote_action(&kind, &payload, now - at) {
                 Ok(bytes) => bytes,
                 Err(reason) => {
-                    let v: Value = serde_json::from_slice(&payload).unwrap_or_default();
                     self.autonomy
-                        .reject_remote_request(v["token"].as_str(), reason);
+                        .reject_remote_request(request_token(&payload).as_deref(), reason);
                     self.events.push(json!({"kind":"command.rejected","topic":kind,"reason":reason,"age":now-at}));
                     continue;
                 }
@@ -100,35 +74,20 @@ impl Runtime {
                 && self.autonomy.authority_revision() == revision_before
                 && !kind.starts_with("navigation/")
             {
-                let v: Value = serde_json::from_slice(&bytes).unwrap_or_default();
                 self.autonomy
-                    .reject_remote_request(v["token"].as_str(), "invalid_request");
+                    .reject_remote_request(request_token(&bytes).as_deref(), "invalid_request");
             }
             self.events.push(
                 json!({"kind":"command.admission","topic":kind,"admitted":accepted,"age":now-at}),
             );
         }
     }
+    /// Run a request from the phone's own UI, which needs no network authority.
     pub fn local_action(&mut self, kind: &str, bytes: &[u8], now: f64) -> Result<(), RuntimeError> {
         if !now.is_finite()
             || now < 0.0
-            || bytes.len() > 4096
-            || !matches!(
-                kind,
-                "autonomy"
-                    | "safety"
-                    | "goal"
-                    | "goal/decision"
-                    | "navigation/settings"
-                    | "navigation/source"
-                    | "navigation/resume"
-                    | "search"
-                    | "search/action"
-                    | "search/report/ack"
-                    | "task"
-                    | "task/action"
-                    | "dock"
-            )
+            || bytes.len() > MAX_REQUEST_BYTES
+            || !RequestKind::find(kind).is_some_and(|k| k.local)
         {
             return Err(invalid("invalid local request"));
         }
@@ -218,26 +177,12 @@ impl Runtime {
                 accepted
             }),
             "goal/decision" => {
-                if let Some(r) = terra_autonomy::decode_decision(&bytes) {
-                    let pose = self.pose.unwrap_or_default();
-                    let map = self.map.as_ref();
-                    let e = self.estimator.estimate(now);
+                if let Some(r) = terra_autonomy::decode_decision(bytes) {
+                    let healthy = self.sensors_ready(now);
                     let token = r.token.clone();
                     self.autonomy.decide_proposal(
                         r,
-                        &ArbiterInput {
-                            now,
-                            pose: pose.0,
-                            pose_time: pose.1,
-                            map: map.map(|m| &m.0),
-                            map_time: map.map(|m| m.1),
-                            map_revision: map.map_or(0, |m| m.2),
-                            measured: Twist {
-                                linear: e.forward,
-                                angular: e.yaw_rate,
-                            },
-                            healthy: pose_quality::ready(self, now),
-                        },
+                        &arbiter_input(&self.estimator, self.pose, self.map.as_ref(), now, healthy),
                     );
                     self.autonomy.request_receipt() == Some((token.as_str(), true))
                 } else {
