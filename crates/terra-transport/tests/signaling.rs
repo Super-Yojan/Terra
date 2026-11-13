@@ -64,6 +64,11 @@ fn signaling_bypasses_the_2048_byte_control_inbox_and_cannot_publish_motion() {
         .wait()
         .unwrap();
     let service = ControlPlane::connect(&endpoint, "fpv-test", 3).unwrap();
+    // Puts before the service's subscriptions reach the router are lost.
+    for key in ["fpv-test/3/teleop", "fpv-test/3/safety", "fpv-test/3/webrtc/request"] {
+        let publisher = operator.declare_publisher(key).wait().unwrap();
+        wait_for(|| publisher.matching_status().wait().unwrap().matching());
+    }
 
     let small_teleop = r#"{"linear":0.1,"angular":0}"#;
     let oversized_teleop = format!("{{\"linear\":0,\"pad\":\"{}\"}}", "x".repeat(3000));
