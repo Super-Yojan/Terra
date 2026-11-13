@@ -279,6 +279,16 @@ impl EventKind {
         }
     }
 }
+/// Reasons on [`EventKind::RequestAccepted`] events that offline metrics
+/// (`terra_experiment::summarize`) count as operator interventions.
+pub mod accepted_reason {
+    /// The operator changed the requested level.
+    pub const OPERATOR_SELECTION: &str = "operator_selection";
+    /// The operator approved a supervised proposal.
+    pub const PROPOSAL_APPROVE: &str = "proposal_approve";
+    /// The operator rejected a supervised proposal.
+    pub const PROPOSAL_REJECT: &str = "proposal_reject";
+}
 /// Dashboard safety state. Serialized as `safety`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

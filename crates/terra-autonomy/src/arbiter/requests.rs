@@ -576,7 +576,7 @@ impl AutonomyArbiter {
             fp,
             true,
             if changed {
-                "operator_selection"
+                crate::accepted_reason::OPERATOR_SELECTION
             } else {
                 "operator_reselection"
             },
@@ -810,8 +810,8 @@ impl AutonomyArbiter {
             ok,
             if ok {
                 match r.decision {
-                    Decision::Approve => "proposal_approve",
-                    Decision::Reject => "proposal_reject",
+                    Decision::Approve => crate::accepted_reason::PROPOSAL_APPROVE,
+                    Decision::Reject => crate::accepted_reason::PROPOSAL_REJECT,
                     Decision::Resume => "supervision_resume",
                 }
             } else {

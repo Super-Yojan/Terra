@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use terra_autonomy::{EventKind, SearchPhase, Source};
+use terra_autonomy::{EventKind, SearchPhase, Source, accepted_reason};
 /// Offline run outcomes; durations use seconds and rates use interventions per minute.
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct RunSummary {
@@ -10,7 +10,7 @@ pub struct RunSummary {
     pub complete: bool,
     /// Maximum recorded control-tick time, in seconds from run start.
     pub duration: f64,
-    /// Accepted authority changes whose reason is `operator_selection`.
+    /// Accepted authority changes whose reason is [`accepted_reason::OPERATOR_SELECTION`].
     pub mode_changes: u64,
     pub takeovers: u64,
     /// Takeovers, approvals, rejections, and redirects divided by run minutes.
@@ -104,10 +104,10 @@ pub fn summarize(records: &[Value]) -> RunSummary {
                 for e in events {
                     let kind = e["kind"].as_str().unwrap_or_default();
                     if kind == EventKind::RequestAccepted.as_str() {
-                        match e["reason"].as_str() {
-                            Some("operator_selection") => out.mode_changes += 1,
-                            Some("proposal_approve") => out.approvals += 1,
-                            Some("proposal_reject") => out.rejections += 1,
+                        match e["reason"].as_str().unwrap_or_default() {
+                            accepted_reason::OPERATOR_SELECTION => out.mode_changes += 1,
+                            accepted_reason::PROPOSAL_APPROVE => out.approvals += 1,
+                            accepted_reason::PROPOSAL_REJECT => out.rejections += 1,
                             _ => {}
                         }
                     } else if kind == EventKind::RouteFailed.as_str() {
