@@ -20,6 +20,7 @@ pub mod ground;
 mod hardware;
 pub mod mapping;
 pub mod navigation;
+pub mod near_miss;
 mod outdoor;
 pub mod pose_quality;
 mod replay;
@@ -235,6 +236,9 @@ pub struct RuntimeOutput {
     /// What the wheels did this tick, for the dashboard.
     pub drive: Value,
     pub events: Vec<Value>,
+    /// Observed clearance around the rover body, metres; `None` without a
+    /// tracked pose, a map, or an observed obstacle nearby.
+    pub clearance: Option<f64>,
 }
 pub struct Runtime {
     /// Authority, planning and mission state; hosts read it through
@@ -288,6 +292,7 @@ pub struct Runtime {
     gate_test: Option<bool>,
     /// Tilt and flip hold; survives a new run, cleared by operator reset.
     tilt: tilt::TiltMonitor,
+    near_miss: near_miss::NearMiss,
 }
 /// Forward command, m/s, from which a rover that does not move counts as stalled.
 const DRIVE_STALL_MIN_COMMAND: f64 = 0.05;
@@ -354,6 +359,7 @@ impl Runtime {
             dock_local: Default::default(),
             gate_test: None,
             tilt: Default::default(),
+            near_miss: Default::default(),
         };
         runtime.refresh_identity();
         Ok(runtime)
@@ -469,6 +475,7 @@ impl Runtime {
         self.pose = None;
         self.imu_time = None;
         self.map = None;
+        self.near_miss = Default::default();
     }
     /// The platform started a new local AR frame: geographic guidance and
     /// everything measured in the old frame no longer apply.
@@ -899,6 +906,15 @@ impl Runtime {
         ));
         self.note_sensor_hold(&mut output, now, outdoor_motion, settling);
         let outdoor_status = self.apply_outdoor_status(&mut output, outdoor_motion, manual, now);
+        let clearance = self.observed_clearance();
+        if let Some(kind) = self.near_miss.update(clearance) {
+            output.events.push(terra_autonomy::DecisionEvent {
+                kind: kind.as_str().into(),
+                token: None,
+                reason: near_miss::REASON.into(),
+                level: output.status.requested_level,
+            });
+        }
         if output.reset_controller {
             self.controller.reset();
         }
@@ -923,6 +939,13 @@ impl Runtime {
             status,
             drive,
             events,
+            clearance,
         })
+    }
+    /// Clearance of the body at the tracked pose in the current map.
+    fn observed_clearance(&self) -> Option<f64> {
+        let (pose, _) = self.pose?;
+        let (map, _, _) = self.map.as_ref()?;
+        terra_navigation::observed_clearance(map, pose, &self.autonomy.footprint())
     }
 }

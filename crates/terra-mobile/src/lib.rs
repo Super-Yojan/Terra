@@ -329,7 +329,6 @@ impl From<InputError> for ControllerError {
 struct Brain {
     runtime: terra_runtime::Runtime,
     recorder: Option<terra_experiment::RunRecorder>,
-    near_miss: terra_experiment::NearMiss,
     map_gate: publication::MapGate,
     dashboard: Option<terra_transport::ControlPlane>,
     /// Running point capture, if the dashboard asked for one.
@@ -447,7 +446,6 @@ impl MobileController {
                     ),
                 )?,
                 recorder: None,
-                near_miss: Default::default(),
                 map_gate: Default::default(),
                 dashboard: None,
                 capture: None,
@@ -671,8 +669,8 @@ impl MobileController {
             .dashboard
             .is_some()
             .then(|| (runtime_output.telemetry(), runtime_output.search_reports()));
-        let mut output = runtime_output.autonomy;
-        let status = runtime_output.status;
+        let output = &runtime_output.autonomy;
+        let status = &runtime_output.status;
         // The dock owns the gate: open only on its request, closed otherwise.
         let mut gate = brain.runtime.gate_servo(output.gate_open);
         if let (Some((id, position)), Some(layout)) = (gate, brain.actuators.as_mut()) {
@@ -696,17 +694,6 @@ impl MobileController {
         }
         let pose = brain.pose().unwrap_or_default();
         let map = brain.map().cloned();
-        let clearance = map.as_ref().and_then(|m| {
-            terra_navigation::observed_clearance(&m.0, pose.0, &brain.autonomy().footprint())
-        });
-        if let Some(kind) = brain.near_miss.update(clearance) {
-            output.events.push(terra_autonomy::DecisionEvent {
-                kind: kind.into(),
-                token: None,
-                reason: "observed_clearance".into(),
-                level: output.status.requested_level,
-            });
-        }
         let map_publication = if brain.dashboard.is_some() {
             map.as_ref().map(|(grid, time, sequence)| {
                 if !publication::fresh_map_sample(timestamp, *time) {
@@ -813,25 +800,16 @@ impl MobileController {
             );
         }
         let estimate = brain.estimate(timestamp);
-        self.observation.tick(&brain, timestamp, &estimate, &status);
+        self.observation.tick(&brain, timestamp, &estimate, status);
         if let Some(r) = brain.recorder.as_ref() {
-            let _ = r.record(serde_json::json!({
-                "kind": "control_tick",
-                "time": timestamp-start,
-                "source_time": timestamp,
-                "sequence": brain.sequence(),
-                "clearance": clearance,
-                "selected": output.twist,
-                "source_command": output.intent,
-                "status": output.status,
-                "goal": output.goal,
-                "proposal": status["proposal"],
-                "run_id": run_id,
-                "exploration": output.exploration,
-                "search": output.search,
-                "task": output.task,
-                "events": output.events,
-            }));
+            let mut record = terra_experiment::ControlTickRecord::new(
+                &runtime_output,
+                &run_id,
+                brain.sequence(),
+                timestamp - start,
+            );
+            record.source_time = Some(timestamp);
+            let _ = r.record(record.to_value());
         }
         self.observation
             .effort(&brain, timestamp, &runtime_output.motor);

@@ -3,28 +3,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use terra_autonomy::{EventKind, SearchPhase, Source};
-/// Clearance episode detector with 0.3 m entry and 0.4 m exit hysteresis.
-#[derive(Default)]
-pub struct NearMiss {
-    active: bool,
-}
-impl NearMiss {
-    /// Emit a near-miss start below 0.3 m or end above 0.4 m, once per transition.
-    ///
-    /// Missing, negative, and nonfinite clearances return `None` and preserve the episode state.
-    pub fn update(&mut self, clearance: Option<f64>) -> Option<&'static str> {
-        let value = clearance.filter(|v| v.is_finite() && *v >= 0.)?;
-        if !self.active && value < 0.3 {
-            self.active = true;
-            Some("near_miss_start")
-        } else if self.active && value > 0.4 {
-            self.active = false;
-            Some("near_miss_end")
-        } else {
-            None
-        }
-    }
-}
 /// Offline run outcomes; durations use seconds and rates use interventions per minute.
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct RunSummary {
@@ -80,7 +58,7 @@ pub fn summarize(records: &[Value]) -> RunSummary {
         if r["kind"] == "run_end" {
             out.complete = r["complete"] == true;
         }
-        if r["kind"] == "control_tick" {
+        if r["kind"] == crate::CONTROL_TICK {
             let time = r["time"].as_f64().unwrap_or(0.);
             out.duration = out.duration.max(time);
             let id = r["rover_id"].as_u64().unwrap_or(0);
@@ -138,10 +116,9 @@ pub fn summarize(records: &[Value]) -> RunSummary {
                         out.takeovers += 1;
                     } else if kind == EventKind::GoalAccepted.as_str() {
                         out.redirects += 1;
-                    } else if kind == "near_miss_start" {
-                        // Clearance episodes (near misses, contacts), not arbiter decisions.
+                    } else if kind == EventKind::NearMissStart.as_str() {
                         out.near_misses += 1;
-                    } else if kind == "contact_start" {
+                    } else if kind == EventKind::ContactStart.as_str() {
                         out.contacts += 1;
                     }
                 }

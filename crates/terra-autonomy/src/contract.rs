@@ -174,14 +174,16 @@ impl Source {
         }
     }
 }
-/// Kind of a [`crate::DecisionEvent`]: the arbiter's own decisions are
-/// variants; kinds forwarded from the exploration, dock and task state
-/// machines are carried in [`EventKind::Other`].
+/// Kind of a [`crate::DecisionEvent`]: the arbiter's own decisions and the
+/// clearance episodes hosts add to its log are variants; kinds forwarded from
+/// the exploration, dock and task state machines are carried in [`EventKind::Other`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EventKind {
     AuthorityGenerationChanged,
     CandidateObserved,
     CandidateRejected,
+    /// A simulator body touched the rover (see `terra_experiment::summarize`).
+    ContactStart,
     DockAligned,
     DockBackoff,
     DockCancelled,
@@ -196,6 +198,10 @@ pub enum EventKind {
     GoalRejected,
     LocalFrameReset,
     MissionPaused,
+    /// Observed clearance fell below the near-miss threshold; see `terra_runtime::near_miss`.
+    NearMissStart,
+    /// Observed clearance recovered above the near-miss exit threshold.
+    NearMissEnd,
     OperatorReceived,
     ProposalCreated,
     RemoteRequestRejected,
@@ -229,6 +235,7 @@ impl EventKind {
             EventKind::AuthorityGenerationChanged => "authority_generation_changed",
             EventKind::CandidateObserved => "candidate_observed",
             EventKind::CandidateRejected => "candidate_rejected",
+            EventKind::ContactStart => "contact_start",
             EventKind::DockAligned => "dock_aligned",
             EventKind::DockBackoff => "dock_backoff",
             EventKind::DockCancelled => "dock_cancelled",
@@ -243,6 +250,8 @@ impl EventKind {
             EventKind::GoalRejected => "goal_rejected",
             EventKind::LocalFrameReset => "local_frame_reset",
             EventKind::MissionPaused => "mission_paused",
+            EventKind::NearMissStart => "near_miss_start",
+            EventKind::NearMissEnd => "near_miss_end",
             EventKind::OperatorReceived => "operator_received",
             EventKind::ProposalCreated => "proposal_created",
             EventKind::RemoteRequestRejected => "remote_request_rejected",
@@ -637,8 +646,8 @@ pub struct SensorHold {
     #[serde(default)]
     pub goal_dropped: bool,
 }
-pub use terra_waypoint::valid_token;
 use terra_types::requests::MAX_REQUEST_BYTES;
+pub use terra_waypoint::valid_token;
 /// Decode one strict JSON request of 1 to [`MAX_REQUEST_BYTES`] bytes.
 pub(crate) fn decode<T: serde::de::DeserializeOwned>(b: &[u8]) -> Option<T> {
     if b.is_empty() || b.len() > MAX_REQUEST_BYTES {

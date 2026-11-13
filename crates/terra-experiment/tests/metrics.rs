@@ -1,13 +1,4 @@
 use terra_experiment::*;
-/// Cross entry and exit clearance thresholds and verify consecutive low-clearance ticks produce only one episode.
-#[test]
-fn near_miss_is_an_episode_not_every_tick() {
-    let mut n = NearMiss::default();
-    assert_eq!(n.update(Some(0.2)), Some("near_miss_start"));
-    assert_eq!(n.update(Some(0.21)), None);
-    assert_eq!(n.update(Some(0.5)), Some("near_miss_end"));
-    assert_eq!(n.update(None), None);
-}
 /// Summarize a manifest, accepted mode change, and incomplete terminal record; preserve both failure and event count.
 #[test]
 fn incomplete_records_are_not_complete_runs() {
@@ -41,4 +32,24 @@ fn mission_outcomes_and_interventions_use_run_exposure() {
     assert_eq!(s.time_to_first_discovery, Some(5.));
     assert_eq!(s.mission_completion_time, Some(30.));
     assert_eq!(s.interventions_per_minute, 4.);
+}
+/// A record built from a runtime tick is the line `summarize` reads.
+#[test]
+fn control_tick_record_round_trips_through_summarize() {
+    let mut runtime =
+        terra_runtime::Runtime::new(Default::default(), "run".into()).expect("default runtime");
+    let output = runtime.step(2.).unwrap();
+    let mut record = ControlTickRecord::new(&output, "run", 1, 12.);
+    record.rover_id = Some(3);
+    record.extra.insert(
+        "mission".into(),
+        serde_json::json!({"complete": true, "observations": []}),
+    );
+    let line = record.to_value();
+    assert_eq!(line["kind"], CONTROL_TICK);
+    assert_eq!(line["rover_id"], 3);
+    assert!(line.get("source_time").is_none());
+    let s = summarize(&[line]);
+    assert_eq!(s.duration, 12.);
+    assert_eq!(s.mission_completion_time, Some(12.));
 }

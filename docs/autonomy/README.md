@@ -82,7 +82,7 @@ Zorvane applies the twist from the arbiter as soon as it depends on this crate. 
 ),
 ```
 
-And include `"exploration": output.exploration` on the `control_tick` record.
+Build the `control_tick` record with `terra_experiment::ControlTickRecord` so it carries `exploration` like every other host.
 
 Safety holds, requested/effective authority, and the assigned trial condition are distinct.
 A takeover clears old goal and teleop intent, including when already in teleop.
@@ -101,7 +101,7 @@ Zorvane writes run logs to `simulator/runs` relative to that process, or to `TER
 cargo run -p terra-experiment --bin terra-run-summary -- /path/to/<run-id>.jsonl
 ```
 
-A complete recording and successful mission are separate results. Truncated or failed recordings are not complete-data runs. Near misses start below 0.3 m observed clearance and end above 0.4 m; unavailable phone contact sensing is labelled unavailable, never zero collisions. Interaction counts and active control time are workload proxies, not measured subjective workload.
+A complete recording and successful mission are separate results. Truncated or failed recordings are not complete-data runs. Near misses start below 0.3 m observed clearance and end above 0.4 m (the runtime logs `near_miss_start`/`near_miss_end` decision events and each tick's `clearance`); unavailable phone contact sensing is labelled unavailable, never zero collisions. Interaction counts and active control time are workload proxies, not measured subjective workload.
 
 TerraPhone uses the same arbiter through UniFFI, records sandbox JSONL files, and supports mode/stop/proposal controls and share/export.
 Remote-supervisor mode sends goals and control intent to Zorvane instead of running another phone waypoint controller for it.
