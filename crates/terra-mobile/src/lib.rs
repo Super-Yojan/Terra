@@ -663,6 +663,10 @@ impl MobileController {
                 timestamp,
             );
         }
+        let fleet_telemetry = brain
+            .dashboard
+            .is_some()
+            .then(|| (runtime_output.telemetry(), runtime_output.search_reports()));
         let mut output = runtime_output.autonomy;
         let status = runtime_output.status;
         // The dock owns the gate: open only on its request, closed otherwise.
@@ -738,47 +742,14 @@ impl MobileController {
                 "recording": recording && brain.recorder.is_some(),
                 "runtime": status["runtime"],
             }).to_string());
-            let mut autonomy = serde_json::to_value(&output.status).unwrap();
-            autonomy["runtime"] = status["runtime"].clone();
-            autonomy["drive"] = runtime_output.drive.clone();
-            autonomy["connectivity"] = serde_json::json!({
-                "policy": status["connectivity"]["policy"],
-                "revision": status["connectivity"]["revision"],
-            });
-            autonomy["navigation"] = status["navigation"].clone();
-            autonomy["navigation"]["outdoor"] = status["outdoor"].clone();
-            d.publish(telemetry::NAVIGATION_OUTDOOR, status["outdoor"].to_string());
-            autonomy["pose_quality"] = status["pose_quality"].clone();
-            d.publish(telemetry::POSE_QUALITY, status["pose_quality"].to_string());
-            d.publish(telemetry::AUTONOMY_STATUS, autonomy.to_string());
-            d.publish(
-                telemetry::SEARCH_STATUS,
-                serde_json::to_string(&output.search).unwrap(),
-            );
-            d.publish_batch(
-                telemetry::SEARCH_REPORT,
-                output
-                    .pending_reports
-                    .iter()
-                    .map(|r| serde_json::to_string(r).unwrap())
-                    .collect(),
-            );
+            if let Some((topics, reports)) = fleet_telemetry {
+                for (topic, body) in topics {
+                    d.publish(topic, body);
+                }
+                d.publish_batch(telemetry::SEARCH_REPORT, reports);
+            }
             if let Some((_, objects)) = &brain.objects_published {
                 d.publish(telemetry::OBJECTS, objects.clone());
-            }
-            d.publish(
-                telemetry::GOAL_STATUS,
-                serde_json::to_string(&output.goal).unwrap(),
-            );
-            d.publish(telemetry::GOAL_PROPOSAL, status["proposal"].to_string());
-            if let Some(exploration) = &output.exploration {
-                d.publish(
-                    telemetry::EXPLORATION_STATUS,
-                    serde_json::to_string(exploration).unwrap(),
-                );
-            }
-            if let Some(task) = &output.task {
-                d.publish(telemetry::TASK_STATUS, serde_json::to_string(task).unwrap());
             }
             if let Some((grid, _, sequence)) = map.as_ref() {
                 match map_publication {

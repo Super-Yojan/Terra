@@ -20,6 +20,55 @@ pub struct Brief {
     pub goal: WaypointStatus,
 }
 
+fn body(v: &impl Serialize) -> String {
+    serde_json::to_string(v).expect("telemetry serializes")
+}
+
+impl RuntimeOutput {
+    /// This tick's fleet telemetry, one payload per topic. The
+    /// `autonomy/status` record is the arbiter status with the runtime,
+    /// drive, connectivity policy, navigation (with outdoor) and pose quality
+    /// attached. Search reports, objects, maps and the pose are published
+    /// separately.
+    pub fn telemetry(&self) -> Vec<(&'static str, String)> {
+        let s = &self.status;
+        let mut autonomy = serde_json::to_value(&self.autonomy.status).expect("status serializes");
+        autonomy["runtime"] = s["runtime"].clone();
+        autonomy["drive"] = self.drive.clone();
+        autonomy["connectivity"] = json!({
+            "policy": s["connectivity"]["policy"],
+            "revision": s["connectivity"]["revision"],
+        });
+        autonomy["navigation"] = s["navigation"].clone();
+        autonomy["navigation"]["outdoor"] = s["outdoor"].clone();
+        autonomy["pose_quality"] = s["pose_quality"].clone();
+        let mut topics = vec![
+            (telemetry::NAVIGATION_OUTDOOR, s["outdoor"].to_string()),
+            (telemetry::POSE_QUALITY, s["pose_quality"].to_string()),
+            (telemetry::AUTONOMY_STATUS, autonomy.to_string()),
+            (telemetry::SEARCH_STATUS, body(&self.autonomy.search)),
+            (telemetry::GOAL_STATUS, body(&self.autonomy.goal)),
+            (telemetry::GOAL_PROPOSAL, s["proposal"].to_string()),
+        ];
+        if let Some(exploration) = &self.autonomy.exploration {
+            topics.push((telemetry::EXPLORATION_STATUS, body(exploration)));
+        }
+        if let Some(task) = &self.autonomy.task {
+            topics.push((telemetry::TASK_STATUS, body(task)));
+        }
+        topics
+    }
+    /// Search reports still waiting for acknowledgement, one payload each,
+    /// for the `search/report` topic.
+    pub fn search_reports(&self) -> Vec<String> {
+        self.autonomy
+            .pending_reports
+            .iter()
+            .map(|r| serde_json::to_string(r).expect("report serializes"))
+            .collect()
+    }
+}
+
 impl Runtime {
     /// Full status JSON from the latest tick; empty before the first tick.
     pub fn status_json(&self) -> &str {
