@@ -43,7 +43,7 @@ pub(crate) fn advance(brain: &mut Brain, now: f64) {
         reset(brain);
         return;
     };
-    let rover_id = dashboard.rover_id;
+    let rover_id = dashboard.rover_id();
     let requests = dashboard.take_capture_requests();
     let grid = brain.runtime.mapping_handle();
     for request in requests

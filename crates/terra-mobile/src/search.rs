@@ -191,7 +191,7 @@ impl MobileController {
             .lock()
             .map(|b| {
                 b.objects()
-                    .telemetry(b.dashboard.as_ref().map_or(0, |d| d.rover_id), b.run_id())
+                    .telemetry(b.dashboard.as_ref().map_or(0, |d| d.rover_id()), b.run_id())
                     .to_string()
             })
             .unwrap_or_default()

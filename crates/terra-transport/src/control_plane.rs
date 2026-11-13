@@ -123,10 +123,13 @@ pub struct ControlPlane {
     stop: Arc<AtomicBool>,
     failure: Arc<Failure>,
     worker: Option<JoinHandle<()>>,
-    /// Rover identity used in topic paths and fleet advertisements.
-    pub rover_id: u64,
+    rover_id: u64,
 }
 impl ControlPlane {
+    /// Rover identity used in topic paths and fleet advertisements.
+    pub fn rover_id(&self) -> u64 {
+        self.rover_id
+    }
     /// Open an explicit loopback TCP dashboard endpoint. Requires the literal
     /// `tcp/127.0.0.1:` address form and a valid non-wildcard key prefix.
     /// Returns `InvalidSettings` for rejected configuration or `Network` on open failure.

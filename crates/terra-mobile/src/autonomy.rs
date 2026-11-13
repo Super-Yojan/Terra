@@ -204,7 +204,7 @@ impl MobileController {
         // ARGOS rejects a pose/quality report without a numeric rover_id and
         // then falls back to its own yaw-rate guess, so every turn showed as
         // degraded pose (#111).
-        brain.runtime.set_rover_id(Some(service.rover_id));
+        brain.runtime.set_rover_id(Some(service.rover_id()));
         brain.dashboard = Some(service);
         Ok(())
     }
@@ -333,7 +333,7 @@ impl MobileController {
                 }
                 publication::Publication::Heartbeat(sequence) => dashboard.publish(
                     telemetry::POINTCLOUD_HEARTBEAT,
-                    serde_json::json!({"version":1,"rover_id":dashboard.rover_id,
+                    serde_json::json!({"version":1,"rover_id":dashboard.rover_id(),
                         "frameID":frame_id,"sequence":sequence})
                     .to_string(),
                 ),

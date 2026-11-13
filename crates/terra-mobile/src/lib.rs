@@ -742,7 +742,7 @@ impl MobileController {
         let mut map_full_rejected = false;
         // Telemetry expires after 500 ms, so the cached body is resent every
         // step and only re-serialized when the object map changes.
-        if let Some(rover) = brain.dashboard.as_ref().map(|d| d.rover_id)
+        if let Some(rover) = brain.dashboard.as_ref().map(|d| d.rover_id())
             && brain
                 .objects_published
                 .as_ref()
@@ -777,14 +777,17 @@ impl MobileController {
                         map_full_rejected = !d.publish_visualization(
                             telemetry::MAP_OCCUPANCY,
                             terra_autonomy::occupancy_telemetry(
-                                d.rover_id, &run_id, *sequence, grid,
+                                d.rover_id(),
+                                &run_id,
+                                *sequence,
+                                grid,
                             )
                             .to_string(),
                         );
                     }
                     Some(publication::Publication::Heartbeat(sequence)) => d.publish(
                         telemetry::MAP_OCCUPANCY_HEARTBEAT,
-                        serde_json::json!({"schema_version":1,"rover_id":d.rover_id,
+                        serde_json::json!({"schema_version":1,"rover_id":d.rover_id(),
                             "run_id":run_id,"sequence":sequence})
                         .to_string(),
                     ),
@@ -795,7 +798,7 @@ impl MobileController {
                 d.publish(
                     telemetry::POSE,
                     serde_json::json!({
-                        "rover_id": d.rover_id,
+                        "rover_id": d.rover_id(),
                         "sequence": brain.sequence(),
                         "x": pose.0.x,
                         "y": pose.0.y,
