@@ -430,6 +430,23 @@ impl AutonomyArbiter {
             },
         );
     }
+    /// Why `level` cannot be selected at `now`, or `None` when it can: target
+    /// search needs a fresh detector capability, task a language model or an
+    /// MCP agent. Status advertises exactly the levels this allows.
+    pub(super) fn level_unavailable(&self, level: Level, now: f64) -> Option<&'static str> {
+        match level {
+            Level::TargetSearch
+                if self.detector_classes.is_empty()
+                    || !fresh(now, self.detector_time, timing::DETECTOR_FRESHNESS_SECONDS) =>
+            {
+                Some("detector_unavailable")
+            }
+            Level::Task if self.task_model.is_none() && self.task_agent.is_none() => {
+                Some("task_model_unavailable")
+            }
+            _ => None,
+        }
+    }
     /// Apply a token-correlated authority request, clearing old intent on acceptance.
     ///
     /// Invalid tokens are ignored. Budget and detector rejections are exposed through status receipts and decision events.
@@ -449,16 +466,17 @@ impl AutonomyArbiter {
             self.acknowledge(r.token, fp, false, "level_not_assigned");
             return;
         }
-        if r.level == Level::TargetSearch && self.detector_classes.is_empty() {
-            self.acknowledge(r.token, fp, false, "detector_unavailable");
+        let now = self
+            .last_time
+            .into_iter()
+            .chain(self.detector_time)
+            .fold(f64::NEG_INFINITY, f64::max);
+        if let Some(reason) = self.level_unavailable(r.level, now) {
+            self.acknowledge(r.token, fp, false, reason);
             return;
         }
         if !budget_fields_valid(&r) {
             self.acknowledge(r.token, fp, false, "invalid_budget");
-            return;
-        }
-        if r.level == Level::Task && self.task_model.is_none() && self.task_agent.is_none() {
-            self.acknowledge(r.token, fp, false, "task_model_unavailable");
             return;
         }
         if task
