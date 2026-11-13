@@ -318,7 +318,7 @@ impl Runtime {
         autonomy.set_run(&run_id);
         autonomy.configure(&config.navigation.arbiter_settings())?;
         let mut outdoor = terra_autonomy::outdoor::OutdoorController::default();
-        outdoor.supported = config.outdoor_supported;
+        outdoor.set_supported(config.outdoor_supported);
         let mut navigation = navigation::State::default();
         navigation.parameters = config.navigation;
         Ok(Self {
@@ -438,7 +438,7 @@ impl Runtime {
         self.outdoor.cancel();
         self.outdoor.invalidate_sensors();
         self.objects.clear();
-        self.outdoor.selected = false;
+        self.outdoor.select_local();
         self.bump_navigation_revision();
         let dock = self.autonomy.dock_config().clone();
         self.autonomy = AutonomyArbiter::default();
@@ -480,10 +480,8 @@ impl Runtime {
         self.outdoor.invalidate_sensors();
         self.forget_local_frame();
         self.bump_navigation_revision();
-        if self.outdoor.selected {
-            self.autonomy.clear_guidance();
-            self.controller.reset();
-        }
+        self.autonomy.reset_local_frame();
+        self.controller.reset();
     }
     /// Drop GPS, heading and course evidence, for example when location access ends.
     pub fn invalidate_outdoor_sensors(&mut self) {
@@ -492,11 +490,11 @@ impl Runtime {
     /// Accept outdoor GPS navigation; only for platforms with measured GPS
     /// and mount-aware true heading.
     pub fn enable_outdoor_gps(&mut self) {
-        self.outdoor.supported = true;
+        self.outdoor.set_supported(true);
     }
     /// A settings change any reviewed outdoor request must be made against again.
     pub(crate) fn bump_navigation_revision(&mut self) {
-        self.outdoor.revision = self.outdoor.revision.saturating_add(1);
+        self.outdoor_admission.revision = self.outdoor_admission.revision.saturating_add(1);
     }
     /// The operator closed the fleet link: pause the outdoor mission, return
     /// authority to teleop and stop the velocity loop. A latched emergency
@@ -553,7 +551,7 @@ impl Runtime {
         config.navigation = self.navigation.parameters.clone();
         config.connectivity = self.connectivity.policy.clone();
         config.mode = self.mode;
-        config.outdoor_supported = self.outdoor.supported;
+        config.outdoor_supported = self.outdoor.supported();
         config.identity()
     }
     /// Drive and plan as the rover in `profile`: planner footprint, turning,
@@ -885,7 +883,7 @@ impl Runtime {
         let settling = !manual && self.settling(sensors_healthy, now);
         let healthy = sensors_healthy && !settling;
         self.autonomy.set_speed_caps(
-            self.control_limits.0.min(if self.outdoor.selected {
+            self.control_limits.0.min(if self.outdoor.selected() {
                 OUTDOOR_MAX_FORWARD
             } else {
                 f64::INFINITY

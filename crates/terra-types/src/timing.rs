@@ -10,14 +10,22 @@
 //! with it (hardware and control-request ages in terra-runtime, the remote
 //! authority cache in terra-transport).
 //!
-//! Freshness checks use age < limit. Interval/expiry checks generally use >=.
+//! Freshness checks use age < limit ([`fresh`]). Interval/expiry checks generally use >=.
 //! Sensor timestamps must share the control clock and cannot be in the future.
+
+/// Whether evidence stamped `time` is younger than `limit` seconds at `now`:
+/// finite, nonnegative, not in the future, and age < limit.
+pub fn fresh(now: f64, time: Option<f64>, limit: f64) -> bool {
+    time.is_some_and(|t| t.is_finite() && t >= 0. && now >= t && now - t < limit)
+}
 
 // DATA AND COMMAND FRESHNESS: separate limits for separate evidence streams.
 /// Maximum occupancy observation age. Runtime override: arbiter map timeout setter.
 pub const MAP_FRESHNESS_SECONDS: f64 = 2.5;
-/// Maximum pose age for modes that require fresh localization.
-pub const POSE_FRESHNESS_SECONDS: f64 = 0.5;
+/// Maximum pose age for driving on localization, and for naming a stale-pose
+/// hold. The pose comes from VIO, which the estimator already calls stale
+/// after [`VIO_FRESHNESS_SECONDS`]; a looser pose limit could never apply.
+pub const POSE_FRESHNESS_SECONDS: f64 = VIO_FRESHNESS_SECONDS;
 /// Maximum age of a teleop command before its intent expires.
 pub const OPERATOR_COMMAND_FRESHNESS_SECONDS: f64 = 0.5;
 /// Maximum age of advertised detector capability.

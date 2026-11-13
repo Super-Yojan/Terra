@@ -8,6 +8,8 @@ const MERGE_RADIUS_M: f64 = 1.0;
 const CONFIRM_FRAMES: u32 = 3;
 /// Detections below this confidence are ignored.
 const MIN_CONFIDENCE: f64 = 0.5;
+/// Detector class of the buckets a dock lines the outlet up over.
+pub const BUCKET_CLASS: &str = "bucket";
 /// Oldest unconfirmed objects are dropped beyond this many.
 pub const MAX_OBJECTS: usize = 64;
 
@@ -59,15 +61,22 @@ pub struct ObjectMap {
     pub revision: u64,
 }
 
-fn valid_token(s: &str) -> bool {
-    (1..=32).contains(&s.len())
-        && s.bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b"_-".contains(&b))
-}
-
 impl ObjectMap {
     pub fn objects(&self) -> &[MappedObject] {
         &self.objects
+    }
+    /// The dock target for confirmed bucket `id`, or `None` when the id is
+    /// unknown, unconfirmed or not a bucket.
+    pub fn dock_target(&self, id: u32) -> Option<crate::DockTarget> {
+        self.objects
+            .iter()
+            .find(|o| o.id == id && o.confirmed && o.class == BUCKET_CLASS)
+            .map(|o| crate::DockTarget {
+                object_id: Some(o.id),
+                color: o.color.clone(),
+                x: o.x,
+                y: o.y,
+            })
     }
     pub fn clear(&mut self) {
         if !self.objects.is_empty() {
@@ -77,7 +86,9 @@ impl ObjectMap {
     }
     /// Merge one sighting into the nearest matching object, or start a new one.
     pub fn observe(&mut self, s: ObjectSighting) -> Result<(), &'static str> {
-        if !valid_token(&s.class) || s.color.as_deref().is_some_and(|c| !valid_token(c)) {
+        if !crate::valid_class(&s.class)
+            || s.color.as_deref().is_some_and(|c| !crate::valid_class(c))
+        {
             return Err("invalid object class");
         }
         if !(s.x.is_finite() && s.y.is_finite() && s.timestamp.is_finite()) {

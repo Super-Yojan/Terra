@@ -97,8 +97,7 @@ fn preceding_goal_or_mode_change_cannot_use_an_old_status_snapshot() {
         hardware(&mut b, false);
         if change == "goal" {
             assert!(b.runtime.autonomy.accept_goal(
-                &terra_waypoint::decode_goal(br#"{"frame":"local","x":5,"y":0}"#).unwrap(),
-                20_000.
+                &terra_waypoint::decode_goal(br#"{"frame":"local","x":5,"y":0}"#).unwrap()
             ));
         } else {
             b.runtime.autonomy.set_level(

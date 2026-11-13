@@ -136,6 +136,9 @@ pub struct MapSnapshot {
 /// Occupancy at or above this value is an obstacle; `0..OCCUPIED` is free and
 /// negative values are unknown.
 pub const OCCUPIED: i8 = 65;
+/// Largest map, in cells, that grid searches over a whole snapshot (route
+/// planning, search coverage) accept; bounds their time and memory per call.
+pub const MAX_PLANNING_CELLS: usize = 250_000;
 impl MapSnapshot {
     /// Non-empty, at most 1000 cells a side, storage matching the size, finite
     /// origin and a resolution of at least 1 cm.
@@ -165,6 +168,14 @@ impl MapSnapshot {
     pub fn at(&self, x: f64, y: f64) -> Option<i8> {
         self.cell(x, y)
             .map(|(c, r)| self.occupancy[r * self.width as usize + c])
+    }
+    /// World `(x, y)` of the centre of cell `(column, row)`. Does not check
+    /// that the cell is on the grid.
+    pub fn centre(&self, column: usize, row: usize) -> (f64, f64) {
+        (
+            self.origin_x + (column as f64 + 0.5) * self.resolution,
+            self.origin_y + (row as f64 + 0.5) * self.resolution,
+        )
     }
 }
 /// Invalid mapping input; rejected frames do not update evidence or the last timestamp.

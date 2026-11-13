@@ -130,9 +130,9 @@ impl Runtime {
     /// an accepted onboard goal, or an outdoor mission that is planning.
     pub fn accepted_onboard_mission(&self) -> bool {
         self.connectivity.policy.autonomous_router_loss == RouterLossPolicy::ContinueAcceptedMission
-            && if self.outdoor.selected {
+            && if self.outdoor.selected() {
                 self.outdoor.active()
-                    && self.outdoor.phase() == "planning"
+                    && self.outdoor.phase() == terra_autonomy::outdoor::OutdoorPhase::Planning
                     && self.autonomy.outdoor_authority()
             } else {
                 self.autonomy

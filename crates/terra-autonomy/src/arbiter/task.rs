@@ -338,7 +338,7 @@ impl AutonomyArbiter {
         }
         self.begin_task(r.spec, now);
         self.acknowledge(r.token.clone(), fp, true, "task_started");
-        self.event("task_started", Some(r.token), "task_started");
+        self.event(EventKind::TaskStarted, Some(r.token), "task_started");
         Ok(())
     }
     pub(super) fn begin_task(&mut self, spec: TaskSpec, now: f64) {
@@ -411,7 +411,7 @@ impl AutonomyArbiter {
         }
         self.acknowledge(a.token.clone(), fp, true, "task_action");
         self.event(
-            "task_action",
+            EventKind::TaskAction,
             Some(a.token),
             &format!("{:?}", a.action).to_lowercase(),
         );
@@ -428,7 +428,7 @@ impl AutonomyArbiter {
         {
             task.end(phase, reason, now);
             self.follower.cancel();
-            self.event("task_ended", None, reason);
+            self.event(EventKind::TaskEnded, None, reason);
         }
     }
     /// Hand the next model query to the host. Each query is returned once.
@@ -604,19 +604,15 @@ impl AutonomyArbiter {
                     && (status.x - w.x).abs() < 1e-9
                     && (status.y - w.y).abs() < 1e-9;
                 if !latched {
-                    // `Err` is impossible: the extent is a valid constant.
-                    let accepted = self
-                        .follower
-                        .accept(
-                            &GoalCommand::Local {
-                                x: w.x,
-                                y: w.y,
-                                yaw: None,
-                                token: None,
-                            },
-                            terra_waypoint::MAX_LOCAL_GOAL_M,
-                        )
-                        .unwrap_or(false);
+                    let accepted = super::requests::follow(
+                        &mut self.follower,
+                        &GoalCommand::Local {
+                            x: w.x,
+                            y: w.y,
+                            yaw: None,
+                            token: None,
+                        },
+                    );
                     self.plan.forget();
                     if accepted {
                         task.waypoint_started = now;
@@ -693,6 +689,7 @@ impl AutonomyArbiter {
                     task.spec.budget(),
                     pose,
                     &footprint,
+                    self.turning_config.allow_in_place,
                     &summary.text,
                     &task.history,
                 );
@@ -724,7 +721,7 @@ impl AutonomyArbiter {
         }
         decision.goal = self.follower.step(pose.x, pose.y, pose.yaw).status;
         for (kind, reason) in events {
-            self.event(kind, None, &reason);
+            self.event(EventKind::Other(kind), None, &reason);
         }
     }
 
@@ -748,7 +745,7 @@ impl AutonomyArbiter {
         let since = *task.blocked_since.get_or_insert(input.now);
         task.reason = "route_blocked".into();
         if input.now - since >= TASK_BLOCKED_SECONDS {
-            let why = decision.route_failure.unwrap_or(decision.reason.as_str());
+            let why = decision.route_failure.unwrap_or(decision.reason).as_str();
             if let Some(w) = task.plan.front().cloned() {
                 task.note(
                     "blocked",
@@ -761,7 +758,7 @@ impl AutonomyArbiter {
             task.replan("route_blocked");
             self.follower.cancel();
             self.plan.forget();
-            self.event("task_waypoint_abandoned", None, why);
+            self.event(EventKind::TaskWaypointAbandoned, None, why);
         }
     }
 

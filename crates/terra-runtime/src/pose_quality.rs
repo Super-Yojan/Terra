@@ -1,7 +1,7 @@
 //! Explicit source health, including when pose publication is suppressed.
 use super::*;
 /// Pose age limit, the same for driving and for naming a stale-pose hold.
-pub const FRESHNESS_SECONDS: f64 = timing::VIO_FRESHNESS_SECONDS;
+pub const FRESHNESS_SECONDS: f64 = timing::POSE_FRESHNESS_SECONDS;
 /// Whether a pose `age` seconds old is fresh enough to drive on.
 pub fn fresh(age: f64) -> bool {
     (0.0..FRESHNESS_SECONDS).contains(&age)

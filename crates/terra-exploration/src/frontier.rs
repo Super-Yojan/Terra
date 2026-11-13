@@ -102,8 +102,7 @@ fn select_frontier_in(
             continue;
         }
         seen[index] = true;
-        let px = map.origin_x + (x as f64 + 0.5) * map.resolution;
-        let py = map.origin_y + (y as f64 + 0.5) * map.resolution;
+        let (px, py) = map.centre(x, y);
         if !traverse.fits(x, y) {
             continue;
         }

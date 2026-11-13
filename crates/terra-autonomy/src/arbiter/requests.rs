@@ -7,7 +7,11 @@ impl AutonomyArbiter {
         if let Some(token) = token.filter(|token| valid_token(token)) {
             self.receipt = Some((token.into(), false));
         }
-        self.event("remote_request_rejected", token.map(str::to_owned), reason);
+        self.event(
+            EventKind::RemoteRequestRejected,
+            token.map(str::to_owned),
+            reason,
+        );
     }
     /// Latest token-correlated result, including idempotent duplicate requests.
     pub fn request_receipt(&self) -> Option<(&str, bool)> {
@@ -23,7 +27,7 @@ impl AutonomyArbiter {
         self.clear_remote_intent();
         self.revision = self.revision.saturating_add(1);
         self.event(
-            "authority_generation_changed",
+            EventKind::AuthorityGenerationChanged,
             None,
             "transport_replaced_or_lost",
         );
@@ -66,7 +70,7 @@ impl AutonomyArbiter {
         self.turning.reset();
         self.maneuver.clear();
         self.reset = true;
-        self.event("mission_paused", None, "router_loss_paused");
+        self.event(EventKind::MissionPaused, None, "router_loss_paused");
     }
 
     /// Operator-selected level, even while safety holds motion.
@@ -115,7 +119,7 @@ impl AutonomyArbiter {
         self.maneuver.clear();
         self.plan.command = None;
         self.request_reason = Some("sensor_hold_timeout".into());
-        self.event("goal_dropped", None, "sensor_hold_timeout");
+        self.event(EventKind::GoalDropped, None, "sensor_hold_timeout");
         true
     }
     pub fn clear_guidance(&mut self) {
@@ -141,13 +145,9 @@ impl AutonomyArbiter {
             yaw: None,
             token,
         };
-        // The extent is a valid constant, so `accept` cannot return `Err`.
-        let ok = self
-            .follower
-            .accept(&goal, terra_waypoint::MAX_LOCAL_GOAL_M)
-            .unwrap_or(false);
+        let ok = follow(&mut self.follower, &goal);
         if !ok {
-            self.event("goal_rejected", None, "goal_out_of_bounds");
+            self.event(EventKind::GoalRejected, None, "goal_out_of_bounds");
         }
         ok
     }
@@ -178,6 +178,7 @@ impl AutonomyArbiter {
         if settings.planner != self.planner_config {
             self.planner_config = settings.planner.clone();
             self.apply_planner();
+            self.explorer.set_footprint(settings.planner.footprint);
             self.plan.forget();
             self.reset_route();
             self.route_map_revision = 0;
@@ -267,7 +268,7 @@ impl AutonomyArbiter {
     pub fn set_tilt_stop(&mut self, latched: bool) {
         if latched && !self.tilt_stop {
             self.end_mission(Some(EndReason::OperatorStop), "tilt_stop");
-            self.event("tilt_stop", None, "tilt_stop");
+            self.event(EventKind::TiltStop, None, "tilt_stop");
         }
         if latched {
             self.stopped = true;
@@ -283,10 +284,10 @@ impl AutonomyArbiter {
     pub fn set_origin(&mut self, lat: f64, lon: f64) -> bool {
         self.follower.set_origin(lat, lon).is_ok()
     }
-    pub(super) fn event(&mut self, kind: &str, token: Option<String>, reason: &str) {
+    pub(super) fn event(&mut self, kind: EventKind, token: Option<String>, reason: &str) {
         if self.events.len() < 256 {
             self.events.push(DecisionEvent {
-                kind: kind.into(),
+                kind: kind.as_str().into(),
                 token,
                 reason: reason.into(),
                 level: self.level,
@@ -345,9 +346,9 @@ impl AutonomyArbiter {
         }
         self.event(
             if ok {
-                "request_accepted"
+                EventKind::RequestAccepted
             } else {
-                "request_rejected"
+                EventKind::RequestRejected
             },
             Some(token),
             reason,
@@ -363,6 +364,27 @@ impl AutonomyArbiter {
         self.plan.command = None;
         self.reset = true;
         Ok(())
+    }
+    /// The host started a new local frame (for example an AR session reset):
+    /// every local position the arbiter holds now names a different place.
+    /// Ends any goal, route, exploration run (`safety_hold`), search, task and
+    /// dock, and forgets the long-range map memory, rejected frontiers, task
+    /// landmarks and outdoor destination. The WGS84 origin is dropped too, so
+    /// geographic goals wait for the host's next [`Self::set_origin`]. The
+    /// level, safety stops and settings stay.
+    pub fn reset_local_frame(&mut self) {
+        self.end_mission(Some(EndReason::SafetyHold), "local_frame_reset");
+        self.follower = WaypointController::new(self.follower.config().clone()).unwrap();
+        self.reset_route();
+        self.route_last_failure = None;
+        self.reset_recovery();
+        self.memory = Default::default();
+        self.memory_revision = None;
+        self.rejected.clear();
+        self.task_landmarks.clear();
+        self.outdoor_destination = None;
+        self.explore_bias = None;
+        self.event(EventKind::LocalFrameReset, None, "local_frame_reset");
     }
     pub(super) fn clear(&mut self) {
         self.cancel_dock("authority_cleared");
@@ -430,6 +452,23 @@ impl AutonomyArbiter {
             },
         );
     }
+    /// Why `level` cannot be selected at `now`, or `None` when it can: target
+    /// search needs a fresh detector capability, task a language model or an
+    /// MCP agent. Status advertises exactly the levels this allows.
+    pub(super) fn level_unavailable(&self, level: Level, now: f64) -> Option<&'static str> {
+        match level {
+            Level::TargetSearch
+                if self.detector_classes.is_empty()
+                    || !fresh(now, self.detector_time, timing::DETECTOR_FRESHNESS_SECONDS) =>
+            {
+                Some("detector_unavailable")
+            }
+            Level::Task if self.task_model.is_none() && self.task_agent.is_none() => {
+                Some("task_model_unavailable")
+            }
+            _ => None,
+        }
+    }
     /// Apply a token-correlated authority request, clearing old intent on acceptance.
     ///
     /// Invalid tokens are ignored. Budget and detector rejections are exposed through status receipts and decision events.
@@ -449,16 +488,17 @@ impl AutonomyArbiter {
             self.acknowledge(r.token, fp, false, "level_not_assigned");
             return;
         }
-        if r.level == Level::TargetSearch && self.detector_classes.is_empty() {
-            self.acknowledge(r.token, fp, false, "detector_unavailable");
+        let now = self
+            .last_time
+            .into_iter()
+            .chain(self.detector_time)
+            .fold(f64::NEG_INFINITY, f64::max);
+        if let Some(reason) = self.level_unavailable(r.level, now) {
+            self.acknowledge(r.token, fp, false, reason);
             return;
         }
         if !budget_fields_valid(&r) {
             self.acknowledge(r.token, fp, false, "invalid_budget");
-            return;
-        }
-        if r.level == Level::Task && self.task_model.is_none() && self.task_agent.is_none() {
-            self.acknowledge(r.token, fp, false, "task_model_unavailable");
             return;
         }
         if task
@@ -509,13 +549,18 @@ impl AutonomyArbiter {
             },
             _ => WaypointConfig::default(),
         };
-        self.follower = WaypointController::new(config).unwrap();
+        // The defaults validate; a level change keeps the WGS84 origin.
+        self.follower.reconfigure(config).unwrap();
         self.paused = false;
         self.explore_blocked = false;
         self.explore_stale_since = None;
         self.explore_unhealthy_since = None;
         if r.level == Level::Teleop {
-            self.event("takeover", Some(r.token.clone()), "operator_takeover");
+            self.event(
+                EventKind::Takeover,
+                Some(r.token.clone()),
+                "operator_takeover",
+            );
         }
         if r.level == Level::Explore
             && let Some(seconds) = budget
@@ -589,7 +634,7 @@ impl AutonomyArbiter {
         }
         self.latest_operator_time = Some(now);
         self.event(
-            "operator_received",
+            EventKind::OperatorReceived,
             r.operator_session_id.clone(),
             &format!("sequence:{:?}", r.sequence),
         );
@@ -600,10 +645,8 @@ impl AutonomyArbiter {
         self.operator_origin = origin;
         true
     }
-    /// Accept or cancel a waypoint and return whether it was accepted.
-    ///
-    /// Local coordinates and `extent` use metres; WGS84 coordinates use degrees and yaw uses radians.
-    /// Invalid, out-of-bounds, unauthorized, or conflicting-token goals return `false`; cancellation clears active intent.
+    /// Refuse goal `g` for `reason`: acknowledge its token (if any) as
+    /// rejected and log a `goal_rejected` event.
     pub fn reject_goal(&mut self, g: &GoalCommand, reason: &str) {
         let token = match g {
             GoalCommand::Local { token, .. } | GoalCommand::Wgs84 { token, .. } => token.clone(),
@@ -612,11 +655,15 @@ impl AutonomyArbiter {
         if let Some(t) = token.clone() {
             self.acknowledge(t, format!("goal:{g:?}"), false, reason);
         }
-        self.event("goal_rejected", token, reason);
+        self.event(EventKind::GoalRejected, token, reason);
     }
-    pub fn accept_goal(&mut self, g: &GoalCommand, extent: f64) -> bool {
+    /// Accept or cancel a waypoint and return whether it was accepted.
+    ///
+    /// Local coordinates use metres (at most [`terra_waypoint::MAX_LOCAL_GOAL_M`] from the origin); WGS84 coordinates use degrees and yaw uses radians.
+    /// Invalid, out-of-bounds, unauthorized, or conflicting-token goals return `false`; cancellation clears active intent.
+    pub fn accept_goal(&mut self, g: &GoalCommand) -> bool {
         if self.level == Level::TargetSearch {
-            self.event("goal_rejected", None, "search_active");
+            self.event(EventKind::GoalRejected, None, "search_active");
             return false;
         }
         if matches!(g, GoalCommand::Cancel) {
@@ -628,34 +675,15 @@ impl AutonomyArbiter {
                 self.pause_reason = "supervision_paused";
             }
             self.revision += 1;
-            self.event("goal_cancel", None, "operator_cancel");
+            self.event(EventKind::GoalCancel, None, "operator_cancel");
             return true;
         }
         let token = match g {
             GoalCommand::Local { token, .. } | GoalCommand::Wgs84 { token, .. } => token.clone(),
             _ => None,
         };
-        let valid = match g {
-            GoalCommand::Local { x, y, yaw, token } => {
-                x.is_finite()
-                    && y.is_finite()
-                    && yaw.is_none_or(|v| v.is_finite() && v.abs() <= std::f64::consts::TAU)
-                    && token.as_ref().is_none_or(|t| valid_token(t))
-            }
-            GoalCommand::Wgs84 {
-                latitude,
-                longitude,
-                yaw,
-                token,
-            } => {
-                terra_waypoint::GeoOrigin::new(*latitude, *longitude).is_ok()
-                    && yaw.is_none_or(|v| v.is_finite() && v.abs() <= std::f64::consts::TAU)
-                    && token.as_ref().is_none_or(|t| valid_token(t))
-            }
-            GoalCommand::Cancel => true,
-        };
-        if !valid {
-            self.event("goal_rejected", token, "invalid_goal");
+        if !g.valid() {
+            self.event(EventKind::GoalRejected, token, "invalid_goal");
             return false;
         }
         let fingerprint = format!("goal:{g:?}");
@@ -674,11 +702,10 @@ impl AutonomyArbiter {
             if let Some(t) = token.clone() {
                 self.acknowledge(t, fingerprint, false, reason);
             }
-            self.event("goal_rejected", token, reason);
+            self.event(EventKind::GoalRejected, token, reason);
             return false;
         }
-        // `Err` is an invalid extent from the caller: refuse the goal.
-        let ok = self.follower.accept(g, extent).unwrap_or(false);
+        let ok = follow(&mut self.follower, g);
         if ok {
             self.plan.forget();
             self.proposal = None;
@@ -697,7 +724,11 @@ impl AutonomyArbiter {
             );
         }
         self.event(
-            if ok { "goal_accepted" } else { "goal_rejected" },
+            if ok {
+                EventKind::GoalAccepted
+            } else {
+                EventKind::GoalRejected
+            },
             token,
             "operator_goal",
         );
@@ -759,15 +790,7 @@ impl AutonomyArbiter {
                         .push((p.x, p.y, input.now + timing::REJECTED_PROPOSAL_SECONDS));
                     self.proposal = None;
                     ok = true;
-                } else if r.decision == Decision::Approve
-                    && self.map_is_fresh(input)
-                    && fresh(
-                        input.now,
-                        Some(input.pose_time),
-                        timing::POSE_FRESHNESS_SECONDS,
-                    )
-                    && input.healthy
-                {
+                } else if r.decision == Decision::Approve && self.inputs_fresh(input) {
                     // Revalidate reachability on the latest occupancy snapshot, independently of the proposal revision.
                     if let Some(m) = input.map
                         && self.route_confirms(m, input.pose, p.x, p.y)
@@ -796,4 +819,13 @@ impl AutonomyArbiter {
             },
         );
     }
+}
+
+/// Latch `goal` on `follower` anywhere within
+/// [`terra_waypoint::MAX_LOCAL_GOAL_M`] of the origin; whether it latched.
+pub(super) fn follow(follower: &mut WaypointController, goal: &GoalCommand) -> bool {
+    // The extent is a valid constant, so `accept` cannot return `Err`.
+    follower
+        .accept(goal, terra_waypoint::MAX_LOCAL_GOAL_M)
+        .unwrap_or(false)
 }

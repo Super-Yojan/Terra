@@ -61,22 +61,14 @@ impl AutonomyArbiter {
                 .as_ref()
                 .map(|r| if r.1 { "accepted" } else { "rejected" }.into()),
             request_reason: self.request_reason.clone(),
-            supported_levels: {
-                let mut levels = Level::BASE.to_vec();
-                if !self.detector_classes.is_empty()
-                    && fresh(
-                        input.now,
-                        self.detector_time,
-                        timing::DETECTOR_FRESHNESS_SECONDS,
-                    )
-                {
-                    levels.push(Level::TargetSearch);
-                }
-                if self.task_model.is_some() || self.task_agent.is_some() {
-                    levels.push(Level::Task);
-                }
-                levels
-            },
+            supported_levels: Level::BASE
+                .into_iter()
+                .chain(
+                    [Level::TargetSearch, Level::Task]
+                        .into_iter()
+                        .filter(|&l| self.level_unavailable(l, input.now).is_none()),
+                )
+                .collect(),
             task_agents: [
                 (self.task_model.is_some(), crate::TaskAgent::Builtin),
                 (self.task_agent.is_some(), crate::TaskAgent::Mcp),

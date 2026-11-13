@@ -1,18 +1,56 @@
 //! Mission-scoped observed map and deterministic routes. No target truth is accepted here.
 use crate::{InformationGainScorer, select_frontier};
 use terra_mapping::MapSnapshot;
+use serde::{Deserialize, Serialize};
 use terra_navigation::{Footprint, Pose, reachable};
-/// Axis-aligned mission area in world metres, including the rover footprint.
-#[derive(Clone, Copy, Debug)]
+/// Longest side of a search area, in metres.
+pub const MAX_SEARCH_SIDE_M: f64 = 100.;
+/// Axis-aligned search rectangle in world metres; valid sides are positive
+/// and at most [`MAX_SEARCH_SIDE_M`]. The whole rover body stays inside it.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SearchBounds {
-    /// Lower world x boundary.
+    /// Inclusive minimum world x coordinate, in metres.
     pub min_x: f64,
-    /// Lower world y boundary.
+    /// Inclusive minimum world y coordinate, in metres.
     pub min_y: f64,
-    /// Upper world x boundary.
+    /// Inclusive maximum world x coordinate, in metres.
     pub max_x: f64,
-    /// Upper world y boundary.
+    /// Inclusive maximum world y coordinate, in metres.
     pub max_y: f64,
+}
+impl SearchBounds {
+    /// Whether all coordinates are finite and each side is positive and at
+    /// most [`MAX_SEARCH_SIDE_M`].
+    pub fn valid(self) -> bool {
+        [self.min_x, self.min_y, self.max_x, self.max_y]
+            .iter()
+            .all(|v| v.is_finite())
+            && self.max_x > self.min_x
+            && self.max_y > self.min_y
+            && self.max_x - self.min_x <= MAX_SEARCH_SIDE_M
+            && self.max_y - self.min_y <= MAX_SEARCH_SIDE_M
+    }
+    /// Whether finite world-metre coordinates lie inside the rectangle, including its edges.
+    pub fn contains(self, x: f64, y: f64) -> bool {
+        x.is_finite()
+            && y.is_finite()
+            && x >= self.min_x
+            && x <= self.max_x
+            && y >= self.min_y
+            && y <= self.max_y
+    }
+    /// Whether the body rectangle at the pose's heading lies inside the bounds.
+    pub fn contains_body(self, footprint: &Footprint, pose: Pose) -> bool {
+        let (a, b) = footprint.half_extents(0.);
+        let (sin, cos) = pose.yaw.sin_cos();
+        let reach_x = a * cos.abs() + b * sin.abs();
+        let reach_y = a * sin.abs() + b * cos.abs();
+        pose.x - reach_x >= self.min_x
+            && pose.x + reach_x <= self.max_x
+            && pose.y - reach_y >= self.min_y
+            && pose.y + reach_y <= self.max_y
+    }
 }
 /// Next action from the mission's accumulated observations and recovery state.
 #[derive(Clone, Debug, PartialEq)]
@@ -68,7 +106,7 @@ impl SearchNavigator {
     /// Create a mission for a rover with this body footprint.
     ///
     /// Each bounds dimension must exceed the diameter of the circle around the
-    /// body (room to turn at any heading) and be at most 100 m.
+    /// body (room to turn at any heading) and be at most [`MAX_SEARCH_SIDE_M`].
     ///
     /// # Errors
     ///
@@ -77,14 +115,10 @@ impl SearchNavigator {
     /// Map memory is allocated later by [`Self::next_goal`], using the first map's resolution.
     pub fn new(bounds: SearchBounds, footprint: Footprint) -> Result<Self, &'static str> {
         let radius = footprint.circumradius();
-        if ![bounds.min_x, bounds.min_y, bounds.max_x, bounds.max_y]
-            .iter()
-            .all(|v| v.is_finite())
+        if !bounds.valid()
             || !footprint.valid()
             || bounds.max_x - bounds.min_x <= 2. * radius
             || bounds.max_y - bounds.min_y <= 2. * radius
-            || bounds.max_x - bounds.min_x > 100.
-            || bounds.max_y - bounds.min_y > 100.
         {
             return Err("invalid search geometry");
         }
@@ -155,7 +189,7 @@ impl SearchNavigator {
         if self.map.is_none() {
             let w = ((self.bounds.max_x - self.bounds.min_x) / m.resolution).ceil() as u32;
             let h = ((self.bounds.max_y - self.bounds.min_y) / m.resolution).ceil() as u32;
-            if w as u64 * h as u64 > 250_000 {
+            if w as u64 * h as u64 > terra_mapping::MAX_PLANNING_CELLS as u64 {
                 return Err("search_map_capacity");
             }
             self.map = Some(MapSnapshot {
@@ -178,12 +212,9 @@ impl SearchNavigator {
                 if value < 0 {
                     continue;
                 }
-                let px = m.origin_x + (x as f64 + 0.5) * m.resolution;
-                let py = m.origin_y + (y as f64 + 0.5) * m.resolution;
-                let ix = ((px - memory.origin_x) / memory.resolution).floor() as isize;
-                let iy = ((py - memory.origin_y) / memory.resolution).floor() as isize;
-                if ix >= 0 && iy >= 0 && ix < memory.width as isize && iy < memory.height as isize {
-                    memory.occupancy[iy as usize * memory.width as usize + ix as usize] = value;
+                let (px, py) = m.centre(x as usize, y as usize);
+                if let Some((ix, iy)) = memory.cell(px, py) {
+                    memory.occupancy[iy * memory.width as usize + ix] = value;
                 }
             }
         }
@@ -232,16 +263,7 @@ impl SearchNavigator {
         if let Err(reason) = self.merge(m, revision) {
             return SearchNavigationDecision::Blocked { reason };
         }
-        // The body rectangle at its heading must stay inside the bounds.
-        let (a, b) = self.footprint.half_extents(0.);
-        let (sin, cos) = pose.yaw.sin_cos();
-        let reach_x = a * cos.abs() + b * sin.abs();
-        let reach_y = a * sin.abs() + b * cos.abs();
-        if pose.x - reach_x < self.bounds.min_x
-            || pose.x + reach_x > self.bounds.max_x
-            || pose.y - reach_y < self.bounds.min_y
-            || pose.y + reach_y > self.bounds.max_y
-        {
+        if !self.bounds.contains_body(&self.footprint, pose) {
             return SearchNavigationDecision::Blocked {
                 reason: "outside_search_bounds",
             };

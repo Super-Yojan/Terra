@@ -13,7 +13,7 @@
 //!    to the edge of what it has seen, the map fills in, and the caller replans.
 use crate::footprint::{self, Unknown};
 use crate::hybrid_astar::HybridSearch;
-use crate::{HybridConfig, HybridGoal, HybridWaypoint, Pose};
+use crate::{HybridConfig, HybridGoal, HybridWaypoint, Pose, RouteError};
 use terra_mapping::MapSnapshot;
 
 /// Cost multiple for crossing unknown cells; routes prefer observed space but
@@ -51,11 +51,11 @@ impl RouteJob {
     /// Start routing from `start` toward `(x, y)`.
     ///
     /// # Errors
-    /// - `route_invalid_map`: invalid map, configuration or coordinates.
-    /// - `route_start_outside_map`, `route_start_blocked`.
-    /// - `route_goal_blocked`: the goal cell is an observed obstacle, or no point
-    ///   within `snap` metres of it fits the body clear of observed obstacles.
-    /// - `route_no_path`: observed obstacles seal the goal off.
+    /// - [`RouteError::InvalidMap`]: invalid map, configuration or coordinates.
+    /// - [`RouteError::StartOutsideMap`], [`RouteError::StartBlocked`].
+    /// - [`RouteError::GoalBlocked`]: the goal cell is an observed obstacle, or no
+    ///   point within `snap` metres of it fits the body clear of observed obstacles.
+    /// - [`RouteError::NoPath`]: observed obstacles seal the goal off.
     pub fn new(
         map: &MapSnapshot,
         start: Pose,
@@ -63,13 +63,13 @@ impl RouteJob {
         y: f64,
         config: &HybridConfig,
         snap: f64,
-    ) -> Result<Self, &'static str> {
+    ) -> Result<Self, RouteError> {
         if !map.valid() || !start.finite() || !x.is_finite() || !y.is_finite() || !snap.is_finite()
         {
-            return Err("route_invalid_map");
+            return Err(RouteError::InvalidMap);
         }
         map.cell(start.x, start.y)
-            .ok_or("route_start_outside_map")?;
+            .ok_or(RouteError::StartOutsideMap)?;
         let mut moved = false;
         let (mut gx, mut gy) = (x, y);
         match map.at(x, y) {
@@ -78,12 +78,12 @@ impl RouteJob {
                 moved = true;
             }
             Some(v) if v >= terra_mapping::OCCUPIED => {
-                return Err("route_goal_blocked");
+                return Err(RouteError::GoalBlocked);
             }
             Some(_) => {}
         }
         if !fits_somewhere(map, config, gx, gy) {
-            (gx, gy) = snap_goal(map, config, gx, gy, snap).ok_or("route_goal_blocked")?;
+            (gx, gy) = snap_goal(map, config, gx, gy, snap).ok_or(RouteError::GoalBlocked)?;
             moved = true;
         }
         let goal = HybridGoal {
@@ -93,7 +93,7 @@ impl RouteJob {
         };
         let stage = match HybridSearch::new(map, start, goal, config, None) {
             Ok(search) => Stage::Known(search),
-            Err("route_no_path" | "route_goal_blocked") => Stage::Unknown(HybridSearch::new(
+            Err(RouteError::NoPath | RouteError::GoalBlocked) => Stage::Unknown(HybridSearch::new(
                 map,
                 start,
                 goal,
@@ -118,7 +118,7 @@ impl RouteJob {
     }
 
     /// Run up to `budget` expansions. `None` while still searching.
-    pub fn advance(&mut self, budget: u32) -> Option<Result<HybridRoute, &'static str>> {
+    pub fn advance(&mut self, budget: u32) -> Option<Result<HybridRoute, RouteError>> {
         match &mut self.stage {
             Stage::Known(search) => match search.advance(budget)? {
                 Ok(waypoints) => {
@@ -157,7 +157,7 @@ impl RouteJob {
                         .map(|w| (w[1].x - w[0].x).hypot(w[1].y - w[0].y))
                         .sum();
                     if length < self.map.resolution {
-                        return Err("route_no_path");
+                        return Err(RouteError::NoPath);
                     }
                     let complete = prefix.len() == waypoints.len();
                     Ok(HybridRoute {
@@ -166,7 +166,7 @@ impl RouteJob {
                     })
                 }))
             }
-            Stage::Done => Some(Err("route_no_path")),
+            Stage::Done => Some(Err(RouteError::NoPath)),
         }
     }
 }
@@ -195,8 +195,7 @@ fn snap_goal(
             if c < 0 || r < 0 || c >= map.width as i64 || r >= map.height as i64 {
                 continue;
             }
-            let cx = map.origin_x + (c as f64 + 0.5) * res;
-            let cy = map.origin_y + (r as f64 + 0.5) * res;
+            let (cx, cy) = map.centre(c as usize, r as usize);
             let distance = (cx - x).hypot(cy - y);
             if distance <= snap {
                 candidates.push((distance, cx, cy));

@@ -146,15 +146,12 @@ fn accepted_mission_survives_link_loss_with_fresh_onboard_evidence() {
         terra_autonomy::Level::WaypointDirect,
         "mode",
     ));
-    r.autonomy.accept_goal(
-        &terra_waypoint::GoalCommand::Local {
-            x: 1.,
-            y: 0.,
-            yaw: None,
-            token: Some("goal".into()),
-        },
-        20000.,
-    );
+    r.autonomy.accept_goal(&terra_waypoint::GoalCommand::Local {
+        x: 1.,
+        y: 0.,
+        yaw: None,
+        token: Some("goal".into()),
+    });
     r.step(0.).unwrap();
     r.ingest(RuntimeEvent::Link {
         connected: false,
@@ -393,15 +390,12 @@ fn autonomous_guidance_uses_feedback_even_with_a_direct_manual_profile() {
         terra_autonomy::Level::WaypointDirect,
         "mode",
     ));
-    r.autonomy.accept_goal(
-        &terra_waypoint::GoalCommand::Local {
-            x: 1.,
-            y: 0.,
-            yaw: None,
-            token: Some("goal".into()),
-        },
-        20000.,
-    );
+    r.autonomy.accept_goal(&terra_waypoint::GoalCommand::Local {
+        x: 1.,
+        y: 0.,
+        yaw: None,
+        token: Some("goal".into()),
+    });
     assert_eq!(
         r.step(0.).unwrap().status["runtime"]["mode"],
         "velocity_feedback"

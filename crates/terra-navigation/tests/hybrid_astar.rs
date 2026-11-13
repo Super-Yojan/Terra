@@ -1,7 +1,7 @@
 //! Hybrid A*: drivable routes for a rectangular rover that never turns in place.
 use std::f64::consts::PI;
 use terra_mapping::MapSnapshot;
-use terra_navigation::{HybridConfig, HybridGoal, HybridWaypoint, Pose, hybrid_astar_route};
+use terra_navigation::{HybridConfig, HybridGoal, HybridWaypoint, Pose, RouteError, hybrid_astar_route};
 
 const RES: f64 = 0.1;
 
@@ -210,13 +210,13 @@ fn a_sealed_wall_or_a_gap_narrower_than_the_body_has_no_route() {
     };
     assert_eq!(
         hybrid_astar_route(&wall_with_gap(0.), start, goal, &config),
-        Err("route_no_path")
+        Err(RouteError::NoPath)
     );
     // The body's inner circle could squeeze through 0.7 m, so the quick 2D check
     // cannot rule it out: the search either exhausts every state or hits its cap.
     let narrow = hybrid_astar_route(&wall_with_gap(0.7), start, goal, &config);
     assert!(
-        matches!(narrow, Err("route_no_path" | "route_search_limit")),
+        matches!(narrow, Err(RouteError::NoPath | RouteError::SearchLimit)),
         "{narrow:?}"
     );
 }
@@ -237,7 +237,7 @@ fn a_blocked_start_or_goal_is_reported() {
     };
     assert_eq!(
         hybrid_astar_route(&map, on_wall, goal, &config),
-        Err("route_start_blocked")
+        Err(RouteError::StartBlocked)
     );
     let start = Pose {
         x: -3.,
@@ -251,7 +251,7 @@ fn a_blocked_start_or_goal_is_reported() {
     };
     assert_eq!(
         hybrid_astar_route(&map, start, goal_on_wall, &config),
-        Err("route_goal_blocked")
+        Err(RouteError::GoalBlocked)
     );
 }
 

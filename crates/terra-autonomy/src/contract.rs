@@ -174,6 +174,102 @@ impl Source {
         }
     }
 }
+/// Kind of a [`crate::DecisionEvent`]: the arbiter's own decisions are
+/// variants; kinds forwarded from the exploration, dock and task state
+/// machines are carried in [`EventKind::Other`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EventKind {
+    AuthorityGenerationChanged,
+    CandidateObserved,
+    CandidateRejected,
+    DockAligned,
+    DockBackoff,
+    DockCancelled,
+    DockDone,
+    DockFailed,
+    DockGateClosed,
+    DockGateOpened,
+    DockStarted,
+    GoalAccepted,
+    GoalCancel,
+    GoalDropped,
+    GoalRejected,
+    LocalFrameReset,
+    MissionPaused,
+    OperatorReceived,
+    ProposalCreated,
+    RemoteRequestRejected,
+    ReportAcknowledged,
+    ReportQueued,
+    RequestAccepted,
+    RequestRejected,
+    RouteFailed,
+    RouteSelected,
+    SearchAccepted,
+    SearchPaused,
+    SearchResumed,
+    SearchCancelled,
+    Takeover,
+    TargetConfirmed,
+    TaskAction,
+    TaskDriveRequested,
+    TaskEnded,
+    TaskPlan,
+    TaskQuestion,
+    TaskStarted,
+    TaskWaypointAbandoned,
+    TiltStop,
+    /// A kind named by a forwarded state machine.
+    Other(&'static str),
+}
+impl EventKind {
+    /// Wire name, as published in `DecisionEvent::kind`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            EventKind::AuthorityGenerationChanged => "authority_generation_changed",
+            EventKind::CandidateObserved => "candidate_observed",
+            EventKind::CandidateRejected => "candidate_rejected",
+            EventKind::DockAligned => "dock_aligned",
+            EventKind::DockBackoff => "dock_backoff",
+            EventKind::DockCancelled => "dock_cancelled",
+            EventKind::DockDone => "dock_done",
+            EventKind::DockFailed => "dock_failed",
+            EventKind::DockGateClosed => "dock_gate_closed",
+            EventKind::DockGateOpened => "dock_gate_opened",
+            EventKind::DockStarted => "dock_started",
+            EventKind::GoalAccepted => "goal_accepted",
+            EventKind::GoalCancel => "goal_cancel",
+            EventKind::GoalDropped => "goal_dropped",
+            EventKind::GoalRejected => "goal_rejected",
+            EventKind::LocalFrameReset => "local_frame_reset",
+            EventKind::MissionPaused => "mission_paused",
+            EventKind::OperatorReceived => "operator_received",
+            EventKind::ProposalCreated => "proposal_created",
+            EventKind::RemoteRequestRejected => "remote_request_rejected",
+            EventKind::ReportAcknowledged => "report_acknowledged",
+            EventKind::ReportQueued => "report_queued",
+            EventKind::RequestAccepted => "request_accepted",
+            EventKind::RequestRejected => "request_rejected",
+            EventKind::RouteFailed => "route_failed",
+            EventKind::RouteSelected => "route_selected",
+            EventKind::SearchAccepted => "search_accepted",
+            EventKind::SearchPaused => "search_paused",
+            EventKind::SearchResumed => "search_resumed",
+            EventKind::SearchCancelled => "search_cancelled",
+            EventKind::Takeover => "takeover",
+            EventKind::TargetConfirmed => "target_confirmed",
+            EventKind::TaskAction => "task_action",
+            EventKind::TaskDriveRequested => "task_drive_requested",
+            EventKind::TaskEnded => "task_ended",
+            EventKind::TaskPlan => "task_plan",
+            EventKind::TaskQuestion => "task_question",
+            EventKind::TaskStarted => "task_started",
+            EventKind::TaskWaypointAbandoned => "task_waypoint_abandoned",
+            EventKind::TiltStop => "tilt_stop",
+            EventKind::Other(name) => name,
+        }
+    }
+}
 /// Dashboard safety state. Serialized as `safety`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -224,6 +320,8 @@ pub enum Reason {
     RouteGoalBlocked,
     HeadingRequiresSpinOrReplan,
     InvalidTurnTiming,
+    /// Recovery could not free the rover; a route failure retried after a wait.
+    BoxedIn,
     ExplorationScan,
     SearchHold,
     /// Dock creeping forward at zero twist between pulses, which is not a hold.
@@ -232,7 +330,7 @@ pub enum Reason {
     Other(&'static str),
 }
 impl Reason {
-    const KNOWN: [Reason; 18] = [
+    const KNOWN: [Reason; 19] = [
         Reason::Idle,
         Reason::Active,
         Reason::Assisted,
@@ -248,6 +346,7 @@ impl Reason {
         Reason::RouteGoalBlocked,
         Reason::HeadingRequiresSpinOrReplan,
         Reason::InvalidTurnTiming,
+        Reason::BoxedIn,
         Reason::ExplorationScan,
         Reason::SearchHold,
         Reason::DockCreep,
@@ -270,6 +369,7 @@ impl Reason {
             Reason::RouteGoalBlocked => "route_goal_blocked",
             Reason::HeadingRequiresSpinOrReplan => "heading_requires_spin_or_replan",
             Reason::InvalidTurnTiming => "invalid_turn_timing",
+            Reason::BoxedIn => "boxed_in",
             Reason::ExplorationScan => "exploration_scan",
             Reason::SearchHold => "search_hold",
             Reason::DockCreep => "dock_creep",
@@ -297,6 +397,11 @@ impl Reason {
 impl From<&'static str> for Reason {
     fn from(name: &'static str) -> Self {
         Reason::known(name).unwrap_or(Reason::Other(name))
+    }
+}
+impl From<terra_navigation::RouteError> for Reason {
+    fn from(error: terra_navigation::RouteError) -> Self {
+        Reason::from(error.as_str())
     }
 }
 impl From<terra_navigation::PlanReason> for Reason {
@@ -532,14 +637,8 @@ pub struct SensorHold {
     #[serde(default)]
     pub goal_dropped: bool,
 }
-/// Return whether `s` is 1–64 ASCII letters, digits, or characters from `._:-`.
-pub fn valid_token(s: &str) -> bool {
-    (1..=64).contains(&s.len())
-        && s.bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b"._:-".contains(&b))
-}
-/// Largest autonomy request payload, in bytes.
-pub(crate) const MAX_REQUEST_BYTES: usize = 2048;
+pub use terra_waypoint::valid_token;
+use terra_types::requests::MAX_REQUEST_BYTES;
 /// Decode one strict JSON request of 1 to [`MAX_REQUEST_BYTES`] bytes.
 pub(crate) fn decode<T: serde::de::DeserializeOwned>(b: &[u8]) -> Option<T> {
     if b.is_empty() || b.len() > MAX_REQUEST_BYTES {

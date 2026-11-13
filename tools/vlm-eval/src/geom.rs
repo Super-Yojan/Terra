@@ -1,4 +1,6 @@
-//! Synthetic occupancy grids on Terra's default 200×200, 0.1 m window.
+//! Synthetic occupancy grids: a 200×200, 0.1 m (20 m) window centred on the
+//! origin. Terra's rolling map defaults to 300×300; the packs keep their
+//! smaller window so existing scenarios stay identical.
 
 use base64::Engine;
 use terra_mapping::MapSnapshot;
@@ -37,26 +39,14 @@ pub fn cell_index(map: &MapSnapshot, col: i32, row: i32) -> Option<usize> {
     }
 }
 
-pub fn world_cell(map: &MapSnapshot, x: f64, y: f64) -> Option<(i32, i32)> {
-    if !x.is_finite() || !y.is_finite() {
-        return None;
-    }
-    let col = ((x - map.origin_x) / map.resolution).floor() as i32;
-    let row = ((y - map.origin_y) / map.resolution).floor() as i32;
-    cell_index(map, col, row)?;
-    Some((col, row))
+fn world_cell(map: &MapSnapshot, x: f64, y: f64) -> Option<(i32, i32)> {
+    map.cell(x, y).map(|(col, row)| (col as i32, row as i32))
 }
 
+/// Centre of an on-grid cell; signed so callers can step to neighbours.
 pub fn cell_center(map: &MapSnapshot, col: i32, row: i32) -> (f64, f64) {
-    (
-        map.origin_x + (f64::from(col) + 0.5) * map.resolution,
-        map.origin_y + (f64::from(row) + 0.5) * map.resolution,
-    )
-}
-
-pub fn occupancy_at(map: &MapSnapshot, x: f64, y: f64) -> Option<i8> {
-    let (col, row) = world_cell(map, x, y)?;
-    Some(map.occupancy[cell_index(map, col, row)?])
+    debug_assert!(col >= 0 && row >= 0);
+    map.centre(col as usize, row as usize)
 }
 
 pub fn fill_rect(map: &mut MapSnapshot, min_x: f64, min_y: f64, max_x: f64, max_y: f64, value: i8) {
@@ -155,7 +145,7 @@ pub fn segment_hits_occupied(map: &MapSnapshot, from: [f64; 2], to: [f64; 2]) ->
         let t = step as f64 / steps.max(1) as f64;
         let x = from[0] + (to[0] - from[0]) * t;
         let y = from[1] + (to[1] - from[1]) * t;
-        occupancy_at(map, x, y).is_some_and(|value| value >= terra_mapping::OCCUPIED)
+        map.at(x, y).is_some_and(|value| value >= terra_mapping::OCCUPIED)
     })
 }
 

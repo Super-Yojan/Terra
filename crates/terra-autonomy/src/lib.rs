@@ -48,9 +48,7 @@ mod dock;
 pub use dock::*;
 /// Detected buckets and balls in the local frame, with GPS when outdoor.
 pub mod objects;
-pub use terra_exploration::{
-    EndReason, ExplorationConfig, ExplorationStatus, ExplorePhase, FrontierTarget,
-};
+pub use terra_exploration::{EndReason, ExplorationStatus, ExplorePhase, FrontierTarget};
 
 /// Dashboard telemetry for observed cells only; never includes simulator ground truth.
 ///

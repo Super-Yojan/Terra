@@ -122,7 +122,7 @@ impl AutonomyArbiter {
             };
             if let Some(why) = decision.route_failure {
                 decision.held = true;
-                decision.reason = why.into();
+                decision.reason = why;
                 decision.source = Source::None;
                 self.plan.forget();
             } else if decision.route_pending && intent == Twist::default() {
@@ -231,7 +231,7 @@ impl AutonomyArbiter {
                 {
                     self.follow_local(x, y, None);
                     self.plan.forget();
-                    self.event("route_selected", None, "search_route");
+                    self.event(EventKind::RouteSelected, None, "search_route");
                 }
                 decision.goal = self
                     .follower
@@ -445,10 +445,13 @@ impl AutonomyArbiter {
             } else {
                 let mut planner = self.planner.clone();
                 if self.level == Level::Explore {
-                    let cap = self.explorer.config().approach_horizon;
-                    if cap.is_finite() && cap > 0. {
-                        planner.config.horizon = planner.config.horizon.min(cap);
-                    }
+                    // Frontier goals sit on the edge of unknown space, which the
+                    // planner treats as occupied: a multi-second rollout stops
+                    // short of every frontier. Only the lookahead shortens.
+                    planner.config.horizon = planner
+                        .config
+                        .horizon
+                        .min(timing::EXPLORATION_APPROACH_HORIZON_SECONDS);
                 }
                 let (planned, trace) = if managed {
                     planner.plan_with_turning(
@@ -519,7 +522,7 @@ impl AutonomyArbiter {
                         expires_at: input.now + timing::PROPOSAL_LIFETIME_SECONDS,
                         reason: "search_unobserved_sector".into(),
                     });
-                    self.event("proposal_created", None, "frontier");
+                    self.event(EventKind::ProposalCreated, None, "frontier");
                 }
             }
             decision.reason = Reason::Other(if self.proposal.is_some() {
@@ -593,10 +596,10 @@ impl AutonomyArbiter {
                 (self.follower.config().arrive_radius - 0.1).max(0.),
             ) {
                 Ok(job) => self.route_job = Some(job),
-                Err("route_start_blocked") if self.recover_from_start_blocked(input) => {
+                Err(terra_navigation::RouteError::StartBlocked) if self.recover_from_start_blocked(input) => {
                     return Twist::default();
                 }
-                Err(why) => self.route_failed(why, decision),
+                Err(why) => self.route_failed(why.into(), decision),
             }
         }
         if due || changed_goal {
@@ -615,10 +618,10 @@ impl AutonomyArbiter {
                     self.route_reaches_goal = route.reaches_goal;
                     self.route_last_failure = None;
                 }
-                Err("route_start_blocked") if self.recover_from_start_blocked(input) => {
+                Err(terra_navigation::RouteError::StartBlocked) if self.recover_from_start_blocked(input) => {
                     return Twist::default();
                 }
-                Err(why) => self.route_failed(why, decision),
+                Err(why) => self.route_failed(why.into(), decision),
             }
         }
         if self.global_route.len() < 2 {
@@ -679,7 +682,7 @@ impl AutonomyArbiter {
     }
 
     /// A route search failed: hold, and keep reporting `why` while a retry runs.
-    fn route_failed(&mut self, why: &'static str, decision: &mut TickDecision) {
+    fn route_failed(&mut self, why: Reason, decision: &mut TickDecision) {
         self.clear_route();
         self.route_last_failure = Some(why);
         decision.route_failure = Some(why);

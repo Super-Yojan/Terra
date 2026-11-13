@@ -68,17 +68,9 @@ impl AutonomyArbiter {
             Some("report_capacity")
         } else if !self.detector_available(&r.target_class, input.now) {
             Some("detector_unavailable")
-        } else if !body_inside(&self.planner.config.footprint, input.pose, &r.bounds) {
+        } else if !r.bounds.contains_body(&self.planner.config.footprint, input.pose) {
             Some("outside_search_bounds")
-        } else if !input.healthy
-            || !input.pose.finite()
-            || !fresh(
-                input.now,
-                Some(input.pose_time),
-                timing::POSE_FRESHNESS_SECONDS,
-            )
-            || input.map.is_none()
-            || !self.map_is_fresh(input)
+        } else if !self.inputs_fresh(input)
             || self.last_time.is_some_and(|t| input.now < t)
         {
             Some("search_inputs_unhealthy")
@@ -97,7 +89,7 @@ impl AutonomyArbiter {
         self.search = Some(search);
         self.paused = false;
         self.acknowledge(r.token.clone(), fp, true, "search_started");
-        self.event("search_accepted", Some(r.token), "search_started");
+        self.event(EventKind::SearchAccepted, Some(r.token), "search_started");
         Ok(())
     }
     /// Apply an action to the matching active run and search, with token idempotency.
@@ -127,14 +119,7 @@ impl AutonomyArbiter {
             return Err("wrong_search_or_authority");
         }
         if r.action == SearchAction::Resume
-            && (!input.healthy
-                || input.map.is_none()
-                || !fresh(
-                    input.now,
-                    Some(input.pose_time),
-                    timing::POSE_FRESHNESS_SECONDS,
-                )
-                || !self.map_is_fresh(input)
+            && (!self.inputs_fresh(input)
                 || !self.detector_available(
                     &self.search.as_ref().unwrap().request.target_class,
                     input.now,
@@ -150,16 +135,19 @@ impl AutonomyArbiter {
             result.is_ok(),
             result.err().unwrap_or("search_action"),
         );
-        self.search.as_mut().unwrap().receipt = Some((r.token.clone(), result.is_ok()));
+        self.search
+            .as_mut()
+            .unwrap()
+            .note_request(r.token.clone(), result.is_ok());
         if result.is_ok() {
             self.follower.cancel();
             self.plan.forget();
             self.reset = true;
             self.event(
                 match r.action {
-                    SearchAction::Pause => "search_paused",
-                    SearchAction::Resume => "search_resumed",
-                    SearchAction::Cancel => "search_cancelled",
+                    SearchAction::Pause => EventKind::SearchPaused,
+                    SearchAction::Resume => EventKind::SearchResumed,
+                    SearchAction::Cancel => EventKind::SearchCancelled,
                 },
                 Some(r.token),
                 "operator_search_action",
@@ -185,9 +173,9 @@ impl AutonomyArbiter {
         self.collect_search_report(now);
         self.event(
             if result.is_ok() {
-                "candidate_observed"
+                EventKind::CandidateObserved
             } else {
-                "candidate_rejected"
+                EventKind::CandidateRejected
             },
             None,
             result.err().unwrap_or("observed_target"),
@@ -202,8 +190,8 @@ impl AutonomyArbiter {
                 .insert((report.run_id.clone(), report.search_id.clone()))
         {
             self.pending_reports.push_back(report);
-            self.event("target_confirmed", None, "target_confirmed");
-            self.event("report_queued", None, "report_pending");
+            self.event(EventKind::TargetConfirmed, None, "target_confirmed");
+            self.event(EventKind::ReportQueued, None, "report_pending");
         }
     }
     /// Remove a report matching the version, run, search, and report IDs.
@@ -227,23 +215,11 @@ impl AutonomyArbiter {
                 r.search_id.clone(),
                 r.report_id.clone(),
             ));
-            self.event("report_acknowledged", Some(r.token), "report_delivered");
+            self.event(EventKind::ReportAcknowledged, Some(r.token), "report_delivered");
             true
         } else {
             self.acknowledged_reports
                 .contains(&(r.run_id, r.search_id, r.report_id))
         }
     }
-}
-
-/// Whether the body rectangle at the pose's heading lies inside the bounds.
-fn body_inside(footprint: &terra_navigation::Footprint, pose: Pose, bounds: &SearchBounds) -> bool {
-    let (a, b) = footprint.half_extents(0.);
-    let (sin, cos) = pose.yaw.sin_cos();
-    let reach_x = a * cos.abs() + b * sin.abs();
-    let reach_y = a * sin.abs() + b * cos.abs();
-    pose.x - reach_x >= bounds.min_x
-        && pose.x + reach_x <= bounds.max_x
-        && pose.y - reach_y >= bounds.min_y
-        && pose.y + reach_y <= bounds.max_y
 }

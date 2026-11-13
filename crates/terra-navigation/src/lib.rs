@@ -58,7 +58,7 @@ pub use footprint::{
     footprint_rejection_at, pull_forward_clear,
 };
 mod hybrid_astar;
-pub use hybrid_astar::{HybridConfig, HybridGoal, HybridWaypoint, hybrid_astar_route};
+pub use hybrid_astar::{HybridConfig, HybridGoal, HybridWaypoint, RouteError, hybrid_astar_route};
 mod route;
 pub use route::{HybridRoute, RouteJob};
 mod maneuver;

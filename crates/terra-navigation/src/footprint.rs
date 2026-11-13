@@ -77,8 +77,7 @@ pub(crate) fn in_blind_zone(
     start: Pose,
 ) -> bool {
     let width = map.width as usize;
-    let cx = map.origin_x + ((i % width) as f64 + 0.5) * map.resolution;
-    let cy = map.origin_y + ((i / width) as f64 + 0.5) * map.resolution;
+    let (cx, cy) = map.centre(i % width, i / width);
     (cx - start.x).hypot(cy - start.y) <= footprint.blind_zone_radius()
 }
 
@@ -144,8 +143,7 @@ pub(crate) fn rejection(
             }
             Unknown::SpinDisc(s) => {
                 let width = map.width as usize;
-                let cx = map.origin_x + ((i % width) as f64 + 0.5) * map.resolution;
-                let cy = map.origin_y + ((i / width) as f64 + 0.5) * map.resolution;
+                let (cx, cy) = map.centre(i % width, i / width);
                 (cx - s.x).hypot(cy - s.y)
                     <= footprint.circumradius()
                         + pad
@@ -174,8 +172,7 @@ pub fn footprint_fits(
 /// Whether map cell `i` overlaps the rectangle with half extents `(a, b)` at `pose`.
 fn cell_overlaps(map: &MapSnapshot, i: usize, pose: Pose, (a, b): (f64, f64)) -> bool {
     let width = map.width as usize;
-    let cx = map.origin_x + ((i % width) as f64 + 0.5) * map.resolution;
-    let cy = map.origin_y + ((i / width) as f64 + 0.5) * map.resolution;
+    let (cx, cy) = map.centre(i % width, i / width);
     overlaps(
         cx - pose.x,
         cy - pose.y,
@@ -270,8 +267,7 @@ fn straight_clear(map: &MapSnapshot, footprint: &Footprint, pose: Pose, travel: 
     let mut touching = std::collections::HashSet::new();
     for_each_overlapping_cell(map, pose.x, pose.y, pose.yaw, a, b, |i| {
         if let Some(i) = i {
-            let cx = map.origin_x + ((i % width) as f64 + 0.5) * map.resolution;
-            let cy = map.origin_y + ((i / width) as f64 + 0.5) * map.resolution;
+            let (cx, cy) = map.centre(i % width, i / width);
             // Only cells on the side being left: ahead of the centre when
             // reversing, behind it when pulling forward.
             if sign * ((cx - pose.x) * cos + (cy - pose.y) * sin) < 0. {
@@ -363,8 +359,7 @@ impl<'a> FitGrid<'a> {
         } else if (d + half_diagonal) * res < self.footprint.inradius() {
             false
         } else {
-            let x = self.map.origin_x + (column as f64 + 0.5) * res;
-            let y = self.map.origin_y + (row as f64 + 0.5) * res;
+            let (x, y) = self.map.centre(column, row);
             footprint_fits_some_heading(self.map, &self.footprint, x, y, self.start)
         };
         self.cache[i] = if fits { 1 } else { 2 };
@@ -475,8 +470,8 @@ pub(crate) fn rectangle_clearance(
             if map.occupancy[r as usize * map.width as usize + c as usize] < OCCUPIED {
                 continue;
             }
-            let dx = map.origin_x + (c as f64 + 0.5) * res - pose.x;
-            let dy = map.origin_y + (r as f64 + 0.5) * res - pose.y;
+            let (x, y) = map.centre(c as usize, r as usize);
+            let (dx, dy) = (x - pose.x, y - pose.y);
             let along = (dx * cos + dy * sin).abs() - a;
             let across = (-dx * sin + dy * cos).abs() - b;
             let outside = along.max(0.).hypot(across.max(0.));
