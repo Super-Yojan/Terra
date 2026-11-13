@@ -8,7 +8,6 @@ pub fn dispatch_search(
     let pose = b.pose.unwrap_or_default();
     let map = b.map.clone();
     let e = b.estimator.estimate(timestamp);
-    b.autonomy.run_id = b.run_id.clone();
     let input = terra_autonomy::ArbiterInput {
         now: timestamp,
         pose: pose.0,

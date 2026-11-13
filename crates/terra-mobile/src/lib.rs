@@ -676,7 +676,7 @@ impl MobileController {
         if let (Some((id, position)), Some(layout)) = (gate, brain.actuators.as_mut()) {
             let _ = layout.set_servo(id, position);
         }
-        let outdoor_motion = output.status.safety == "clear";
+        let outdoor_motion = output.status.safety == terra_autonomy::Safety::Clear;
         let mut outdoor_status = brain.outdoor.status(
             timestamp,
             outdoor_bridge::evidence(&brain, timestamp),
@@ -684,19 +684,14 @@ impl MobileController {
         );
         if brain.outdoor.selected {
             if brain.outdoor.phase() == "planning"
-                && matches!(
-                    output.status.reason.as_str(),
-                    "obstacle_blocked"
-                        | "route_no_path"
-                        | "route_goal_blocked"
-                        | "heading_requires_spin_or_replan"
-                )
+                && terra_autonomy::Reason::known(&output.status.reason)
+                    .is_some_and(terra_autonomy::Reason::is_route_blocked)
             {
                 outdoor_status["hold_reason"] = serde_json::json!("route_blocked");
             }
             // Explore and task keep their own hold reason: the outdoor mission does not gate them.
             if !outdoor_motion
-                && output.status.safety != "emergency_stop"
+                && output.status.safety != terra_autonomy::Safety::EmergencyStop
                 && !brain.autonomy.reads_outdoor_destination()
             {
                 output.status.reason = outdoor_status["hold_reason"]
@@ -709,11 +704,7 @@ impl MobileController {
             }
         }
         let clearance = map.as_ref().and_then(|m| {
-            terra_navigation::observed_clearance(
-                &m.0,
-                pose.0,
-                &brain.autonomy.planner.config.footprint,
-            )
+            terra_navigation::observed_clearance(&m.0, pose.0, &brain.autonomy.footprint())
         });
         if let Some(kind) = brain.near_miss.update(clearance) {
             output.events.push(terra_autonomy::DecisionEvent {

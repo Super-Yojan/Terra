@@ -192,14 +192,10 @@ impl Runtime {
             "search" | "search/action" | "search/report/ack" => {
                 search::dispatch_search(self, &kind, &bytes, now).is_ok()
             }
-            "task" => terra_autonomy::decode_task_request(&bytes).is_some_and(|r| {
-                self.autonomy.run_id = self.run_id.clone();
-                self.autonomy.start_task(r, now).is_ok()
-            }),
-            "task/action" => terra_autonomy::decode_task_action(&bytes).is_some_and(|a| {
-                self.autonomy.run_id = self.run_id.clone();
-                self.autonomy.apply_task_action(a, now).is_ok()
-            }),
+            "task" => terra_autonomy::decode_task_request(&bytes)
+                .is_some_and(|r| self.autonomy.start_task(r, now).is_ok()),
+            "task/action" => terra_autonomy::decode_task_action(&bytes)
+                .is_some_and(|a| self.autonomy.apply_task_action(a, now).is_ok()),
             "dock" => terra_autonomy::decode_dock(bytes).is_some_and(|r| {
                 let target = r.object_id.and_then(|id| {
                     self.objects
@@ -214,7 +210,6 @@ impl Runtime {
                         })
                 });
                 let pose = self.pose.unwrap_or_default().0;
-                self.autonomy.run_id = self.run_id.clone();
                 let accepted = self.autonomy.apply_dock_request(r, target, pose, now);
                 if self.autonomy.dock_active() {
                     // A gate test ends when a dock takes the gate.

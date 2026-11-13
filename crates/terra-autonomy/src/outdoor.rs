@@ -1,18 +1,16 @@
 //! Geographic mission state, independent of the local pose and occupancy frame.
 use serde_json::{Value, json};
 use terra_navigation::Pose;
+use terra_waypoint::{EARTH_RADIUS_M, valid_coordinates as coordinates};
 mod anchor;
 mod heading;
 pub use anchor::GeoAnchor;
 pub use heading::{CourseFix, HeadingFusion, Source as HeadingSource};
-/// Autonomy levels that accept a geographic destination, as wire names.
-/// L2 and L3 follow it directly; L4 explore and L5 task plan toward it on the local map.
-pub const GOAL_LEVELS: [&str; 4] = ["waypoint_direct", "waypoint", "explore", "task"];
 /// Arrival radius when the operator does not choose one, in metres. GPS accuracy
 /// no longer has to fit inside it: arrival uses the smoothed anchor position.
-pub const DEFAULT_ARRIVAL_RADIUS_M: f64 = 3.;
+const DEFAULT_ARRIVAL_RADIUS_M: f64 = 3.;
 /// Guidance lookahead along the destination bearing, in metres.
-pub const LOOKAHEAD_M: f64 = 3.;
+const LOOKAHEAD_M: f64 = 3.;
 #[derive(Clone, Copy, Debug)]
 pub struct GpsFix {
     pub timestamp: f64,
@@ -86,12 +84,6 @@ impl Default for OutdoorController {
 fn fresh(now: f64, t: f64, limit: f64) -> bool {
     now.is_finite() && t.is_finite() && t >= 0. && (0.0..=limit).contains(&(now - t))
 }
-fn coordinates(lat: f64, lon: f64) -> bool {
-    lat.is_finite()
-        && lon.is_finite()
-        && (-85.0..=85.).contains(&lat)
-        && (-180.0..=180.).contains(&lon)
-}
 /// Great-circle metres and true-north clockwise bearing in degrees.
 pub fn distance_bearing(lat: f64, lon: f64, to_lat: f64, to_lon: f64) -> (f64, f64) {
     let (a, b) = (lat.to_radians(), to_lat.to_radians());
@@ -102,12 +94,12 @@ pub fn distance_bearing(lat: f64, lon: f64, to_lat: f64, to_lon: f64) -> (f64, f
         .atan2(a.cos() * b.sin() - a.sin() * b.cos() * dl.cos())
         .to_degrees()
         .rem_euclid(360.);
-    (2. * 6_371_000. * h.sqrt().asin(), bearing)
+    (2. * EARTH_RADIUS_M * h.sqrt().asin(), bearing)
 }
 /// Point `distance` metres from (`lat`, `lon`) along true bearing `bearing` radians.
 pub fn destination(lat: f64, lon: f64, distance: f64, bearing: f64) -> (f64, f64) {
     let (a, l) = (lat.to_radians(), lon.to_radians());
-    let d = distance / 6_371_000.;
+    let d = distance / EARTH_RADIUS_M;
     let b = (a.sin() * d.cos() + a.cos() * d.sin() * bearing.cos()).asin();
     let m = l + (bearing.sin() * d.sin() * a.cos()).atan2(d.cos() - a.sin() * b.sin());
     (
@@ -386,7 +378,7 @@ impl OutdoorController {
    "heading_age_s":heading.map(|h|h.2),"heading_accuracy_deg":heading.map(|h|h.1),"heading_deg":heading.map(|h|h.0),
    "heading_source":self.heading.source().map(|s|s.name()),"heading_correction_age_s":self.heading.correction_age(now),
    "destination":self.mission.as_ref().map(|m|json!({"latitude":m.latitude,"longitude":m.longitude})),
-   "remaining_m":self.remaining,"token":self.token,"result":self.result,"goal_levels":GOAL_LEVELS,
+   "remaining_m":self.remaining,"token":self.token,"result":self.result,"goal_levels":crate::Level::ALL.iter().filter(|l| l.accepts_outdoor_goal()).map(|l| l.as_str()).collect::<Vec<_>>(),
    "destination_local":self.destination_local(e.pose).map(|(x,y)|json!({"x":x,"y":y})),
    "anchor":self.anchor.position().map(|(_,_,sigma)|json!({"sigma_m":sigma,"reanchors":self.anchor.reanchors,"innovation_m":self.anchor.last_innovation})),
    "mission_token":self.mission.as_ref().map(|m|&m.token)})

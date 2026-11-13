@@ -16,8 +16,9 @@ It answers one question each control tick: **what motion may the rover execute n
 
 - `decision.intent_command`: what the operator or goal follower wanted.
 - `decision.twist`: what the rover is actually allowed to execute.
-- `decision.safety`: `clear`, `hold`, or `emergency_stop`.
-- `decision.reason`: the specific explanation, such as `map_stale` or `operator_stop`.
+- `decision.safety`: a `Safety` (`clear`, `hold`, or `emergency_stop` on the wire).
+- `decision.reason`: a `Reason`, the specific explanation, such as `map_stale` or `operator_stop`.
+- `decision.source`: a `Source`, who supplied the motion (`none` during any hold).
 
 `decision.held` means that motion must be stopped. `finish_holds` sets the final
 command to zero and changes `clear` to `hold`. It preserves `emergency_stop`.
@@ -39,7 +40,10 @@ not change thresholds, command admission, turning policy or telemetry strings.
 
 ## Where the details live
 
-- `requests.rs`: mode changes, operator commands, goals, safety stop/reset and proposal decisions.
+- `requests.rs`: mode changes, operator commands, goals, safety stop/reset and proposal decisions;
+  `configure`/`set_speed_caps`/`set_run` (the host's only ways to change planner, turning,
+  exploration and run settings), token admission (`repeat`/`replay`) and the single stop
+  path `end_mission`.
 - `search_requests.rs`: detector capability, target-search actions and report acknowledgements.
 - `motion.rs`: intent selection, waypoint routing, heading maneuvers and collision checks.
 - `exploration.rs`: choosing frontier goals and tracking exploration hold timers.
@@ -65,8 +69,7 @@ Existing per-instance configuration can override its corresponding default.
 Mission budgets remain explicit per-run inputs; application-level publishing and
 sensor checks outside these crates are separate.
 
-For the map timeout, change `MAP_FRESHNESS_SECONDS` (default: `0.5`).
-`DEFAULT_MAP_FRESHNESS_TIMEOUT_SECONDS` remains a compatibility alias.
+For the map timeout, change `MAP_FRESHNESS_SECONDS`.
 All arbiter map-age checks use that default:
 safety holds, maneuver execution, proposal approval, search admission/resume and
 route visibility. Existing arbiters can also be configured individually:

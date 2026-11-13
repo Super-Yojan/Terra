@@ -14,7 +14,6 @@
 //! obstacle-aware 2D distance, both scaled so they never overestimate. Near the
 //! goal, a direct curve to it is tried as a shortcut: a Dubins curve with a goal
 //! heading, otherwise one turn and a straight line.
-use terra_mapping::OCCUPIED;
 use crate::footprint::{distance_field, for_each_overlapping_cell};
 use crate::{Footprint, Pose};
 use serde::{Deserialize, Serialize};
@@ -22,6 +21,7 @@ use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::f64::consts::{PI, SQRT_2, TAU};
 use terra_mapping::MapSnapshot;
+use terra_mapping::OCCUPIED;
 
 /// Longest 8-connected grid distance relative to the straight-line distance.
 const OCTILE_OVER_EUCLID: f64 = 1.082_392_2;
@@ -161,7 +161,7 @@ pub struct HybridWaypoint {
 /// one map cell apart. It ends within `goal_tolerance` of the goal position and,
 /// when `goal.yaw` is set, within `goal_heading_tolerance` of that heading.
 /// Unknown cells are blocked except under the starting body. This runs the whole
-/// search at once; use [`HybridSearch`] to spread it over control ticks.
+/// search at once; use [`crate::RouteJob`] to spread it over control ticks.
 ///
 /// # Errors
 /// - `route_invalid_map`: invalid map or configuration, nonfinite start, or more
@@ -260,7 +260,9 @@ impl HybridSearch {
         {
             return Err("route_invalid_map");
         }
-        let start_cell = map.cell(start.x, start.y).ok_or("route_start_outside_map")?;
+        let start_cell = map
+            .cell(start.x, start.y)
+            .ok_or("route_start_outside_map")?;
         let goal_cell = map.cell(goal.x, goal.y).ok_or("route_goal_outside_map")?;
         let mut search = Self {
             map: map.clone(),
@@ -349,11 +351,6 @@ impl HybridSearch {
             reversed: 0.,
         });
         Ok(search)
-    }
-
-    /// Expansions so far.
-    pub fn expansions(&self) -> u32 {
-        self.expansions
     }
 
     /// Run up to `budget` expansions. Returns `None` while still searching, then
@@ -588,10 +585,9 @@ impl HybridSearch {
 
     fn arrived(&self, x: f64, y: f64, yaw: f64) -> bool {
         (self.goal.x - x).hypot(self.goal.y - y) <= self.config.goal_tolerance
-            && self
-                .goal
-                .yaw
-                .is_none_or(|g| terra_types::wrap_angle(yaw - g).abs() <= self.config.goal_heading_tolerance)
+            && self.goal.yaw.is_none_or(|g| {
+                terra_types::wrap_angle(yaw - g).abs() <= self.config.goal_heading_tolerance
+            })
     }
 
     fn cost(&self, parent: &Node, curvature: f64, length: f64) -> f64 {
@@ -725,7 +721,6 @@ fn drive((x, y, yaw): (f64, f64, f64), curvature: f64, length: f64) -> (f64, f64
         end,
     )
 }
-
 
 fn index(map: &MapSnapshot, (column, row): (usize, usize)) -> usize {
     row * map.width as usize + column
@@ -865,7 +860,8 @@ fn dubins(from: (f64, f64, f64), to: (f64, f64, f64), radius: f64) -> Option<Vec
         .map(|word| word.map(|(curvature, units)| (curvature, units * radius)))
         .filter(|word| {
             let end = word.iter().fold(from, |at, &(c, len)| drive(at, c, len));
-            (end.0 - to.0).hypot(end.1 - to.1) < 1e-6 && terra_types::wrap_angle(end.2 - to.2).abs() < 1e-6
+            (end.0 - to.0).hypot(end.1 - to.1) < 1e-6
+                && terra_types::wrap_angle(end.2 - to.2).abs() < 1e-6
         })
         .min_by(|x, y| {
             let total = |w: &[(f64, f64); 3]| w.iter().map(|(_, len)| len).sum::<f64>();

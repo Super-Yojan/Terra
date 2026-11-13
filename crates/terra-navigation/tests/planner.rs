@@ -42,10 +42,9 @@ fn clear_space_and_blocked_braking() {
     assert!(result.twist.linear < 1.);
     assert!(!p.admissible(&m, pose, intent));
 }
-/// Unknown space cannot support forward motion or a frontier proposal on its own;
-/// revealing a free patch creates a finite frontier candidate.
+/// Unknown space cannot support forward motion on its own.
 #[test]
-fn unknown_space_and_frontier() {
+fn unknown_space_blocks_forward_motion() {
     let mut m = map();
     let p = LocalPlanner::default();
     m.occupancy.fill(-1);
@@ -57,37 +56,6 @@ fn unknown_space_and_frontier() {
             angular: 0.
         }
     ));
-    assert!(
-        frontier(
-            &m,
-            Pose::default(),
-            &terra_navigation::Footprint {
-                length: 0.495,
-                width: 0.495,
-                margin: 0.
-            },
-            &[]
-        )
-        .is_none()
-    );
-    for y in 15..25 {
-        for x in 15..25 {
-            m.occupancy[y * 40 + x] = 0;
-        }
-    }
-    let f = frontier(
-        &m,
-        Pose::default(),
-        &terra_navigation::Footprint {
-            length: 0.495,
-            width: 0.495,
-            margin: 0.,
-        },
-        &[],
-    )
-    .unwrap();
-    assert!(f.0.is_finite());
-    assert!(f.1.is_finite());
 }
 /// Repeated reverse-turn requests select identical commands within the sampled
 /// yaw acceleration bound; nonfinite intent or pose must fail closed.
@@ -136,38 +104,6 @@ fn known_current_footprint_allows_stationary_hold_in_unknown_map() {
     m.occupancy.fill(-1);
     assert!(LocalPlanner::default().admissible(&m, Pose::default(), Twist::default()));
 }
-/// Unknown underbody cells must not trap the rover when an observed region is
-/// available ahead; both frontier selection and reachability share this exception.
-#[test]
-fn frontier_can_leave_known_robot_footprint_when_grid_under_body_is_unobserved() {
-    let mut m = map();
-    m.occupancy.fill(-1);
-    for y in 14..27 {
-        for x in 14..35 {
-            m.occupancy[y * 40 + x] = 0;
-        }
-    }
-    // Remove only observations under the rover, preserving the free region ahead.
-    for y in 0..40 {
-        for x in 0..40 {
-            let px = -5. + (x as f64 + 0.5) * 0.25;
-            let py = -5. + (y as f64 + 0.5) * 0.25;
-            // Under the 0.919 m square body (half 0.46 m) at heading 0.
-            if px.abs() < 0.46 && py.abs() < 0.46 {
-                m.occupancy[y * 40 + x] = -1;
-            }
-        }
-    }
-    let pose = Pose::default();
-    let body = terra_navigation::Footprint {
-        length: 0.9192,
-        width: 0.9192,
-        margin: 0.,
-    };
-    let target = frontier(&m, pose, &body, &[]).expect("reachable observed region ahead");
-    assert!(reachable(&m, pose, &body, target.0, target.1));
-}
-
 /// Recording diagnostics must preserve the chosen command, identify its candidate,
 /// retain rejection reasons, and keep sampled paths and serialized telemetry bounded.
 #[test]
@@ -196,7 +132,7 @@ fn trace_matches_decision_and_records_rejected_candidates() {
     let mut blocked = free;
     blocked.occupancy.fill(100);
     let (decision, trace) = planner.plan_with_trace(&blocked, pose, Twist::default(), intent, 0.1);
-    assert_eq!(decision.reason, "obstacle_blocked");
+    assert_eq!(decision.reason, PlanReason::ObstacleBlocked);
     assert!(trace.selected.is_none());
     assert!(
         trace
@@ -319,4 +255,45 @@ fn measured_overspeed_does_not_expand_candidate_limits() {
         "{:?}",
         plan.twist
     );
+}
+/// A turning-limiter timing error (a tick too long after the last) is invalid
+/// input, not an obstacle, and samples nothing.
+#[test]
+fn turning_timing_error_is_invalid_input() {
+    use terra_types::turning::{TurningConfig, TurningLimiter};
+    let mut limiter = TurningLimiter::new(TurningConfig::default()).unwrap();
+    limiter
+        .step(terra_types::VelocityTarget {
+            timestamp: 0.,
+            forward: 0.,
+            yaw_rate: 0.,
+        })
+        .unwrap();
+    let intent = Twist {
+        linear: 0.5,
+        angular: 0.,
+    };
+    let planner = LocalPlanner::default();
+    let (late, trace) = planner.plan_with_turning(
+        &map(),
+        Pose::default(),
+        Twist::default(),
+        intent,
+        0.1,
+        &limiter,
+        1.,
+    );
+    assert_eq!(late.reason, PlanReason::InvalidInput);
+    assert_eq!(late.twist, Twist::default());
+    assert!(trace.candidates.is_empty());
+    let (on_time, _) = planner.plan_with_turning(
+        &map(),
+        Pose::default(),
+        Twist::default(),
+        intent,
+        0.1,
+        &limiter,
+        0.01,
+    );
+    assert!(!on_time.reason.holds());
 }

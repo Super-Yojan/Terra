@@ -116,17 +116,21 @@ impl AutonomyArbiter {
     /// Track how long the local planner has held a routed level; real
     /// progress resets recovery. Called after the motion check each tick.
     pub(super) fn note_blocked(&mut self, input: &ArbiterInput<'_>, decision: &TickDecision) {
-        if !self.routed_level() {
+        if !self.level.routed() {
             self.blocked_since = None;
             self.reset_recovery();
             return;
         }
-        let stalled = matches!(decision.reason, "active" | "assisted")
+        if decision.reason == Reason::PlannerInvalidInput {
+            // Nothing was sampled this tick: no evidence of progress or blockage.
+            return;
+        }
+        let stalled = matches!(decision.reason, Reason::Active | Reason::Assisted)
             && decision.goal.state == GoalState::Active
             && decision.twist.linear.abs() < STALL_SPEED
             && decision.twist.angular.abs() < STALL_YAW_RATE
             && !matches!(self.recovery, Recovery::BackingOff { .. });
-        if decision.reason == "obstacle_blocked" || stalled {
+        if decision.reason == Reason::ObstacleBlocked || stalled {
             self.blocked_since.get_or_insert(input.now);
             self.progress_since = None;
         } else {
@@ -157,7 +161,6 @@ impl AutonomyArbiter {
         };
         self.blocked_since = None;
         self.clear_route();
-        self.route_reaches_goal = false;
     }
 
     /// One back-off tick: reverse straight back while that keeps the body off
@@ -198,7 +201,7 @@ impl AutonomyArbiter {
             since,
             forward,
         };
-        decision.source = "recovery";
+        decision.source = Source::Recovery;
         Twist {
             linear: if forward { speed } else { -speed },
             angular: 0.,
@@ -211,7 +214,6 @@ impl AutonomyArbiter {
         };
         self.blocked_since = None;
         self.clear_route();
-        self.route_reaches_goal = false;
         decision.route_failure = Some("boxed_in");
     }
 
@@ -219,7 +221,6 @@ impl AutonomyArbiter {
     fn force_replan(&mut self) {
         self.blocked_since = None;
         self.clear_route();
-        self.route_reaches_goal = false;
         self.route_checked_at = f64::NEG_INFINITY;
     }
 }

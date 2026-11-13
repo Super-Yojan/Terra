@@ -27,7 +27,8 @@ fn navigation_dimensions_validate_and_derive_a_conservative_footprint() {
 fn navigation_update_requires_fresh_neutral_idle_hardware_and_current_revisions() {
     let c = MobileController::new(default_control_settings()).unwrap();
     let mut b = c.brain.lock().unwrap();
-    b.autonomy.run_id = b.run_id.clone();
+    let run = b.run_id.clone();
+    b.autonomy.set_run(&run);
     b.autonomy_json=serde_json::json!({"status":{"run_id":b.run_id,"revision":0,"safety":"hold"},"goal":{"state":"idle"}}).to_string();
     let payload = serde_json::json!({"token":"settings-one","run_id":b.run_id,"authority_revision":0,"settings_revision":0,"parameters":navigation_settings::Parameters::default()});
     let bytes = serde_json::to_vec(&payload).unwrap();
@@ -43,7 +44,7 @@ fn navigation_update_requires_fresh_neutral_idle_hardware_and_current_revisions(
     assert_eq!(b.navigation.revision, 1);
     assert_eq!(b.navigation.parameters.length, 0.8);
     assert_eq!(
-        b.autonomy.planner.config.footprint,
+        b.autonomy.footprint(),
         b.navigation.parameters.planner().footprint
     );
     let mut stale = payload.clone();
@@ -79,7 +80,7 @@ fn preceding_goal_or_mode_change_cannot_use_an_old_status_snapshot() {
         let c = MobileController::new(default_control_settings()).unwrap();
         let mut b = c.brain.lock().unwrap();
         let run = b.run_id.clone();
-        b.autonomy.run_id = run.clone();
+        b.autonomy.set_run(&run);
         b.autonomy.set_level(
             terra_autonomy::decode_level(br#"{"level":"waypoint_direct","token":"setup"}"#)
                 .unwrap(),

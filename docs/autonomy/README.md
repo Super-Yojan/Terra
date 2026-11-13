@@ -82,7 +82,7 @@ Zorvane applies the twist from the arbiter as soon as it depends on this crate. 
 ),
 ```
 
-And include `"exploration": output.exploration` on the `control_tick` record. Phase 2 can call `arbiter.notify_detection` when a simulated survivor is observed. `FindTargetsObjective` is the stub. It is not a detector.
+And include `"exploration": output.exploration` on the `control_tick` record.
 
 Safety holds, requested/effective authority, and the assigned trial condition are distinct.
 A takeover clears old goal and teleop intent, including when already in teleop.

@@ -39,7 +39,7 @@ flowchart LR
 | [fpv-signaling](fpv-signaling.md) | Shared WebRTC FPV signaling. No media. |
 | [terra-mapping](terra-mapping.md) | Rolling occupancy grid. |
 | [terra-map-merge](terra-map-merge.md) | Fuse several rovers' grids. |
-| [terra-navigation](terra-navigation.md) | Local planner and supervised frontiers. |
+| [terra-navigation](terra-navigation.md) | Local planner and Hybrid A* routes. |
 | [terra-exploration](terra-exploration.md) | Time-bounded autonomous exploration. |
 | [terra-autonomy](terra-autonomy.md) | Five levels and a safety hold. |
 | [terra-experiment](terra-experiment.md) | JSONL logs and summaries. |

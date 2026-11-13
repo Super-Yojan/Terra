@@ -31,7 +31,7 @@ pub const TASK_MAX_STEPS: u32 = 100;
 /// Waypoints taken from one reply; extra entries are dropped.
 pub const TASK_MAX_WAYPOINTS: usize = 5;
 /// Largest model reply the arbiter parses.
-pub const TASK_RESPONSE_MAX_BYTES: usize = 8192;
+const TASK_RESPONSE_MAX_BYTES: usize = 8192;
 /// A query with no answer after this long counts as a failed step.
 pub const TASK_QUERY_TIMEOUT_SECONDS: f64 = 90.;
 /// A route failure lasting this long abandons the active waypoint and asks the model again.
@@ -41,9 +41,9 @@ pub const TASK_WAYPOINT_TIMEOUT_SECONDS: f64 = 90.;
 /// Consecutive invalid replies, timeouts or model errors that fail the task.
 pub const TASK_MAX_CONSECUTIVE_FAILURES: u32 = 3;
 /// Landmarks older than this are left out of the prompt.
-pub const TASK_LANDMARK_MAX_AGE_SECONDS: f64 = 120.;
+const TASK_LANDMARK_MAX_AGE_SECONDS: f64 = 120.;
 /// Free point snapped to observed, clear space within this distance.
-pub const TASK_SNAP_RADIUS: f64 = 0.5;
+const TASK_SNAP_RADIUS: f64 = 0.5;
 /// Longest raw-drive grant an operator can approve, in seconds.
 pub const TASK_DRIVE_MAX_GRANT_SECONDS: f64 = 60.;
 /// A drive request the operator has not answered expires after this many seconds.
@@ -161,12 +161,7 @@ fn valid_text(text: &str) -> bool {
         && !text.chars().any(|c| c.is_control() && c != '\n')
 }
 
-fn decode<T: serde::de::DeserializeOwned>(b: &[u8]) -> Option<T> {
-    if b.is_empty() || b.len() > 2048 {
-        return None;
-    }
-    serde_json::from_slice(b).ok()
-}
+use crate::contract::decode;
 
 /// Decode at most 2048 bytes of strict JSON; `None` for invalid ids, text, budget or fields.
 pub fn decode_task_request(b: &[u8]) -> Option<TaskRequest> {
@@ -470,7 +465,6 @@ fn tidy(value: f64) -> f64 {
     if rounded.abs() < 5e-3 { 0. } else { rounded }
 }
 
-
 /// Relative bearing in degrees and a word for it.
 fn bearing(pose: Pose, x: f64, y: f64) -> (f64, &'static str) {
     let rel = terra_types::wrap_angle((y - pose.y).atan2(x - pose.x) - pose.yaw).to_degrees();
@@ -494,8 +488,9 @@ pub(crate) fn symbolic_grid(map: &MapSnapshot, pose: Pose) -> String {
     let cols = (map.width as usize).div_ceil(child);
     let rows = (map.height as usize).div_ceil(child);
     let width = map.width as usize;
-    let rover =
-        map.cell(pose.x, pose.y).map(|(c, r)| (c / child, r / child));
+    let rover = map
+        .cell(pose.x, pose.y)
+        .map(|(c, r)| (c / child, r / child));
     let mut lines = Vec::with_capacity(rows + 2);
     for br in (0..rows).rev() {
         let y0 = map.origin_y + (br * child) as f64 * map.resolution;

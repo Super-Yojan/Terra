@@ -239,11 +239,13 @@ fn cached_waypoint_command_must_stay_admissible() {
         occupancy: vec![0; 120 * 80],
     };
     let mut arbiter = AutonomyArbiter::default();
-    arbiter.planner.config.footprint = terra_navigation::Footprint {
+    let mut settings = arbiter.settings();
+    settings.planner.footprint = terra_navigation::Footprint {
         length: 0.28,
         width: 0.28,
         margin: 0.,
     };
+    arbiter.configure(&settings).unwrap();
     arbiter.set_level(LevelRequest {
         level: Level::Waypoint,
         token: "cache".into(),
@@ -279,7 +281,7 @@ fn cached_waypoint_command_must_stay_admissible() {
     });
     assert!(first.twist.linear > 0.5, "{:?}", first.twist);
     let planner = LocalPlanner {
-        config: arbiter.planner.config.clone(),
+        config: arbiter.planner_config().clone(),
     };
     let mut blocking = None;
     for index in 0..map.occupancy.len() {
@@ -294,7 +296,7 @@ fn cached_waypoint_command_must_stay_admissible() {
             (point[0] - pose.x).hypot(point[1] - pose.y) > 0.3
                 && terra_navigation::footprint_fits_some_heading(
                     &blocked,
-                    &arbiter.planner.config.footprint,
+                    &arbiter.footprint(),
                     point[0],
                     point[1],
                     Some(pose),
@@ -444,11 +446,13 @@ fn stalled_measured_speed_does_not_pin_waypoint_speed() {
         occupancy: vec![0; 120 * 80],
     };
     let mut arbiter = AutonomyArbiter::default();
-    arbiter.planner.config.footprint = terra_navigation::Footprint {
+    let mut settings = arbiter.settings();
+    settings.planner.footprint = terra_navigation::Footprint {
         length: 0.28,
         width: 0.28,
         margin: 0.,
     };
+    arbiter.configure(&settings).unwrap();
     arbiter.set_level(LevelRequest {
         level: Level::Waypoint,
         token: "stall".into(),

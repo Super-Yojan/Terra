@@ -300,7 +300,7 @@ impl AutonomyArbiter {
         task.note("operator", "new GPS destination G1".into());
         task.replan("gps_destination");
         self.follower.cancel();
-        self.last_plan = None;
+        self.plan.command = None;
     }
     /// Current or last task, if one has started since the level was selected.
     pub fn task_status(&self, now: f64) -> Option<TaskStatus> {
@@ -314,12 +314,8 @@ impl AutonomyArbiter {
         if !valid_token(&r.token) {
             return Err("invalid_task");
         }
-        if self.duplicate(&r.token, &fp) {
-            return if self.receipt.as_ref().is_some_and(|r| r.1) {
-                Ok(())
-            } else {
-                Err("conflicting_or_rejected_token")
-            };
+        if let Some(result) = self.replay(&r.token, &fp) {
+            return result;
         }
         let reason = if !r.spec.valid() {
             Some("invalid_task")
@@ -350,8 +346,7 @@ impl AutonomyArbiter {
             old.end(TaskPhase::Cancelled, "replaced", now);
         }
         self.follower.cancel();
-        self.last_plan = None;
-        self.planner_trace = None;
+        self.plan.forget();
         self.paused = false;
         self.task = Some(TaskRun::new(spec, now));
     }
@@ -364,12 +359,8 @@ impl AutonomyArbiter {
         if !valid_token(&a.token) {
             return Err("invalid_task_action");
         }
-        if self.duplicate(&a.token, &fp) {
-            return if self.receipt.as_ref().is_some_and(|r| r.1) {
-                Ok(())
-            } else {
-                Err("conflicting_or_rejected_token")
-            };
+        if let Some(result) = self.replay(&a.token, &fp) {
+            return result;
         }
         let reason = match self.task.as_ref() {
             _ if a.run_id.as_ref().is_some_and(|run| run != &self.run_id) => Some("wrong_run"),
@@ -495,16 +486,16 @@ impl AutonomyArbiter {
         let fresh_map = input.map.filter(|_| self.map_is_fresh(input));
         let Some(task) = self.task.as_mut() else {
             decision.held = true;
-            decision.reason = "task_idle";
+            decision.reason = Reason::Other("task_idle");
             return;
         };
         if task.phase.terminal() {
             decision.held = true;
-            decision.reason = match task.phase {
+            decision.reason = Reason::Other(match task.phase {
                 TaskPhase::Completed => "task_completed",
                 TaskPhase::Failed => "task_failed",
                 _ => "task_cancelled",
-            };
+            });
             return;
         }
         let mut events: Vec<(&'static str, String)> = Vec::new();
@@ -614,6 +605,7 @@ impl AutonomyArbiter {
                     && (status.x - w.x).abs() < 1e-9
                     && (status.y - w.y).abs() < 1e-9;
                 if !latched {
+                    // `Err` is impossible: the extent is a valid constant.
                     let accepted = self
                         .follower
                         .accept(
@@ -623,11 +615,10 @@ impl AutonomyArbiter {
                                 yaw: None,
                                 token: None,
                             },
-                            20_000.,
+                            terra_waypoint::MAX_LOCAL_GOAL_M,
                         )
                         .unwrap_or(false);
-                    self.last_plan = None;
-                    self.planner_trace = None;
+                    self.plan.forget();
                     if accepted {
                         task.waypoint_started = now;
                         events.push(("route_selected", "task_waypoint".into()));
@@ -719,19 +710,17 @@ impl AutonomyArbiter {
         }
 
         let phase = task.phase;
-        let reason: &'static str = match phase {
-            TaskPhase::Navigating => "",
-            TaskPhase::Planning => "task_planning",
-            TaskPhase::WaitingOperator => "task_waiting_operator",
-            TaskPhase::Completed => "task_completed",
-            TaskPhase::Failed => "task_failed",
-            TaskPhase::Cancelled => "task_cancelled",
-        };
         if phase != TaskPhase::Navigating {
             self.follower.cancel();
             if !agent_driving {
                 decision.held = true;
-                decision.reason = reason;
+                decision.reason = Reason::Other(match phase {
+                    TaskPhase::Planning => "task_planning",
+                    TaskPhase::WaitingOperator => "task_waiting_operator",
+                    TaskPhase::Completed => "task_completed",
+                    TaskPhase::Failed => "task_failed",
+                    _ => "task_cancelled",
+                });
             }
         }
         decision.goal = self.follower.step(pose.x, pose.y, pose.yaw).status;
@@ -745,17 +734,11 @@ impl AutonomyArbiter {
         let Some(task) = self.task.as_mut() else {
             return;
         };
-        if task.phase != TaskPhase::Navigating {
+        // A planner input error sampled nothing: no evidence either way.
+        if task.phase != TaskPhase::Navigating || decision.reason == Reason::PlannerInvalidInput {
             return;
         }
-        let blocked = decision.route_failure.is_some()
-            || matches!(
-                decision.reason,
-                "obstacle_blocked"
-                    | "route_no_path"
-                    | "route_goal_blocked"
-                    | "heading_requires_spin_or_replan"
-            );
+        let blocked = decision.route_failure.is_some() || decision.reason.is_route_blocked();
         if !blocked {
             task.blocked_since = None;
             if task.reason != "driving_waypoint" {
@@ -766,7 +749,7 @@ impl AutonomyArbiter {
         let since = *task.blocked_since.get_or_insert(input.now);
         task.reason = "route_blocked".into();
         if input.now - since >= TASK_BLOCKED_SECONDS {
-            let why = decision.route_failure.unwrap_or(decision.reason);
+            let why = decision.route_failure.unwrap_or(decision.reason.as_str());
             if let Some(w) = task.plan.front().cloned() {
                 task.note(
                     "blocked",
@@ -778,8 +761,7 @@ impl AutonomyArbiter {
             }
             task.replan("route_blocked");
             self.follower.cancel();
-            self.last_plan = None;
-            self.planner_trace = None;
+            self.plan.forget();
             self.event("task_waypoint_abandoned", None, why);
         }
     }

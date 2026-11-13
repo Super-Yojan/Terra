@@ -172,34 +172,17 @@ impl MobileController {
 /// and the L5 `task` level only while the phone advertises a language model.
 #[uniffi::export]
 pub fn supported_autonomy_levels() -> Vec<String> {
-    [
-        terra_autonomy::Level::Teleop,
-        terra_autonomy::Level::AssistedTeleop,
-        terra_autonomy::Level::Waypoint,
-        terra_autonomy::Level::WaypointDirect,
-        terra_autonomy::Level::Explore,
-        terra_autonomy::Level::Supervised,
-    ]
-    .into_iter()
-    .map(|level| match level {
-        terra_autonomy::Level::Teleop => "teleop",
-        terra_autonomy::Level::AssistedTeleop => "assisted_teleop",
-        terra_autonomy::Level::Waypoint => "waypoint",
-        terra_autonomy::Level::Supervised => "supervised",
-        terra_autonomy::Level::WaypointDirect => "waypoint_direct",
-        terra_autonomy::Level::Explore => "explore",
-        terra_autonomy::Level::TargetSearch => "target_search",
-        terra_autonomy::Level::Task => "task",
-    })
-    .map(str::to_string)
-    .collect()
+    terra_autonomy::Level::BASE
+        .iter()
+        .map(|level| level.as_str().to_string())
+        .collect()
 }
 
 /// Operator-facing label for a wire level name, from [`terra_autonomy::Level::label`].
 /// Unknown names are returned unchanged.
 #[uniffi::export]
 pub fn autonomy_level_label(level: String) -> String {
-    serde_json::from_value::<terra_autonomy::Level>(serde_json::Value::String(level.clone()))
+    terra_autonomy::Level::parse(&level)
         .map(|l| l.label().to_string())
         .unwrap_or(level)
 }

@@ -1,7 +1,8 @@
 //! Mission search regressions for observation memory, waypoint validity, and recovery.
 
+use terra_exploration::{SearchBounds, SearchNavigationDecision, SearchNavigator};
 use terra_mapping::MapSnapshot;
-use terra_navigation::{Pose, SearchBounds, SearchNavigationDecision, SearchNavigator};
+use terra_navigation::Pose;
 /// Observe a central 5 m square, leaving unknown space around it to form frontiers.
 fn map() -> MapSnapshot {
     let mut m = MapSnapshot {

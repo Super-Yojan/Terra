@@ -190,7 +190,7 @@ fn search_route_intent_is_not_swallowed_by_waypoint_arrival_radius() {
     a.start_search(req(), &input(&m, 0.)).unwrap();
     let o = a.step(input(&m, 0.1));
     assert_ne!(o.intent, Twist::default());
-    assert_eq!(o.status.active_source, "target_search");
+    assert_eq!(o.status.active_source, Source::TargetSearch);
 }
 /// Place the rover centre near the search edge so its footprint crosses the boundary; reject the start.
 #[test]

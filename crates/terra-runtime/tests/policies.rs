@@ -98,7 +98,7 @@ fn stale_generation_in_a_batch_is_rejected_and_stop_dominates_reset() {
     );
     assert_eq!(
         r.step(0.01).unwrap().autonomy.status.safety,
-        "emergency_stop"
+        terra_autonomy::Safety::EmergencyStop
     );
 }
 #[test]
@@ -164,7 +164,7 @@ fn accepted_mission_survives_link_loss_with_fresh_onboard_evidence() {
     sensors(&mut r, 0.01);
     let out = r.step(0.01).unwrap();
     assert_eq!(out.autonomy.goal.state, terra_waypoint::GoalState::Active);
-    assert_eq!(out.autonomy.status.safety, "clear");
+    assert_eq!(out.autonomy.status.safety, terra_autonomy::Safety::Clear);
     assert!(out.autonomy.twist.linear > 0.);
 }
 #[test]

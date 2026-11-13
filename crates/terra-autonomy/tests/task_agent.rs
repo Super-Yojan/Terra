@@ -231,7 +231,10 @@ fn raw_drive_needs_operator_approval_is_capped_and_ends_with_the_grant() {
     // Asked for 2 m/s: capped to 0.5, then the planner decides what is safe.
     sim.arbiter.agent_drive(2.0, 0., 5., sim.now).unwrap();
     let output = sim.tick();
-    assert_eq!(output.status.active_source, "task_agent_drive");
+    assert_eq!(
+        output.status.active_source,
+        terra_autonomy::Source::TaskAgentDrive
+    );
     assert!(output.twist.linear > 0. && output.twist.linear <= TASK_DRIVE_MAX_LINEAR + 1e-9);
     assert!(output.task.unwrap().drive_remaining_seconds.unwrap() > 59.);
 
@@ -333,7 +336,10 @@ fn approved_agent_can_back_up_on_a_stale_map() {
     };
     sim.arbiter.agent_drive(-0.3, 0., 1., sim.now + 5.).unwrap();
     let output = stale(&mut sim);
-    assert_eq!(output.status.active_source, "task_agent_drive");
+    assert_eq!(
+        output.status.active_source,
+        terra_autonomy::Source::TaskAgentDrive
+    );
     assert!(output.twist.linear < 0., "{}", output.status.reason);
 
     // Forward on the same stale map still holds.
