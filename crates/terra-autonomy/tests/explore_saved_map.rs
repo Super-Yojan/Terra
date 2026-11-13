@@ -215,7 +215,7 @@ fn explore_saved_map() {
                 out.twist.linear,
                 out.twist.angular,
                 out.status.reason,
-                out.status.active_source
+                out.status.active_source.as_str()
             );
         }
         if std::env::var("TERRA_DUMP")

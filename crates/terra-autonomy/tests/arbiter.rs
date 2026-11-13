@@ -45,7 +45,10 @@ fn takeover_clears_old_lease_and_stop_is_latched() {
         },
         true,
     );
-    assert_eq!(a.step(input(0.4)).status.safety, "emergency_stop");
+    assert_eq!(
+        a.step(input(0.4)).status.safety,
+        terra_autonomy::Safety::EmergencyStop
+    );
     a.set_safety(
         SafetyRequest {
             action: SafetyAction::Reset,
@@ -54,7 +57,7 @@ fn takeover_clears_old_lease_and_stop_is_latched() {
         false,
     );
     let held = a.step(input(0.5)).status;
-    assert_eq!(held.safety, "emergency_stop");
+    assert_eq!(held.safety, Safety::EmergencyStop);
     assert_eq!(held.request_reason.as_deref(), Some("unhealthy_reset"));
     a.set_safety_refusing(
         SafetyRequest {
@@ -64,7 +67,7 @@ fn takeover_clears_old_lease_and_stop_is_latched() {
         Some("still_tilted"),
     );
     let held = a.step(input(0.55)).status;
-    assert_eq!(held.safety, "emergency_stop");
+    assert_eq!(held.safety, Safety::EmergencyStop);
     assert_eq!(held.request_reason.as_deref(), Some("still_tilted"));
     a.set_safety(
         SafetyRequest {
@@ -251,7 +254,10 @@ fn keyboard_stop_relatches_after_each_reset() {
     let mut a = AutonomyArbiter::default();
     for n in 0..3 {
         a.hold_emergency_stop();
-        assert_eq!(a.step(input(n as f64)).status.safety, "emergency_stop");
+        assert_eq!(
+            a.step(input(n as f64)).status.safety,
+            terra_autonomy::Safety::EmergencyStop
+        );
         a.set_safety(
             SafetyRequest {
                 action: SafetyAction::Reset,
@@ -259,14 +265,17 @@ fn keyboard_stop_relatches_after_each_reset() {
             },
             true,
         );
-        assert_eq!(a.step(input(n as f64 + 0.1)).status.safety, "clear");
+        assert_eq!(
+            a.step(input(n as f64 + 0.1)).status.safety,
+            terra_autonomy::Safety::Clear
+        );
     }
 }
 /// Generate a proposal in a new run and reject an approval carrying the old run ID despite a matching proposal number.
 #[test]
 fn previous_run_approval_cannot_launch_reused_proposal_id() {
     let mut a = AutonomyArbiter::default();
-    a.run_id = "new".into();
+    a.set_run("new");
     a.set_level(LevelRequest {
         level: Level::Supervised,
         token: "level".into(),
@@ -319,7 +328,7 @@ fn previous_run_approval_cannot_launch_reused_proposal_id() {
 #[test]
 fn canonical_motion_is_bound_to_authority_and_run() {
     let mut a = AutonomyArbiter::default();
-    a.run_id = "new-run".into();
+    a.set_run("new-run");
     let mut r = tele();
     r.run_id = Some("old-run".into());
     r.authority_revision = Some(0);

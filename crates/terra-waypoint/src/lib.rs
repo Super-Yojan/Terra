@@ -9,7 +9,11 @@ use serde::Serialize;
 use terra_types::InputError;
 
 /// Maximum accepted goal JSON size in bytes, including whitespace.
-pub const MAX_GOAL_BYTES: usize = 2048;
+const MAX_GOAL_BYTES: usize = 2048;
+/// Largest local goal coordinate magnitude, metres: [`decode_goal`] refuses a
+/// local goal beyond it, and hosts pass it as the follower's `half_extent`
+/// when every decoded goal should fit.
+pub const MAX_LOCAL_GOAL_M: f64 = 20_000.;
 const METRES_PER_DEGREE: f64 = 40_075_016.686 / 360.0;
 
 /// Map origin. Goals in WGS84 are projected into robotics metres: +x north, +y west.
@@ -534,7 +538,7 @@ pub fn decode_goal(bytes: &[u8]) -> Option<GoalCommand> {
             }
             let x = finite(object.get("x")?)?;
             let y = finite(object.get("y")?)?;
-            if x.abs() > 20_000.0 || y.abs() > 20_000.0 {
+            if x.abs() > MAX_LOCAL_GOAL_M || y.abs() > MAX_LOCAL_GOAL_M {
                 return None;
             }
             Some(GoalCommand::Local { x, y, yaw, token })
@@ -577,7 +581,6 @@ fn inside_square(x: f64, y: f64, half_extent: f64) -> bool {
     let bevy_z = -x;
     bevy_x.abs() <= half_extent && bevy_z.abs() <= half_extent
 }
-
 
 fn finite(value: &serde_json::Value) -> Option<f64> {
     let number = value.as_f64()?;

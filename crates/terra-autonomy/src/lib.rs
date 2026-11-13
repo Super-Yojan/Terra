@@ -30,7 +30,7 @@
 //!     healthy: true,
 //! });
 //! assert_eq!(output.twist.linear, 0.2);
-//! assert_eq!(output.status.active_source, "operator");
+//! assert_eq!(output.status.active_source, terra_autonomy::Source::Operator);
 //! ```
 
 mod search;
@@ -49,8 +49,7 @@ pub use dock::*;
 /// Detected buckets and balls in the local frame, with GPS when outdoor.
 pub mod objects;
 pub use terra_exploration::{
-    Detection, EndReason, ExplorationConfig, ExplorationStatus, ExplorePhase, FindTargetsObjective,
-    FrontierTarget, MissionObjective,
+    EndReason, ExplorationConfig, ExplorationStatus, ExplorePhase, FrontierTarget,
 };
 
 /// Dashboard telemetry for observed cells only; never includes simulator ground truth.

@@ -209,13 +209,7 @@ pub struct SearchReportAck {
     /// Request correlation token; command tokens use 1–64 ASCII letters, digits, or `._:-`.
     pub token: String,
 }
-fn decode<T: serde::de::DeserializeOwned>(b: &[u8]) -> Option<T> {
-    if b.is_empty() || b.len() > 2048 {
-        None
-    } else {
-        serde_json::from_slice(b).ok()
-    }
-}
+use crate::contract::decode;
 /// Decode strict JSON up to 2048 bytes, returning `None` unless the complete search request validates.
 pub fn decode_search_request(b: &[u8]) -> Option<SearchRequest> {
     decode::<SearchRequest>(b).filter(SearchRequest::valid)

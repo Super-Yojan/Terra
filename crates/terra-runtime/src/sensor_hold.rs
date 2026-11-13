@@ -57,7 +57,7 @@ impl Runtime {
         outdoor_motion: bool,
         settling: bool,
     ) {
-        if output.status.reason == "sensor_unhealthy" {
+        if output.status.reason == terra_autonomy::Reason::SensorUnhealthy.as_str() {
             let since = *self.holds.since.get_or_insert(now);
             if settling && let Some((at, _)) = self.holds.last.as_mut() {
                 // Keep the cause that started the hold while data settles.

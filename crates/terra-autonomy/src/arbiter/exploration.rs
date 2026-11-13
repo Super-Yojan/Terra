@@ -68,33 +68,25 @@ impl AutonomyArbiter {
                     && (preview.status.x - x).hypot(preview.status.y - y) < 0.05;
                 if !same {
                     let token = format!("explore-{}", self.explorer.frontiers_attempted());
-                    let _ = self.follower.accept(
-                        &GoalCommand::Local {
-                            x,
-                            y,
-                            yaw: None,
-                            token: Some(token),
-                        },
-                        20_000.,
-                    );
-                    self.last_plan = None;
+                    self.follow_local(x, y, Some(token));
+                    self.plan.command = None;
                 }
                 None
             }
             ExploreAction::Scan { yaw_rate } => {
                 self.follower.cancel();
-                self.last_plan = None;
+                self.plan.command = None;
                 self.explore_scan = Some(yaw_rate);
                 return None;
             }
             ExploreAction::Hold => {
                 self.follower.cancel();
-                self.last_plan = None;
+                self.plan.command = None;
                 Some("frontier_retry")
             }
             ExploreAction::Finished(reason) => {
                 self.follower.cancel();
-                self.last_plan = None;
+                self.plan.command = None;
                 Some(reason.as_str())
             }
             ExploreAction::Idle => Some("exploration_idle"),
@@ -113,7 +105,7 @@ impl AutonomyArbiter {
         yaw_rate: f64,
         decision: &mut TickDecision,
     ) {
-        decision.source = "explore";
+        decision.source = Source::Explore;
         let spin = self.turning_config.allow_in_place;
         let circle = yaw_rate.abs() * self.turning_config.min_turn_radius;
         let candidates: &[Twist] = if spin {
@@ -138,7 +130,7 @@ impl AutonomyArbiter {
             planning_map.is_some_and(|map| self.planner.admissible(map, input.pose, intent))
         }) else {
             decision.held = true;
-            decision.reason = "obstacle_blocked";
+            decision.reason = Reason::ObstacleBlocked;
             return;
         };
         decision.intent_command = intent;
@@ -159,12 +151,12 @@ impl AutonomyArbiter {
                     linear: target.forward,
                     angular: target.yaw_rate,
                 };
-                decision.reason = "exploration_scan";
+                decision.reason = Reason::ExplorationScan;
             }
             Err(_) => {
                 self.scan_turning = None;
                 decision.held = true;
-                decision.reason = "invalid_turn_timing";
+                decision.reason = Reason::InvalidTurnTiming;
             }
         }
     }

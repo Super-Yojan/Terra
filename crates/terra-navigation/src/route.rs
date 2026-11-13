@@ -12,9 +12,8 @@
 //!    and only the known-free start of that route is returned: the rover drives
 //!    to the edge of what it has seen, the map fills in, and the caller replans.
 use crate::footprint::{self, Unknown};
-use crate::{
-    HybridConfig, HybridGoal, HybridSearch, HybridWaypoint, Pose,
-};
+use crate::hybrid_astar::HybridSearch;
+use crate::{HybridConfig, HybridGoal, HybridWaypoint, Pose};
 use terra_mapping::MapSnapshot;
 
 /// Cost multiple for crossing unknown cells; routes prefer observed space but
@@ -65,15 +64,12 @@ impl RouteJob {
         config: &HybridConfig,
         snap: f64,
     ) -> Result<Self, &'static str> {
-        if !map.valid()
-            || !start.finite()
-            || !x.is_finite()
-            || !y.is_finite()
-            || !snap.is_finite()
+        if !map.valid() || !start.finite() || !x.is_finite() || !y.is_finite() || !snap.is_finite()
         {
             return Err("route_invalid_map");
         }
-        map.cell(start.x, start.y).ok_or("route_start_outside_map")?;
+        map.cell(start.x, start.y)
+            .ok_or("route_start_outside_map")?;
         let mut moved = false;
         let (mut gx, mut gy) = (x, y);
         match map.at(x, y) {

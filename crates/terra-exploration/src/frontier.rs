@@ -31,8 +31,8 @@ pub fn map_coverage(map: &MapSnapshot) -> Option<(f64, f64)> {
 /// separation from every excluded point. Nonfinite scorer outputs are ignored.
 /// Invalid or nonpositive `exclude_radius` falls back to 1 m.
 ///
-/// Ordering matches `terra_navigation::frontier` when `scorer` is [`crate::InformationGainScorer`]
-/// and `exclude_radius` is 1: right, left, up, down, and a strictly better score replaces the current best.
+/// Neighbours expand right, left, up, down, and only a strictly better score
+/// replaces the current best, so equal scores keep the first cell found.
 pub fn select_frontier(
     map: &MapSnapshot,
     pose: Pose,

@@ -47,7 +47,7 @@ impl AutonomyArbiter {
         now: f64,
     ) -> bool {
         let fp = format!("dock:{:?}:{:?}:{:?}", r.action, r.object_id, r.dock_id);
-        if !valid_token(&r.token) || self.duplicate(&r.token, &fp) {
+        if !valid_token(&r.token) || self.repeat(&r.token, &fp).is_some() {
             return false;
         }
         if r.run_id.as_ref().is_some_and(|run| run != &self.run_id) {
@@ -138,7 +138,7 @@ impl AutonomyArbiter {
             self.gate_open = false;
             return false;
         };
-        let held = decision.held.then_some(decision.reason);
+        let held = decision.held.then_some(decision.reason.as_str());
         let tick = dock.step(
             input.now,
             input.pose,
@@ -153,11 +153,11 @@ impl AutonomyArbiter {
         if decision.held {
             return true;
         }
-        decision.source = "dock";
-        decision.reason = tick.reason;
+        decision.source = Source::Dock;
+        decision.reason = tick.reason.into();
         decision.intent_command = tick.twist;
         decision.twist = tick.twist;
-        if tick.twist == Twist::default() && tick.reason != "dock_creep" {
+        if tick.twist == Twist::default() && decision.reason != Reason::DockCreep {
             // Zero motion is the dock's intent, not a safety hold.
             self.turning.reset();
         }

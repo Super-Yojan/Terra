@@ -928,10 +928,7 @@ pub struct DockRequest {
 /// Decode a `dock` request of at most 2048 bytes. `start` needs `object_id`
 /// and `dump` needs `dock_id`.
 pub fn decode_dock(b: &[u8]) -> Option<DockRequest> {
-    if b.is_empty() || b.len() > 2048 {
-        return None;
-    }
-    serde_json::from_slice::<DockRequest>(b).ok().filter(|r| {
+    crate::contract::decode::<DockRequest>(b).filter(|r| {
         crate::valid_token(&r.token)
             && r.run_id.as_ref().is_none_or(|s| crate::valid_token(s))
             && match r.action {

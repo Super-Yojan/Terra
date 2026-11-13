@@ -100,7 +100,7 @@ fn teleop_dock_waits_for_operator_then_dumps() {
     let dock = out.status.dock.unwrap();
     assert!(dock.awaiting_approval);
     assert_eq!(dock.approval, DumpApproval::Operator);
-    assert_eq!(out.status.active_source, "dock");
+    assert_eq!(out.status.active_source, terra_autonomy::Source::Dock);
     // A dump for another dock id is refused.
     let wrong = decode_dock(br#"{"action":"dump","dock_id":9,"token":"x1"}"#).unwrap();
     assert!(!a.apply_dock_request(wrong, None, pose, t));

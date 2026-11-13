@@ -2,8 +2,8 @@
 //!
 //! [`LocalPlanner::plan`] samples reachable velocities and chooses the safe one
 //! closest to the requested intent. [`LocalPlanner::admissible`] checks the swept
-//! footprint through the prediction horizon and braking period. [`frontier`] and
-//! [`reachable`] search the grid; unknown cells are not treated as free paths.
+//! footprint through the prediction horizon and braking period. [`reachable`]
+//! searches the grid; unknown cells are not treated as free paths.
 //!
 //! # Choosing an API
 //!
@@ -11,7 +11,6 @@
 //! - Use [`RouteJob`] for a drivable route to a goal (Hybrid A* over position and
 //!   heading, turning only along arcs), spread over control ticks, including goals
 //!   beyond the observed window; [`hybrid_astar_route`] runs one search at once.
-//! - Use [`SearchNavigator`] to accumulate observations and select exploration waypoints.
 //!
 //! # Coordinates and occupancy
 //!
@@ -33,7 +32,7 @@
 //!
 //! ```
 //! use terra_mapping::MapSnapshot;
-//! use terra_navigation::{LocalPlanner, Pose, Twist};
+//! use terra_navigation::{LocalPlanner, PlanReason, Pose, Twist};
 //!
 //! let map = MapSnapshot {
 //!     width: 40,
@@ -50,26 +49,22 @@
 //! // Acceleration limits allow only a small first step toward the requested speed.
 //! assert!(decision.twist.linear > 0.0);
 //! assert!(decision.twist.linear <= 0.1);
-//! assert_eq!(decision.reason, "assisted");
+//! assert_eq!(decision.reason, PlanReason::Assisted);
 //! ```
 
 mod footprint;
 pub use footprint::{
     FitGrid, Footprint, backoff_clear, footprint_fits, footprint_fits_some_heading,
-    footprint_rejection_at, pull_forward_clear, rectangle_clearance,
+    footprint_rejection_at, pull_forward_clear,
 };
 mod hybrid_astar;
-pub use hybrid_astar::{
-    HybridConfig, HybridGoal, HybridSearch, HybridWaypoint, hybrid_astar_route,
-};
+pub use hybrid_astar::{HybridConfig, HybridGoal, HybridWaypoint, hybrid_astar_route};
 mod route;
 pub use route::{HybridRoute, RouteJob};
-mod search;
-pub use search::*;
 mod maneuver;
 mod memory;
 pub use maneuver::ManeuverSegment;
-pub use memory::{LongRangeMemory, MEMORY_CELLS, MEMORY_RESOLUTION};
+pub use memory::LongRangeMemory;
 fn direction(v: f64) -> &'static str {
     if v < 0. {
         "reverse"
@@ -82,6 +77,36 @@ fn direction(v: f64) -> &'static str {
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use terra_mapping::MapSnapshot;
+/// Why the local planner chose its command. Serializes as [`PlanReason::as_str`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlanReason {
+    /// The selected command is within 0.15 of the intent on both axes.
+    Active,
+    /// The planner changed the intent by more than 0.15 on some axis to stay safe.
+    Assisted,
+    /// No sampled command was admissible on the map.
+    ObstacleBlocked,
+    /// The configuration, pose, time step, velocities or turning-limiter timing
+    /// were invalid, so nothing was sampled. This says nothing about obstacles.
+    #[serde(rename = "planner_invalid_input")]
+    InvalidInput,
+}
+impl PlanReason {
+    /// Wire name, identical to the serde form.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PlanReason::Active => "active",
+            PlanReason::Assisted => "assisted",
+            PlanReason::ObstacleBlocked => "obstacle_blocked",
+            PlanReason::InvalidInput => "planner_invalid_input",
+        }
+    }
+    /// Whether the decision holds the rover: a zero command and no admissible motion.
+    pub fn holds(self) -> bool {
+        matches!(self, PlanReason::ObstacleBlocked | PlanReason::InvalidInput)
+    }
+}
 /// Forward and yaw velocities in the rover's local frame.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Twist {
@@ -116,7 +141,7 @@ impl Pose {
 /// The default footprint is Terra's 0.61 m square body with 5 cm margin, speed limits are 2 m/s and 2 rad/s,
 /// acceleration limits are 1 m/s² and 2 rad/s², braking is 1 m/s², and the
 /// prediction horizon is 2 s.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PlannerConfig {
     /// Conservative reverse speed cap, metres/second.
     #[serde(default = "default_reverse")]
@@ -172,8 +197,8 @@ pub struct LocalPlanner {
 pub struct PlanningDecision {
     /// Selected command, or zero velocity when planning is blocked.
     pub twist: Twist,
-    /// `active`, `assisted`, or `obstacle_blocked`; invalid input also yields the latter.
-    pub reason: &'static str,
+    /// Why this command was chosen, or why the rover holds.
+    pub reason: PlanReason,
 }
 /// Diagnostic geometry from the actual candidate checks. Points are millimetre
 /// offsets from `origin`, keeping all 121 paths below the telemetry size budget.
@@ -322,8 +347,9 @@ impl LocalPlanner {
     ///
     /// The reason is `active` when both velocity errors are at most 0.15 in their
     /// respective units, and `assisted` when either error exceeds that threshold.
-    /// Returns zero twist with `obstacle_blocked` when no candidate is admissible
-    /// or the planning inputs are invalid; the reason alone does not prove an obstacle.
+    /// Returns zero twist with [`PlanReason::ObstacleBlocked`] when no candidate
+    /// is admissible, and with [`PlanReason::InvalidInput`] when the planning
+    /// inputs are invalid.
     pub fn plan(
         &self,
         map: &MapSnapshot,
@@ -381,9 +407,9 @@ impl LocalPlanner {
             candidates: Vec::new(),
             selected: None,
         };
-        let stop = PlanningDecision {
+        let hold = |reason| PlanningDecision {
             twist: Twist::default(),
-            reason: "obstacle_blocked",
+            reason,
         };
         if !self.valid()
             || !pose.finite()
@@ -398,7 +424,7 @@ impl LocalPlanner {
             .iter()
             .any(|v| !v.is_finite())
         {
-            return (stop, trace);
+            return (hold(PlanReason::InvalidInput), trace);
         }
         let config = &self.config;
         let min_linear = (current.linear - config.acceleration * dt).clamp(
@@ -425,12 +451,16 @@ impl LocalPlanner {
                         + (max_angular - min_angular) * angular_sample as f64 / 10.,
                 };
                 let trajectory = if let Some((limiter, now)) = turning {
+                    // Every candidate steps a fresh copy of the same limiter, so a
+                    // timing error rejects them all alike: that is invalid input.
                     let Ok(t) = limiter.clone().step(terra_types::VelocityTarget {
                         timestamp: now,
                         forward: trajectory.linear,
                         yaw_rate: trajectory.angular,
                     }) else {
-                        continue;
+                        trace.candidates.clear();
+                        trace.selected = None;
+                        return (hold(PlanReason::InvalidInput), trace);
                     };
                     Twist {
                         linear: t.forward,
@@ -468,29 +498,14 @@ impl LocalPlanner {
                 reason: if (twist.linear - intent.linear).abs() > 0.15
                     || (twist.angular - intent.angular).abs() > 0.15
                 {
-                    "assisted"
+                    PlanReason::Assisted
                 } else {
-                    "active"
+                    PlanReason::Active
                 },
             })
-            .unwrap_or(stop);
+            .unwrap_or(hold(PlanReason::ObstacleBlocked));
         (decision, trace)
     }
-}
-/// Whether the body fits centred at `(x, y)` at some heading (one of eight, 22.5
-/// degrees apart). Use it where the heading is not yet known.
-///
-/// With `current: None`, every cell the body touches must be observed and
-/// unoccupied. With `Some(pose)`, unknown cells under the body at that starting
-/// pose are tolerated. Map boundaries remain blocked.
-pub fn footprint_clear(
-    m: &MapSnapshot,
-    footprint: &Footprint,
-    x: f64,
-    y: f64,
-    current: Option<Pose>,
-) -> bool {
-    footprint::footprint_fits_some_heading(m, footprint, x, y, current)
 }
 /// Copy of `map` with every unknown cell marked free. Observed cells and map bounds are kept.
 ///
@@ -505,84 +520,6 @@ pub fn unknown_as_free(map: &MapSnapshot) -> MapSnapshot {
         }
     }
     copy
-}
-/// Breadth-first search over cells where the body fits at some heading. Stable
-/// ordering breaks ties.
-///
-/// Supervised mode proposes this point and waits for approval. Time-bounded autonomous
-/// exploration lives in `terra-exploration` and uses the same clearance helpers.
-///
-/// # Selection and return value
-///
-/// Returns a reachable, observed cell center near unknown space, in world metres.
-/// Candidates must be farther than `max(r, 0.8)` m from `pose`, where `r` is the
-/// circle around the body, and more than 1 m from every point in `excluded`.
-/// Nearby unknown cells increase the score; grid travel distance decreases it.
-///
-/// Returns `None` for invalid map, pose or footprint, or when no candidate qualifies.
-pub fn frontier(
-    map: &MapSnapshot,
-    pose: Pose,
-    footprint: &Footprint,
-    excluded: &[(f64, f64)],
-) -> Option<(f64, f64)> {
-    if !pose.finite() || !footprint.valid() {
-        return None;
-    }
-    let radius = footprint.circumradius();
-    let start = map.cell(pose.x, pose.y)?;
-    let mut traverse = FitGrid::new(map, footprint, Some(pose));
-    let mut observed = FitGrid::new(map, footprint, None);
-    let mut seen = vec![false; map.occupancy.len()];
-    let mut queue = VecDeque::from([(start.0, start.1, 0usize)]);
-    let mut best: Option<(f64, (f64, f64))> = None;
-    while let Some((x, y, distance_cells)) = queue.pop_front() {
-        let index = y * map.width as usize + x;
-        if seen[index] {
-            continue;
-        }
-        seen[index] = true;
-        let px = map.origin_x + (x as f64 + 0.5) * map.resolution;
-        let py = map.origin_y + (y as f64 + 0.5) * map.resolution;
-        if !traverse.fits(x, y) {
-            continue;
-        }
-        let reach = (radius / map.resolution).ceil() as isize + 2;
-        let mut unknown_neighbors = 0;
-        for dy in -reach..=reach {
-            for dx in -reach..=reach {
-                let a = x as isize + dx;
-                let b = y as isize + dy;
-                if a >= 0
-                    && b >= 0
-                    && a < map.width as isize
-                    && b < map.height as isize
-                    && map.occupancy[b as usize * map.width as usize + a as usize] < 0
-                {
-                    unknown_neighbors += 1;
-                }
-            }
-        }
-        if unknown_neighbors > 0
-            && (px - pose.x).hypot(py - pose.y) > radius.max(0.8)
-            && excluded.iter().all(|&(a, b)| (px - a).hypot(py - b) > 1.)
-            && observed.fits(x, y)
-        {
-            // Favor nearby observation opportunities; keep the first equal-scoring cell.
-            let score = unknown_neighbors as f64 / (1. + distance_cells as f64);
-            if best.is_none_or(|b| score > b.0) {
-                best = Some((score, (px, py)));
-            }
-        }
-        for (dx, dy) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
-            let a = x as isize + dx;
-            let b = y as isize + dy;
-            if a >= 0 && b >= 0 && a < map.width as isize && b < map.height as isize {
-                queue.push_back((a as usize, b as usize, distance_cells + 1));
-            }
-        }
-    }
-    best.map(|b| b.1)
 }
 /// A quick, heading-free reachability filter.
 ///
@@ -599,7 +536,10 @@ pub fn reachable(map: &MapSnapshot, pose: Pose, footprint: &Footprint, x: f64, y
     let Some(target) = map.cell(x, y) else {
         return false;
     };
-    if !pose.finite() || !footprint.valid() || !footprint_clear(map, footprint, x, y, None) {
+    if !pose.finite()
+        || !footprint.valid()
+        || !footprint_fits_some_heading(map, footprint, x, y, None)
+    {
         return false;
     }
     let mut grid = FitGrid::new(map, footprint, Some(pose));

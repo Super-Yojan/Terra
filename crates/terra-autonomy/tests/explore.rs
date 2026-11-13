@@ -1,5 +1,5 @@
 use terra_autonomy::*;
-use terra_exploration::{Detection, ExplorePhase};
+use terra_exploration::ExplorePhase;
 use terra_mapping::MapSnapshot;
 use terra_navigation::{Pose, Twist};
 use terra_types::timing::EXPLORATION_MAP_STALE_GRACE_SECONDS;
@@ -100,7 +100,7 @@ fn operator_stop_and_takeover_end_exploration() {
         true,
     );
     let stopped = arbiter.step(input_at(0.2, Pose::default(), &map));
-    assert_eq!(stopped.status.safety, "emergency_stop");
+    assert_eq!(stopped.status.safety, terra_autonomy::Safety::EmergencyStop);
     assert_eq!(stopped.twist, Twist::default());
     assert_eq!(
         stopped
@@ -117,7 +117,7 @@ fn operator_stop_and_takeover_end_exploration() {
         true,
     );
     let reset = arbiter.step(input_at(0.3, Pose::default(), &map));
-    assert_eq!(reset.status.safety, "hold");
+    assert_eq!(reset.status.safety, terra_autonomy::Safety::Hold);
     assert_eq!(reset.status.reason, "operator_stop");
     assert_eq!(
         reset
@@ -202,7 +202,7 @@ fn no_frontiers_and_map_stale_stop_cleanly() {
     );
     let recovered = arbiter.step(input_at(0.4, Pose::default(), &map));
     assert_ne!(recovered.status.reason, "map_stale");
-    assert!(arbiter.explorer.is_running());
+    assert!(arbiter.exploring());
     let gap = |now: f64| ArbiterInput {
         now,
         pose: Pose::default(),
@@ -217,7 +217,7 @@ fn no_frontiers_and_map_stale_stop_cleanly() {
     let _ = arbiter.step(gap(0.5));
     let held = arbiter.step(gap(0.5 + EXPLORATION_MAP_STALE_GRACE_SECONDS - 0.1));
     assert_eq!(held.twist, Twist::default());
-    assert!(arbiter.explorer.is_running());
+    assert!(arbiter.exploring());
     let ended = arbiter.step(gap(0.5 + EXPLORATION_MAP_STALE_GRACE_SECONDS));
     assert_eq!(ended.twist, Twist::default());
     assert_eq!(
@@ -228,31 +228,11 @@ fn no_frontiers_and_map_stale_stop_cleanly() {
         Some(EndReason::MapStale)
     );
 }
-/// Finish on an injected wanted detection, restart, and verify goal cancellation ends exploration as an operator stop.
+/// Goal cancellation ends exploration as an operator stop.
 #[test]
-fn goal_cancel_and_detection_stub_stop_exploration() {
+fn goal_cancel_stops_exploration() {
     let map = open_map();
     let mut arbiter = AutonomyArbiter::default();
-    arbiter
-        .explorer
-        .set_objective(Box::new(FindTargetsObjective::new(["survivor"])));
-    arbiter.set_level(explore("find", 60.));
-    let _ = arbiter.step(input_at(0.1, Pose::default(), &map));
-    arbiter.notify_detection(Detection {
-        label: "survivor".into(),
-        x: 1.,
-        y: 1.,
-        confidence: 1.,
-        observed_at: 0.2,
-    });
-    let found = arbiter.step(input_at(0.2, Pose::default(), &map));
-    assert_eq!(
-        found
-            .exploration
-            .as_ref()
-            .and_then(|status| status.end_reason),
-        Some(EndReason::ObjectiveComplete)
-    );
     arbiter.set_level(explore("cancel", 30.));
     let _ = arbiter.step(input_at(0.3, Pose::default(), &map));
     assert!(arbiter.accept_goal(&terra_waypoint::GoalCommand::Cancel, 50.));
@@ -543,7 +523,9 @@ fn through_unknown_drives_forward_from_the_camera_wedge() {
             .all(|(_, out)| out.twist.linear == 0.)
     );
     let mut optimistic = AutonomyArbiter::default();
-    optimistic.explorer.config_mut().through_unknown = true;
+    let mut settings = optimistic.settings();
+    settings.explore_through_unknown = true;
+    optimistic.configure(&settings).unwrap();
     optimistic.set_level(explore("optimistic", 60.));
     let run = drive(&mut optimistic, &map, 40);
     let (end, _) = run.last().unwrap();
@@ -559,9 +541,11 @@ fn through_unknown_stops_short_of_an_occupied_wall() {
     let wall = 1.6..1.8;
     let map = wedge_map(Some(wall.clone()));
     let mut arbiter = AutonomyArbiter::default();
-    arbiter.explorer.config_mut().through_unknown = true;
+    let mut settings = arbiter.settings();
+    settings.explore_through_unknown = true;
+    arbiter.configure(&settings).unwrap();
     arbiter.set_level(explore("walled", 60.));
-    let body = arbiter.planner.config.footprint;
+    let body = arbiter.footprint();
     let run = drive(&mut arbiter, &map, 200);
     for (pose, _) in &run {
         // Furthest x the rectangle (with its margin) reaches at this heading.

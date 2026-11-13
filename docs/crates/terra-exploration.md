@@ -32,7 +32,7 @@ flowchart TD
 | `operator_takeover` | Level changes away from `explore`. |
 | `map_stale` | The map stays missing or older than `MAP_FRESHNESS_SECONDS` (2.5 s) for 3 s (`EXPLORATION_MAP_STALE_GRACE_SECONDS`). Motion holds from the first stale tick. |
 | `safety_hold` | Pose or health is not fresh. Emergency stop uses `operator_stop`. |
-| `objective_complete` | Phase 2 stub. A caller reported a wanted detection. |
+| `objective_complete` | The host reached the run's goal, such as the GPS destination of an outdoor explore. |
 
 Each tick the current frontier is judged:
 
@@ -50,7 +50,7 @@ A blacklisted frontier is skipped for `blacklist_seconds` (30 s) while other fro
 
 **Look-around.** When no frontier is reachable but unknown cells lie within reach of the body (`scan_radius` beyond the circle around it), the rover turns one full circle to see around itself. A rover whose profile allows spinning (`terra_mini`) turns in place. Terra (`allow_in_place: false`) instead drives slowly round its tightest circle, forward and else in reverse, checked by the local planner; if neither fits it holds and the look-around timeout ends it. It never falls back to spinning, and `in_place_turn` is reported only for a turn with no forward speed.
 
-`MissionObjective` and `GoalScorer` are the phase 2 hooks. `TimeBudgetObjective` and `InformationGainScorer` are the defaults. `FindTargetsObjective` records labels such as `survivor` and can end the run. This crate does not classify images.
+`GoalScorer` ranks frontiers; `InformationGainScorer` is the default, and the arbiter swaps in a destination-biased scorer while an outdoor GPS goal is set. `select_frontier` is the one frontier search: supervised proposals and `SearchNavigator` (target search's mission memory) use it too. This crate does not classify images.
 
 Coverage is the area of observed free cells (occupancy 0–64), in square metres. `explored_ratio` is the fraction of cells that are no longer unknown.
 

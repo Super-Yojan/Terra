@@ -10,17 +10,7 @@
 use crate::{ControlOutput, ControllerError, MobileController, SafetyState};
 use std::sync::{Arc, Mutex};
 
-/// Levels that drive on the controller's own targets instead of operator effort.
-const AUTONOMOUS_LEVELS: [&str; 6] = [
-    "waypoint",
-    "waypoint_direct",
-    "supervised",
-    "explore",
-    "target_search",
-    "task",
-];
-/// Levels whose motion estimate is phone VIO (L3 route, and L5 on that route).
-const VIO_LEVELS: [&str; 2] = ["waypoint", "task"];
+use terra_autonomy::Level;
 /// Pose older than this is not fresh enough for closed-loop motion.
 const MAX_POSE_AGE: f64 = 0.35;
 
@@ -86,26 +76,29 @@ impl AutonomyBrief {
         } else {
             self.requested_level.as_str()
         };
-        level == "teleop"
+        Level::parse(level).is_some_and(Level::is_manual)
     }
 
     /// The requested level drives on autonomous targets.
     pub fn autonomous(&self) -> bool {
-        AUTONOMOUS_LEVELS.contains(&self.requested_level.as_str())
+        Level::parse(&self.requested_level).is_some_and(|level| !level.operator_driven())
     }
 
     /// The requested or effective level uses phone VIO motion estimates.
     pub fn requires_vio(&self) -> bool {
-        VIO_LEVELS.contains(&self.requested_level.as_str())
-            || self
-                .effective_level
-                .as_deref()
-                .is_some_and(|level| VIO_LEVELS.contains(&level))
+        [
+            Some(self.requested_level.as_str()),
+            self.effective_level.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        .filter_map(Level::parse)
+        .any(Level::uses_vio)
     }
 
     /// The router latched an emergency stop (what sensor-free manual drive must obey).
     pub fn emergency_stopped(&self) -> bool {
-        self.safety == "emergency_stop"
+        self.safety == terra_autonomy::Safety::EmergencyStop.as_str()
     }
 
     /// Pose is not degraded and at most 0.35 s old.

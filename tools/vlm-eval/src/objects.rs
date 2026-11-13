@@ -3,8 +3,9 @@
 //! IDs are assigned after geometry is fixed: buckets `B`, people `P`, balls `N`,
 //! frontiers `F`, other occupied components `O`, numbered by increasing x then y.
 
+use terra_exploration::{InformationGainScorer, select_frontier};
 use terra_mapping::MapSnapshot;
-use terra_navigation::{Pose, frontier, reachable};
+use terra_navigation::{Pose, reachable};
 
 use crate::geom::{self, cell_center, cell_index};
 use crate::scene::{CameraModel, FOOTPRINT, SceneObject};
@@ -357,7 +358,9 @@ pub fn verified_frontier_viewpoint(map: &MapSnapshot, pose: Pose) -> Option<[f64
         }
         x += 0.1;
     }
-    if let Some((x, y)) = frontier(map, pose, &FOOTPRINT, &[]) {
+    if let Some(terra_exploration::FrontierCandidate { x, y, .. }) =
+        select_frontier(map, pose, &FOOTPRINT, &[], 1., &InformationGainScorer)
+    {
         if crate::scene::route(map, pose, x, y).is_ok() {
             return Some([tidy(x), tidy(y)]);
         }
@@ -378,7 +381,9 @@ fn local_viewpoint(map: &MapSnapshot, pose: Pose, cluster: &[(f64, f64)]) -> Opt
         for (dx, dy) in [(0.1, 0.0), (-0.1, 0.0), (0.0, 0.1), (0.0, -0.1)] {
             let x = cell.0 + dx;
             let y = cell.1 + dy;
-            if geom::occupancy_at(map, x, y).is_some_and(|value| (0..terra_mapping::OCCUPIED).contains(&value)) {
+            if geom::occupancy_at(map, x, y)
+                .is_some_and(|value| (0..terra_mapping::OCCUPIED).contains(&value))
+            {
                 sx += x;
                 sy += y;
                 n += 1.0;
@@ -421,8 +426,9 @@ fn frontier_cells(map: &MapSnapshot) -> Vec<(f64, f64)> {
             let touches_free = [(1, 0), (-1, 0), (0, 1), (0, -1)]
                 .into_iter()
                 .any(|(dx, dy)| {
-                    cell_index(map, col + dx, row + dy)
-                        .is_some_and(|neighbor| (0..terra_mapping::OCCUPIED).contains(&map.occupancy[neighbor]))
+                    cell_index(map, col + dx, row + dy).is_some_and(|neighbor| {
+                        (0..terra_mapping::OCCUPIED).contains(&map.occupancy[neighbor])
+                    })
                 });
             if touches_free {
                 cells.push(cell_center(map, col, row));

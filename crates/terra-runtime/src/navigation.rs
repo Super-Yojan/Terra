@@ -82,6 +82,14 @@ impl Parameters {
     }
     /// Build planner settings around the body rectangle.
     /// Other planner parameters retain portable defaults; this conversion assumes prior validation.
+    /// Everything the autonomy arbiter takes from these parameters.
+    pub fn arbiter_settings(&self) -> terra_autonomy::ArbiterSettings {
+        terra_autonomy::ArbiterSettings {
+            planner: self.planner(),
+            turning: self.turning,
+            explore_through_unknown: self.explore_through_unknown,
+        }
+    }
     pub fn planner(&self) -> terra_navigation::PlannerConfig {
         terra_navigation::PlannerConfig {
             footprint: self.footprint(),
@@ -165,7 +173,10 @@ pub fn apply(b: &mut super::Runtime, bytes: &[u8], age: f64, now: f64) -> bool {
         .navigation_configuration_allowed(&r.run_id, r.authority_revision, pose)
     {
         Some("live vehicle authority changed or a goal is active")
-    } else if !matches!(a["safety"].as_str(), Some("clear" | "hold")) {
+    } else if !matches!(
+        terra_autonomy::Safety::deserialize(&a["safety"]),
+        Ok(terra_autonomy::Safety::Clear | terra_autonomy::Safety::Hold)
+    ) {
         Some("vehicle safety state does not permit configuration")
     } else if !b.hardware_observation.as_ref().is_some_and(|(h, at)| {
         (0.0..terra_types::timing::HARDWARE_FRESHNESS_SECONDS).contains(&(now - *at))
@@ -187,11 +198,9 @@ pub fn apply(b: &mut super::Runtime, bytes: &[u8], age: f64, now: f64) -> bool {
         b.navigation.result = Some(format!("rejected: {reason}"));
         return false;
     }
-    b.autonomy.configure_planner(r.parameters.planner());
     b.autonomy
-        .configure_turning(r.parameters.turning)
+        .configure(&r.parameters.arbiter_settings())
         .expect("validated turning settings");
-    b.autonomy.explorer.config_mut().through_unknown = r.parameters.explore_through_unknown;
     b.controller.reset();
     b.navigation.parameters = r.parameters;
     b.navigation.revision += 1;

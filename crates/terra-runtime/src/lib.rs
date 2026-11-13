@@ -196,20 +196,6 @@ fn local_teleop(linear: f64, angular: f64) -> terra_autonomy::TeleopRequest {
         sequence: None,
     }
 }
-/// Apply the planner, turning and exploration settings in `parameters`. The
-/// planner is optional because configuring it bumps the arbiter's revision.
-fn configure_autonomy(
-    autonomy: &mut AutonomyArbiter,
-    parameters: &navigation::Parameters,
-    planner: bool,
-) -> Result<(), RuntimeError> {
-    if planner {
-        autonomy.configure_planner(parameters.planner());
-    }
-    autonomy.configure_turning(parameters.turning)?;
-    autonomy.explorer.config_mut().through_unknown = parameters.explore_through_unknown;
-    Ok(())
-}
 #[derive(Clone, Debug, PartialEq)]
 pub struct RuntimeSnapshot {
     pub value: Value,
@@ -282,10 +268,8 @@ impl Runtime {
         }
         let configuration = config.clone();
         let mut autonomy = AutonomyArbiter::default();
-        autonomy.run_id = run_id.clone();
-        let custom_planner = serde_json::to_value(config.navigation.planner()).ok()
-            != serde_json::to_value(terra_navigation::PlannerConfig::default()).ok();
-        configure_autonomy(&mut autonomy, &config.navigation, custom_planner)?;
+        autonomy.set_run(&run_id);
+        autonomy.configure(&config.navigation.arbiter_settings())?;
         let mut outdoor = terra_autonomy::outdoor::OutdoorController::default();
         outdoor.supported = config.outdoor_supported;
         let mut navigation = navigation::State::default();
@@ -354,9 +338,11 @@ impl Runtime {
         self.outdoor.revision = self.outdoor.revision.saturating_add(1);
         let dock = self.autonomy.dock_config().clone();
         self.autonomy = AutonomyArbiter::default();
-        self.autonomy.run_id = self.run_id.clone();
+        self.autonomy.set_run(&self.run_id);
         self.autonomy.configure_dock(dock);
-        configure_autonomy(&mut self.autonomy, &self.navigation.parameters, true)
+        self.autonomy
+            .configure(&self.navigation.parameters.arbiter_settings())?;
+        Ok(())
     }
     /// Begin a fresh control session while retaining configured policy and calibration.
     pub fn reset(&mut self) -> Result<(), RuntimeError> {
@@ -434,7 +420,7 @@ impl Runtime {
         if !navigation.valid() || controller.validate().is_err() {
             return Err(invalid("invalid rover profile"));
         }
-        configure_autonomy(&mut self.autonomy, &navigation, true)?;
+        self.autonomy.configure(&navigation.arbiter_settings())?;
         self.controller = VelocityController::new(controller)?;
         self.configuration.controller = controller;
         self.control_limits = (controller.max_forward, controller.max_yaw_rate);
@@ -679,7 +665,7 @@ impl Runtime {
             terra_autonomy::Level::Teleop | terra_autonomy::Level::AssistedTeleop
         );
         if self.mode == ActuationMode::DirectEffort
-            && (output.status.active_source == "dock" || !teleop)
+            && (output.status.active_source == terra_autonomy::Source::Dock || !teleop)
         {
             ActuationMode::VelocityFeedback
         } else {
@@ -696,7 +682,7 @@ impl Runtime {
         mode: ActuationMode,
         now: f64,
     ) -> Result<MotorOutput, RuntimeError> {
-        Ok(if output.status.safety != "clear" {
+        Ok(if output.status.safety != terra_autonomy::Safety::Clear {
             self.controller.reset();
             MotorOutput::stopped(if estimate.health == Health::Ready {
                 StopReason::StaleTarget
@@ -762,21 +748,14 @@ impl Runtime {
         // start the rover.
         let settling = !manual && self.settling(sensors_healthy, now);
         let healthy = sensors_healthy && !settling;
-        self.autonomy.planner.config.max_linear = self
-            .navigation
-            .parameters
-            .max_linear
-            .min(self.control_limits.0)
-            .min(if self.outdoor.selected {
+        self.autonomy.set_speed_caps(
+            self.control_limits.0.min(if self.outdoor.selected {
                 0.3
             } else {
                 f64::INFINITY
-            });
-        self.autonomy.planner.config.max_angular = self
-            .navigation
-            .parameters
-            .max_angular
-            .min(self.control_limits.1);
+            }),
+            self.control_limits.1,
+        );
         let tilted = self.tilt.update(now);
         if tilted && !self.autonomy.tilt_stopped() {
             self.events
@@ -806,7 +785,10 @@ impl Runtime {
             if let Some(goal) = self.outdoor.mission_status() {
                 output.goal = goal;
             }
-            if !outdoor_motion && !manual && output.status.safety != "emergency_stop" {
+            if !outdoor_motion
+                && !manual
+                && output.status.safety != terra_autonomy::Safety::EmergencyStop
+            {
                 output.status.reason = outdoor_status["hold_reason"]
                     .as_str()
                     .unwrap_or(self.outdoor.phase())

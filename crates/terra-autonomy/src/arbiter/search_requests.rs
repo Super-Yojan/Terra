@@ -49,12 +49,8 @@ impl AutonomyArbiter {
             return Err("invalid_search");
         }
         let fp = format!("search:{}", serde_json::to_string(&r).unwrap());
-        if self.duplicate(&r.token, &fp) {
-            return if self.receipt.as_ref().is_some_and(|r| r.1) {
-                Ok(())
-            } else {
-                Err("conflicting_or_rejected_token")
-            };
+        if let Some(result) = self.replay(&r.token, &fp) {
+            return result;
         }
         let reason = if r.run_id != self.run_id {
             Some("wrong_run")
@@ -94,15 +90,9 @@ impl AutonomyArbiter {
             return Err(reason);
         }
         self.collect_search_report(input.now);
-        let search = SearchController::with_config(
-            r.clone(),
-            input.now,
-            ConfirmationConfig::default(),
-            self.planner.config.footprint,
-        )?;
+        let search = SearchController::new(r.clone(), input.now, self.planner.config.footprint)?;
         self.follower.cancel();
-        self.last_plan = None;
-        self.planner_trace = None;
+        self.plan.forget();
         self.search_sessions.push_back(r.search_id.clone());
         self.search = Some(search);
         self.paused = false;
@@ -123,12 +113,8 @@ impl AutonomyArbiter {
             return Err("invalid_search_action");
         }
         let fp = format!("search_action:{}", serde_json::to_string(&r).unwrap());
-        if self.duplicate(&r.token, &fp) {
-            return if self.receipt.as_ref().is_some_and(|r| r.1) {
-                Ok(())
-            } else {
-                Err("conflicting_or_rejected_token")
-            };
+        if let Some(result) = self.replay(&r.token, &fp) {
+            return result;
         }
         let valid =
             self.search.as_ref().is_some_and(|s| {
@@ -167,8 +153,7 @@ impl AutonomyArbiter {
         self.search.as_mut().unwrap().receipt = Some((r.token.clone(), result.is_ok()));
         if result.is_ok() {
             self.follower.cancel();
-            self.last_plan = None;
-            self.planner_trace = None;
+            self.plan.forget();
             self.reset = true;
             self.event(
                 match r.action {

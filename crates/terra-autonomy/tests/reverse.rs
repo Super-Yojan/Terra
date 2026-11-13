@@ -105,7 +105,7 @@ fn reverse_is_capped_and_still_obeys_stop_and_sensors() {
         true,
     );
     let out = a.step(input(0.3, None, None));
-    assert_eq!(out.status.safety, "emergency_stop");
+    assert_eq!(out.status.safety, terra_autonomy::Safety::EmergencyStop);
     assert_eq!(out.twist, Twist::default());
 }
 

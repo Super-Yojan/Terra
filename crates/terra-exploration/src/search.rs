@@ -1,7 +1,7 @@
 //! Mission-scoped observed map and deterministic routes. No target truth is accepted here.
-//!
-use crate::{Footprint, Pose, reachable};
+use crate::{InformationGainScorer, select_frontier};
 use terra_mapping::MapSnapshot;
+use terra_navigation::{Footprint, Pose, reachable};
 /// Axis-aligned mission area in world metres, including the rover footprint.
 #[derive(Clone, Copy, Debug)]
 pub struct SearchBounds {
@@ -41,7 +41,8 @@ pub enum SearchNavigationDecision {
 /// # Examples
 ///
 /// ```
-/// use terra_navigation::{Footprint, SearchBounds, SearchNavigator};
+/// use terra_exploration::{SearchBounds, SearchNavigator};
+/// use terra_navigation::Footprint;
 ///
 /// let bounds = SearchBounds {
 ///     min_x: -10.0, min_y: -10.0, max_x: 10.0, max_y: 10.0,
@@ -277,7 +278,15 @@ impl SearchNavigator {
         // Choose frontiers globally from memory; validate follower waypoints locally below.
         let memory = self.map.as_ref().unwrap();
         let excluded: Vec<_> = self.excluded.iter().map(|p| (p.0, p.1)).collect();
-        let Some(target) = crate::frontier(memory, pose, &self.footprint, &excluded) else {
+        let Some(target) = select_frontier(
+            memory,
+            pose,
+            &self.footprint,
+            &excluded,
+            1.,
+            &InformationGainScorer,
+        )
+        .map(|c| (c.x, c.y)) else {
             return if !excluded.is_empty() {
                 SearchNavigationDecision::Blocked {
                     reason: "frontier_cooldown",

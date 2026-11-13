@@ -130,8 +130,7 @@ impl AutonomyArbiter {
                 task.count_step();
                 let names = task.follow(plan.clone(), note, rationale, now);
                 self.follower.cancel();
-                self.last_plan = None;
-                self.planner_trace = None;
+                self.plan.forget();
                 self.event("task_plan", None, &names);
                 Ok(AgentOutcome::Following(plan))
             }

@@ -161,12 +161,7 @@ fn valid_text(text: &str) -> bool {
         && !text.chars().any(|c| c.is_control() && c != '\n')
 }
 
-fn decode<T: serde::de::DeserializeOwned>(b: &[u8]) -> Option<T> {
-    if b.is_empty() || b.len() > 2048 {
-        return None;
-    }
-    serde_json::from_slice(b).ok()
-}
+use crate::contract::decode;
 
 /// Decode at most 2048 bytes of strict JSON; `None` for invalid ids, text, budget or fields.
 pub fn decode_task_request(b: &[u8]) -> Option<TaskRequest> {
@@ -470,7 +465,6 @@ fn tidy(value: f64) -> f64 {
     if rounded.abs() < 5e-3 { 0. } else { rounded }
 }
 
-
 /// Relative bearing in degrees and a word for it.
 fn bearing(pose: Pose, x: f64, y: f64) -> (f64, &'static str) {
     let rel = terra_types::wrap_angle((y - pose.y).atan2(x - pose.x) - pose.yaw).to_degrees();
@@ -494,8 +488,9 @@ pub(crate) fn symbolic_grid(map: &MapSnapshot, pose: Pose) -> String {
     let cols = (map.width as usize).div_ceil(child);
     let rows = (map.height as usize).div_ceil(child);
     let width = map.width as usize;
-    let rover =
-        map.cell(pose.x, pose.y).map(|(c, r)| (c / child, r / child));
+    let rover = map
+        .cell(pose.x, pose.y)
+        .map(|(c, r)| (c / child, r / child));
     let mut lines = Vec::with_capacity(rows + 2);
     for br in (0..rows).rev() {
         let y0 = map.origin_y + (br * child) as f64 * map.resolution;

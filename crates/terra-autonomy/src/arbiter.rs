@@ -6,22 +6,16 @@
 //!
 //! Supporting files: `requests.rs` handles incoming commands, `motion.rs` handles
 //! planning, `exploration.rs` handles frontier exploration, `search_requests.rs`
-//! handles search messages, and `status.rs` builds
-//! telemetry. Public APIs and telemetry strings are unchanged.
+//! handles search messages, and `status.rs` builds telemetry.
 
 use crate::*;
 use serde::Serialize;
 use std::collections::VecDeque;
-use terra_types::turning::{TurningConfig, TurningLimiter};
 use terra_exploration::{EndReason, ExplorationStatus, ExploreAction, ExploreTick, Explorer};
 use terra_mapping::MapSnapshot;
-use terra_navigation::{LocalPlanner, Pose, Twist, frontier};
+use terra_navigation::{LocalPlanner, PlannerConfig, Pose, Twist};
 use terra_types::timing;
-/// Backward-compatible name for the shared map freshness default. Edit
-/// `terra_types::timing::MAP_FRESHNESS_SECONDS`, or override it per arbiter using
-/// [`AutonomyArbiter::set_map_freshness_timeout`]. Pose/operator/detector timeouts
-/// are independent. Observations exactly this old are stale.
-pub use terra_types::timing::MAP_FRESHNESS_SECONDS as DEFAULT_MAP_FRESHNESS_TIMEOUT_SECONDS;
+use terra_types::turning::{TurningConfig, TurningLimiter};
 /// Refusal reason for a goal, search or task request while a safety stop is
 /// held (operator stop, keyboard stop or tilt stop). The operator resets the
 /// stop first. Older builds sent `authority_required` for this too.
@@ -100,13 +94,42 @@ pub struct ArbiterOutput {
     /// approval sets it; every hold clears it. Hosts map it to the gate servo.
     pub gate_open: bool,
 }
+/// Navigation settings a host applies together, for example from a rover
+/// profile or an accepted navigation-settings request.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ArbiterSettings {
+    /// Local planner limits and body footprint, before per-tick speed caps.
+    pub planner: PlannerConfig,
+    /// Managed turning limits for autonomous and fleet commands.
+    pub turning: TurningConfig,
+    /// L4 explore plans through unknown space (see `ExplorationConfig::through_unknown`).
+    pub explore_through_unknown: bool,
+}
+/// The local planner's last command and its diagnostics.
+#[derive(Default)]
+struct PlanMemory {
+    /// Last planned command, reused while it stays admissible (unmanaged origins only).
+    command: Option<(f64, Twist, Reason)>,
+    /// Candidate geometry behind the latest plan, published while fresh.
+    trace: Option<(f64, terra_navigation::PlannerTrace)>,
+}
+impl PlanMemory {
+    /// Forget the cached command and its diagnostics.
+    fn forget(&mut self) {
+        *self = Self::default();
+    }
+}
 /// Stateful authority arbiter, waypoint follower, exploration runner, and target-search coordinator.
 pub struct AutonomyArbiter {
-    /// Local collision-aware planner and its current configuration.
-    pub planner: LocalPlanner,
+    /// Effective local planner: [`Self::planner_config`] with the speed caps applied.
+    planner: LocalPlanner,
+    /// Configured planner, before the host's per-tick speed caps.
+    planner_config: PlannerConfig,
+    /// Per-tick (linear, angular) speed caps from [`AutonomyArbiter::set_speed_caps`].
+    speed_caps: (f64, f64),
     /// Study condition: operator requests outside it are rejected (see
     /// [`AutonomyArbiter::level_permitted`]). Set with an [`AssignmentRequest`].
-    pub assigned_level: Option<Level>,
+    assigned_level: Option<Level>,
     map_freshness_timeout_seconds: f64,
     level: Level,
     follower: WaypointController,
@@ -120,7 +143,7 @@ pub struct AutonomyArbiter {
     operator_order: std::collections::BTreeMap<String, u64>,
     latest_operator_time: Option<f64>,
     /// Run identifier used to correlate commands and telemetry.
-    pub run_id: String,
+    run_id: String,
     stopped: bool,
     /// The runtime's tilt latch is set (see [`AutonomyArbiter::set_tilt_stop`]).
     tilt_stop: bool,
@@ -136,12 +159,11 @@ pub struct AutonomyArbiter {
     rejected: Vec<(f64, f64, f64)>,
     events: Vec<DecisionEvent>,
     reset: bool,
-    last_plan: Option<(f64, Twist, &'static str)>,
+    plan: PlanMemory,
     /// Last motion allowed, zero after a hold. Centres the local planner's
     /// velocity window: a measured speed that sits in the motor deadband
     /// would otherwise pin every command near zero.
     commanded: Twist,
-    planner_trace: Option<(f64, terra_navigation::PlannerTrace)>,
     /// Hybrid A* route being followed, and how far along it the rover is.
     global_route: Vec<terra_navigation::HybridWaypoint>,
     route_progress: usize,
@@ -173,7 +195,7 @@ pub struct AutonomyArbiter {
     reported_sessions: std::collections::BTreeSet<(String, String)>,
     acknowledged_reports: std::collections::BTreeSet<(String, String, String)>,
     /// Frontier-exploration state machine and configuration.
-    pub explorer: Explorer,
+    explorer: Explorer,
     exploration_budget: Option<f64>,
     explore_blocked: bool,
     explore_stale_since: Option<f64>,
@@ -206,8 +228,10 @@ impl Default for AutonomyArbiter {
     fn default() -> Self {
         Self {
             planner: LocalPlanner::default(),
+            planner_config: PlannerConfig::default(),
+            speed_caps: (f64::INFINITY, f64::INFINITY),
             assigned_level: None,
-            map_freshness_timeout_seconds: DEFAULT_MAP_FRESHNESS_TIMEOUT_SECONDS,
+            map_freshness_timeout_seconds: timing::MAP_FRESHNESS_SECONDS,
             level: Level::Teleop,
             follower: WaypointController::new(WaypointConfig::default()).unwrap(),
             operator: None,
@@ -234,9 +258,8 @@ impl Default for AutonomyArbiter {
             rejected: Vec::new(),
             events: Vec::new(),
             reset: true,
-            last_plan: None,
+            plan: PlanMemory::default(),
             commanded: Twist::default(),
-            planner_trace: None,
             global_route: Vec::new(),
             route_progress: 0,
             route_job: None,
@@ -296,12 +319,12 @@ mod task;
 /// Working result for one tick. Kept private so external code uses ArbiterOutput.
 struct TickDecision {
     goal: WaypointStatus,
-    /// Why this tick is moving or holding (for example, "map_stale").
-    reason: &'static str,
-    /// Who supplied the motion: operator, waypoint, exploration, or none.
-    source: &'static str,
-    /// Dashboard state: "clear", "hold", or "emergency_stop".
-    safety: &'static str,
+    /// Why this tick is moving or holding.
+    reason: Reason,
+    /// Who supplied the motion.
+    source: Source,
+    /// Dashboard state; a hold becomes [`Safety::Hold`] unless already a stop.
+    safety: Safety,
     /// Requested motion before collision and turning checks.
     intent_command: Twist,
     /// Motion actually allowed after those checks.
@@ -316,9 +339,9 @@ impl TickDecision {
     fn new(goal: WaypointStatus) -> Self {
         Self {
             goal,
-            reason: "idle",
-            source: "none",
-            safety: "clear",
+            reason: Reason::Idle,
+            source: Source::None,
+            safety: Safety::Clear,
             intent_command: Twist::default(),
             twist: Twist::default(),
             held: false,
@@ -373,7 +396,7 @@ impl AutonomyArbiter {
     /// Callers must execute `output.twist`, not the unfiltered `output.intent`.
     pub fn step(&mut self, input: ArbiterInput<'_>) -> ArbiterOutput {
         // 1. Identify who is driving and check that the control clock advanced.
-        let command_origin = if matches!(self.level, Level::Teleop | Level::AssistedTeleop) {
+        let command_origin = if self.level.operator_driven() {
             self.operator_origin
         } else {
             CommandOrigin::Autonomous
@@ -439,8 +462,8 @@ impl AutonomyArbiter {
         // Only a turn with no forward speed is in place; a circling look-around is not.
         let in_place_turn = !decision.held
             && decision.twist.linear == 0.
-            && (decision.reason == "exploration_scan"
-                || (decision.source == "dock" && self.dock_in_place));
+            && (decision.reason == Reason::ExplorationScan
+                || (decision.source == Source::Dock && self.dock_in_place));
         let gate_open = self.gate_open && !decision.held;
         if !gate_open {
             self.gate_open = false;
@@ -466,7 +489,7 @@ impl AutonomyArbiter {
         let identity = (self.run_id.clone(), self.revision, command_origin);
         if self.turning_identity.as_ref() != Some(&identity) {
             self.turning.reset();
-            self.last_plan = None;
+            self.plan.command = None;
             self.commanded = Twist::default();
             self.maneuver.clear();
             self.turning_identity = Some(identity);
@@ -478,6 +501,7 @@ impl AutonomyArbiter {
             self.last_time = Some(input.now);
         }
         if valid_time && let Some(search) = self.search.as_mut() {
+            // Only a backwards clock fails, and `valid_time` already rules that out.
             let _ = search.update_time(input.now);
             if search.request.run_id != self.run_id {
                 search.cancel("run_changed");
@@ -495,19 +519,19 @@ impl AutonomyArbiter {
         decision: &mut TickDecision,
     ) {
         if !valid_time {
-            decision.reason = "invalid_time";
+            decision.reason = Reason::InvalidTime;
             decision.held = true;
         } else if self.stopped {
-            decision.safety = "emergency_stop";
+            decision.safety = Safety::EmergencyStop;
             decision.reason = if self.tilt_stop {
-                "tilt_stop"
+                Reason::TiltStop
             } else {
-                "operator_stop"
+                Reason::OperatorStop
             };
             decision.held = true;
             self.halt_explore(EndReason::OperatorStop);
         } else if !input.healthy
-            || (!self.is_manual()
+            || (!self.level.is_manual()
                 && (!input.pose.finite()
                     || !fresh(
                         input.now,
@@ -517,18 +541,18 @@ impl AutonomyArbiter {
                     || !input.measured.linear.is_finite()
                     || !input.measured.angular.is_finite()))
         {
-            decision.reason = "sensor_unhealthy";
+            decision.reason = Reason::SensorUnhealthy;
             decision.held = true;
             self.note_safety_hold(input.now);
-        } else if !matches!(self.level, Level::Teleop | Level::WaypointDirect)
+        } else if self.level.needs_map()
             && !self.reverse_requested(input.now)
             && (input.map.is_none() || !self.map_is_fresh(input))
         {
-            decision.reason = "map_stale";
+            decision.reason = Reason::MapStale;
             decision.held = true;
             self.note_map_stale(input.now);
         } else if self.paused {
-            decision.reason = self.pause_reason;
+            decision.reason = self.pause_reason.into();
             decision.held = true;
         }
     }
@@ -558,45 +582,44 @@ impl AutonomyArbiter {
         }
         if decision.held
             && self.level == Level::TargetSearch
-            && decision.reason == "obstacle_blocked"
+            && decision.reason == Reason::ObstacleBlocked
         {
             if let Some(search) = self.search.as_mut() {
                 search.navigator.invalidate_goal(input.now);
             }
-            self.last_plan = None;
             // Retire cached motion, but keep fresh diagnostics explaining the route failure.
-            self.event("route_failed", None, "obstacle_blocked");
+            self.plan.command = None;
+            self.event("route_failed", None, Reason::ObstacleBlocked.as_str());
         }
         if decision.held
             && self.level == Level::TargetSearch
-            && decision.reason != "search_hold"
-            && decision.reason != "obstacle_blocked"
+            && decision.reason != Reason::SearchHold
+            && decision.reason != Reason::ObstacleBlocked
         {
             if let Some(search) = self.search.as_mut() {
-                search.hold(decision.reason);
+                search.hold(decision.reason.as_str());
             }
             self.follower.cancel();
         }
         self.collect_search_report(input.now);
         let search_status = self.search_status(input.now);
         if let Some(status) = search_status.as_ref()
-            && decision.source != "dock"
+            && decision.source != Source::Dock
             && self.level == Level::TargetSearch
             && status.phase != SearchPhase::Searching
         {
             decision.held = true;
-            decision.reason = "search_hold";
+            decision.reason = Reason::SearchHold;
         }
         if decision.held {
-            if decision.reason != "obstacle_blocked" {
-                self.last_plan = None;
-                self.planner_trace = None;
+            if decision.reason != Reason::ObstacleBlocked {
+                self.plan.forget();
             }
             decision.twist = Twist::default();
-            decision.source = "none";
+            decision.source = Source::None;
             self.reset = true;
-            if decision.safety == "clear" {
-                decision.safety = "hold";
+            if decision.safety == Safety::Clear {
+                decision.safety = Safety::Hold;
             }
         }
 
@@ -606,4 +629,3 @@ impl AutonomyArbiter {
 fn fresh(now: f64, time: Option<f64>, limit: f64) -> bool {
     time.is_some_and(|t| t.is_finite() && t >= 0. && now >= t && now - t < limit)
 }
-

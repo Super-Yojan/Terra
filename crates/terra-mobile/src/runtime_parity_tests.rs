@@ -7,7 +7,7 @@ fn phone_facade_matches_pure_runtime_for_timestamped_sensor_and_manual_stream() 
     {
         let mut b = phone.brain.lock().unwrap();
         b.runtime.run_id = "replay".into();
-        b.runtime.autonomy.run_id = "replay".into();
+        b.runtime.autonomy.set_run("replay");
     }
     let mut pure = Runtime::new(RuntimeConfig::default(), "replay".into()).unwrap();
     for n in 1..=100 {

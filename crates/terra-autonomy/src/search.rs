@@ -26,50 +26,22 @@ pub struct TargetObservation {
     /// Token identifying the underlying sensor evidence.
     pub evidence_id: String,
 }
-/// Thresholds for accepting independent, fresh, spatially consistent target observations.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ConfirmationConfig {
-    /// Minimum observation confidence, finite and on the inclusive 0–1 scale.
-    pub confidence: f64,
-    /// Minimum supporting frame count; valid configurations require 3–64.
-    pub frames: usize,
-    /// Minimum time span between first and last supporting frames, in positive seconds.
-    pub span_s: f64,
-    /// Maximum pairwise separation of supporting positions, in positive metres.
-    pub agreement_m: f64,
-    /// Maximum observation age and gap between candidate frames, in positive seconds.
-    pub freshness_s: f64,
-}
-impl Default for ConfirmationConfig {
-    fn default() -> Self {
-        Self {
-            confidence: 0.8,
-            frames: 3,
-            span_s: terra_types::timing::SEARCH_CONFIRMATION_SPAN_SECONDS,
-            agreement_m: 1.,
-            freshness_s: terra_types::timing::SEARCH_OBSERVATION_FRESHNESS_SECONDS,
-        }
-    }
-}
-impl ConfirmationConfig {
-    /// Return whether confidence is in 0–1, frame count is 3–64, and all time/distance thresholds are finite and positive.
-    pub fn valid(&self) -> bool {
-        self.confidence.is_finite()
-            && (0.0..=1.0).contains(&self.confidence)
-            && (3..=64).contains(&self.frames)
-            && [self.span_s, self.agreement_m, self.freshness_s]
-                .iter()
-                .all(|v| v.is_finite() && *v > 0.)
-    }
-}
+/// Minimum observation confidence on the 0–1 scale.
+const CONFIRM_CONFIDENCE: f64 = 0.8;
+/// Supporting frames needed to confirm a target.
+const CONFIRM_FRAMES: usize = 3;
+/// Largest pairwise separation of supporting positions, metres.
+const CONFIRM_AGREEMENT_M: f64 = 1.;
+/// Shortest span between the first and last supporting frames, seconds.
+const CONFIRM_SPAN_S: f64 = terra_types::timing::SEARCH_CONFIRMATION_SPAN_SECONDS;
+/// Largest observation age, and gap between candidate frames, seconds.
+const CONFIRM_FRESHNESS_S: f64 = terra_types::timing::SEARCH_OBSERVATION_FRESHNESS_SECONDS;
 /// Finite target-search lifecycle combining frontier navigation with sensor-only confirmation.
 pub struct SearchController {
     /// Validated session request retained for correlation and bounds checks.
     pub request: SearchRequest,
     /// Frontier navigation state used to select search destinations.
-    pub navigator: terra_navigation::SearchNavigator,
-    config: ConfirmationConfig,
+    pub navigator: terra_exploration::SearchNavigator,
     phase: SearchPhase,
     reason: String,
     started_at: f64,
@@ -83,34 +55,33 @@ pub struct SearchController {
     pub receipt: Option<(String, bool)>,
 }
 impl SearchController {
-    /// Start a validated search at finite nonnegative `now` seconds using default confirmation
-    /// thresholds and a 0.495 m square body (0.35 m circumscribed radius).
+    /// Start a validated search at finite nonnegative `now` seconds with a
+    /// 0.495 m square body (0.35 m circumscribed radius).
     ///
-    /// Returns `invalid_search` for malformed request/time/configuration, or a navigation configuration error.
+    /// Returns `invalid_search` for malformed request/time, or a navigation configuration error.
     pub fn start(request: SearchRequest, now: f64) -> Result<Self, SearchError> {
         let body = terra_navigation::Footprint {
             length: 0.495,
             width: 0.495,
             margin: 0.,
         };
-        Self::with_config(request, now, ConfirmationConfig::default(), body)
+        Self::new(request, now, body)
     }
-    /// Start a search with explicit confirmation thresholds and the rover body.
+    /// Start a search for a rover with this body.
     ///
-    /// Requires a valid request, nonnegative finite `now` seconds, valid thresholds, and a navigator-valid body.
+    /// Requires a valid request, nonnegative finite `now` seconds, and a navigator-valid body.
     /// Returns `invalid_search` or the navigator construction error on rejection.
-    pub fn with_config(
+    pub fn new(
         request: SearchRequest,
         now: f64,
-        config: ConfirmationConfig,
         footprint: terra_navigation::Footprint,
     ) -> Result<Self, SearchError> {
-        if !request.valid() || !now.is_finite() || now < 0. || !config.valid() {
+        if !request.valid() || !now.is_finite() || now < 0. {
             return Err("invalid_search");
         }
         let b = request.bounds;
-        let navigator = terra_navigation::SearchNavigator::new(
-            terra_navigation::SearchBounds {
+        let navigator = terra_exploration::SearchNavigator::new(
+            terra_exploration::SearchBounds {
                 min_x: b.min_x,
                 min_y: b.min_y,
                 max_x: b.max_x,
@@ -122,7 +93,6 @@ impl SearchController {
         Ok(Self {
             request,
             navigator,
-            config,
             phase: SearchPhase::Searching,
             reason: "search_started".into(),
             started_at: now,
@@ -210,12 +180,12 @@ impl SearchController {
             || o.target_class != self.request.target_class
             || !valid_token(&o.evidence_id)
             || !o.confidence.is_finite()
-            || !(self.config.confidence..=1.).contains(&o.confidence)
+            || !(CONFIRM_CONFIDENCE..=1.).contains(&o.confidence)
             || !self.request.bounds.contains(o.world_x, o.world_y)
             || !o.received_at.is_finite()
             || o.received_at < self.started_at
             || o.received_at > now
-            || now - o.received_at > self.config.freshness_s
+            || now - o.received_at > CONFIRM_FRESHNESS_S
             || self.last_frame.is_some_and(|f| o.frame_id <= f)
             || self
                 .candidate
@@ -228,10 +198,11 @@ impl SearchController {
         if self
             .candidate
             .last()
-            .is_some_and(|c| o.received_at - c.received_at > self.config.freshness_s)
-            || self.candidate.iter().any(|c| {
-                (c.world_x - o.world_x).hypot(c.world_y - o.world_y) > self.config.agreement_m
-            })
+            .is_some_and(|c| o.received_at - c.received_at > CONFIRM_FRESHNESS_S)
+            || self
+                .candidate
+                .iter()
+                .any(|c| (c.world_x - o.world_x).hypot(c.world_y - o.world_y) > CONFIRM_AGREEMENT_M)
         {
             self.candidate.clear();
         }
@@ -242,8 +213,8 @@ impl SearchController {
         self.transition(SearchPhase::Confirming, "target_candidate");
         let first = &self.candidate[0];
         let last = self.candidate.last().unwrap();
-        if self.candidate.len() >= self.config.frames
-            && last.received_at - first.received_at >= self.config.span_s
+        if self.candidate.len() >= CONFIRM_FRAMES
+            && last.received_at - first.received_at >= CONFIRM_SPAN_S
         {
             let n = self.candidate.len() as f64;
             self.report = Some(SearchReport {
@@ -282,7 +253,7 @@ impl SearchController {
             && self
                 .candidate
                 .last()
-                .is_some_and(|c| now - c.received_at > self.config.freshness_s)
+                .is_some_and(|c| now - c.received_at > CONFIRM_FRESHNESS_S)
         {
             self.candidate.clear();
             self.transition(SearchPhase::Searching, "candidate_expired");
@@ -291,15 +262,15 @@ impl SearchController {
             return Ok(None);
         }
         match self.navigator.next_goal(map, pose, revision, now) {
-            terra_navigation::SearchNavigationDecision::Goal { x, y } => {
+            terra_exploration::SearchNavigationDecision::Goal { x, y } => {
                 self.goal = Some((x, y));
                 Ok(self.goal)
             }
-            terra_navigation::SearchNavigationDecision::Exhausted => {
+            terra_exploration::SearchNavigationDecision::Exhausted => {
                 self.transition(SearchPhase::Exhausted, "no_reachable_frontier");
                 Ok(None)
             }
-            terra_navigation::SearchNavigationDecision::Blocked { reason } => {
+            terra_exploration::SearchNavigationDecision::Blocked { reason } => {
                 self.hold(reason);
                 Ok(None)
             }

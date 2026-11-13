@@ -195,7 +195,7 @@ fn model_waypoint_drives_on_the_l3_route_then_the_task_completes() {
         moved |= output.twist.linear > 0.;
         saw_route |= !output.status.global_route.is_empty();
         if output.status.effective_level.is_some() {
-            assert_eq!(output.status.active_source, "task");
+            assert_eq!(output.status.active_source, terra_autonomy::Source::Task);
         }
         if let Some(q) = sim.arbiter.take_task_query() {
             break q;

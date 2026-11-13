@@ -8,15 +8,15 @@
 //! A* to the far goal and returns where that path leaves the local window.
 //! The fine Hybrid A* route then drives to that point instead of to the
 //! straight-line clamp.
-use terra_mapping::OCCUPIED;
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 use terra_mapping::MapSnapshot;
+use terra_mapping::OCCUPIED;
 
 /// Coarse cell side, metres.
-pub const MEMORY_RESOLUTION: f64 = 0.5;
+const MEMORY_RESOLUTION: f64 = 0.5;
 /// Coarse cells per side (100 m at 0.5 m).
-pub const MEMORY_CELLS: usize = 200;
+const MEMORY_CELLS: usize = 200;
 /// Share of a coarse cell's fine cells that must be occupied to block it.
 const BLOCKED_SHARE: f64 = 0.15;
 /// Share of a coarse cell's fine cells that must be observed to update it.

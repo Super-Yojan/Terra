@@ -3049,6 +3049,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "terra-autonomy",
+ "terra-exploration",
  "terra-mapping",
  "terra-navigation",
  "ureq",

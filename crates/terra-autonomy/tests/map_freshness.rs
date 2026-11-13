@@ -1,9 +1,7 @@
-use terra_autonomy::{
-    ArbiterInput, AutonomyArbiter, DEFAULT_MAP_FRESHNESS_TIMEOUT_SECONDS as DEFAULT, Level,
-    LevelRequest,
-};
+use terra_autonomy::{ArbiterInput, AutonomyArbiter, Level, LevelRequest};
 use terra_mapping::MapSnapshot;
 use terra_navigation::{Pose, Twist};
+use terra_types::timing::MAP_FRESHNESS_SECONDS as DEFAULT;
 
 fn status_at(timeout: Option<f64>, now: f64, map_time: Option<f64>, pose_time: f64) -> String {
     let mut arbiter = AutonomyArbiter::default();

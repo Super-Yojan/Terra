@@ -452,7 +452,7 @@ pub(crate) fn for_each_overlapping_cell(
 /// or `None` when no occupied cell is within `reach` metres. Zero when touching.
 /// Each cell is treated as the disc around its square, so the result can read up
 /// to half a cell diagonal low: it never overstates clearance.
-pub fn rectangle_clearance(
+pub(crate) fn rectangle_clearance(
     map: &MapSnapshot,
     footprint: &Footprint,
     pose: Pose,
