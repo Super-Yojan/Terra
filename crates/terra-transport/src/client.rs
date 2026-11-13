@@ -12,6 +12,9 @@ use std::{
 };
 use zenoh::Wait;
 const LEASE: Duration = Duration::from_millis(250);
+/// Maximum cached authority age, seconds, when issuing a new remote mission
+/// request. This does not extend manual intent leases or any onboard sensor limit.
+const REMOTE_AUTHORITY_CACHE_SECONDS: f64 = 90.0;
 #[derive(Default)]
 struct State {
     target: Option<(f64, f64, Instant)>,
@@ -448,9 +451,10 @@ impl RoverConnection {
         if !request.neutral(&value) {
             let authority: serde_json::Value =
                 serde_json::from_str(&state.authority).unwrap_or_default();
-            if !state.authority_received.is_some_and(|at| {
-                at.elapsed().as_secs_f64() < terra_types::timing::REMOTE_AUTHORITY_CACHE_SECONDS
-            }) || !authority["run_id"].is_string()
+            if !state
+                .authority_received
+                .is_some_and(|at| at.elapsed().as_secs_f64() < REMOTE_AUTHORITY_CACHE_SECONDS)
+                || !authority["run_id"].is_string()
                 || authority["revision"].as_u64().is_none()
                 || (value.get("run_id").is_some() && value["run_id"] != authority["run_id"])
                 || (value.get("authority_revision").is_some()

@@ -24,12 +24,14 @@
 //! assert!(output.left > 0.0 && output.left == output.right);
 //! ```
 
-use terra_types::*;
 use terra_types::turning::TurningConfig;
+use terra_types::*;
 /// PI gains and safety limits for differential wheel control.
 ///
-/// Defaults target a small rover. All numbers must be finite; call [`Self::validate`]
-/// after changing settings. Gains convert velocity errors into normalized effort.
+/// Defaults are Terra's drive: terra-runtime's `RoverProfile::terra` derives the
+/// same gains and adds its reverse compensation. All numbers must be finite;
+/// call [`Self::validate`] after changing settings. Gains convert velocity
+/// errors into normalized effort.
 #[derive(Clone, Copy, Debug)]
 pub struct ControllerConfig {
     /// Forward proportional gain in normalized effort per metre/second.

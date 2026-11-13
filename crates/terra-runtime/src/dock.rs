@@ -1,6 +1,7 @@
 //! Dock outlet and gate servo: the rover profile's values with the phone's
 //! local settings on top, plus the setup-screen gate test.
 use super::{Runtime, RuntimeError, invalid, rover_profile};
+use rover_profile::{GATE_POSITION, OUTLET_AHEAD_M, within};
 
 /// Dock values set on the phone, kept across rover profile changes.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -26,7 +27,7 @@ impl Runtime {
     /// # Errors
     /// Outside 0.05..=3 m; the current value stays.
     pub fn set_dock_outlet(&mut self, ahead: Option<f64>) -> Result<(), RuntimeError> {
-        if ahead.is_some_and(|v| !(v.is_finite() && (0.05..=3.).contains(&v))) {
+        if ahead.is_some_and(|v| !within(v, &OUTLET_AHEAD_M)) {
             return Err(invalid("dock outlet must be 0.05 to 3 m ahead"));
         }
         self.dock_local.outlet_ahead = ahead;
@@ -41,10 +42,7 @@ impl Runtime {
     /// Positions outside -1..=1 or equal; the current gate stays.
     pub fn set_dock_gate(&mut self, gate: Option<(u8, f64, f64)>) -> Result<(), RuntimeError> {
         if let Some((_, open, closed)) = gate
-            && !([open, closed]
-                .iter()
-                .all(|v| v.is_finite() && (-1.0..=1.0).contains(v))
-                && open != closed)
+            && !(within(open, &GATE_POSITION) && within(closed, &GATE_POSITION) && open != closed)
         {
             return Err(invalid("gate positions must differ and lie in -1..=1"));
         }

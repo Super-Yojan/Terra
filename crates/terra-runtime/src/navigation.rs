@@ -12,7 +12,7 @@ pub struct Parameters {
     pub max_reverse: f64,
     #[serde(default = "default_reverse_penalty")]
     pub reverse_penalty: f64,
-    /// Assumed body length, metres, validated in 0.1..=3.
+    /// Assumed body length, metres, validated in 0.1..=3 like a rover profile.
     pub length: f64,
     /// Assumed body width, metres, validated in 0.1..=3.
     pub width: f64,
@@ -35,18 +35,24 @@ fn default_reverse_penalty() -> f64 {
     0.05
 }
 impl Default for Parameters {
+    /// Terra's body, turning and speed limits from
+    /// [`RoverProfile::terra`](crate::rover_profile::RoverProfile::terra).
+    /// Operators must enter the actual vehicle dimensions for other rovers.
     fn default() -> Self {
-        // Terra's measured 0.61 m square body with 5 cm on every side. Operators
-        // must enter the actual vehicle dimensions for other rovers.
+        let terra = crate::rover_profile::RoverProfile::terra();
         Self {
-            turning: Default::default(),
+            turning: terra_types::turning::TurningConfig {
+                min_turn_radius: terra.min_turn_radius,
+                allow_in_place: terra.allow_in_place,
+                ..Default::default()
+            },
             max_reverse: default_reverse(),
             reverse_penalty: default_reverse_penalty(),
-            length: 0.61,
-            width: 0.61,
-            clearance: 0.05,
-            max_linear: 2.,
-            max_angular: 2.,
+            length: terra.length,
+            width: terra.width,
+            clearance: terra.clearance,
+            max_linear: terra.max_linear,
+            max_angular: terra.max_angular,
             horizon: 2.,
             explore_through_unknown: false,
         }
@@ -55,6 +61,9 @@ impl Default for Parameters {
 impl Parameters {
     /// Return whether every geometry and avoidance parameter is finite and within its supported range.
     pub fn valid(&self) -> bool {
+        use crate::rover_profile::{
+            BODY_SIZE_M, CLEARANCE_M, MAX_ANGULAR_RADPS, MAX_LINEAR_MPS, within,
+        };
         self.turning.validate().is_ok()
             && self.max_reverse.is_finite()
             && self.max_reverse > 0.
@@ -62,15 +71,15 @@ impl Parameters {
             && self.reverse_penalty.is_finite()
             && (0.0..=10.).contains(&self.reverse_penalty)
             && [
-                (self.length, 0.1, 3.),
-                (self.width, 0.1, 3.),
-                (self.clearance, 0., 1.),
-                (self.max_linear, 0.05, 2.),
-                (self.max_angular, 0.1, 2.),
-                (self.horizon, 0.5, 5.),
+                (self.length, BODY_SIZE_M),
+                (self.width, BODY_SIZE_M),
+                (self.clearance, CLEARANCE_M),
+                (self.max_linear, MAX_LINEAR_MPS),
+                (self.max_angular, MAX_ANGULAR_RADPS),
+                (self.horizon, 0.5..=5.),
             ]
             .iter()
-            .all(|&(v, min, max)| v.is_finite() && (min..=max).contains(&v))
+            .all(|(v, range)| within(*v, range))
     }
     /// The body rectangle the planners check, with `clearance` as the margin on every side.
     pub fn footprint(&self) -> terra_navigation::Footprint {

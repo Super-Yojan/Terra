@@ -112,7 +112,9 @@ pub struct ControlSettings {
 }
 impl ControlSettings {
     fn controller(&self) -> ControllerConfig {
-        ControllerConfig {
+        // Until a rover profile is selected (Android has no picker yet),
+        // back up with Terra's reverse compensation.
+        terra_runtime::rover_profile::RoverProfile::terra().reverse_compensation(ControllerConfig {
             linear_kp: self.linear_kp,
             linear_ki: self.linear_ki,
             yaw_kp: self.yaw_kp,
@@ -126,13 +128,8 @@ impl ControlSettings {
             max_step: self.max_step,
             anti_windup: self.anti_windup,
             spin_effort: self.spin_effort,
-            wheel_deadband: 0.0,
-            // Until a rover profile is selected (Android has no picker yet),
-            // back up with Terra's reverse compensation.
-            reverse_effort_scale: terra_runtime::rover_profile::RoverProfile::terra()
-                .reverse_effort_scale,
-            reverse_deadband: terra_runtime::rover_profile::RoverProfile::terra().reverse_deadband,
-        }
+            ..ControllerConfig::default()
+        })
     }
     fn estimator(&self) -> EstimatorConfig {
         EstimatorConfig {
