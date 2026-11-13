@@ -6,8 +6,11 @@
 //! run, not chosen here. These values preserve the previous behavior; they are not
 //! a claim that the defaults have been validated for every physical rover.
 //!
-//! Only limits shared across crates live here; a limit one crate uses lives
-//! with it (hardware and control-request ages in terra-runtime, the remote
+//! Map, pose and operator-command freshness are shared across crates. The
+//! rest are each used by one crate (autonomy planning, proposals and search,
+//! exploration, the state estimator, turning) and stay here so every timing
+//! default can be reviewed and tuned in one place. Ages that are not tuning
+//! knobs live with their crate (hardware status in terra-runtime, the remote
 //! authority cache in terra-transport).
 //!
 //! Freshness checks use age < limit ([`fresh`]). Interval/expiry checks generally use >=.

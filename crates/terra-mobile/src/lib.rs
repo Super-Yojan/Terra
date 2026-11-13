@@ -466,18 +466,20 @@ impl MobileController {
     /// [`Self::sensor_queue_stats`]).
     ///
     /// # Errors
-    /// Returns `InvalidInput` for invalid sensor values or sample ordering and
-    /// `Internal` if shared state cannot be locked.
+    /// Returns `InvalidInput` for a nonfinite timestamp and `Internal` if the
+    /// queue cannot be locked.
     pub fn push_imu(&self, sample: ImuReading) -> Result<(), ControllerError> {
         self.brain.inbox.push(inbox::Sample::Imu(sample))
     }
     /// Queue one VIO reading for the next [`Self::step`]; when tracked it updates the
     /// planar world pose as it is applied. Never waits for a running tick.
-    /// The tracked quaternion is normalized before extracting heading.
+    /// The tracked quaternion is normalized before extracting heading. A
+    /// reading the estimator rejects when applied sets no pose and is dropped
+    /// and counted (see [`Self::sensor_queue_stats`]).
     ///
     /// # Errors
-    /// Returns `InvalidInput` for invalid readings or sample ordering and
-    /// `Internal` for a poisoned mutex. Pose assignment precedes estimator validation.
+    /// Returns `InvalidInput` for a nonfinite timestamp and `Internal` if the
+    /// queue cannot be locked.
     pub fn push_vio(&self, sample: VioReading) -> Result<(), ControllerError> {
         self.brain.inbox.push(inbox::Sample::Vio(sample))
     }

@@ -89,8 +89,6 @@ impl Parameters {
             margin: self.clearance,
         }
     }
-    /// Build planner settings around the body rectangle.
-    /// Other planner parameters retain portable defaults; this conversion assumes prior validation.
     /// Everything the autonomy arbiter takes from these parameters.
     pub fn arbiter_settings(&self) -> terra_autonomy::ArbiterSettings {
         terra_autonomy::ArbiterSettings {
@@ -99,6 +97,8 @@ impl Parameters {
             explore_through_unknown: self.explore_through_unknown,
         }
     }
+    /// Planner settings around the body rectangle. Other planner parameters
+    /// keep portable defaults; this conversion assumes prior validation.
     pub fn planner(&self) -> terra_navigation::PlannerConfig {
         terra_navigation::PlannerConfig {
             footprint: self.footprint(),
