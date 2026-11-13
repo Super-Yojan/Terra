@@ -3,21 +3,19 @@ use crate::*;
 use terra_autonomy::outdoor::{Evidence, NavigationSource, OutdoorPhase};
 
 /// Outdoor request admission: replay memory for source requests and
-/// geographic goals, the navigation revision requests are reviewed against,
-/// and the last source request's token and result.
+/// geographic goals, and the last source request's token and result.
 #[derive(Default)]
 pub(crate) struct Admission {
     requests: replay::ReplayGuard<128>,
     goals: replay::ReplayGuard<128>,
-    /// Bumped by every settings change a reviewed outdoor request depends on.
-    pub(crate) revision: u64,
     token: Option<String>,
     result: Option<String>,
 }
 impl Admission {
-    /// Add the request bookkeeping to the controller's `outdoor` status.
-    pub(crate) fn annotate(&self, status: &mut serde_json::Value) {
-        status["navigation_revision"] = self.revision.into();
+    /// Add the request bookkeeping, and the settings revision requests are
+    /// reviewed against, to the controller's `outdoor` status.
+    pub(crate) fn annotate(&self, status: &mut serde_json::Value, revision: u64) {
+        status["navigation_revision"] = revision.into();
         status["token"] = self.token.clone().into();
         status["result"] = self.result.clone().into();
     }
@@ -55,7 +53,7 @@ pub(crate) fn request(
     let result = (|| {
         if v["schema_version"] != 1
             || v["run_id"] != b.run_id
-            || v["navigation_revision"] != b.outdoor_admission.revision
+            || v["navigation_revision"] != b.navigation.revision
         {
             return Err(invalid("run or navigation revision changed"));
         }
@@ -80,11 +78,11 @@ pub(crate) fn request(
             .get("arrival_radius_m")
             .and_then(|v| v.as_f64())
             .unwrap_or(b.outdoor.arrival_radius());
-        if b.outdoor_admission.revision == u64::MAX {
+        if b.navigation.revision == u64::MAX {
             return Err(invalid("revision exhausted"));
         }
         b.outdoor.select_source(source, radius).map_err(invalid)?;
-        b.bump_navigation_revision();
+        b.settings_changed();
         b.autonomy.accept_goal(&terra_waypoint::GoalCommand::Cancel);
         b.controller.reset();
         Ok(())
@@ -193,7 +191,7 @@ pub(crate) fn dispatch_goal(b: &mut Runtime, bytes: &[u8], now: f64) -> bool {
     let outdoor = b.outdoor.selected() && value["cancel"] != true;
     let radius = value["arrival_radius_m"].as_f64();
     let bound =
-        value["run_id"] == b.run_id && value["navigation_revision"] == b.outdoor_admission.revision;
+        value["run_id"] == b.run_id && value["navigation_revision"] == b.navigation.revision;
     if let Some(o) = value.as_object_mut() {
         o.remove("run_id");
         if outdoor {

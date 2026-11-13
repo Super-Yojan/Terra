@@ -437,7 +437,7 @@ impl Runtime {
         self.outdoor.invalidate_sensors();
         self.objects.clear();
         self.outdoor.select_local();
-        self.bump_navigation_revision();
+        self.settings_changed();
         let dock = self.autonomy.dock_config().clone();
         self.autonomy = AutonomyArbiter::default();
         self.autonomy.set_run(&self.run_id);
@@ -477,7 +477,7 @@ impl Runtime {
         self.outdoor.cancel();
         self.outdoor.invalidate_sensors();
         self.forget_local_frame();
-        self.bump_navigation_revision();
+        self.settings_changed();
         self.autonomy.reset_local_frame();
         self.controller.reset();
     }
@@ -490,9 +490,10 @@ impl Runtime {
     pub fn enable_outdoor_gps(&mut self) {
         self.outdoor.set_supported(true);
     }
-    /// A settings change any reviewed outdoor request must be made against again.
-    pub(crate) fn bump_navigation_revision(&mut self) {
-        self.outdoor_admission.revision = self.outdoor_admission.revision.saturating_add(1);
+    /// Navigation settings, the navigation source or the local frame changed:
+    /// settings and outdoor requests reviewed against the old revision are refused.
+    pub(crate) fn settings_changed(&mut self) {
+        self.navigation.revision = self.navigation.revision.saturating_add(1);
     }
     /// The operator closed the fleet link: pause the outdoor mission, return
     /// authority to teleop and stop the velocity loop. A latched emergency
@@ -572,12 +573,11 @@ impl Runtime {
         self.configuration.controller = controller;
         self.control_limits = (controller.max_forward, controller.max_yaw_rate);
         self.navigation.parameters = navigation;
-        self.navigation.revision = self.navigation.revision.saturating_add(1);
         self.rover_profile = Some(profile.clone());
         self.apply_dock();
         self.navigation.profile = Some(profile.name.clone());
         self.navigation.result = Some(format!("profile {}", profile.name));
-        self.bump_navigation_revision();
+        self.settings_changed();
         self.events
             .push(json!({"kind":"rover_profile.applied","profile":profile}));
         Ok(())

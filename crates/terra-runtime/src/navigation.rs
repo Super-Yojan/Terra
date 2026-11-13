@@ -116,7 +116,9 @@ impl Parameters {
 pub struct State {
     /// Currently applied geometry and planner limits.
     pub parameters: Parameters,
-    /// Monotonic accepted-settings revision within this controller session.
+    /// Settings revision within this controller session, bumped by
+    /// [`Runtime::settings_changed`](crate::Runtime): settings and outdoor
+    /// requests must name it.
     pub revision: u64,
     /// Most recently processed unique settings token, including rejected requests.
     pub token: Option<String>,
@@ -195,8 +197,7 @@ pub fn apply(b: &mut super::Runtime, bytes: &[u8], now: f64) -> bool {
         .expect("validated turning settings");
     b.controller.reset();
     b.navigation.parameters = r.parameters;
-    b.navigation.revision += 1;
-    b.bump_navigation_revision();
+    b.settings_changed();
     b.navigation.result = Some("accepted".into());
     true
 }

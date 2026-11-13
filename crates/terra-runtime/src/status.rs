@@ -47,7 +47,8 @@ impl Runtime {
         let mut status = self
             .outdoor
             .status(now, outdoor::evidence(self, now), &self.run_id);
-        self.outdoor_admission.annotate(&mut status);
+        self.outdoor_admission
+            .annotate(&mut status, self.navigation.revision);
         if !self.outdoor.selected() {
             return status;
         }
