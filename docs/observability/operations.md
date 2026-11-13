@@ -317,7 +317,7 @@ in-memory export job index; recreate an export after a restart.
 
 ### Connectivity display defaults
 
-Edit `crates/terra-types/src/connectivity_policy.rs` for GPS display freshness (3 s) and fleet stale presentation (90 s). The phone obtains these defaults through its native binding; ARGOS uses the same crate. Old GPS observations retain their source timestamp and coordinates and are labelled last known. Neither value changes local sensor admission, remote command expiry or navigation GPS quality checks. Fleet membership remains visible without geographic placement.
+Edit `crates/terra-runtime/src/connectivity.rs` (`GPS_DISPLAY_FRESHNESS_SECONDS`, `FLEET_DISPLAY_STALE_SECONDS`) for GPS display freshness (3 s) and fleet stale presentation (90 s). The phone obtains these defaults through `MobileController.connectivity_policy_settings`; dashboards read the effective policy from its telemetry. Old GPS observations retain their source timestamp and coordinates and are labelled last known. Neither value changes local sensor admission, remote command expiry or navigation GPS quality checks. Fleet membership remains visible without geographic placement.
 
 ### Onboard autonomy during router loss
 

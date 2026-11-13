@@ -2,7 +2,7 @@
 
 > [!TIP]
 > **TL;DR**
-> Fourteen workspace crates.
+> Eighteen crates under `crates/`.
 > `terra-mobile` is the only UniFFI boundary.
 > The Pi reimplements Bluetooth in Python. It does not link these crates.
 
@@ -10,7 +10,7 @@
 flowchart LR
   Types[terra-types] --> State[terra-state]
   State --> Control[terra-control]
-  Control --> Motors[terra-motors]
+  Types --> Motors[terra-motors]
   Types --> Way[terra-waypoint]
   Types --> Map[terra-mapping]
   Map --> Nav[terra-navigation]
@@ -18,12 +18,16 @@ flowchart LR
   Way --> Auto[terra-autonomy]
   Nav --> Auto
   Exp --> Auto
-  Auto --> Mobile[terra-mobile]
-  Control --> Mobile
-  Map --> Mobile
+  Auto --> Runtime[terra-runtime]
+  Control --> Runtime
+  Runtime --> Record[terra-experiment]
+  Runtime --> Mobile[terra-mobile]
+  Record --> Mobile
+  Types --> Transport[terra-transport]
+  Transport --> Mobile
 ```
 
-*Phone and Zorvane share the middle. PWM stays in `terra-motors`.*
+*Phone and Zorvane each run one `terra-runtime` per rover. PWM stays in `terra-motors`.*
 
 ![Body axes shared by the crates](../assets/body-axes.svg)
 
@@ -42,9 +46,12 @@ flowchart LR
 | [terra-navigation](terra-navigation.md) | Local planner and Hybrid A* routes. |
 | [terra-exploration](terra-exploration.md) | Time-bounded autonomous exploration. |
 | [terra-autonomy](terra-autonomy.md) | Five levels and a safety hold. |
+| [terra-runtime](terra-runtime.md) | One rover's control loop, no I/O. |
 | [terra-experiment](terra-experiment.md) | JSONL logs and summaries. |
 | [terra-motors](terra-motors.md) | PWM, enable, watchdog, coast. |
 | [terra-actuators](terra-actuators.md) | Layouts and Bluetooth frames. |
 | [terra-mobile](terra-mobile.md) | Swift exports. |
+
+`terra-observability` and `terra-observability-collector` (event contract and collector) are covered in [Observability operations](../observability/operations.md). `tools/vlm-eval` is a workspace tool, not a crate under `crates/`.
 
 Rustdoc: [super-yojan.dev/Terra/api/](https://super-yojan.dev/Terra/api/).

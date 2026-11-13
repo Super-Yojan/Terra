@@ -4,7 +4,7 @@
 > **TL;DR**
 > The iPhone sends one rear-camera video track to ARGOS over WebRTC.
 > Signaling rides the existing fleet Zenoh session.
-> Drive commands stay on `teleop` and `hardware`. The video path cannot arm or move the rover.
+> Drive commands stay on `teleop`. The video path cannot arm or move the rover.
 
 The phone and the dashboard are often on different networks. WebRTC uses ICE, with a public STUN server by default and TURN when you configure it. There is no Tailscale dependency for the video.
 
@@ -33,7 +33,7 @@ Session ids are UUIDs. Comparison ignores letter case, and the phone echoes the 
 
 ## Size limit
 
-Control payloads stay capped at **2048 bytes**. Signaling payloads have their own cap of **65536 bytes**. A larger sample is dropped. WebRTC topics are not control topics: they never enter the autonomy inbox, so an SDP cannot evict a stop or be decoded as `teleop`, `hardware`, or `safety`.
+Control payloads stay capped at **2048 bytes**. Signaling payloads have their own cap of **65536 bytes**. A larger sample is dropped. WebRTC topics are not control topics: they never enter the autonomy inbox, so an SDP cannot evict a stop or be decoded as `teleop` or `safety`.
 
 Offers and candidates are published once. They are not replayed with the 500 ms telemetry cache.
 

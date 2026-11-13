@@ -92,7 +92,7 @@ Phone depth, when ARCore Depth is supported, uses the raw 16-bit image and its c
 
 ## Waypoint
 
-**Go to waypoint** calls `MobileWaypoint.setOrigin` and `setGoal`. While the goal is latched the sliders stay idle. Each tick steps the follower with the simulated plant pose, the phone body pose, or the Zorvane depth frame’s body pose, and that twist is the command. On Zenoh it is `cmd_vel`. The `goal` topic stays idle during that run, so Zorvane does not latch a second follower. **Cancel waypoint**, Stop, and leaving the app drop the latch. **Johnson Center, 12 m north** fills the same default fields as iOS. The reachable square is 49 m. Map taps use `geographicPosition`.
+**Go to waypoint** calls `MobileWaypoint.setOrigin` and `setGoal`. While the goal is latched the sliders stay idle. Each tick steps the follower with the simulated plant pose, the phone body pose, or the Zorvane depth frame’s body pose, and that twist is the controller's velocity target. The `goal` topic stays idle during that run, so Zorvane does not latch a second follower. **Cancel waypoint**, Stop, and leaving the app drop the latch. **Johnson Center, 12 m north** fills the same default fields as iOS. The reachable square is 49 m. Map taps use `geographicPosition`.
 
 ## Autonomy
 
@@ -136,7 +136,7 @@ Not verified:
 
 ## iOS follow-up on a Mac
 
-`PhoneController` now calls `deviceVectorToBody`, `yUpCameraToBodyPose`, `yUpCameraToOpticalPose`, `latchGroundOffset`, `PoseVelocityFilter`, `SimulatedPlant`, and `simulatedRoomDepth`. Those symbols appear only after `./scripts/ios/build-ios.sh` regenerates `apps/ios/Generated`. This checkout cannot run `xcodebuild`.
+`PhoneController` calls `SimulatedPlant` and `simulatedRoomDepth`. Those symbols appear only after `./scripts/ios/build-ios.sh` regenerates `apps/ios/Generated`. This checkout cannot run `xcodebuild`.
 
 ### Integrated exploration
 
