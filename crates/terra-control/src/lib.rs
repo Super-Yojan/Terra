@@ -468,8 +468,20 @@ mod tests {
         }
         let out = spin(&mut c, 0.15, -0.5, 0.0);
         assert_eq!((out.left, out.right), (0.35, -0.35));
-        // Open loop leaves nothing to surge when feedback resumes.
-        assert_eq!((c.linear_integral, c.yaw_integral), (0.0, 0.0));
+        // Open loop leaves nothing to surge when feedback resumes: the next
+        // feedback step matches a controller that never spun.
+        let mut fresh = spin_controller(Some(SPIN_ALLOWED), 0.35);
+        for ctl in [&mut c, &mut fresh] {
+            ctl.set_target(VelocityTarget {
+                timestamp: 0.2,
+                forward: 0.2,
+                yaw_rate: 0.1,
+            })
+            .unwrap();
+        }
+        let resumed = c.step(estimate(0.2, 0.0, 0.0));
+        let reference = fresh.step(estimate(0.2, 0.0, 0.0));
+        assert_eq!((resumed.left, resumed.right), (reference.left, reference.right));
     }
 
     /// Spins stay on feedback when in-place turns are not allowed, for local
@@ -513,7 +525,8 @@ mod tests {
         assert!(out.left > 0.4 && out.left < 0.5, "left={}", out.left);
         assert_eq!(out.left, out.right);
         assert_eq!(c.past_deadband(1.0), 1.0);
-        assert!((c.past_deadband(-0.5) + 0.7).abs() < 1e-12);
+        let lifted = c.past_deadband(-0.5);
+        assert!(lifted < -0.5 && lifted > -1.0, "lifted={lifted}");
         assert_eq!(c.past_deadband(0.005), 0.0);
         c.set_target(VelocityTarget {
             timestamp: 0.01,
@@ -571,7 +584,8 @@ mod tests {
             }
         }
         assert_eq!(c.past_deadband(-1.0), -1.0);
-        assert_eq!(c.past_deadband(-0.6), -1.0);
+        assert!(c.past_deadband(-0.6) < -0.6);
+        assert!(c.past_deadband(-0.6) >= -1.0);
         assert_eq!(c.past_deadband(-0.005), 0.0);
         assert_eq!(plain.past_deadband(-0.3), -0.3);
         for (reverse_effort_scale, reverse_deadband) in

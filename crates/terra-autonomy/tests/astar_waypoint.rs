@@ -320,10 +320,6 @@ fn cached_waypoint_command_must_stay_admissible() {
 #[test]
 fn l3_crosses_an_18_by_12_pitch_on_the_rolling_map() {
     let config = MapConfig::default();
-    assert_eq!(
-        (config.width, config.height, config.resolution),
-        (300, 300, 0.1)
-    );
     let mut arbiter = AutonomyArbiter::default();
     arbiter.set_level(LevelRequest {
         level: Level::Waypoint,

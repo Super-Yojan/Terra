@@ -165,7 +165,7 @@ class PhoneDriveSmokeTest {
         // Terra's landscape mount keeps the rear camera forward and rolls the phone onto its side.
         val terra = PhonePosePipeline(terraLandscapeMount(true), PoseAxes.DEVICE, 0.0)
         assertEquals(1.0, terra.imu(1.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0).accelerationForward, 1e-9)
-        assertEquals(0.23, terra.calibration().cameraHeight, 1e-9)
+        assertEquals(terraLandscapeMount(true), terra.calibration())
     }
 
     @Test

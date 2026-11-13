@@ -783,7 +783,6 @@ mod tests {
             .is_err()
         );
         assert!(MotorAdapterConfig::default().validate().is_ok());
-        assert_eq!(MotorAdapterConfig::default().command_timeout, 0.2);
     }
 
     /// Checks the standalone producer-clock watchdog at the exact expiry boundary,

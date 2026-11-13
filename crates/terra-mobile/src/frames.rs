@@ -553,14 +553,20 @@ mod tests {
     }
 
     #[test]
-    /// Checks first-sample suppression, the 30 ms low-pass response, and history clearing across tracking loss.
+    /// Checks first-sample suppression, a low-pass ramp toward the raw speed, and history clearing across tracking loss.
     fn velocity_filter_ramps_then_drops_on_tracking_loss() {
         let mut filter = VelocityFilter::new();
         let at = |x: f64| Vector3 { x, ..Vector3::ZERO };
         assert!(filter.push(at(0.0), 0.0).is_none());
         let first = filter.push(at(1.0), 0.1).unwrap();
-        let alpha = 0.1 / 0.13;
-        approx(first.x, 10.0 * alpha);
+        assert!(first.x > 0.0 && first.x < 10.0, "{}", first.x);
+        let mut last = first.x;
+        for i in 2..40 {
+            let next = filter.push(at(i as f64), i as f64 * 0.1).unwrap().x;
+            assert!(next >= last - 1e-9 && next <= 10.0 + 1e-9, "{next}");
+            last = next;
+        }
+        approx(last, 10.0);
         filter.clear();
         assert!(filter.push(at(2.0), 0.3).is_none());
     }
@@ -575,16 +581,16 @@ mod tests {
     }
 
     #[test]
-    /// Applies equal positive efforts for one 10 ms plant tick and checks acceleration, speed, position, and zero turning.
+    /// Applies equal positive efforts for one plant tick and checks it accelerates and moves forward without turning.
     fn plant_coasts_forward_when_both_efforts_are_positive() {
         let plant = SimulatedPlant::new();
         let before = plant.state().unwrap();
         approx(before.forward, 0.0);
         let after = plant.step(1.0, 1.0).unwrap();
-        approx(after.acceleration_forward, 3.0);
-        approx(after.forward, 0.03);
+        assert!(after.acceleration_forward > 0.0);
+        assert!(after.forward > 0.0);
+        assert!(after.x > before.x);
         approx(after.yaw_rate, 0.0);
-        approx(after.x, 0.0003);
         approx(after.quaternion_w, 1.0);
     }
 

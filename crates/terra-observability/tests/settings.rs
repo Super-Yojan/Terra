@@ -6,7 +6,10 @@ fn partial_overrides_preserve_other_defaults() {
         serde_json::from_value(json!({"evidence_sample_seconds":2.0})).unwrap();
     assert!(s.valid());
     assert_eq!(s.evidence_sample_seconds, 2.);
-    assert_eq!(s.control_sample_seconds, 0.1);
+    assert_eq!(
+        s.control_sample_seconds,
+        ObservationSettings::default().control_sample_seconds
+    );
 }
 #[test]
 fn invalid_sampling_and_retention_are_rejected() {
