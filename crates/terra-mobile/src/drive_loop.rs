@@ -410,24 +410,34 @@ mod tests {
     #[test]
     /// A stop is handed out once, and an old frame is not handed out at all.
     fn take_returns_stops_once_and_drops_stale_frames() {
-        let drive = manual_loop();
-        {
-            let mut s = drive.shared.state.lock().unwrap();
-            s.latest_drive = Some(("[]".into(), 100.0));
-            s.pending_stop = Some("why".into());
-        }
-        assert_eq!(
-            drive.take_motor_command(1e9),
-            MotorCommand::Stop {
-                reason: "why".into()
-            }
-        );
+        let controller = MobileController::new(default_control_settings()).unwrap();
+        controller.set_actuator_layout(PROFILES.into()).unwrap();
+        let held = PhoneDriveLoop::new(controller, MotorGate::new(), DriveSource::Phone, 0.0);
+        held.set_link(true, true, false, true);
+        held.set_tracking(true);
+        assert!(matches!(held.step_once(0.0).unwrap(), MotorCommand::Stop { .. }));
         assert!(matches!(
-            drive.take_motor_command(1e9),
-            MotorCommand::Drive { .. }
+            held.take_motor_command(1e9),
+            MotorCommand::Stop { .. }
         ));
-        drive.shared.state.lock().unwrap().latest_drive = Some(("[]".into(), 99.0));
-        assert_eq!(drive.take_motor_command(0.15), MotorCommand::Idle);
+        assert_eq!(held.take_motor_command(1e9), MotorCommand::Idle);
+
+        let drive = manual_loop();
+        drive.set_link(true, true, false, true);
+        drive.set_local_input(0.5, 0.0);
+        let now = drive.now();
+        let driving = (0..10)
+            .map(|i| drive.step_once(now + i as f64 * 0.01).unwrap())
+            .any(|c| matches!(c, MotorCommand::Drive { .. }));
+        assert!(driving);
+        for _ in 0..2 {
+            assert!(matches!(
+                drive.take_motor_command(1e9),
+                MotorCommand::Drive { .. }
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(20));
+        assert_eq!(drive.take_motor_command(0.0), MotorCommand::Idle);
     }
 
     #[test]
@@ -479,17 +489,22 @@ mod tests {
     }
 
     #[test]
-    /// The thread ticks near 100 Hz on its own and stops when asked.
+    /// The thread ticks on its own without bursting past 100 Hz, and stops when asked.
     fn thread_ticks_and_stops() {
         let drive = manual_loop();
+        let started = Instant::now();
         drive.start().unwrap();
-        std::thread::sleep(Duration::from_millis(120));
+        while drive.snapshot().tick < 5 && started.elapsed() < Duration::from_secs(5) {
+            std::thread::sleep(Duration::from_millis(5));
+        }
         drive.stop();
+        let elapsed = started.elapsed();
         let snapshot = drive.snapshot();
         assert!(!snapshot.running);
+        let ceiling = elapsed.as_millis() as u64 / 10 + 2;
         assert!(
-            (5..=20).contains(&snapshot.tick),
-            "ticked {} times",
+            (5..=ceiling).contains(&snapshot.tick),
+            "ticked {} times in {elapsed:?}",
             snapshot.tick
         );
         let after = snapshot.tick;

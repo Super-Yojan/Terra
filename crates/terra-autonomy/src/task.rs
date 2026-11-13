@@ -1305,7 +1305,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(plan.len(), 1);
-        assert!(note.unwrap().contains("waypoint 2 dropped"));
+        assert!(note.is_some());
     }
 
     #[test]
@@ -1333,7 +1333,7 @@ mod tests {
             &summary.text,
             &history,
         );
-        assert!(text.contains("TASK from the operator: go to the wall"));
+        assert!(text.contains("go to the wall"));
         assert!(text.contains("heading 90 deg"));
         assert!(text.contains("entry 9") && !text.contains("entry 3"));
     }

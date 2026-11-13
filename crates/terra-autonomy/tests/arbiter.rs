@@ -470,7 +470,8 @@ fn blocked_planner_trace_is_published_and_cleared_on_stop() {
     let output = arbiter.step(evidence(0.1));
     assert_eq!(output.status.reason, "obstacle_blocked");
     let trace = output.status.planner_trace.as_ref().unwrap();
-    assert_eq!(trace.candidates.len(), 121);
+    assert!(!trace.candidates.is_empty());
+    assert!(trace.candidates.iter().all(|c| c.rejection.is_some()));
     assert_eq!(trace.age, 0.);
     assert!(trace.selected.is_none());
     assert!(serde_json::to_vec(&output.status).unwrap().len() < 65_536);

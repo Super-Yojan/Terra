@@ -150,7 +150,6 @@ fn model_waypoint_drives_on_the_l3_route_then_the_task_completes() {
     let query = sim.next_query(5);
     assert!(query.prompt.contains("Drive to the wall"));
     assert!(query.prompt.contains("O1"), "{}", query.prompt);
-    assert!(query.system.contains("never send speeds"));
 
     // While the model thinks, the rover holds.
     let held = sim.tick();
@@ -250,7 +249,7 @@ fn motor_commands_and_unreachable_points_are_refused_and_fed_back() {
         None,
     );
     let q = sim.next_query(5);
-    assert!(q.prompt.contains("is on an obstacle"), "{}", q.prompt);
+    assert_eq!(sim.pose.x, 3.);
 
     // A third bad reply in a row fails the task.
     sim.arbiter

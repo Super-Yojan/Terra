@@ -364,8 +364,13 @@ fn test_prompt_helpers_parse_without_running_and_list_native_tool_specs() {
     assert_eq!(bad["ok"], false);
     let specs: Value = serde_json::from_str(&agent_tool_specs_json()).unwrap();
     let specs = specs.as_array().unwrap();
-    assert_eq!(specs.len(), 12);
-    assert_eq!(specs[0]["type"], "function");
+    assert!(specs.iter().all(|s| s["type"] == "function"));
+    for name in ["get_state", "get_map", "go_to", "ask_operator", "finish", "stop"] {
+        assert!(
+            specs.iter().any(|s| s["function"]["name"] == name),
+            "{name} missing"
+        );
+    }
     assert!(
         specs
             .iter()

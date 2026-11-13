@@ -1,28 +1,10 @@
 use super::*;
-use zenoh::Wait;
 #[test]
 fn busy_telemetry_lock_is_unknown_not_stale() {
-    let mut config = zenoh::Config::default();
-    config
-        .insert_json5("scouting/multicast/enabled", "false")
-        .unwrap();
-    config.insert_json5("listen/endpoints", "[]").unwrap();
-    let session = zenoh::open(config).wait().unwrap();
-    let service = ControlPlane {
-        inbox: Default::default(),
-        signaling: Default::default(),
-        captures: Default::default(),
-        bulk: None,
-        bulk_worker: None,
-        states: Default::default(),
-        session,
-        base: "diag/7".into(),
-        batches: Default::default(),
-        stop: Default::default(),
-        failure: Default::default(),
-        worker: None,
-        rover_id: 7,
-    };
+    let socket = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let endpoint = format!("tcp/127.0.0.1:{}", socket.local_addr().unwrap().port());
+    drop(socket);
+    let service = ControlPlane::listen(&endpoint, "diag", 7).unwrap();
     let guard = service.states.lock().unwrap();
     let details = service.diagnostics();
     assert_eq!(details["telemetry_fresh"], serde_json::Value::Null);

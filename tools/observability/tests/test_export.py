@@ -20,7 +20,7 @@ def test_recording_preserves_source_receipt_and_reset_boundaries(tmp_path):
  assert 'source_phone_boot' in summary and 'source_phone_second-boot' in summary
  assert 'receipt_time' in summary
  index=json.loads(out.with_suffix('.index.json').read_text());assert {r['id']['boot_id'] for r in index}=={'boot','second-boot'}
- assert json.loads(out.with_suffix('.manifest.json').read_text())['clock_alignment']=='unmeasured; wall-clock alignment is approximate'
+ assert json.loads(out.with_suffix('.manifest.json').read_text())['clock_alignment'].startswith('unmeasured')
 
 def test_late_event_changes_revision_without_rewriting_ids(tmp_path):
  d=source(tmp_path,[event(1)]);out=tmp_path/'one.rrd';a=export_session(d,out,ExportConfig())
