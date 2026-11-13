@@ -135,7 +135,7 @@ impl ControlPlane {
         if !endpoint.starts_with("tcp/127.0.0.1:") {
             return Err(TransportError::InvalidSettings);
         }
-        Self::open(endpoint, prefix, id, false, None)
+        Self::open(endpoint, prefix, id, false, ("", ""))
     }
     /// Outbound TCP session, suitable for an explicitly configured Tailscale router.
     /// No listeners, multicast discovery, or automatic application command retries.
@@ -143,8 +143,7 @@ impl ControlPlane {
     /// has a three-second timeout. Returns `InvalidSettings` for rejected settings
     /// or `Network` for configuration, connection, or subscriber failure.
     pub fn connect(endpoint: &str, prefix: &str, id: u64) -> Result<Self, TransportError> {
-        crate::validate(endpoint, prefix)?;
-        Self::open(endpoint, prefix, id, true, None)
+        Self::connect_authenticated(endpoint, prefix, id, "", "")
     }
     /// Open the same outbound session as [`Self::connect`] with Zenoh user/password
     /// authentication. An empty `user` omits credentials. No application intent is retried.
@@ -157,14 +156,14 @@ impl ControlPlane {
         password: &str,
     ) -> Result<Self, TransportError> {
         crate::validate(endpoint, prefix)?;
-        Self::open(endpoint, prefix, id, true, Some((user, password)))
+        Self::open(endpoint, prefix, id, true, (user, password))
     }
     fn open(
         endpoint: &str,
         prefix: &str,
         id: u64,
         outbound: bool,
-        credentials: Option<(&str, &str)>,
+        (user, password): (&str, &str),
     ) -> Result<Self, TransportError> {
         let mut config = zenoh::Config::default();
         if outbound {
@@ -192,7 +191,7 @@ impl ControlPlane {
         config
             .insert_json5("scouting/multicast/enabled", "false")
             .map_err(|e| TransportError::Network(e.to_string()))?;
-        if let Some((user, password)) = credentials.filter(|(u, _)| !u.is_empty()) {
+        if !user.is_empty() {
             for (key, value) in [
                 ("transport/auth/usrpwd/user", user),
                 ("transport/auth/usrpwd/password", password),

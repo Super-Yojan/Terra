@@ -550,7 +550,6 @@ mod tests {
         assert!(payload(2.1, 0.0).is_err());
     }
     #[test]
-    #[ignore = "requires local TCP sockets"]
     /// Uses a loopback peer to observe rover-scoped motion, expiry of the 250 ms lease,
     /// then a final zero on disconnect. Ignored by default because local TCP sockets are required.
     fn publishes_selected_rover_expires_lease_and_disconnects_with_zero() {
@@ -671,7 +670,6 @@ mod tests {
         assert!(fallback.depth_metres[0].is_nan());
     }
     #[test]
-    #[ignore = "requires local TCP sockets"]
     /// Publishes successive one-pixel depth packets over loopback and verifies consume-once
     /// retrieval plus frame-count status. Ignored by default because TCP sockets are required.
     fn returns_each_posed_depth_frame_once() {
