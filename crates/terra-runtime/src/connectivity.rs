@@ -93,7 +93,8 @@ impl Runtime {
         self.autonomy.pause_for_router_loss();
         self.controller.reset();
     }
-    pub fn link(&mut self, connected: bool) {
+    /// The fleet link came up or went down (see [`RuntimeEvent::Link`]).
+    pub(crate) fn link(&mut self, connected: bool) {
         if connected {
             if self.connectivity.loss_handled {
                 self.autonomy.invalidate_remote_authority();

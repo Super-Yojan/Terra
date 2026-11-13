@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 use std::collections::VecDeque;
 use terra_autonomy::{ArbiterInput, ArbiterOutput, AutonomyArbiter, CommandOrigin};
 use terra_control::{ControllerConfig, VelocityController};
-use terra_mapping::{CameraIntrinsics, CameraPose, GroundPlane, MapConfig, MapSnapshot};
+use terra_mapping::{MapConfig, MapSnapshot};
 use terra_navigation::{Pose, Twist};
 use terra_state::{EstimatorConfig, VelocityEstimator};
 use terra_types::*;
@@ -100,14 +100,6 @@ pub enum RuntimeEvent {
         sample: VioSample,
         received_at: f64,
     },
-    Depth {
-        timestamp: f64,
-        received_at: f64,
-        intrinsics: CameraIntrinsics,
-        camera: CameraPose,
-        depth: Vec<f32>,
-        ground: Option<GroundPlane>,
-    },
     /// An occupancy snapshot built by the host; one older than the current map is ignored.
     Map {
         snapshot: MapSnapshot,
@@ -131,10 +123,6 @@ pub enum RuntimeEvent {
     },
     Link {
         connected: bool,
-        received_at: f64,
-    },
-    Recording {
-        healthy: bool,
         received_at: f64,
     },
     Hardware {
@@ -173,13 +161,11 @@ impl RuntimeEvent {
         match self {
             Self::Imu { received_at, .. }
             | Self::Vio { received_at, .. }
-            | Self::Depth { received_at, .. }
             | Self::Map { received_at, .. }
             | Self::LocalManual { received_at, .. }
             | Self::LocalVelocity { received_at, .. }
             | Self::Remote { received_at, .. }
             | Self::Link { received_at, .. }
-            | Self::Recording { received_at, .. }
             | Self::Hardware { received_at, .. }
             | Self::Mode { received_at, .. }
             | Self::Gps { received_at, .. }
@@ -640,31 +626,6 @@ impl Runtime {
                     self.tilt.observe(q, sample.timestamp);
                 }
             }
-            RuntimeEvent::Depth {
-                timestamp,
-                intrinsics,
-                camera,
-                depth,
-                ground,
-                ..
-            } => {
-                not_future(timestamp, received, "future depth timestamp")?;
-                let p = self.pose.unwrap_or_default().0;
-                self.grid.recenter(p.x, p.y)?;
-                match ground {
-                    Some(ground) => self.grid.integrate_depth_with_ground_plane(
-                        timestamp, intrinsics, camera, &depth, ground,
-                    )?,
-                    None => self
-                        .grid
-                        .integrate_depth(timestamp, intrinsics, camera, &depth)?,
-                };
-                self.map = Some((
-                    self.grid.snapshot(),
-                    timestamp,
-                    self.map.as_ref().map_or(1, |m| m.2 + 1),
-                ));
-            }
             RuntimeEvent::Map {
                 snapshot,
                 timestamp,
@@ -717,7 +678,6 @@ impl Runtime {
                 self.queue.push_back((kind, payload, received));
             }
             RuntimeEvent::Link { connected, .. } => self.link(connected),
-            RuntimeEvent::Recording { healthy, .. } => self.set_recording_healthy(healthy),
             RuntimeEvent::Hardware { status, .. } => {
                 self.hardware = Some(hardware::Hardware {
                     status,

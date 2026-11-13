@@ -55,10 +55,18 @@ pub fn trace() -> Vec<f64> {
                 .unwrap();
             }
             if tick == 40 {
-                r.link(false);
+                r.ingest(RuntimeEvent::Link {
+                    connected: false,
+                    received_at: t,
+                })
+                .unwrap();
             }
             if tick == 45 {
-                r.link(true);
+                r.ingest(RuntimeEvent::Link {
+                    connected: true,
+                    received_at: t,
+                })
+                .unwrap();
             }
             if tick == 60 || tick == 90 {
                 let payload = json!({"action":if tick==60{"stop"}else{"reset"},"token":format!("safety-{tick}"),"run_id":r.run_id(),"authority_revision":r.autonomy.authority_revision()});

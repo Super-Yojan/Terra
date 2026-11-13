@@ -208,11 +208,7 @@ fn recording_health_is_distinct_from_link_health() {
     })
     .unwrap();
     assert!(r.step(0.).unwrap().motor.left > 0.);
-    r.ingest(RuntimeEvent::Recording {
-        healthy: false,
-        received_at: 0.01,
-    })
-    .unwrap();
+    r.set_recording_healthy(false);
     let out = r.step(0.01).unwrap();
     assert_eq!(out.motor.left, 0.);
     assert!(out.events.iter().any(|e| e["kind"] == "recording.health"));
@@ -234,22 +230,23 @@ fn identical_depth_and_ground_planes_produce_identical_maps() {
                 z: 0.,
             }),
         };
-        r.ingest(RuntimeEvent::Depth {
-            timestamp: 0.,
-            received_at: 0.,
-            intrinsics: terra_mapping::CameraIntrinsics {
-                width: 1,
-                height: 1,
-                fx: 1.,
-                fy: 1.,
-                cx: 0.,
-                cy: 0.,
-            },
-            camera,
-            depth: vec![2.],
-            ground: Some(terra_mapping::GroundPlane::default()),
-        })
-        .unwrap();
+        r.mapping_handle()
+            .integrate_depth_with_ground_plane(
+                0.,
+                terra_mapping::CameraIntrinsics {
+                    width: 1,
+                    height: 1,
+                    fx: 1.,
+                    fy: 1.,
+                    cx: 0.,
+                    cy: 0.,
+                },
+                camera,
+                &[2.],
+                terra_mapping::GroundPlane::default(),
+            )
+            .unwrap();
+        r.step(0.).unwrap();
     }
     assert_eq!(a.map().unwrap().0.occupancy, b.map().unwrap().0.occupancy);
     assert!(a.map().unwrap().0.occupancy.iter().any(|v| *v >= 0));
@@ -405,7 +402,11 @@ fn autonomous_guidance_uses_feedback_even_with_a_direct_manual_profile() {
 #[test]
 fn changing_connectivity_policy_during_loss_pauses_the_accepted_mission() {
     let mut r = runtime(ActuationMode::DirectEffort);
-    r.link(false);
+    r.ingest(RuntimeEvent::Link {
+        connected: false,
+        received_at: 0.,
+    })
+    .unwrap();
     let revision = r.connectivity_revision();
     let mut policy = r.connectivity().clone();
     policy.autonomous_router_loss = terra_runtime::connectivity::RouterLossPolicy::Pause;

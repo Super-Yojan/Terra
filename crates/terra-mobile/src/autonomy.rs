@@ -149,7 +149,11 @@ impl MobileController {
         brain.map_gate = Default::default();
         brain.cloud_gate = Default::default();
         capture::reset(&mut brain);
-        brain.runtime.link(true);
+        let at = brain.last_tick;
+        brain.runtime.ingest(terra_runtime::RuntimeEvent::Link {
+            connected: true,
+            received_at: at,
+        })?;
         // ARGOS rejects a pose/quality report without a numeric rover_id and
         // then falls back to its own yaw-rate guess, so every turn showed as
         // degraded pose (#111).
