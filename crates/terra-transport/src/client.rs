@@ -421,33 +421,24 @@ impl RoverConnection {
         state.target = Some((linear, angular, Instant::now()));
         Ok(())
     }
-    /// Queue an action suffix and JSON payload for the worker. Accepted suffixes are
-    /// `autonomy`, `safety`, `goal`, `goal/decision`, `search`, `search/action`,
-    /// `search/report/ack`, `task`, `task/action` and `dock`; JSON must fit 2048 bytes.
+    /// Queue an action suffix and JSON payload for the worker. Accepts every
+    /// [`terra_types::requests`] topic except `teleop` (sent with
+    /// [`Self::set_target`]) and `navigation/settings`; JSON must fit
+    /// [`terra_types::requests::MAX_REQUEST_BYTES`].
     ///
     /// # Errors
     /// Returns `InvalidTarget` for topic/JSON/size rejection, `Closed` after shutdown,
     /// or `Network` when the 64-action queue is full. Success means queued, not delivered.
     pub fn send_action(&self, kind: &str, payload: &str) -> Result<(), TransportError> {
-        if !matches!(
-            kind,
-            "autonomy"
-                | "safety"
-                | "goal"
-                | "goal/decision"
-                | "navigation/source"
-                | "navigation/resume"
-                | "search"
-                | "search/action"
-                | "search/report/ack"
-                | "task"
-                | "task/action"
-                | "dock"
-        ) || payload.len() > 2048
-            || serde_json::from_str::<serde_json::Value>(payload).is_err()
-        {
+        use terra_types::requests::{self, RequestKind};
+        let request = RequestKind::find(kind)
+            .filter(|k| ![requests::TELEOP, requests::NAVIGATION_SETTINGS].contains(&k.topic));
+        let Some(request) = request.filter(|_| payload.len() <= requests::MAX_REQUEST_BYTES)
+        else {
             return Err(TransportError::InvalidTarget);
-        }
+        };
+        let mut value: serde_json::Value =
+            serde_json::from_str(payload).map_err(|_| TransportError::InvalidTarget)?;
         let mut state = self.state.lock().unwrap();
         if state.shutdown {
             return Err(TransportError::Closed);
@@ -455,16 +446,7 @@ impl RoverConnection {
         if state.actions.len() >= 64 {
             return Err(TransportError::Network("action queue full".into()));
         }
-        let mut value: serde_json::Value =
-            serde_json::from_str(payload).map_err(|_| TransportError::InvalidTarget)?;
-        let neutral = (kind == "goal" && value["cancel"] == true)
-            || (kind == "safety" && value["action"] == "stop")
-            || (kind == "search/action"
-                && matches!(value["action"].as_str(), Some("pause" | "cancel")))
-            || kind == "search/report/ack"
-            || (kind == "task/action" && value["action"] == "cancel")
-            || (kind == "dock" && value["action"] == "cancel");
-        if !neutral {
+        if !request.neutral(&value) {
             let authority: serde_json::Value =
                 serde_json::from_str(&state.authority).unwrap_or_default();
             if !state.authority_received.is_some_and(|at| {

@@ -29,7 +29,7 @@ pub fn request(
     now: f64,
     age: f64,
 ) -> Result<(), RuntimeError> {
-    if bytes.len() > 2048
+    if bytes.len() > terra_types::requests::MAX_REQUEST_BYTES
         || !age.is_finite()
         || !(0.0..timing::CONTROL_REQUEST_FRESHNESS_SECONDS).contains(&age)
     {
@@ -195,7 +195,7 @@ pub fn update(b: &mut Runtime, now: f64) -> bool {
 
 /// Decode the outdoor envelope before stripping its reviewed metadata for the legacy local decoder.
 pub fn dispatch_goal(b: &mut Runtime, bytes: &[u8], now: f64, age: f64) -> bool {
-    if bytes.len() > 2048 {
+    if bytes.len() > terra_types::requests::MAX_REQUEST_BYTES {
         return false;
     }
     let Ok(mut value) = serde_json::from_slice::<serde_json::Value>(bytes) else {

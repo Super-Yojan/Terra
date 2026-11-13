@@ -11,10 +11,10 @@ fn command_topics_are_explicit() {
         "task",
         "task/action",
     ] {
-        assert!(is_control_topic(s));
+        assert!(admits(s, b"{}"));
     }
     for s in ["search/observation", "search/status", "task/status"] {
-        assert!(!is_control_topic(s));
+        assert!(!admits(s, b"{}"));
     }
 }
 

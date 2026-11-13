@@ -543,7 +543,9 @@ impl Runtime {
                 );
             }
             RuntimeEvent::Remote { kind, payload, .. } => {
-                if payload.len() > 4096 || self.queue.len() >= 256 {
+                if payload.len() > requests::MAX_REQUEST_BYTES
+                    || self.queue.len() >= requests::MAX_QUEUED_REQUESTS
+                {
                     return Err(invalid("remote request queue full or oversized"));
                 }
                 self.queue.push_back((kind, payload, received));

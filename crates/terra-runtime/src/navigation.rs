@@ -139,7 +139,7 @@ struct Request {
 /// age in seconds. Invalid envelopes are ignored; unique valid tokens record
 /// an acceptance or rejection result and cannot be replayed.
 pub fn apply(b: &mut super::Runtime, bytes: &[u8], age: f64, now: f64) -> bool {
-    if bytes.len() > 2048 {
+    if bytes.len() > terra_types::requests::MAX_REQUEST_BYTES {
         return false;
     }
     let Ok(r) = serde_json::from_slice::<Request>(bytes) else {
