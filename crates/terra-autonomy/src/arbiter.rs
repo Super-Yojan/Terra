@@ -321,7 +321,6 @@ struct TickDecision {
     goal: WaypointStatus,
     /// Why this tick is moving or holding.
     reason: Reason,
-    /// Who supplied the motion.
     source: Source,
     /// Dashboard state; a hold becomes [`Safety::Hold`] unless already a stop.
     safety: Safety,

@@ -504,7 +504,6 @@ impl AutonomyArbiter {
             events.push(("task_ended", "budget_exhausted".into()));
         }
 
-        // Validate an answer that arrived since the last tick.
         if let Some((id, answer, latency)) = task.answer.take()
             && let Some((_, _, targets)) = task.outstanding.take().filter(|q| q.0 == id)
         {

@@ -177,7 +177,6 @@ pub struct SearchStatus {
     pub search_id: String,
     /// Monotonically advancing state or authority revision.
     pub revision: u64,
-    /// Current lifecycle phase.
     pub phase: SearchPhase,
     /// Machine-readable explanation of the current decision or transition.
     pub reason: String,

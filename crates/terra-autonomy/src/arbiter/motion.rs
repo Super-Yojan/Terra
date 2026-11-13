@@ -774,7 +774,6 @@ impl AutonomyArbiter {
                 .map(|w| (w[1].x - w[0].x).hypot(w[1].y - w[0].y))
                 .sum()
         };
-        // Lookahead target along this section.
         let mut target = at + 1;
         while target < end && length(at, target) < ROUTE_LOOKAHEAD {
             target += 1;

@@ -527,7 +527,7 @@ pub(crate) fn symbolic_grid(map: &MapSnapshot, pose: Pose) -> String {
     lines.join("\n")
 }
 
-/// Occupied 8-connected blobs as (cell centres, centroid, bounds).
+/// Occupied 8-connected blobs as lists of cell centres.
 fn obstacle_blobs(map: &MapSnapshot) -> Vec<Vec<(f64, f64)>> {
     let width = map.width as usize;
     let height = map.height as usize;
@@ -636,7 +636,6 @@ pub(crate) fn summarize(
 ) -> MapSummary {
     let mut text = String::new();
     let mut targets = Vec::new();
-    // Distances below are sized by the circle around the body.
     let radius = footprint.circumradius();
     let reach = Reach::build(map, pose, footprint);
     let (mut free, mut occupied, mut unknown) = (0, 0, 0);
@@ -1061,7 +1060,6 @@ pub(crate) fn resolve_plan(
     Ok((plan, None))
 }
 
-/// Render the step prompt.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn step_prompt(
     instruction: &str,

@@ -431,7 +431,6 @@ pub struct ProposalDecision {
     pub run_id: String,
     /// Identifier of the proposal being decided; absent for resume.
     pub proposal_id: Option<u64>,
-    /// Operator decision to apply.
     pub decision: Decision,
     /// Request correlation token; command tokens use 1–64 ASCII letters, digits, or `._:-`.
     pub token: String,
