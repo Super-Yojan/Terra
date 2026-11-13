@@ -6,8 +6,7 @@ fn phone_facade_matches_pure_runtime_for_timestamped_sensor_and_manual_stream() 
     let phone = MobileController::new(default_control_settings()).unwrap();
     {
         let mut b = phone.brain.lock().unwrap();
-        b.runtime.run_id = "replay".into();
-        b.runtime.autonomy.set_run("replay");
+        b.runtime.begin_run("replay".into()).unwrap();
     }
     let mut pure = Runtime::new(RuntimeConfig::default(), "replay".into()).unwrap();
     for n in 1..=100 {
@@ -80,8 +79,8 @@ fn phone_facade_matches_pure_runtime_for_timestamped_sensor_and_manual_stream() 
         assert!((a.left_effort - b.motor.left).abs() <= 1e-6);
         assert!((a.right_effort - b.motor.right).abs() <= 1e-6);
         let actual: serde_json::Value = serde_json::from_str(&phone.autonomy_status()).unwrap();
-        assert_eq!(actual["status"], b.snapshot.value["status"]);
-        assert_eq!(actual["twist"], b.snapshot.value["twist"]);
+        assert_eq!(actual["status"], b.status["status"]);
+        assert_eq!(actual["twist"], b.status["twist"]);
     }
 }
 #[test]

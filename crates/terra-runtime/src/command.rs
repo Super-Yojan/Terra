@@ -54,9 +54,8 @@ impl Runtime {
             .into_iter()
             .collect::<Vec<_>>();
         queue.sort_by_key(|(kind, payload, _)| {
-            RequestKind::find(kind).is_some_and(|k| {
-                serde_json::from_slice::<Value>(payload).is_ok_and(|v| k.stop(&v))
-            })
+            RequestKind::find(kind)
+                .is_some_and(|k| serde_json::from_slice::<Value>(payload).is_ok_and(|v| k.stop(&v)))
         });
         for (kind, payload, at) in queue {
             let bytes = match self.remote_action(&kind, &payload, now - at) {
@@ -178,26 +177,12 @@ impl Runtime {
                 accepted
             }),
             "goal/decision" => {
-                if let Some(r) = terra_autonomy::decode_decision(&bytes) {
-                    let pose = self.pose.unwrap_or_default();
-                    let map = self.map.as_ref();
-                    let e = self.estimator.estimate(now);
+                if let Some(r) = terra_autonomy::decode_decision(bytes) {
+                    let healthy = self.sensors_ready(now);
                     let token = r.token.clone();
                     self.autonomy.decide_proposal(
                         r,
-                        &ArbiterInput {
-                            now,
-                            pose: pose.0,
-                            pose_time: pose.1,
-                            map: map.map(|m| &m.0),
-                            map_time: map.map(|m| m.1),
-                            map_revision: map.map_or(0, |m| m.2),
-                            measured: Twist {
-                                linear: e.forward,
-                                angular: e.yaw_rate,
-                            },
-                            healthy: pose_quality::ready(self, now),
-                        },
+                        &arbiter_input(&self.estimator, self.pose, self.map.as_ref(), now, healthy),
                     );
                     self.autonomy.request_receipt() == Some((token.as_str(), true))
                 } else {

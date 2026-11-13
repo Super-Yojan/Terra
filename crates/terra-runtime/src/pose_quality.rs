@@ -1,15 +1,19 @@
 //! Explicit source health, including when pose publication is suppressed.
 use super::*;
+/// Pose age limit, the same for driving and for naming a stale-pose hold.
 pub const FRESHNESS_SECONDS: f64 = timing::VIO_FRESHNESS_SECONDS;
+/// Whether a pose `age` seconds old is fresh enough to drive on.
+pub fn fresh(age: f64) -> bool {
+    (0.0..FRESHNESS_SECONDS).contains(&age)
+}
 fn age(now: f64, time: Option<f64>) -> Option<f64> {
     time.filter(|t| now.is_finite() && t.is_finite() && *t <= now)
         .map(|t| now - t)
 }
 pub fn ready(b: &Runtime, now: f64) -> bool {
     b.estimator.estimate(now).health == Health::Ready
-        && b.pose.is_some_and(|(p, t)| {
-            p.finite() && age(now, Some(t)).is_some_and(|a| a <= FRESHNESS_SECONDS)
-        })
+        && b.pose
+            .is_some_and(|(p, t)| p.finite() && age(now, Some(t)).is_some_and(fresh))
 }
 fn reason(b: &Runtime, now: f64) -> &'static str {
     match b.estimator.estimate(now).health {
@@ -40,7 +44,7 @@ pub fn hold(b: &Runtime, now: f64, outdoor_motion: bool) -> terra_autonomy::Sens
     } else {
         match reason(b, now) {
             "ready" if !b.pose.is_some_and(|(p, _)| p.finite()) => "pose_invalid",
-            "ready" if pose_age.is_none_or(|a| a >= timing::POSE_FRESHNESS_SECONDS) => "pose_stale",
+            "ready" if !pose_age.is_some_and(fresh) => "pose_stale",
             "ready" if !estimate.forward.is_finite() || !estimate.yaw_rate.is_finite() => {
                 "velocity_invalid"
             }

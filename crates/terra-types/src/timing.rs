@@ -21,10 +21,6 @@ pub const DETECTOR_FRESHNESS_SECONDS: f64 = 0.5;
 /// Maximum displayed planner-trace age; this is a diagnostic lifetime.
 pub const PLANNER_TRACE_FRESHNESS_SECONDS: f64 = 0.5;
 
-/// Maximum age of relay status used for source/configuration admission.
-pub const HARDWARE_FRESHNESS_SECONDS: f64 = 0.5;
-/// Execution-time admission age for settings and other control requests.
-pub const CONTROL_REQUEST_FRESHNESS_SECONDS: f64 = 0.5;
 /// IMU and VIO estimator defaults. The IMU limit was 0.1 s; the 2026-10-27 sensor timing
 /// runs saw a Debug build push it past that while iOS delivered every sample within 3 ms.
 pub const IMU_FRESHNESS_SECONDS: f64 = 0.5;

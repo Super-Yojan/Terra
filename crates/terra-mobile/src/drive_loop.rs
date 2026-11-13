@@ -291,7 +291,7 @@ fn tick(shared: &Shared, now: f64) -> Result<MotorCommand, ControllerError> {
     let controller = &shared.controller;
     let mut s = shared.state.lock().map_err(|_| ControllerError::Internal)?;
     let dashboard = controller.dashboard_status();
-    let fleet = dashboard == "connected";
+    let fleet = controller.fleet_owns_intent();
     match shared.source {
         DriveSource::BluetoothManual => {
             controller.set_actuation_mode(false)?;

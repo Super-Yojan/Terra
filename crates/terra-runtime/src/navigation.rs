@@ -115,7 +115,7 @@ pub struct State {
     pub result: Option<String>,
     /// Rover profile that last set these parameters, if any.
     pub profile: Option<String>,
-    seen: std::collections::VecDeque<String>,
+    seen: crate::replay::ReplayGuard<64>,
 }
 impl State {
     /// Return versioned navigation configuration status JSON, including the footprint, revision, and latest result.
@@ -145,26 +145,19 @@ pub fn apply(b: &mut super::Runtime, bytes: &[u8], age: f64, now: f64) -> bool {
     let Ok(r) = serde_json::from_slice::<Request>(bytes) else {
         return false;
     };
-    if !terra_autonomy::valid_token(&r.token) || b.navigation.seen.contains(&r.token) {
+    if !terra_autonomy::valid_token(&r.token) || !b.navigation.seen.admit(&r.token) {
         return false;
     }
-    if b.navigation.seen.len() >= 64 {
-        b.navigation.seen.pop_front();
-    }
-    b.navigation.seen.push_back(r.token.clone());
     b.navigation.token = Some(r.token);
-    let status: serde_json::Value = serde_json::from_str(&b.autonomy_json).unwrap_or_default();
-    let a = &status["status"];
+    // The last published tick must already show this authority, safety and goal.
+    let tick = b.brief.as_ref();
     let pose = b.pose.map(|p| p.0).unwrap_or_default();
     let reason = if !r.parameters.valid() {
         Some("invalid dimensions or avoidance limits")
-    } else if !age.is_finite()
-        || !(0.0..terra_types::timing::CONTROL_REQUEST_FRESHNESS_SECONDS).contains(&age)
-    {
+    } else if !age.is_finite() || !(0.0..super::CONTROL_REQUEST_FRESHNESS_SECONDS).contains(&age) {
         Some("settings request expired")
     } else if r.run_id != b.run_id
-        || a["run_id"] != r.run_id
-        || a["revision"] != r.authority_revision
+        || tick.is_none_or(|t| t.run_id != r.run_id || t.revision != r.authority_revision)
         || r.settings_revision != b.navigation.revision
     {
         Some("vehicle run or configuration revision changed")
@@ -173,21 +166,16 @@ pub fn apply(b: &mut super::Runtime, bytes: &[u8], age: f64, now: f64) -> bool {
         .navigation_configuration_allowed(&r.run_id, r.authority_revision, pose)
     {
         Some("live vehicle authority changed or a goal is active")
-    } else if !matches!(
-        terra_autonomy::Safety::deserialize(&a["safety"]),
-        Ok(terra_autonomy::Safety::Clear | terra_autonomy::Safety::Hold)
-    ) {
-        Some("vehicle safety state does not permit configuration")
-    } else if !b.hardware_observation.as_ref().is_some_and(|(h, at)| {
-        (0.0..terra_types::timing::HARDWARE_FRESHNESS_SECONDS).contains(&(now - *at))
-            && h["ready"] == true
-            && h["output_active"] == false
+    } else if !tick.is_some_and(|t| {
+        matches!(
+            t.safety,
+            terra_autonomy::Safety::Clear | terra_autonomy::Safety::Hold
+        )
     }) {
+        Some("vehicle safety state does not permit configuration")
+    } else if !b.hardware.is_some_and(|h| h.fresh_and_idle(now)) {
         Some("fresh ready hardware with neutral output required")
-    } else if !matches!(
-        status["goal"]["state"].as_str(),
-        Some("idle" | "arrived" | "cancelled")
-    ) {
+    } else if tick.is_some_and(|t| t.goal.state == terra_waypoint::GoalState::Active) {
         Some("cancel the active goal before changing settings")
     } else if b.navigation.revision == u64::MAX {
         Some("configuration revision exhausted")
@@ -204,7 +192,7 @@ pub fn apply(b: &mut super::Runtime, bytes: &[u8], age: f64, now: f64) -> bool {
     b.controller.reset();
     b.navigation.parameters = r.parameters;
     b.navigation.revision += 1;
-    b.outdoor.revision = b.outdoor.revision.saturating_add(1);
+    b.bump_navigation_revision();
     b.navigation.result = Some("accepted".into());
     true
 }

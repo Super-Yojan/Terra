@@ -37,7 +37,7 @@ fn drive(r: &mut Runtime, t: f64, forward: f64) -> serde_json::Value {
         received_at: t,
     })
     .unwrap();
-    r.step(t).unwrap().snapshot.value["drive"].clone()
+    r.step(t).unwrap().drive.clone()
 }
 
 #[test]

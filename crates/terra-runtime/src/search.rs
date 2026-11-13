@@ -5,24 +5,10 @@ pub fn dispatch_search(
     bytes: &[u8],
     timestamp: f64,
 ) -> Result<(), RuntimeError> {
-    let pose = b.pose.unwrap_or_default();
-    let map = b.map.clone();
-    let e = b.estimator.estimate(timestamp);
-    let input = terra_autonomy::ArbiterInput {
-        now: timestamp,
-        pose: pose.0,
-        pose_time: pose.1,
-        map: map.as_ref().map(|m| &m.0),
-        map_time: map.as_ref().map(|m| m.1),
-        map_revision: map.as_ref().map(|m| m.2).unwrap_or(0),
-        measured: terra_navigation::Twist {
-            linear: e.forward,
-            angular: e.yaw_rate,
-        },
-        healthy: e.health == Health::Ready && b.recording_healthy,
-    };
+    let healthy = b.sensors_ready(timestamp);
+    let input = arbiter_input(&b.estimator, b.pose, b.map.as_ref(), timestamp, healthy);
     match kind {
-        "search" => b
+        requests::SEARCH => b
             .autonomy
             .start_search(
                 terra_autonomy::decode_search_request(bytes)
@@ -30,7 +16,7 @@ pub fn dispatch_search(
                 &input,
             )
             .map_err(invalid),
-        "search/action" => b
+        requests::SEARCH_ACTION => b
             .autonomy
             .apply_search_action(
                 terra_autonomy::decode_search_action(bytes)
@@ -38,7 +24,7 @@ pub fn dispatch_search(
                 &input,
             )
             .map_err(invalid),
-        "search/report/ack" => {
+        requests::SEARCH_REPORT_ACK => {
             let r = terra_autonomy::decode_search_report_ack(bytes)
                 .ok_or_else(|| invalid("invalid report acknowledgement"))?;
             if b.autonomy.ack_search_report(r) {

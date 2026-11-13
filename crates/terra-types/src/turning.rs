@@ -1,7 +1,7 @@
 //! Managed motion limits. Local Bluetooth manual driving does not use this policy.
-use serde::{Deserialize, Serialize};
 use crate::timing;
 use crate::{InputError, VelocityTarget};
+use serde::{Deserialize, Serialize};
 /// Units: rad/s, rad/s², rad/s² and metres, respectively.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]

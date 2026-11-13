@@ -40,7 +40,7 @@ fn replay_is_deterministic_and_managed_spin_is_blocked() {
         }
         let a = phone.step(t).unwrap();
         let b = simulator.step(t).unwrap();
-        assert_eq!(a.snapshot, b.snapshot);
+        assert_eq!(a.status, b.status);
         assert_eq!(a.motor.left, b.motor.left);
         assert_eq!(a.motor.right, b.motor.right);
         assert_eq!(a.autonomy.twist.angular, 0.0);
@@ -70,7 +70,7 @@ fn direct_manual_works_without_camera_and_link_loss_clears_remote_input() {
         received_at: 0.01,
     })
     .unwrap();
-    assert!(r.snapshot(0.01).value["connectivity"]["revision"].is_number());
+    assert!(serde_json::from_str::<serde_json::Value>(r.status_json()).unwrap()["connectivity"]["revision"].is_number());
 }
 #[test]
 fn queued_action_is_checked_at_execution_and_future_events_are_rejected() {

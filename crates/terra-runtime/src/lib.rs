@@ -1,4 +1,8 @@
 //! Platform-independent control orchestration. Time and all external evidence are injected.
+//!
+//! The runtime is the only place rover state changes: hosts feed it
+//! [`RuntimeEvent`]s and intent calls, call [`Runtime::step`] at control rate,
+//! and publish what the tick returns.
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::VecDeque;
@@ -10,17 +14,23 @@ use terra_state::{EstimatorConfig, VelocityEstimator};
 use terra_types::*;
 pub const SOURCE_REVISION: &str = env!("TERRA_RUNTIME_REVISION");
 mod command;
+pub mod connectivity;
 mod dock;
 pub mod ground;
+mod hardware;
 pub mod mapping;
 pub mod navigation;
 pub mod outdoor;
 pub mod pose_quality;
+mod replay;
 pub mod rover_profile;
 pub mod search;
 mod sensor_hold;
+mod status;
 pub mod tilt;
+pub use hardware::{HARDWARE_FRESHNESS_SECONDS, HardwareStatus};
 pub use sensor_hold::SENSOR_HOLD_GOAL_TIMEOUT_SECONDS;
+pub use status::Brief;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RuntimeError {
     InvalidInput { message: String },
@@ -59,7 +69,7 @@ pub struct RuntimeConfig {
     pub controller: ControllerConfig,
     pub navigation: navigation::Parameters,
     pub mapping: MapConfig,
-    pub connectivity: connectivity_policy::ConnectivityPolicySettings,
+    pub connectivity: connectivity::ConnectivityPolicySettings,
     pub mode: ActuationMode,
     pub outdoor_supported: bool,
 }
@@ -70,8 +80,8 @@ impl RuntimeConfig {
             self.controller,
             self.estimator,
             self.mapping,
-            serde_json::to_string(&self.navigation).unwrap_or_default(),
-            serde_json::to_string(&self.connectivity).unwrap_or_default(),
+            serde_json::to_string(&self.navigation).expect("navigation settings serialize"),
+            serde_json::to_string(&self.connectivity).expect("connectivity policy serializes"),
             self.mode,
             self.outdoor_supported
         );
@@ -98,6 +108,7 @@ pub enum RuntimeEvent {
         depth: Vec<f32>,
         ground: Option<GroundPlane>,
     },
+    /// An occupancy snapshot built by the host; one older than the current map is ignored.
     Map {
         snapshot: MapSnapshot,
         timestamp: f64,
@@ -127,7 +138,7 @@ pub enum RuntimeEvent {
         received_at: f64,
     },
     Hardware {
-        status: Value,
+        status: HardwareStatus,
         received_at: f64,
     },
     Mode {
@@ -146,6 +157,7 @@ pub enum RuntimeEvent {
         sample: terra_autonomy::outdoor::CourseFix,
         received_at: f64,
     },
+    /// Detector heartbeat; empty classes withdraw the search capability.
     Detector {
         classes: Vec<String>,
         version: String,
@@ -196,63 +208,98 @@ fn local_teleop(linear: f64, angular: f64) -> terra_autonomy::TeleopRequest {
         sequence: None,
     }
 }
-#[derive(Clone, Debug, PartialEq)]
-pub struct RuntimeSnapshot {
-    pub value: Value,
+/// Forward speed, m/s, that a full local manual stick asks for.
+const MANUAL_FULL_FORWARD: f64 = 0.5;
+/// Largest local velocity target accepted, m/s and rad/s.
+const MAX_LOCAL_VELOCITY: f64 = 5.0;
+/// Execution-time admission age for settings and outdoor source requests.
+pub const CONTROL_REQUEST_FRESHNESS_SECONDS: f64 = 0.5;
+/// Speed cap, m/s, while the outdoor GPS source is selected.
+const OUTDOOR_MAX_FORWARD: f64 = 0.3;
+/// Inputs to one arbiter call. `healthy` is the caller's sensor verdict:
+/// a control tick also holds for outdoor recovery and the settle wait after
+/// a long hold, which do not apply to admitting a request.
+fn arbiter_input<'a>(
+    estimator: &VelocityEstimator,
+    pose: Option<(Pose, f64)>,
+    map: Option<&'a (MapSnapshot, f64, u64)>,
+    now: f64,
+    healthy: bool,
+) -> ArbiterInput<'a> {
+    let pose = pose.unwrap_or_default();
+    let estimate = estimator.estimate(now);
+    ArbiterInput {
+        now,
+        pose: pose.0,
+        pose_time: pose.1,
+        map: map.map(|m| &m.0),
+        map_time: map.map(|m| m.1),
+        map_revision: map.map_or(0, |m| m.2),
+        measured: Twist {
+            linear: estimate.forward,
+            angular: estimate.yaw_rate,
+        },
+        healthy,
+    }
 }
 pub struct RuntimeOutput {
     pub autonomy: ArbiterOutput,
     pub motor: MotorOutput,
-    pub snapshot: RuntimeSnapshot,
+    /// This tick's status record; the same JSON as [`Runtime::status_json`].
+    pub status: Value,
+    /// What the wheels did this tick, for the dashboard.
+    pub drive: Value,
     pub events: Vec<Value>,
 }
 pub struct Runtime {
-    pub estimator: VelocityEstimator,
-    pub controller: VelocityController,
+    /// Authority, planning and mission state; hosts may call its request API.
     pub autonomy: AutonomyArbiter,
-    pub pose: Option<(Pose, f64)>,
-    pub map: Option<(MapSnapshot, f64, u64)>,
-    pub imu_time: Option<f64>,
-    pub run_id: String,
-    pub sequence: u64,
-    pub rover_id: Option<u64>,
-    pub autonomy_json: String,
-    /// The few status fields the phone's control loop reads every tick,
-    /// so it never parses the full status (planner trace included) at 100 Hz.
-    pub autonomy_brief: String,
-    pub navigation: navigation::State,
-    pub outdoor: terra_autonomy::outdoor::OutdoorController,
+    estimator: VelocityEstimator,
+    controller: VelocityController,
+    pose: Option<(Pose, f64)>,
+    map: Option<(MapSnapshot, f64, u64)>,
+    /// Whether the host supplies maps itself (see [`RuntimeEvent::Map`]).
+    host_maps: bool,
+    imu_time: Option<f64>,
+    run_id: String,
+    /// First tick of this run; published times are relative to it.
+    run_start: Option<f64>,
+    sequence: u64,
+    /// Local requests made on the operator's behalf, for unique tokens.
+    local_requests: u64,
+    rover_id: Option<u64>,
+    status_json: String,
+    brief_json: String,
+    brief: Option<Brief>,
+    navigation: navigation::State,
+    outdoor: terra_autonomy::outdoor::OutdoorController,
+    outdoor_admission: outdoor::Admission,
     /// Buckets and balls seen this run, in the local frame.
-    pub objects: terra_autonomy::objects::ObjectMap,
-    pub outdoor_tokens: VecDeque<String>,
-    pub outdoor_goal_tokens: VecDeque<String>,
-    pub hardware_observation: Option<(Value, f64)>,
-    pub connectivity: connectivity_policy::ConnectivityPolicySettings,
-    pub connectivity_revision: u64,
-    pub router_loss_handled: bool,
-    pub recording_healthy: bool,
-    pub control_limits: (f64, f64),
-    pub mode: ActuationMode,
+    objects: terra_autonomy::objects::ObjectMap,
+    hardware: Option<hardware::Hardware>,
+    connectivity: connectivity::Connectivity,
+    recording_healthy: bool,
+    control_limits: (f64, f64),
+    mode: ActuationMode,
     configuration: RuntimeConfig,
     grid: mapping::MappingState,
     queue: VecDeque<(String, Vec<u8>, f64)>,
     events: Vec<Value>,
     last_step: Option<f64>,
     local_manual: Option<(f64, f64)>,
-    last_snapshot: RuntimeSnapshot,
     /// `sensor_unhealthy` hold bookkeeping for this run.
     holds: sensor_hold::SensorHolds,
     /// When the wheels last started pushing without the rover moving.
     drive_stall_since: Option<f64>,
     /// Dump outlet and gate servo in use: the rover profile's, with the
     /// phone's local settings on top.
-    pub dock_profile: rover_profile::DockProfile,
+    dock_profile: rover_profile::DockProfile,
     rover_profile: Option<rover_profile::RoverProfile>,
     dock_local: dock::DockLocal,
     /// Gate test from the setup screen while no dock runs: open or closed.
     gate_test: Option<bool>,
     /// Tilt and flip hold; survives a new run, cleared by operator reset.
-    pub tilt: tilt::TiltMonitor,
+    tilt: tilt::TiltMonitor,
 }
 /// Forward command, m/s, from which a rover that does not move counts as stalled.
 const DRIVE_STALL_MIN_COMMAND: f64 = 0.05;
@@ -280,21 +327,25 @@ impl Runtime {
             autonomy,
             pose: None,
             map: None,
+            host_maps: false,
             imu_time: None,
             run_id,
+            run_start: None,
             sequence: 0,
+            local_requests: 0,
             rover_id: None,
-            autonomy_json: String::new(),
-            autonomy_brief: String::new(),
+            status_json: String::new(),
+            brief_json: String::new(),
+            brief: None,
             navigation,
             outdoor,
+            outdoor_admission: Default::default(),
             objects: Default::default(),
-            outdoor_tokens: Default::default(),
-            outdoor_goal_tokens: Default::default(),
-            hardware_observation: None,
-            connectivity: config.connectivity,
-            connectivity_revision: 0,
-            router_loss_handled: false,
+            hardware: None,
+            connectivity: connectivity::Connectivity {
+                policy: config.connectivity,
+                ..Default::default()
+            },
             recording_healthy: true,
             control_limits: (
                 config.controller.max_forward,
@@ -309,7 +360,6 @@ impl Runtime {
             local_manual: None,
             holds: Default::default(),
             drive_stall_since: None,
-            last_snapshot: RuntimeSnapshot { value: json!({}) },
             dock_profile: Default::default(),
             rover_profile: None,
             dock_local: Default::default(),
@@ -320,12 +370,66 @@ impl Runtime {
     pub fn metadata(&self) -> Value {
         json!({"schema_version":1,"configured_mode":self.mode,"source_revision":SOURCE_REVISION,"configuration_identity":self.configuration_identity()})
     }
+    pub fn run_id(&self) -> &str {
+        &self.run_id
+    }
+    /// Time of this run's first tick; `None` until it runs.
+    pub fn run_start(&self) -> Option<f64> {
+        self.run_start
+    }
+    /// Ticks since the run began.
+    pub fn sequence(&self) -> u64 {
+        self.sequence
+    }
+    /// Latest tracked planar pose and its sample time.
+    pub fn pose(&self) -> Option<(Pose, f64)> {
+        self.pose
+    }
+    /// Latest occupancy snapshot, its source time and revision.
+    pub fn map(&self) -> Option<&(MapSnapshot, f64, u64)> {
+        self.map.as_ref()
+    }
+    pub fn imu_time(&self) -> Option<f64> {
+        self.imu_time
+    }
+    pub fn estimate(&self, now: f64) -> VelocityEstimate {
+        self.estimator.estimate(now)
+    }
+    /// Fresh tracked pose and a ready velocity estimate.
+    pub fn pose_ready(&self, now: f64) -> bool {
+        pose_quality::ready(self, now)
+    }
+    pub fn navigation(&self) -> &navigation::State {
+        &self.navigation
+    }
+    pub fn outdoor(&self) -> &terra_autonomy::outdoor::OutdoorController {
+        &self.outdoor
+    }
+    pub fn objects(&self) -> &terra_autonomy::objects::ObjectMap {
+        &self.objects
+    }
+    /// Forget every mapped object, for example after moving buckets during a test.
+    pub fn clear_objects(&mut self) {
+        self.objects.clear();
+    }
+    /// Rover identity published in pose quality; `None` while no fleet link is attached.
+    pub fn set_rover_id(&mut self, rover_id: Option<u64>) {
+        self.rover_id = rover_id;
+    }
+    pub fn set_recording_healthy(&mut self, healthy: bool) {
+        if healthy != self.recording_healthy {
+            self.events
+                .push(json!({"kind":"recording.health","healthy":healthy}));
+        }
+        self.recording_healthy = healthy;
+    }
     /// Replace run authority without discarding the adapter's current sensor clock.
     pub fn begin_run(&mut self, run_id: String) -> Result<(), RuntimeError> {
         if run_id.is_empty() {
             return Err(invalid("invalid run identity"));
         }
         self.run_id = run_id;
+        self.run_start = None;
         self.queue.clear();
         self.events.clear();
         self.controller.reset();
@@ -335,7 +439,7 @@ impl Runtime {
         self.outdoor.invalidate_sensors();
         self.objects.clear();
         self.outdoor.selected = false;
-        self.outdoor.revision = self.outdoor.revision.saturating_add(1);
+        self.bump_navigation_revision();
         let dock = self.autonomy.dock_config().clone();
         self.autonomy = AutonomyArbiter::default();
         self.autonomy.set_run(&self.run_id);
@@ -346,21 +450,68 @@ impl Runtime {
     }
     /// Begin a fresh control session while retaining configured policy and calibration.
     pub fn reset(&mut self) -> Result<(), RuntimeError> {
+        // The session keeps its run, so published times keep their origin.
+        let run_start = self.run_start;
         // `begin_run` also clears the queue, events and velocity loop.
         self.begin_run(self.run_id.clone())?;
+        self.run_start = run_start;
+        self.forget_local_frame();
+        self.hardware = None;
+        self.last_step = None;
+        self.local_manual = None;
+        self.status_json.clear();
+        self.brief_json.clear();
+        self.brief = None;
+        self.grid.clear();
+        self.tilt.reset();
+        Ok(())
+    }
+    /// Drop the pose, map and motion estimate tied to the platform's local frame.
+    fn forget_local_frame(&mut self) {
         self.estimator.reset();
         self.pose = None;
         self.imu_time = None;
         self.map = None;
-        self.hardware_observation = None;
-        self.last_step = None;
-        self.local_manual = None;
-        self.last_snapshot = RuntimeSnapshot { value: json!({}) };
-        self.autonomy_json.clear();
-        self.autonomy_brief.clear();
-        self.grid.clear();
-        self.tilt.reset();
-        Ok(())
+    }
+    /// The platform started a new local AR frame: geographic guidance and
+    /// everything measured in the old frame no longer apply.
+    pub fn reset_outdoor_frame(&mut self) {
+        self.outdoor.cancel();
+        self.outdoor.invalidate_sensors();
+        self.forget_local_frame();
+        self.bump_navigation_revision();
+        if self.outdoor.selected {
+            self.autonomy.clear_guidance();
+            self.controller.reset();
+        }
+    }
+    /// Drop GPS, heading and course evidence, for example when location access ends.
+    pub fn invalidate_outdoor_sensors(&mut self) {
+        self.outdoor.invalidate_sensors();
+    }
+    /// Accept outdoor GPS navigation; only for platforms with measured GPS
+    /// and mount-aware true heading.
+    pub fn enable_outdoor_gps(&mut self) {
+        self.outdoor.supported = true;
+    }
+    /// A settings change any reviewed outdoor request must be made against again.
+    pub(crate) fn bump_navigation_revision(&mut self) {
+        self.outdoor.revision = self.outdoor.revision.saturating_add(1);
+    }
+    /// The operator closed the fleet link: pause the outdoor mission, return
+    /// authority to teleop and stop the velocity loop. A latched emergency
+    /// stop and the sensors stay.
+    pub fn disconnect_operator(&mut self) {
+        self.outdoor.pause("authority_lost");
+        self.rover_id = None;
+        self.local_requests += 1;
+        self.autonomy.set_level(terra_autonomy::LevelRequest {
+            level: terra_autonomy::Level::Teleop,
+            token: format!("dashboard-detach-{}", self.local_requests),
+            budget_seconds: None,
+            budget_minutes: None,
+        });
+        self.controller.reset();
     }
     /// Add one detector sighting in the local frame. Adds latitude and longitude
     /// when the outdoor GPS fix and heading are good enough.
@@ -370,7 +521,7 @@ impl Runtime {
         now: f64,
     ) -> Result<(), RuntimeError> {
         sighting.geo = self.pose.and_then(|(pose, t)| {
-            (now - t <= 0.35)
+            pose_quality::fresh(now - t)
                 .then(|| self.outdoor.geolocate(now, pose, sighting.x, sighting.y))
                 .flatten()
         });
@@ -400,7 +551,7 @@ impl Runtime {
         let mut config = self.configuration.clone();
         config.mapping = self.grid.config();
         config.navigation = self.navigation.parameters.clone();
-        config.connectivity = self.connectivity.clone();
+        config.connectivity = self.connectivity.policy.clone();
         config.mode = self.mode;
         config.outdoor_supported = self.outdoor.supported;
         config.identity()
@@ -430,7 +581,7 @@ impl Runtime {
         self.apply_dock();
         self.navigation.profile = Some(profile.name.clone());
         self.navigation.result = Some(format!("profile {}", profile.name));
-        self.outdoor.revision = self.outdoor.revision.saturating_add(1);
+        self.bump_navigation_revision();
         self.events
             .push(json!({"kind":"rover_profile.applied","profile":profile}));
         Ok(())
@@ -438,9 +589,29 @@ impl Runtime {
     pub fn mapping_handle(&self) -> mapping::MappingState {
         self.grid.clone()
     }
+    /// Share the host's mapper. Each tick takes its newest snapshot unless
+    /// the host supplies maps itself through [`RuntimeEvent::Map`].
     pub fn attach_mapping(&mut self, map: mapping::MappingState) {
         self.grid = map;
         self.map = None;
+    }
+    /// Take the attached mapper's newest snapshot when it integrated a frame
+    /// since the current map.
+    fn refresh_map(&mut self) {
+        if self.host_maps {
+            return;
+        }
+        let Some(time) = self.grid.last_timestamp() else {
+            return;
+        };
+        if self.map.as_ref().is_none_or(|m| time > m.1) {
+            let sequence = self.map.as_ref().map_or(1, |m| m.2 + 1);
+            self.map = Some((self.grid.snapshot(), time, sequence));
+        }
+    }
+    /// Sensor health for admitting a request: fresh pose and a healthy recorder.
+    fn sensors_ready(&self, now: f64) -> bool {
+        pose_quality::ready(self, now) && self.recording_healthy
     }
     pub fn ingest(&mut self, event: RuntimeEvent) -> Result<(), RuntimeError> {
         let received = event.received_at();
@@ -463,15 +634,10 @@ impl Runtime {
                         .orientation
                         .normalized()
                         .ok_or(InputError::OutOfRange)?;
-                    let f = q.rotate(Vector3 {
-                        x: 1.,
-                        y: 0.,
-                        z: 0.,
-                    });
                     let pose = Pose {
                         x: sample.position.x,
                         y: sample.position.y,
-                        yaw: f.y.atan2(f.x),
+                        yaw: q.yaw(),
                     };
                     self.pose = Some((pose, sample.timestamp));
                     self.outdoor.observe_pose(pose, sample.timestamp);
@@ -509,8 +675,12 @@ impl Runtime {
                 sequence,
                 ..
             } => {
+                if !timestamp.is_finite() || timestamp < 0. || !snapshot.valid() {
+                    return Err(InputError::OutOfRange.into());
+                }
                 not_future(timestamp, received, "future map timestamp")?;
-                if self.map.as_ref().is_none_or(|m| timestamp > m.1) {
+                self.host_maps = true;
+                if self.map.as_ref().is_none_or(|m| timestamp >= m.1) {
                     self.map = Some((snapshot, timestamp, sequence));
                 }
             }
@@ -524,7 +694,7 @@ impl Runtime {
                 }
                 self.local_manual = Some((forward, turn));
                 self.autonomy
-                    .accept_operator(local_teleop(forward * 0.5, turn), received);
+                    .accept_operator(local_teleop(forward * MANUAL_FULL_FORWARD, turn), received);
             }
             RuntimeEvent::LocalVelocity { target, .. } => {
                 if !target.timestamp.is_finite()
@@ -532,8 +702,8 @@ impl Runtime {
                     || target.timestamp > received
                     || !target.forward.is_finite()
                     || !target.yaw_rate.is_finite()
-                    || target.forward.abs() > 5.0
-                    || target.yaw_rate.abs() > 5.0
+                    || target.forward.abs() > MAX_LOCAL_VELOCITY
+                    || target.yaw_rate.abs() > MAX_LOCAL_VELOCITY
                 {
                     return Err(invalid("invalid local velocity input"));
                 }
@@ -551,13 +721,12 @@ impl Runtime {
                 self.queue.push_back((kind, payload, received));
             }
             RuntimeEvent::Link { connected, .. } => self.link(connected),
-            RuntimeEvent::Recording { healthy, .. } => {
-                self.recording_healthy = healthy;
-                self.events
-                    .push(json!({"kind":"recording.health","healthy":healthy}));
-            }
+            RuntimeEvent::Recording { healthy, .. } => self.set_recording_healthy(healthy),
             RuntimeEvent::Hardware { status, .. } => {
-                self.hardware_observation = Some((status, received))
+                self.hardware = Some(hardware::Hardware {
+                    status,
+                    received_at: received,
+                })
             }
             RuntimeEvent::Mode { mode, .. } => {
                 if mode != self.mode {
@@ -593,45 +762,6 @@ impl Runtime {
             }
         }
         Ok(())
-    }
-    pub fn set_connectivity_policy(
-        &mut self,
-        policy: connectivity_policy::ConnectivityPolicySettings,
-    ) -> Result<(), RuntimeError> {
-        policy.validate().map_err(invalid)?;
-        self.connectivity = policy;
-        if self.router_loss_handled
-            && self.connectivity.autonomous_router_loss
-                == connectivity_policy::RouterLossPolicy::Pause
-        {
-            self.outdoor.pause("router_loss_paused");
-            self.autonomy.pause_for_router_loss();
-            self.controller.reset();
-        }
-        self.connectivity_revision = self.connectivity_revision.saturating_add(1);
-        self.events.push(json!({"kind":"connectivity.policy_changed","policy":self.connectivity,"revision":self.connectivity_revision}));
-        Ok(())
-    }
-    pub fn link(&mut self, connected: bool) {
-        if connected {
-            if self.router_loss_handled {
-                self.autonomy.invalidate_remote_authority();
-            }
-            self.router_loss_handled = false;
-        } else if !self.router_loss_handled {
-            self.autonomy.invalidate_remote_authority();
-            self.queue.clear();
-            if self.connectivity.autonomous_router_loss
-                == connectivity_policy::RouterLossPolicy::Pause
-            {
-                self.autonomy.pause_for_router_loss();
-                self.outdoor.pause("router_loss_paused");
-                self.controller.reset();
-            }
-            self.router_loss_handled = true;
-        }
-        self.events
-            .push(json!({"kind":if connected{"connection.established"}else{"connection.lost"}}));
     }
     /// What the wheels are doing this tick, for the dashboard: the commanded
     /// and measured forward speed, wheel efforts, whether the rover is backing
@@ -738,6 +868,7 @@ impl Runtime {
         }
         self.apply_pending(now);
         self.last_step = Some(now);
+        self.refresh_map();
         let estimate = self.estimator.estimate(now);
         let outdoor_motion = outdoor::update(self, now);
         // A paused outdoor mission holds L3 motion only. L0 takeover drives
@@ -752,7 +883,7 @@ impl Runtime {
         let healthy = sensors_healthy && !settling;
         self.autonomy.set_speed_caps(
             self.control_limits.0.min(if self.outdoor.selected {
-                0.3
+                OUTDOOR_MAX_FORWARD
             } else {
                 f64::INFINITY
             }),
@@ -764,39 +895,15 @@ impl Runtime {
                 .push(json!({"kind":"safety.tilt_stop","tilt":self.tilt.status(now)}));
         }
         self.autonomy.set_tilt_stop(tilted);
-        let p = self.pose.unwrap_or_default();
-        let map = self.map.as_ref();
-        let mut output = self.autonomy.step(ArbiterInput {
+        let mut output = self.autonomy.step(arbiter_input(
+            &self.estimator,
+            self.pose,
+            self.map.as_ref(),
             now,
-            pose: p.0,
-            pose_time: p.1,
-            map: map.map(|m| &m.0),
-            map_time: map.map(|m| m.1),
-            map_revision: map.map_or(0, |m| m.2),
-            measured: Twist {
-                linear: estimate.forward,
-                angular: estimate.yaw_rate,
-            },
             healthy,
-        });
+        ));
         self.note_sensor_hold(&mut output, now, outdoor_motion, settling);
-        let outdoor_status = self
-            .outdoor
-            .status(now, outdoor::evidence(self, now), &self.run_id);
-        if self.outdoor.selected {
-            if let Some(goal) = self.outdoor.mission_status() {
-                output.goal = goal;
-            }
-            if !outdoor_motion
-                && !manual
-                && output.status.safety != terra_autonomy::Safety::EmergencyStop
-            {
-                output.status.reason = outdoor_status["hold_reason"]
-                    .as_str()
-                    .unwrap_or(self.outdoor.phase())
-                    .into();
-            }
-        }
+        let outdoor_status = self.apply_outdoor_status(&mut output, outdoor_motion, manual, now);
         if output.reset_controller {
             self.controller.reset();
         }
@@ -804,10 +911,8 @@ impl Runtime {
         let motor = self.motor_output(&output, estimate, effective_mode, now)?;
         self.sequence += 1;
         let drive = self.drive_status(now, &motor);
-        let quality = pose_quality::value(self, now);
-        let value = json!({"status":output.status,"command_origin":output.command_origin,"pose_quality":quality,"navigation":self.navigation.status(),"outdoor":outdoor_status,"connectivity":{"policy":self.connectivity,"revision":self.connectivity_revision},"goal":output.goal,"proposal":output.proposal,"exploration":output.exploration,"search":output.search,"pending_reports":output.pending_reports,"twist":output.twist,"drive":drive,"runtime":{"schema_version":1,"tilt":self.tilt.status(now),"mode":effective_mode,"configured_mode":self.mode,"source_revision":SOURCE_REVISION,"configuration_identity":self.configuration_identity()}});
-        self.autonomy_json = value.to_string();
-        self.last_snapshot = RuntimeSnapshot { value };
+        let runtime = json!({"schema_version":1,"tilt":self.tilt.status(now),"mode":effective_mode,"configured_mode":self.mode,"source_revision":SOURCE_REVISION,"configuration_identity":self.configuration_identity()});
+        let status = self.publish_status(&output, outdoor_status, runtime, now);
         let mut events = std::mem::take(&mut self.events);
         events.extend(
             output
@@ -818,11 +923,9 @@ impl Runtime {
         Ok(RuntimeOutput {
             autonomy: output,
             motor,
-            snapshot: self.last_snapshot.clone(),
+            status,
+            drive,
             events,
         })
-    }
-    pub fn snapshot(&self, _now: f64) -> RuntimeSnapshot {
-        self.last_snapshot.clone()
     }
 }

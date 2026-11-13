@@ -433,8 +433,7 @@ impl RoverConnection {
         use terra_types::requests::{self, RequestKind};
         let request = RequestKind::find(kind)
             .filter(|k| ![requests::TELEOP, requests::NAVIGATION_SETTINGS].contains(&k.topic));
-        let Some(request) = request.filter(|_| payload.len() <= requests::MAX_REQUEST_BYTES)
-        else {
+        let Some(request) = request.filter(|_| payload.len() <= requests::MAX_REQUEST_BYTES) else {
             return Err(TransportError::InvalidTarget);
         };
         let mut value: serde_json::Value =

@@ -3,7 +3,7 @@ use super::*;
 fn delayed_remote_goal_and_reset_cannot_cross_loss_generation() {
     let c = MobileController::new(default_control_settings()).unwrap();
     let mut b = c.brain.lock().unwrap();
-    let run = b.run_id.clone();
+    let run = b.run_id().to_owned();
     let rev = b.autonomy.authority_revision();
     let goal = serde_json::json!({"frame":"local","x":4,"y":0,"token":"never-seen","run_id":run,"authority_revision":rev});
     assert!(remote_action(&b, "goal", goal.to_string().as_bytes(), 0.1).is_ok());
