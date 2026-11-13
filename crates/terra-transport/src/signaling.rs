@@ -21,11 +21,6 @@ pub fn webrtc_outbound(kind: &str) -> bool {
     fpv_signaling::Topic::parse(kind).is_some_and(fpv_signaling::Topic::is_phone_outbound)
 }
 
-/// Either direction. Telemetry replay refuses these suffixes.
-pub fn is_webrtc_topic(kind: &str) -> bool {
-    fpv_signaling::is_signaling_topic(kind)
-}
-
 /// True when `value` is a valid phone-to-dashboard signaling sample.
 pub fn accept_phone_outbound(kind: &str, value: &str) -> bool {
     webrtc_outbound(kind) && fpv_signaling::decode(kind, value).is_some()
@@ -55,7 +50,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn webrtc_topics_stay_out_of_the_control_allowlist() {
+    fn webrtc_topics_stay_out_of_requests_and_telemetry() {
         for kind in [
             "webrtc/request",
             "webrtc/answer",
@@ -64,7 +59,8 @@ mod tests {
             "webrtc/ice/phone",
             "webrtc/state",
         ] {
-            assert!(is_webrtc_topic(kind), "{kind}");
+            assert!(fpv_signaling::is_signaling_topic(kind), "{kind}");
+            assert!(terra_types::telemetry::TelemetryTopic::find(kind).is_none());
             assert!(!crate::inbox::admits(kind, b"{}"), "{kind}");
         }
         assert!(!webrtc_outbound("hardware"));

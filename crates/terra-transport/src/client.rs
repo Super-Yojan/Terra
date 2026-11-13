@@ -10,6 +10,9 @@ use std::{
     thread::{self, JoinHandle},
     time::{Duration, Instant},
 };
+use terra_types::telemetry::{
+    AUTONOMY_STATUS, DEFAULT_MAX_BYTES, SEARCH_REPORT, SEARCH_REPORT_MAX_RECORDS, SEARCH_STATUS,
+};
 use zenoh::Wait;
 const LEASE: Duration = Duration::from_millis(250);
 /// Maximum cached authority age, seconds, when issuing a new remote mission
@@ -273,18 +276,18 @@ impl RoverConnection {
                     .declare_subscriber(format!("{base}/**"))
                     .callback(move |sample| {
                         let key = sample.key_expr().as_str();
-                        if !key.ends_with("/autonomy/status")
-                            && !key.ends_with("/search/status")
-                            && !key.ends_with("/search/report")
-                        {
+                        let Some(topic) = [AUTONOMY_STATUS, SEARCH_STATUS, SEARCH_REPORT]
+                            .into_iter()
+                            .find(|t| key.strip_suffix(t).is_some_and(|k| k.ends_with('/')))
+                        else {
                             return;
-                        }
+                        };
                         let bytes = sample.payload().to_bytes();
-                        if bytes.len() <= 65536
+                        if bytes.len() <= DEFAULT_MAX_BYTES
                             && let Ok(text) = String::from_utf8(bytes.to_vec())
                         {
                             let mut state = status_shared.lock().unwrap();
-                            if key.ends_with("/search/report") {
+                            if topic == SEARCH_REPORT {
                                 if let Ok(value) = serde_json::from_str::<serde_json::Value>(&text)
                                 {
                                     let ids = (
@@ -297,14 +300,14 @@ impl RoverConnection {
                                             .reports
                                             .retain(|_, (_, at)| at.elapsed().as_secs_f64() < 2.5);
                                         let key = (run.into(), search.into(), report.into());
-                                        if state.reports.len() < 128
+                                        if state.reports.len() < SEARCH_REPORT_MAX_RECORDS
                                             || state.reports.contains_key(&key)
                                         {
                                             state.reports.insert(key, (value, Instant::now()));
                                         }
                                     }
                                 }
-                            } else if key.ends_with("/search/status") {
+                            } else if topic == SEARCH_STATUS {
                                 if let Ok(value) = serde_json::from_str::<serde_json::Value>(&text)
                                 {
                                     state.search = Some((value, Instant::now()));
@@ -325,8 +328,17 @@ impl RoverConnection {
                             }
                         }
                     })
-                    .wait()
-                    .ok();
+                    .wait();
+                let authority = match authority {
+                    Ok(authority) => authority,
+                    Err(error) => {
+                        shared.lock().unwrap().error = Some(error.to_string());
+                        shared.lock().unwrap().shutdown = true;
+                        drop(subscriber);
+                        let _ = session.close().wait();
+                        return;
+                    }
+                };
                 let operator_session_id = format!(
                     "phone-ui-{}",
                     std::time::SystemTime::now()

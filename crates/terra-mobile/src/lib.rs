@@ -730,7 +730,7 @@ impl MobileController {
             ));
         }
         if let Some(d) = brain.dashboard.as_ref() {
-            d.publish("experiment/status",serde_json::json!({
+            d.publish(telemetry::EXPERIMENT_STATUS,serde_json::json!({
                 "run_id": run_id,
                 "run_elapsed": timestamp-start,
                 "schema_version": 1,
@@ -747,16 +747,16 @@ impl MobileController {
             });
             autonomy["navigation"] = status["navigation"].clone();
             autonomy["navigation"]["outdoor"] = status["outdoor"].clone();
-            d.publish("navigation/outdoor", status["outdoor"].to_string());
+            d.publish(telemetry::NAVIGATION_OUTDOOR, status["outdoor"].to_string());
             autonomy["pose_quality"] = status["pose_quality"].clone();
-            d.publish("pose/quality", status["pose_quality"].to_string());
-            d.publish("autonomy/status", autonomy.to_string());
+            d.publish(telemetry::POSE_QUALITY, status["pose_quality"].to_string());
+            d.publish(telemetry::AUTONOMY_STATUS, autonomy.to_string());
             d.publish(
-                "search/status",
+                telemetry::SEARCH_STATUS,
                 serde_json::to_string(&output.search).unwrap(),
             );
             d.publish_batch(
-                "search/report",
+                telemetry::SEARCH_REPORT,
                 output
                     .pending_reports
                     .iter()
@@ -764,24 +764,27 @@ impl MobileController {
                     .collect(),
             );
             if let Some((_, objects)) = &brain.objects_published {
-                d.publish("objects", objects.clone());
+                d.publish(telemetry::OBJECTS, objects.clone());
             }
-            d.publish("goal/status", serde_json::to_string(&output.goal).unwrap());
-            d.publish("goal/proposal", status["proposal"].to_string());
+            d.publish(
+                telemetry::GOAL_STATUS,
+                serde_json::to_string(&output.goal).unwrap(),
+            );
+            d.publish(telemetry::GOAL_PROPOSAL, status["proposal"].to_string());
             if let Some(exploration) = &output.exploration {
                 d.publish(
-                    "exploration/status",
+                    telemetry::EXPLORATION_STATUS,
                     serde_json::to_string(exploration).unwrap(),
                 );
             }
             if let Some(task) = &output.task {
-                d.publish("task/status", serde_json::to_string(task).unwrap());
+                d.publish(telemetry::TASK_STATUS, serde_json::to_string(task).unwrap());
             }
             if let Some((grid, _, sequence)) = map.as_ref() {
                 match map_publication {
                     Some(publication::Publication::Full) => {
                         map_full_rejected = !d.publish_visualization(
-                            "map/occupancy",
+                            telemetry::MAP_OCCUPANCY,
                             terra_autonomy::occupancy_telemetry(
                                 d.rover_id, &run_id, *sequence, grid,
                             )
@@ -789,7 +792,7 @@ impl MobileController {
                         );
                     }
                     Some(publication::Publication::Heartbeat(sequence)) => d.publish(
-                        "map/occupancy/heartbeat",
+                        telemetry::MAP_OCCUPANCY_HEARTBEAT,
                         serde_json::json!({"schema_version":1,"rover_id":d.rover_id,
                             "run_id":run_id,"sequence":sequence})
                         .to_string(),
@@ -799,7 +802,7 @@ impl MobileController {
             }
             if brain.pose_ready(timestamp) {
                 d.publish(
-                    "pose",
+                    telemetry::POSE,
                     serde_json::json!({
                         "rover_id": d.rover_id,
                         "sequence": brain.sequence(),

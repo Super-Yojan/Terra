@@ -7,6 +7,7 @@
 
 pub mod point_capture;
 pub mod requests;
+pub mod telemetry;
 pub mod timing;
 pub mod turning;
 

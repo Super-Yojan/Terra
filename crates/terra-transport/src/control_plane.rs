@@ -9,6 +9,7 @@ use std::{
     thread::{self, JoinHandle},
     time::{Duration, Instant},
 };
+use terra_types::telemetry::{Delivery, SEARCH_REPORT_MAX_RECORDS, TelemetryTopic};
 use zenoh::Wait;
 type Inbox = Arc<Mutex<VecDeque<(String, Vec<u8>, Instant)>>>;
 type SignalingInbox = Arc<Mutex<VecDeque<(String, Vec<u8>)>>>;
@@ -73,11 +74,8 @@ impl Failure {
 #[path = "../tests/internal/control_plane_diagnostics.rs"]
 mod diagnostic_tests;
 
-fn visualization_topic(kind: &str) -> bool {
-    matches!(
-        kind,
-        "map/occupancy" | "map/occupancy/heartbeat" | "pointcloud" | "pointcloud/heartbeat"
-    )
+fn delivered_as(kind: &str, delivery: Delivery) -> Option<&'static TelemetryTopic> {
+    TelemetryTopic::find(kind).filter(|t| t.delivery == delivery)
 }
 
 // Visualization is sample-driven, unlike replayable control state. Retain the
@@ -92,7 +90,7 @@ fn telemetry_snapshot(
             continue;
         }
         active = true;
-        let payload = if visualization_topic(kind) {
+        let payload = if delivered_as(kind, Delivery::Visualization).is_some() {
             value.take()
         } else {
             value.clone()
@@ -369,11 +367,11 @@ impl ControlPlane {
             .collect()
     }
     /// Replace the latest telemetry slot and refresh its 500 ms TTL.
-    /// Drops oversized values silently: occupancy is capped at 2,000,000 bytes,
-    /// point clouds at 262144 bytes, and other suffixes at 65536 bytes.
+    /// Silently drops a topic that is not state or visualization in
+    /// [`terra_types::telemetry::ALL`] (WebRTC signaling included, so an offer
+    /// is never replayed as latched telemetry), or a value over its byte cap.
     /// Ordinary state can replay at 10 Hz; visualization is taken once per update.
-    /// Does not parse JSON or acknowledge delivery. WebRTC signaling suffixes are
-    /// refused here so an offer is not replayed as latched telemetry.
+    /// Does not parse JSON or acknowledge delivery.
     pub fn publish(&self, kind: &str, value: String) {
         let _ = self.enqueue_state(kind, value);
     }
@@ -406,24 +404,17 @@ impl ControlPlane {
     }
     /// Enqueue sample-driven visualization, reporting size/failure rejection.
     /// Acceptance is into the bounded latest-state slot, not network delivery.
-    /// Only occupancy, pointcloud, and their heartbeat suffixes are accepted.
-    /// Uses [`Self::publish`] byte caps and returns false for an unsupported topic,
-    /// failed link, or oversized value. JSON/schema validation belongs to the caller.
+    /// Returns false for a topic that is not visualization, a failed link, or
+    /// an oversized value. JSON/schema validation belongs to the caller.
     pub fn publish_visualization(&self, kind: &str, value: String) -> bool {
-        visualization_topic(kind) && !self.failed() && self.enqueue_state(kind, value)
+        delivered_as(kind, Delivery::Visualization).is_some()
+            && !self.failed()
+            && self.enqueue_state(kind, value)
     }
     fn enqueue_state(&self, kind: &str, value: String) -> bool {
-        if crate::signaling::is_webrtc_topic(kind) {
-            return false;
-        }
-        // Dense visualization snapshots exceed the ordinary state-message budget.
-        // Keep action/small telemetry limits unchanged and bound only these two topics higher.
-        let limit = match kind {
-            "map/occupancy" => 2_000_000,
-            "pointcloud" => 262144,
-            _ => 65536,
-        };
-        if value.len() <= limit {
+        let topic = delivered_as(kind, Delivery::State)
+            .or_else(|| delivered_as(kind, Delivery::Visualization));
+        if topic.is_some_and(|t| t.fits(value.len())) {
             self.states
                 .lock()
                 .unwrap()
@@ -444,14 +435,12 @@ impl ControlPlane {
         }
         queue.drain(..).collect()
     }
-    /// Queue one large payload on `pointcloud/full` for the bulk thread.
-    /// Accepts at most [`terra_types::point_capture::MAX_FRAME_BYTES`] and two
-    /// frames in flight. Returns false for another topic, an oversized frame, a
-    /// failed link or a full queue. Delivery is best effort at background priority.
+    /// Queue one large payload on a bulk topic (`pointcloud/full`) for the bulk
+    /// thread, with at most two frames in flight. Returns false for another
+    /// topic, an oversized frame, a failed link or a full queue. Delivery is
+    /// best effort at background priority.
     pub fn publish_bulk(&self, kind: &str, value: Vec<u8>) -> bool {
-        if kind != terra_types::point_capture::FRAME_TOPIC
-            || value.len() > terra_types::point_capture::MAX_FRAME_BYTES
-            || self.failed()
+        if delivered_as(kind, Delivery::Bulk).is_none_or(|t| !t.fits(value.len())) || self.failed()
         {
             return false;
         }
@@ -460,12 +449,15 @@ impl ControlPlane {
             .is_some_and(|bulk| bulk.try_send((kind.into(), value)).is_ok())
     }
     /// Fair replay of bounded outstanding records on one contractual topic.
-    /// Only `search/report` is accepted: at most 128 records, each at most 65536
-    /// bytes. Invalid batches are ignored. The latest batch has a 500 ms TTL and
+    /// Only a batch topic (`search/report`) is accepted: at most
+    /// [`SEARCH_REPORT_MAX_RECORDS`] records, each within the topic's byte cap.
+    /// Invalid batches are ignored. The latest batch has a 500 ms TTL and
     /// can replay once per second while ordinary producer telemetry keeps the
     /// worker active. Callers refresh unacknowledged reports explicitly.
     pub fn publish_batch(&self, kind: &str, values: Vec<String>) {
-        if kind == "search/report" && values.len() <= 128 && values.iter().all(|v| v.len() <= 65536)
+        if let Some(topic) = delivered_as(kind, Delivery::Batch)
+            && values.len() <= SEARCH_REPORT_MAX_RECORDS
+            && values.iter().all(|v| topic.fits(v.len()))
         {
             self.batches
                 .lock()

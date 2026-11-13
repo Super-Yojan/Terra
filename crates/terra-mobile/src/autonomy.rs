@@ -233,13 +233,13 @@ impl MobileController {
         self.detach_dashboard_link()
     }
     /// Bounded world-space visualization points; never a source of motor authority.
-    /// Requires version 1 JSON, at most 4096 points, and at most 262144 bytes.
+    /// Requires version 1 JSON, at most 4096 points, and within the `pointcloud` byte cap.
     /// Published only while a dashboard point capture runs; otherwise accepted and dropped.
     /// Full content is coalesced; unchanged newer samples can emit heartbeats.
     /// Returns `InvalidInput` for size/schema rejection and `Internal` for malformed
     /// JSON or lock failure. No dashboard means no network publication.
     pub fn publish_point_cloud(&self, payload: String) -> Result<(), ControllerError> {
-        if payload.len() > 262144 {
+        if payload.len() > telemetry::POINTCLOUD_MAX_BYTES {
             return Err(ControllerError::InvalidInput {
                 message: "point cloud too large".into(),
             });
@@ -277,10 +277,11 @@ impl MobileController {
         if let Some(dashboard) = brain.dashboard.as_ref() {
             match publication {
                 publication::Publication::Full => {
-                    full_rejected = !dashboard.publish_visualization("pointcloud", payload);
+                    full_rejected =
+                        !dashboard.publish_visualization(telemetry::POINTCLOUD, payload);
                 }
                 publication::Publication::Heartbeat(sequence) => dashboard.publish(
-                    "pointcloud/heartbeat",
+                    telemetry::POINTCLOUD_HEARTBEAT,
                     serde_json::json!({"version":1,"rover_id":dashboard.rover_id,
                         "frameID":frame_id,"sequence":sequence})
                     .to_string(),
@@ -313,7 +314,7 @@ impl MobileController {
         value["run_id"] = serde_json::json!(brain.run_id());
         value["connectivity_policy"] = serde_json::json!(brain.connectivity());
         if let Some(dashboard) = brain.dashboard.as_ref() {
-            dashboard.publish("localization", value.to_string());
+            dashboard.publish(telemetry::LOCALIZATION, value.to_string());
         }
         Ok(())
     }
@@ -466,7 +467,7 @@ impl MobileController {
             received_at,
         })?;
         if let Some(d) = b.dashboard.as_ref() {
-            d.publish("hardware/status", payload);
+            d.publish(telemetry::HARDWARE_STATUS, payload);
         }
         Ok(())
     }
