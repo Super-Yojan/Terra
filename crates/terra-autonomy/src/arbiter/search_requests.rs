@@ -89,7 +89,7 @@ impl AutonomyArbiter {
         self.search = Some(search);
         self.paused = false;
         self.acknowledge(r.token.clone(), fp, true, "search_started");
-        self.event("search_accepted", Some(r.token), "search_started");
+        self.event(EventKind::SearchAccepted, Some(r.token), "search_started");
         Ok(())
     }
     /// Apply an action to the matching active run and search, with token idempotency.
@@ -145,9 +145,9 @@ impl AutonomyArbiter {
             self.reset = true;
             self.event(
                 match r.action {
-                    SearchAction::Pause => "search_paused",
-                    SearchAction::Resume => "search_resumed",
-                    SearchAction::Cancel => "search_cancelled",
+                    SearchAction::Pause => EventKind::SearchPaused,
+                    SearchAction::Resume => EventKind::SearchResumed,
+                    SearchAction::Cancel => EventKind::SearchCancelled,
                 },
                 Some(r.token),
                 "operator_search_action",
@@ -173,9 +173,9 @@ impl AutonomyArbiter {
         self.collect_search_report(now);
         self.event(
             if result.is_ok() {
-                "candidate_observed"
+                EventKind::CandidateObserved
             } else {
-                "candidate_rejected"
+                EventKind::CandidateRejected
             },
             None,
             result.err().unwrap_or("observed_target"),
@@ -190,8 +190,8 @@ impl AutonomyArbiter {
                 .insert((report.run_id.clone(), report.search_id.clone()))
         {
             self.pending_reports.push_back(report);
-            self.event("target_confirmed", None, "target_confirmed");
-            self.event("report_queued", None, "report_pending");
+            self.event(EventKind::TargetConfirmed, None, "target_confirmed");
+            self.event(EventKind::ReportQueued, None, "report_pending");
         }
     }
     /// Remove a report matching the version, run, search, and report IDs.
@@ -215,7 +215,7 @@ impl AutonomyArbiter {
                 r.search_id.clone(),
                 r.report_id.clone(),
             ));
-            self.event("report_acknowledged", Some(r.token), "report_delivered");
+            self.event(EventKind::ReportAcknowledged, Some(r.token), "report_delivered");
             true
         } else {
             self.acknowledged_reports

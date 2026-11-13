@@ -291,6 +291,16 @@ impl WaypointController {
         })
     }
 
+    /// Replace the pursuit configuration and clear the goal, keeping the
+    /// geographic origin. Returns [`InputError::InvalidConfiguration`] and
+    /// changes nothing when `config` fails validation.
+    pub fn reconfigure(&mut self, config: WaypointConfig) -> Result<(), InputError> {
+        config.validate()?;
+        self.config = config;
+        self.cancel();
+        Ok(())
+    }
+
     /// Pursuit configuration this follower was built with.
     pub fn config(&self) -> &WaypointConfig {
         &self.config

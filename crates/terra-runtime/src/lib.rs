@@ -480,10 +480,8 @@ impl Runtime {
         self.outdoor.invalidate_sensors();
         self.forget_local_frame();
         self.bump_navigation_revision();
-        if self.outdoor.selected() {
-            self.autonomy.clear_guidance();
-            self.controller.reset();
-        }
+        self.autonomy.reset_local_frame();
+        self.controller.reset();
     }
     /// Drop GPS, heading and course evidence, for example when location access ends.
     pub fn invalidate_outdoor_sensors(&mut self) {

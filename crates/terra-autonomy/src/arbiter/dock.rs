@@ -170,7 +170,7 @@ impl AutonomyArbiter {
         };
         let token = dock.token.clone();
         for (kind, reason) in dock.take_events() {
-            self.event(kind, Some(token.clone()), &reason);
+            self.event(EventKind::Other(kind), Some(token.clone()), &reason);
         }
     }
 }

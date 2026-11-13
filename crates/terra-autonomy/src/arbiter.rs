@@ -589,7 +589,7 @@ impl AutonomyArbiter {
             }
             // Retire cached motion, but keep fresh diagnostics explaining the route failure.
             self.plan.command = None;
-            self.event("route_failed", None, Reason::ObstacleBlocked.as_str());
+            self.event(EventKind::RouteFailed, None, Reason::ObstacleBlocked.as_str());
         }
         // A planner input error (a late tick upsets the turning limiter's
         // timing) is a one-tick hold: it says nothing about the search.

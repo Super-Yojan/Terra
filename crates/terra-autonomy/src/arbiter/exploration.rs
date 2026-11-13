@@ -8,7 +8,7 @@ impl AutonomyArbiter {
     }
     pub(super) fn drain_explore_events(&mut self) {
         for event in self.explorer.take_events() {
-            self.event(event.kind, None, &event.reason);
+            self.event(EventKind::Other(event.kind), None, &event.reason);
         }
     }
     pub(super) fn halt_explore(&mut self, reason: EndReason) {

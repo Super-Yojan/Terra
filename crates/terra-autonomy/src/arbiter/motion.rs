@@ -231,7 +231,7 @@ impl AutonomyArbiter {
                 {
                     self.follow_local(x, y, None);
                     self.plan.forget();
-                    self.event("route_selected", None, "search_route");
+                    self.event(EventKind::RouteSelected, None, "search_route");
                 }
                 decision.goal = self
                     .follower
@@ -522,7 +522,7 @@ impl AutonomyArbiter {
                         expires_at: input.now + timing::PROPOSAL_LIFETIME_SECONDS,
                         reason: "search_unobserved_sector".into(),
                     });
-                    self.event("proposal_created", None, "frontier");
+                    self.event(EventKind::ProposalCreated, None, "frontier");
                 }
             }
             decision.reason = Reason::Other(if self.proposal.is_some() {

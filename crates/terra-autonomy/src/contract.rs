@@ -174,6 +174,102 @@ impl Source {
         }
     }
 }
+/// Kind of a [`crate::DecisionEvent`]: the arbiter's own decisions are
+/// variants; kinds forwarded from the exploration, dock and task state
+/// machines are carried in [`EventKind::Other`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EventKind {
+    AuthorityGenerationChanged,
+    CandidateObserved,
+    CandidateRejected,
+    DockAligned,
+    DockBackoff,
+    DockCancelled,
+    DockDone,
+    DockFailed,
+    DockGateClosed,
+    DockGateOpened,
+    DockStarted,
+    GoalAccepted,
+    GoalCancel,
+    GoalDropped,
+    GoalRejected,
+    LocalFrameReset,
+    MissionPaused,
+    OperatorReceived,
+    ProposalCreated,
+    RemoteRequestRejected,
+    ReportAcknowledged,
+    ReportQueued,
+    RequestAccepted,
+    RequestRejected,
+    RouteFailed,
+    RouteSelected,
+    SearchAccepted,
+    SearchPaused,
+    SearchResumed,
+    SearchCancelled,
+    Takeover,
+    TargetConfirmed,
+    TaskAction,
+    TaskDriveRequested,
+    TaskEnded,
+    TaskPlan,
+    TaskQuestion,
+    TaskStarted,
+    TaskWaypointAbandoned,
+    TiltStop,
+    /// A kind named by a forwarded state machine.
+    Other(&'static str),
+}
+impl EventKind {
+    /// Wire name, as published in `DecisionEvent::kind`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            EventKind::AuthorityGenerationChanged => "authority_generation_changed",
+            EventKind::CandidateObserved => "candidate_observed",
+            EventKind::CandidateRejected => "candidate_rejected",
+            EventKind::DockAligned => "dock_aligned",
+            EventKind::DockBackoff => "dock_backoff",
+            EventKind::DockCancelled => "dock_cancelled",
+            EventKind::DockDone => "dock_done",
+            EventKind::DockFailed => "dock_failed",
+            EventKind::DockGateClosed => "dock_gate_closed",
+            EventKind::DockGateOpened => "dock_gate_opened",
+            EventKind::DockStarted => "dock_started",
+            EventKind::GoalAccepted => "goal_accepted",
+            EventKind::GoalCancel => "goal_cancel",
+            EventKind::GoalDropped => "goal_dropped",
+            EventKind::GoalRejected => "goal_rejected",
+            EventKind::LocalFrameReset => "local_frame_reset",
+            EventKind::MissionPaused => "mission_paused",
+            EventKind::OperatorReceived => "operator_received",
+            EventKind::ProposalCreated => "proposal_created",
+            EventKind::RemoteRequestRejected => "remote_request_rejected",
+            EventKind::ReportAcknowledged => "report_acknowledged",
+            EventKind::ReportQueued => "report_queued",
+            EventKind::RequestAccepted => "request_accepted",
+            EventKind::RequestRejected => "request_rejected",
+            EventKind::RouteFailed => "route_failed",
+            EventKind::RouteSelected => "route_selected",
+            EventKind::SearchAccepted => "search_accepted",
+            EventKind::SearchPaused => "search_paused",
+            EventKind::SearchResumed => "search_resumed",
+            EventKind::SearchCancelled => "search_cancelled",
+            EventKind::Takeover => "takeover",
+            EventKind::TargetConfirmed => "target_confirmed",
+            EventKind::TaskAction => "task_action",
+            EventKind::TaskDriveRequested => "task_drive_requested",
+            EventKind::TaskEnded => "task_ended",
+            EventKind::TaskPlan => "task_plan",
+            EventKind::TaskQuestion => "task_question",
+            EventKind::TaskStarted => "task_started",
+            EventKind::TaskWaypointAbandoned => "task_waypoint_abandoned",
+            EventKind::TiltStop => "tilt_stop",
+            EventKind::Other(name) => name,
+        }
+    }
+}
 /// Dashboard safety state. Serialized as `safety`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
