@@ -114,63 +114,6 @@ fn duplicate_takeover_does_not_clear_fresh_input_twice() {
     a.set_level(r);
     assert_eq!(a.step(input(0.1)).twist.linear, 1.);
 }
-/// Offer a frontier on a known free core, hold motion until approval, and accept approval against fresh map and pose evidence.
-#[test]
-fn supervised_proposes_but_waits_for_approval() {
-    let mut a = AutonomyArbiter::default();
-    a.set_level(LevelRequest {
-        level: Level::Supervised,
-        token: "s".into(),
-        budget_seconds: None,
-        budget_minutes: None,
-    });
-    let mut m = terra_mapping::MapSnapshot {
-        width: 40,
-        height: 40,
-        resolution: 0.25,
-        origin_x: -5.,
-        origin_y: -5.,
-        occupancy: vec![-1; 1600],
-    };
-    for y in 12..28 {
-        for x in 12..28 {
-            m.occupancy[y * 40 + x] = 0;
-        }
-    }
-    let i = ArbiterInput {
-        map: Some(&m),
-        map_time: Some(0.1),
-        ..input(0.1)
-    };
-    let o = a.step(i);
-    assert!(o.proposal.is_some());
-    assert_eq!(o.twist, Twist::default());
-    let p = o.proposal.unwrap();
-    a.decide_proposal(
-        ProposalDecision {
-            run_id: p.run_id.clone(),
-            proposal_id: Some(p.proposal_id),
-            decision: Decision::Approve,
-            token: "yes".into(),
-        },
-        &ArbiterInput {
-            map: Some(&m),
-            map_time: Some(0.2),
-            ..input(0.2)
-        },
-    );
-    assert_eq!(
-        a.step(ArbiterInput {
-            map: Some(&m),
-            map_time: Some(0.3),
-            ..input(0.3)
-        })
-        .status
-        .result
-        .as_deref(),
-        Some("accepted")
-    );
-}
 /// Accept a goal, switch to teleop, and replay the old token; the receipt stays accepted without activating a goal.
 #[test]
 fn duplicate_goal_token_does_not_relaunch() {
@@ -438,7 +381,7 @@ fn cancelled_l2_token_never_replays_motion() {
     assert_eq!(a.step(input(0.2)).twist, Twist::default());
 }
 
-/// Block assisted teleop with an occupied map, verify the bounded 121-candidate trace, and clear it on emergency stop.
+/// Block assisted teleop with an occupied map, verify the bounded candidate trace, and clear it on emergency stop.
 #[test]
 fn blocked_planner_trace_is_published_and_cleared_on_stop() {
     let mut arbiter = AutonomyArbiter::default();
@@ -511,6 +454,7 @@ fn router_intent_clear_keeps_local_manual_but_removes_fleet_lease() {
     assert_eq!(a.step(input(1.)).twist, Twist::default());
 }
 
+/// Offer a frontier, hold until approval, finish the approved action offline, then wait for approval of the next.
 #[test]
 fn supervised_approved_action_can_finish_offline_without_approving_the_next() {
     let mut a = AutonomyArbiter::default();

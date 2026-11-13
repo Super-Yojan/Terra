@@ -1024,8 +1024,9 @@ mod tests {
         settings.max_effort = 1.5;
         assert!(MobileController::new(settings).is_err());
     }
-    /// The published status keeps its shape: the apps and dashboards read
-    /// these fields, and the brief is the same record cut down.
+    /// The published status and brief keep their shape: the apps and
+    /// dashboards read these fields (dashboard_reconnect checks the brief
+    /// matches the status).
     #[test]
     fn status_and_brief_keep_their_published_fields() {
         let controller = MobileController::new(default_control_settings()).unwrap();
@@ -1100,9 +1101,6 @@ mod tests {
                 "safety"
             ]
         );
-        assert_eq!(brief["status"]["safety"], status["status"]["safety"]);
-        assert_eq!(brief["goal"]["state"], status["goal"]["state"]);
-        assert_eq!(brief["pose_quality"], status["pose_quality"]);
         let typed = controller.autonomy_brief_typed();
         assert_eq!(typed.requested_level, "teleop");
         assert_eq!(typed.goal_state, "idle");
