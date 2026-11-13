@@ -73,8 +73,21 @@ pub fn initialize_runtime(role: &str) {
                 let _ = std::fs::write(&identity_path, &id);
                 id
             });
-        let settings = crate::ObservationSettings::from_environment().ok()?;
+        // Bad settings must not silently turn observation off; run on the
+        // defaults and record why.
+        let (settings, rejected) = match crate::ObservationSettings::from_environment() {
+            Ok(settings) => (settings, None),
+            Err(error) => (Default::default(), Some(error.to_string())),
+        };
         let mut observer = RuntimeObserver::open_with_settings(&path, &producer, settings).ok()?;
+        if let Some(reason) = rejected {
+            observer.record(
+                PRODUCER_ROVER,
+                role,
+                "observability.settings_rejected",
+                serde_json::json!({"reason": reason}),
+            );
+        }
         let upload = match (
             std::env::var("TERRA_OBSERVABILITY_ENDPOINT"),
             std::env::var("TERRA_OBSERVABILITY_UPLOAD_TOKEN_FILE"),
@@ -99,7 +112,7 @@ pub fn initialize_runtime(role: &str) {
                 crate::UploadConfig {
                     endpoint: config.endpoint,
                     token: token.trim().into(),
-                    evidence_directory: Some(path.with_extension("evidence")),
+                    evidence_directory: Some(crate::evidence_directory(&path)),
                     clock_journal: Some(observer.journal.clone()),
                 },
             )
@@ -156,7 +169,7 @@ fn default_state_path(role: &str) -> std::path::PathBuf {
 pub fn runtime_evidence_directory() -> Option<std::path::PathBuf> {
     OBSERVER
         .get()
-        .and_then(|o| o.as_ref().map(|o| o.path.with_extension("evidence")))
+        .and_then(|o| o.as_ref().map(|o| crate::evidence_directory(&o.path)))
 }
 
 /// Private per-application upload settings, used when explicit environment

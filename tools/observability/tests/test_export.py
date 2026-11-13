@@ -121,3 +121,8 @@ def test_missing_rgb_clears_image_and_reset_clears_old_frame(tmp_path,monkeypatc
  source(tmp_path,[first,second]);export_session(d,tmp_path/'reset.rrd',ExportConfig())
  assert ('/rovers/4/sources/phone/frames/A',True) in reset_calls
  assert 'Clear:is_recursive' in RrdReader(tmp_path/'reset.rrd').stream().collect().summary()
+
+def test_attachment_limit_matches_the_shared_contract():
+ from terra_replay.export import MAX_ATTACHMENT_BYTES
+ contract=Path(__file__).resolve().parents[3]/"tests/fixtures/observability/contract.json"
+ assert MAX_ATTACHMENT_BYTES==json.loads(contract.read_text())["max_attachment_bytes"]

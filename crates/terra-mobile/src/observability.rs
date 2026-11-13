@@ -175,7 +175,7 @@ impl MobileController {
                 *rover = Some(config.rover_id.clone());
             }
         }
-        let evidence_path = config.path.with_extension("evidence");
+        let evidence_path = terra_observability::evidence_directory(&config.path);
         let router_diagnostics =
             terra_observability::DiagnosticRecorder::open(&config.path, "router")
                 .map_err(|_| ControllerError::Internal)?;
@@ -410,7 +410,7 @@ impl MobileController {
                 terra_observability::UploadConfig {
                     endpoint,
                     token,
-                    evidence_directory: Some(a.path.with_extension("evidence")),
+                    evidence_directory: Some(terra_observability::evidence_directory(&a.path)),
                     clock_journal: Some(a.journal.clone()),
                 },
             )

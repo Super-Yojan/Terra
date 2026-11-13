@@ -1,9 +1,18 @@
 {
-  "description": "Observability event contract shared by terra-observability (phone writer and collector) and apps/rover-pi (Pi journal). Change both implementations and this file together.",
+  "description": "Observability event contract shared by terra-observability (phone writer and collector), apps/rover-pi (Pi journal and journald forwarder) and tools/observability (replay export). `journal_messages` are journald lines and whether each producer must replace them with the sensitive placeholder. Change every implementation and this file together.",
   "schema_version": 1,
   "max_event_bytes": 131072,
   "max_ingest_events": 256,
   "max_upload_batch_bytes": 921600,
+  "upload_batch_events": 64,
+  "max_attachment_bytes": 33554432,
+  "max_field_bytes": 256,
+  "severities": [
+    "debug",
+    "info",
+    "warning",
+    "error"
+  ],
   "producer_rover": "_producer",
   "gap_kind": "observability.gap",
   "secret_key_fragments": [
@@ -14,5 +23,64 @@
     "secret",
     "access_token",
     "refresh_token"
+  ],
+  "sensitive_journal_words": [
+    "password",
+    "passphrase",
+    "bearer ",
+    "private key",
+    "credential",
+    "authorization:"
+  ],
+  "sensitive_journal_placeholder": "[sensitive journal message omitted]",
+  "journal_messages": [
+    {
+      "message": "wlan0: AP-STA-DISCONNECTED",
+      "sensitive": false
+    },
+    {
+      "message": "WPA: 4-Way Handshake failed - pre-shared key may be incorrect (PSK mismatch)",
+      "sensitive": false
+    },
+    {
+      "message": "psk=private-fixture-value",
+      "sensitive": true
+    },
+    {
+      "message": "wpa_psk=private-fixture-value",
+      "sensitive": true
+    },
+    {
+      "message": "network={ psk \"x\" }",
+      "sensitive": false
+    },
+    {
+      "message": "PSK: 'secret'",
+      "sensitive": true
+    },
+    {
+      "message": "psk value is set",
+      "sensitive": true
+    },
+    {
+      "message": "pskx=1",
+      "sensitive": false
+    },
+    {
+      "message": "Authorization: Bearer abc",
+      "sensitive": true
+    },
+    {
+      "message": "nmcli set wifi Passphrase",
+      "sensitive": true
+    },
+    {
+      "message": "loaded private key from disk",
+      "sensitive": true
+    },
+    {
+      "message": "fusion_hat 1-0017: probe failed with error -5",
+      "sensitive": false
+    }
   ]
 }

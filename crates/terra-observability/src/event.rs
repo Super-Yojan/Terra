@@ -9,6 +9,27 @@ pub struct EventId {
     pub boot_id: String,
     pub sequence: u64,
 }
+/// How much an event matters; serialized lowercase.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum Severity {
+    Debug,
+    #[default]
+    Info,
+    Warning,
+    Error,
+}
+impl Severity {
+    pub const ALL: [Self; 4] = [Self::Debug, Self::Info, Self::Warning, Self::Error];
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Debug => "debug",
+            Self::Info => "info",
+            Self::Warning => "warning",
+            Self::Error => "error",
+        }
+    }
+}
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct EventInput {
@@ -16,7 +37,7 @@ pub struct EventInput {
     pub session_id: Option<String>,
     pub component: String,
     pub kind: String,
-    pub severity: String,
+    pub severity: Severity,
     pub wall_time_ns: u64,
     pub monotonic_ns: u64,
     pub cause_id: Option<EventId>,
@@ -29,19 +50,22 @@ impl EventInput {
             session_id: None,
             component: component.into(),
             kind: kind.into(),
-            severity: "info".into(),
+            severity: Severity::Info,
             wall_time_ns: wall_time_ns(),
             monotonic_ns: 0,
             cause_id: None,
             attributes,
         }
     }
+    /// The collector's admission rule; it rejects a batch holding an event that fails it.
     pub fn validate(&self) -> bool {
         [&self.rover_id, &self.component, &self.kind]
             .iter()
-            .all(|s| !s.is_empty() && s.len() <= 256)
-            && self.session_id.as_ref().is_none_or(|s| s.len() <= 256)
-            && ["debug", "info", "warning", "error"].contains(&self.severity.as_str())
+            .all(|s| !s.is_empty() && s.len() <= crate::MAX_FIELD_BYTES)
+            && self
+                .session_id
+                .as_ref()
+                .is_none_or(|s| s.len() <= crate::MAX_FIELD_BYTES)
             && self.attributes.is_object()
     }
 }

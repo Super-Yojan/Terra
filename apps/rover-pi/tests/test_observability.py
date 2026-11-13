@@ -58,6 +58,15 @@ class ContractTests(unittest.TestCase):
         self.assertEqual(observability.PRODUCER_ROVER, fixture['producer_rover'])
         self.assertEqual(observability.GAP_KIND, fixture['gap_kind'])
         self.assertEqual(list(observability.SECRET_KEY_FRAGMENTS), fixture['secret_key_fragments'])
+        self.assertEqual(observability.UPLOAD_BATCH_EVENTS, fixture['upload_batch_events'])
+        self.assertEqual(observability.MAX_FIELD_BYTES, fixture['max_field_bytes'])
+        self.assertEqual(list(observability.SEVERITIES), fixture['severities'])
+        self.assertEqual(list(observability.SENSITIVE_JOURNAL_WORDS), fixture['sensitive_journal_words'])
+        self.assertEqual(observability.SENSITIVE_JOURNAL_PLACEHOLDER, fixture['sensitive_journal_placeholder'])
+
+    def test_sensitive_journal_messages_match_the_shared_cases(self):
+        for case in json.loads(FIXTURE.read_text())['journal_messages']:
+            self.assertEqual(observability.sensitive_journal_message(case['message']), case['sensitive'], case['message'])
 
 
 class JournalProjectionTests(unittest.TestCase):

@@ -165,7 +165,9 @@ impl EvidenceWriter {
                 .is_none_or(|s| s.is_empty() || s.len() > 256)
             || bundle.attachments.len() > 8
             || bundle.attachments.iter().any(|a| {
-                a.data.len() > 32 * 1024 * 1024 || a.dimensions.len() > 3 || a.name.len() > 64
+                a.data.len() > crate::MAX_ATTACHMENT_BYTES
+                    || a.dimensions.len() > 3
+                    || a.name.len() > 64
             })
             || bundle
                 .attachments

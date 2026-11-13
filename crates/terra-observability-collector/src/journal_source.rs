@@ -23,12 +23,8 @@ pub fn project_journal(v: &Value, producer: &str) -> Option<EventEnvelope> {
     let cursor = v["__CURSOR"].as_str()?;
     let id = format!("{:x}", Sha256::digest(cursor.as_bytes()));
     let message = v["MESSAGE"].as_str().unwrap_or("");
-    let lower = message.to_lowercase();
-    let text = if ["password", "bearer ", "private key", "credential"]
-        .iter()
-        .any(|p| lower.contains(p))
-    {
-        "[sensitive journal message omitted]"
+    let text = if terra_observability::sensitive_journal_message(message) {
+        terra_observability::SENSITIVE_JOURNAL_PLACEHOLDER
     } else {
         message
     };

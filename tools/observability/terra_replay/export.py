@@ -15,6 +15,9 @@ from PIL import Image
 import rerun as rr
 from .layout import default_blueprint
 
+# Mirrors terra-observability MAX_ATTACHMENT_BYTES; tests/fixtures/observability/contract.json pins both.
+MAX_ATTACHMENT_BYTES = 32 * 1024 * 1024
+
 @dataclass
 class ExportConfig:
     session: str | None = None
@@ -133,7 +136,7 @@ def _attachment(directory, item):
     path = directory / digest
     if not path.exists(): return None
     if path.resolve().parent != directory.resolve(): raise ValueError('attachment escapes evidence directory')
-    if path.stat().st_size > 32*1024*1024: raise ValueError('attachment too large')
+    if path.stat().st_size > MAX_ATTACHMENT_BYTES: raise ValueError('attachment too large')
     raw = path.read_bytes()
     if len(raw) != item['byte_length'] or hashlib.sha256(raw).hexdigest() != digest: raise ValueError('attachment integrity failure')
     return raw

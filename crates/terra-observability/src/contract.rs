@@ -3,6 +3,7 @@
 //! The rover-pi journal (`apps/rover-pi/terra_rover/observability.py`) mirrors
 //! these values; `tests/fixtures/observability/contract.json` pins both sides.
 use serde_json::Value;
+use std::path::{Path, PathBuf};
 
 /// Event envelope schema version.
 pub const SCHEMA_VERSION: u32 = 1;
@@ -18,6 +19,8 @@ pub const MAX_UPLOAD_BATCH_BYTES: usize = 900 * 1024;
 pub const UPLOAD_BATCH_EVENTS: usize = 64;
 /// Largest evidence attachment either side transfers.
 pub const MAX_ATTACHMENT_BYTES: usize = 32 * 1024 * 1024;
+/// Largest `rover_id`, `component`, `kind` or `session_id` in an event.
+pub const MAX_FIELD_BYTES: usize = 256;
 /// Rover id for events about the producer itself rather than a rover.
 pub const PRODUCER_ROVER: &str = "_producer";
 /// Kind of the event that records lost or omitted observations.
@@ -35,6 +38,57 @@ pub const SECRET_KEY_FRAGMENTS: [&str; 7] = [
     "access_token",
     "refresh_token",
 ];
+
+/// A journald message containing any of these (case-insensitive) is replaced
+/// by [`SENSITIVE_JOURNAL_PLACEHOLDER`] before it becomes an event.
+pub const SENSITIVE_JOURNAL_WORDS: [&str; 6] = [
+    "password",
+    "passphrase",
+    "bearer ",
+    "private key",
+    "credential",
+    "authorization:",
+];
+/// Message text stored in place of a sensitive journald line.
+pub const SENSITIVE_JOURNAL_PLACEHOLDER: &str = "[sensitive journal message omitted]";
+
+/// True when a journald message may carry a credential: one of
+/// [`SENSITIVE_JOURNAL_WORDS`], or a Wi-Fi key assignment such as `psk=...`,
+/// `wpa_psk: ...` or `psk value ...`.
+pub fn sensitive_journal_message(text: &str) -> bool {
+    let lower = text.to_lowercase();
+    SENSITIVE_JOURNAL_WORDS.iter().any(|w| lower.contains(w)) || psk_assignment(&lower)
+}
+
+fn psk_assignment(lower: &str) -> bool {
+    let word = |c: Option<char>| c.is_some_and(|c| c.is_alphanumeric() || c == '_');
+    lower.match_indices("psk").any(|(at, _)| {
+        let before = &lower[..at];
+        let starts = !word(before.chars().next_back())
+            || ["wpa_", "wpa-"].iter().any(|p| {
+                before
+                    .strip_suffix(p)
+                    .is_some_and(|b| !word(b.chars().next_back()))
+            });
+        let after = &lower[at + 3..];
+        if !starts || word(after.chars().next()) {
+            return false;
+        }
+        let rest = after
+            .strip_prefix(['\'', '"'])
+            .unwrap_or(after)
+            .trim_start();
+        rest.starts_with(['=', ':'])
+            || rest
+                .strip_prefix("value")
+                .is_some_and(|r| !word(r.chars().next()))
+    })
+}
+
+/// Directory beside a journal database that holds its evidence attachments.
+pub fn evidence_directory(journal: &Path) -> PathBuf {
+    journal.with_extension("evidence")
+}
 
 /// True when an attribute key names a credential.
 pub fn is_secret_key(key: &str) -> bool {

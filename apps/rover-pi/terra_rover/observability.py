@@ -5,6 +5,7 @@ import itertools
 import os
 from pathlib import Path
 import queue
+import re
 import sqlite3
 import threading
 import time
@@ -15,6 +16,7 @@ SCHEMA_VERSION = 1
 MAX_EVENT_BYTES = 128 * 1024
 MAX_UPLOAD_BATCH_BYTES = 900 * 1024
 UPLOAD_BATCH_EVENTS = 64
+MAX_FIELD_BYTES = 256
 PRODUCER_ROVER = '_producer'
 GAP_KIND = 'observability.gap'
 # The collector rejects a whole batch if any attribute key contains one of these,
@@ -22,6 +24,9 @@ GAP_KIND = 'observability.gap'
 SECRET_KEY_FRAGMENTS = ('password', 'authorization', 'credential', 'private_key',
                         'secret', 'access_token', 'refresh_token')
 SEVERITIES = ('debug', 'info', 'warning', 'error')
+SENSITIVE_JOURNAL_WORDS = ('password', 'passphrase', 'bearer ', 'private key', 'credential', 'authorization:')
+SENSITIVE_JOURNAL_PLACEHOLDER = '[sensitive journal message omitted]'
+_PSK_ASSIGNMENT = re.compile(r"(?i)\b(?:wpa[_-])?psk\b['\"]?\s*(?:[=:]|value\b)")
 
 _journal = None
 
@@ -37,13 +42,17 @@ def redact(value):
         return [redact(item) for item in value]
     return value
 
+def sensitive_journal_message(text):
+    """Same rule as terra_observability::sensitive_journal_message."""
+    return any(word in text.lower() for word in SENSITIVE_JOURNAL_WORDS) or _PSK_ASSIGNMENT.search(text) is not None
+
 def _valid_input(event):
     """Same admission rule as EventInput::validate; the collector rejects the batch otherwise."""
     def text(value):
-        return isinstance(value, str) and 0 < len(value.encode()) <= 256
+        return isinstance(value, str) and 0 < len(value.encode()) <= MAX_FIELD_BYTES
     session = event.get('session_id')
     return (text(event.get('rover_id')) and text(event.get('component')) and text(event.get('kind'))
-            and (session is None or (isinstance(session, str) and len(session.encode()) <= 256))
+            and (session is None or (isinstance(session, str) and len(session.encode()) <= MAX_FIELD_BYTES))
             and event.get('severity') in SEVERITIES and isinstance(event.get('attributes'), dict))
 
 def set_journal(journal):
@@ -175,6 +184,11 @@ class ObservationJournal:
             event['input']['attributes'] = redact(event['input'].get('attributes'))
         return events
 
+    def contains(self, identity):
+        """Whether an event with this id is stored durably."""
+        with self._db() as db:
+            return db.execute('SELECT 1 FROM events WHERE id=?', (json.dumps(identity, sort_keys=True),)).fetchone() is not None
+
     def acknowledge(self, ids):
         with self._db() as db:
             db.executemany('UPDATE events SET ack=1 WHERE id=?', [(json.dumps(i, sort_keys=True),) for i in ids])
@@ -189,12 +203,19 @@ class ObservationJournal:
         self.worker.join(timeout=5)
 
 
+def journal_from_environment(path, emit_journal=False):
+    """Journal at `path` with producer, rover and limits from the TERRA_OBSERVABILITY_* environment."""
+    return ObservationJournal(path, os.environ['TERRA_OBSERVABILITY_PRODUCER'], os.environ['TERRA_OBSERVABILITY_ROVER'],
+                              emit_journal=emit_journal,
+                              max_bytes=int(os.getenv('TERRA_OBSERVABILITY_EVENT_BYTES', 512*1024*1024)),
+                              retention_seconds=int(os.getenv('TERRA_OBSERVABILITY_RETENTION_SECONDS', 7*86400)))
+
 def configure_from_environment():
     """Optional startup initialization, off the output loop. No credentials are logged."""
     path = os.getenv('TERRA_OBSERVABILITY_DB')
     if not path: return
     try:
-        journal = ObservationJournal(path, os.environ['TERRA_OBSERVABILITY_PRODUCER'], os.environ['TERRA_OBSERVABILITY_ROVER'], emit_journal=True, max_bytes=int(os.getenv('TERRA_OBSERVABILITY_EVENT_BYTES',512*1024*1024)), retention_seconds=int(os.getenv('TERRA_OBSERVABILITY_RETENTION_SECONDS',7*86400)))
+        journal = journal_from_environment(path, emit_journal=True)
         set_journal(journal)
         record_event('pi', 'lifecycle.start', {})
         endpoint = os.getenv('TERRA_OBSERVABILITY_ENDPOINT')
