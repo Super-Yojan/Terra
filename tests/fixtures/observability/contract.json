@@ -1,0 +1,18 @@
+{
+  "description": "Observability event contract shared by terra-observability (phone writer and collector) and apps/rover-pi (Pi journal). Change both implementations and this file together.",
+  "schema_version": 1,
+  "max_event_bytes": 131072,
+  "max_ingest_events": 256,
+  "max_upload_batch_bytes": 921600,
+  "producer_rover": "_producer",
+  "gap_kind": "observability.gap",
+  "secret_key_fragments": [
+    "password",
+    "authorization",
+    "credential",
+    "private_key",
+    "secret",
+    "access_token",
+    "refresh_token"
+  ]
+}

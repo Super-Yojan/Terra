@@ -64,18 +64,20 @@ impl Store {
         scope: &Scope,
         events: &[EventEnvelope],
     ) -> Result<Vec<EventId>, JournalError> {
-        if scope.read || events.is_empty() || events.len() > 256 {
+        if scope.read || events.is_empty() || events.len() > terra_observability::MAX_INGEST_EVENTS
+        {
             return Err("invalid batch".into());
         }
         for e in events {
-            if e.schema_version != 1
+            if e.schema_version != terra_observability::SCHEMA_VERSION
                 || e.id.producer_id != scope.producer_id
                 || e.id.boot_id.is_empty()
                 || e.id.boot_id.len() > 256
                 || e.id.sequence > i64::MAX as u64
-                || (!scope.rovers.contains(&e.input.rover_id) && e.input.rover_id != "_producer")
+                || (!scope.rovers.contains(&e.input.rover_id)
+                    && e.input.rover_id != terra_observability::PRODUCER_ROVER)
                 || !e.input.validate()
-                || contains_secret(&e.input.attributes)
+                || terra_observability::contains_secret(&e.input.attributes)
             {
                 return Err("invalid or unauthorized event".into());
             }
@@ -85,7 +87,7 @@ impl Store {
         let mut ack = Vec::new();
         for e in events {
             let payload = serde_json::to_string(e)?;
-            if payload.len() > 128 * 1024 {
+            if payload.len() > terra_observability::MAX_EVENT_BYTES {
                 return Err("event too large".into());
             }
             let hash = format!("{:x}", Sha256::digest(payload.as_bytes()));
@@ -135,7 +137,9 @@ impl Store {
         let mut result = Vec::new();
         for row in rows {
             let (c, t, p, r, producer) = row?;
-            if scope.rovers.contains(&r) || (r == "_producer" && scope.producer_id == producer) {
+            if scope.rovers.contains(&r)
+                || (r == terra_observability::PRODUCER_ROVER && scope.producer_id == producer)
+            {
                 result.push(StoredEvent {
                     cursor: c,
                     received_ns: t,
@@ -160,19 +164,20 @@ impl Store {
             })? {
                 let (producer, rover, at, count, attachments) = gap?;
                 if scope.rovers.contains(&rover)
-                    || (rover == "_producer" && scope.producer_id == producer)
+                    || (rover == terra_observability::PRODUCER_ROVER
+                        && scope.producer_id == producer)
                 {
                     result.push(StoredEvent {
                         cursor: 0,
                         received_ns: at,
                         event: EventEnvelope {
-                            schema_version: 1,
+                            schema_version: terra_observability::SCHEMA_VERSION,
                             id: EventId {
                                 producer_id: producer,
                                 boot_id: format!("collector-retention-{count}-{attachments}"),
                                 sequence: at,
                             },
-                            input: {let mut input=EventInput::new(&rover,"collector","observability.gap",serde_json::json!({"evicted_events":count,"evicted_attachments":attachments,"at_ns":at}));input.wall_time_ns=at;input},
+                            input: {let mut input=EventInput::new(&rover,"collector",terra_observability::GAP_KIND,serde_json::json!({"evicted_events":count,"evicted_attachments":attachments,"at_ns":at}));input.wall_time_ns=at;input},
                         },
                     });
                 }
@@ -225,26 +230,5 @@ impl Store {
         tx.execute("DELETE FROM retention_gaps WHERE rowid NOT IN (SELECT MAX(rowid) FROM retention_gaps GROUP BY producer,rover)",[])?;
         tx.commit()?;
         Ok(())
-    }
-}
-fn contains_secret(value: &serde_json::Value) -> bool {
-    match value {
-        serde_json::Value::Object(m) => m.iter().any(|(key, v)| {
-            let k = key.to_lowercase();
-            [
-                "password",
-                "authorization",
-                "credential",
-                "private_key",
-                "secret",
-                "access_token",
-                "refresh_token",
-            ]
-            .iter()
-            .any(|s| k.contains(s))
-                || contains_secret(v)
-        }),
-        serde_json::Value::Array(a) => a.iter().any(contains_secret),
-        _ => false,
     }
 }

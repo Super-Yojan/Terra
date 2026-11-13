@@ -1,4 +1,4 @@
-use crate::{EventInput, Journal, JournalConfig, JournalError};
+use crate::{EventInput, Journal, JournalConfig, JournalError, PRODUCER_ROVER};
 use serde_json::Value;
 use std::{
     path::Path,
@@ -40,8 +40,7 @@ impl RuntimeObserver {
             path: path.into(),
         })
     }
-    pub fn record(&self, rover: &str, component: &str, kind: &str, mut attributes: Value) {
-        redact(&mut attributes);
+    pub fn record(&self, rover: &str, component: &str, kind: &str, attributes: Value) {
         let mut e = EventInput::new(rover, component, kind, attributes);
         e.session_id = Some(self.session.clone());
         e.monotonic_ns = self.start.elapsed().as_nanos().min(u64::MAX as u128) as u64;
@@ -49,36 +48,6 @@ impl RuntimeObserver {
     }
     pub fn flush(&self) -> Result<(), JournalError> {
         self.journal.flush(Duration::from_secs(5))
-    }
-}
-/// Sanitize structured credential fields before local persistence as well as upload.
-pub fn redact(value: &mut Value) {
-    match value {
-        Value::Object(m) => {
-            m.retain(|k, _| {
-                let key = k.to_lowercase();
-                ![
-                    "password",
-                    "authorization",
-                    "credential",
-                    "private_key",
-                    "secret",
-                    "access_token",
-                    "refresh_token",
-                ]
-                .iter()
-                .any(|s| key.contains(s))
-            });
-            for v in m.values_mut() {
-                redact(v);
-            }
-        }
-        Value::Array(a) => {
-            for v in a {
-                redact(v)
-            }
-        }
-        _ => {}
     }
 }
 static OBSERVER: OnceLock<Option<RuntimeObserver>> = OnceLock::new();
@@ -139,7 +108,7 @@ pub fn initialize_runtime(role: &str) {
         Some(observer)
     });
     record_runtime(
-        "_producer",
+        PRODUCER_ROVER,
         role,
         "lifecycle.start",
         serde_json::json!({"version":env!("CARGO_PKG_VERSION")}),

@@ -159,12 +159,14 @@ fn send_batch(
     let mut diagnostics = Diagnostics::new(reader.path(), "upload");
     diagnostics.record("upload.stage", serde_json::json!({"stage":"read_queue"}));
     let mut events = reader
-        .batch(64)
+        .batch(crate::UPLOAD_BATCH_EVENTS)
         .map_err(|e| StageError::wrap("read_queue", e))?;
     if events.is_empty() {
         return Ok(Vec::new());
     }
-    while serde_json::to_vec(&serde_json::json!({"events":events}))?.len() > 900 * 1024 {
+    while serde_json::to_vec(&serde_json::json!({"events":events}))?.len()
+        > crate::MAX_UPLOAD_BATCH_BYTES
+    {
         events.pop();
         if events.is_empty() {
             return Err("event exceeds ingestion limit".into());
@@ -184,7 +186,7 @@ fn send_batch(
                     }
                     let path = directory.join(&attachment.sha256);
                     match std::fs::metadata(&path) {
-                        Ok(m) if m.len() <= 32 * 1024 * 1024 => {
+                        Ok(m) if m.len() <= crate::MAX_ATTACHMENT_BYTES as u64 => {
                             let bytes = std::fs::read(path)?;
                             if bytes.len() != attachment.byte_length
                                 || format!("{:x}", Sha256::digest(&bytes)) != attachment.sha256
@@ -338,7 +340,7 @@ fn worker_event(config: &UploadConfig, kind: &str, attributes: serde_json::Value
         let mut attrs = attributes;
         attrs["time_basis"] = "wall_only".into();
         journal.try_record(crate::EventInput::new(
-            "_producer",
+            crate::PRODUCER_ROVER,
             "observability",
             kind,
             attrs,

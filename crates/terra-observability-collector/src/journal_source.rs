@@ -33,7 +33,7 @@ pub fn project_journal(v: &Value, producer: &str) -> Option<EventEnvelope> {
         message
     };
     let mut input = EventInput::new(
-        "_producer",
+        terra_observability::PRODUCER_ROVER,
         unit,
         "service.journal",
         serde_json::json!({"message":text,"cursor_hash":id}),
@@ -48,7 +48,7 @@ pub fn project_journal(v: &Value, producer: &str) -> Option<EventEnvelope> {
         .unwrap_or(0)
         .saturating_mul(1000);
     Some(EventEnvelope {
-        schema_version: 1,
+        schema_version: terra_observability::SCHEMA_VERSION,
         id: EventId {
             producer_id: producer.into(),
             boot_id: id,
@@ -83,8 +83,8 @@ pub fn follow_router_journal_program(
         .spawn(move || {
             use std::sync::atomic::Ordering;
             let scope = Scope {
-                producer_id: "gcp-router".into(),
-                rovers: vec!["_producer".into()],
+                producer_id: terra_observability::ROUTER_PRODUCER.into(),
+                rovers: vec![terra_observability::PRODUCER_ROVER.into()],
                 read: false,
             };
             let mut delay = retry;
@@ -128,7 +128,7 @@ pub fn follow_router_journal_program(
                                 if record_fault(
                                     &store,
                                     &scope,
-                                    "observability.gap",
+                                    terra_observability::GAP_KIND,
                                     "oversized_journal_record",
                                 )
                                 .is_err()
@@ -153,7 +153,7 @@ pub fn follow_router_journal_program(
                                 if record_fault(
                                     &store,
                                     &scope,
-                                    "observability.gap",
+                                    terra_observability::GAP_KIND,
                                     "malformed_journal_record",
                                 )
                                 .is_err()
@@ -163,7 +163,9 @@ pub fn follow_router_journal_program(
                                 }
                                 continue;
                             };
-                            let Some(event) = project_journal(&value, "gcp-router") else {
+                            let Some(event) =
+                                project_journal(&value, terra_observability::ROUTER_PRODUCER)
+                            else {
                                 continue;
                             };
                             // Never consume B after failure to persist A. Restart from the
@@ -210,14 +212,14 @@ fn record_fault(
     reason: &str,
 ) -> Result<(), terra_observability::JournalError> {
     let event = EventEnvelope {
-        schema_version: 1,
+        schema_version: terra_observability::SCHEMA_VERSION,
         id: EventId {
             producer_id: scope.producer_id.clone(),
             boot_id: uuid_identity(),
             sequence: 0,
         },
         input: EventInput::new(
-            "_producer",
+            terra_observability::PRODUCER_ROVER,
             "journal",
             kind,
             serde_json::json!({"reason":reason}),

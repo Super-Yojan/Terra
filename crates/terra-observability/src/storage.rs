@@ -234,7 +234,7 @@ fn maintain(
         gap.input = EventInput::new(
             &source.input.rover_id,
             "observability",
-            "observability.gap",
+            crate::GAP_KIND,
             serde_json::json!({"evicted_events":lost,"reason":"retention_or_quota"}),
         );
         insert(db, &gap)?;

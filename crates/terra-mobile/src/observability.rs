@@ -227,7 +227,7 @@ impl MobileController {
         }
     }
     pub fn record_observation(&self, event_json: String) -> bool {
-        if event_json.len() > 128 * 1024 {
+        if event_json.len() > terra_observability::MAX_EVENT_BYTES {
             return false;
         }
         let Ok(event) = serde_json::from_str::<EventInput>(&event_json) else {
@@ -326,7 +326,7 @@ impl MobileController {
             manifest["rover_id"]
                 .as_str()
                 .or(rover.as_deref())
-                .unwrap_or("_producer"),
+                .unwrap_or(terra_observability::PRODUCER_ROVER),
             "mapping",
             "mapping.evidence",
             serde_json::json!({}),
@@ -365,7 +365,7 @@ impl MobileController {
     pub fn record_observation_gap(&self, reason: String) {
         self.observation.event(
             "observability",
-            "observability.gap",
+            terra_observability::GAP_KIND,
             serde_json::json!({"reason":reason,"time_basis":"wall_only"}),
             &self.observation_run_id(),
             0.,

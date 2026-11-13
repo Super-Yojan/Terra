@@ -10,7 +10,41 @@ import threading
 import time
 import uuid
 
+# Mirrors terra-observability's contract.rs; tests/fixtures/observability/contract.json pins both.
+SCHEMA_VERSION = 1
+MAX_EVENT_BYTES = 128 * 1024
+MAX_UPLOAD_BATCH_BYTES = 900 * 1024
+UPLOAD_BATCH_EVENTS = 64
+PRODUCER_ROVER = '_producer'
+GAP_KIND = 'observability.gap'
+# The collector rejects a whole batch if any attribute key contains one of these,
+# so an unredacted event would block every later upload.
+SECRET_KEY_FRAGMENTS = ('password', 'authorization', 'credential', 'private_key',
+                        'secret', 'access_token', 'refresh_token')
+SEVERITIES = ('debug', 'info', 'warning', 'error')
+
 _journal = None
+
+def is_secret_key(key):
+    lowered = key.lower()
+    return any(fragment in lowered for fragment in SECRET_KEY_FRAGMENTS)
+
+def redact(value):
+    """Copy of `value` without credential-named keys at any depth."""
+    if isinstance(value, dict):
+        return {key: redact(item) for key, item in value.items() if not is_secret_key(key)}
+    if isinstance(value, list):
+        return [redact(item) for item in value]
+    return value
+
+def _valid_input(event):
+    """Same admission rule as EventInput::validate; the collector rejects the batch otherwise."""
+    def text(value):
+        return isinstance(value, str) and 0 < len(value.encode()) <= 256
+    session = event.get('session_id')
+    return (text(event.get('rover_id')) and text(event.get('component')) and text(event.get('kind'))
+            and (session is None or (isinstance(session, str) and len(session.encode()) <= 256))
+            and event.get('severity') in SEVERITIES and isinstance(event.get('attributes'), dict))
 
 def set_journal(journal):
     global _journal
@@ -52,18 +86,21 @@ class ObservationJournal:
         sequence = next(self.sequence)
         source_boot = hashlib.sha256(event["source_cursor"].encode()).hexdigest() if event.get("source_cursor") else self.boot
         if event.get("source_cursor"): sequence = 0
-        return {'schema_version': 1, 'id': {'producer_id': self.producer, 'boot_id': source_boot, 'sequence': sequence},
+        return {'schema_version': SCHEMA_VERSION, 'id': {'producer_id': self.producer, 'boot_id': source_boot, 'sequence': sequence},
                 'input': {'rover_id': self.rover, 'session_id': event.get('session_id'),
                           'component': event['component'], 'kind': event['kind'], 'severity': event.get('severity', 'info'),
                           'wall_time_ns': event.get('wall_time_ns', time.time_ns()),
                           'monotonic_ns': event.get('monotonic_ns', time.monotonic_ns()),
-                          'cause_id': event.get('cause_id'), 'attributes': event.get('attributes', {})}}
+                          'cause_id': event.get('cause_id'), 'attributes': redact(event.get('attributes', {}))}}
 
     def record(self, event):
         try:
             envelope = self._envelope(event)
+            if not _valid_input(envelope['input']):
+                self.dropped += 1
+                return False
             payload = json.dumps(envelope, separators=(',', ':'), allow_nan=False)
-            if len(payload.encode()) > 128*1024:
+            if len(payload.encode()) > MAX_EVENT_BYTES:
                 self.dropped += 1
                 return False
             self.queue.put_nowait(payload)
@@ -74,9 +111,11 @@ class ObservationJournal:
 
     def record_envelope(self, envelope):
         try:
-            if envelope['schema_version'] != 1 or envelope['id']['producer_id'] != self.producer: return False
+            if envelope['schema_version'] != SCHEMA_VERSION or envelope['id']['producer_id'] != self.producer: return False
+            envelope = dict(envelope, input=dict(envelope['input'], attributes=redact(envelope['input'].get('attributes'))))
+            if not _valid_input(envelope['input']): return False
             payload=json.dumps(envelope,separators=(',', ':'),allow_nan=False)
-            if len(payload.encode()) > 128*1024: return False
+            if len(payload.encode()) > MAX_EVENT_BYTES: return False
             self.queue.put_nowait(payload)
             return True
         except (queue.Full,ValueError,TypeError,KeyError):
@@ -112,7 +151,7 @@ class ObservationJournal:
                     break
                 if self.dropped > reported:
                     count = self.dropped-reported
-                    gap = self._envelope({'component':'observability','kind':'observability.gap','attributes':{'dropped':count}})
+                    gap = self._envelope({'component':'observability','kind':GAP_KIND,'attributes':{'dropped':count}})
                     self._persist(db, json.dumps(gap))
                     reported += count
                 if isinstance(item, threading.Event):
@@ -128,9 +167,13 @@ class ObservationJournal:
                 self.queue.task_done()
         db.close()
 
-    def pending(self, limit=64):
+    def pending(self, limit=UPLOAD_BATCH_EVENTS):
         with self._db() as db:
-            return [json.loads(row[0]) for row in db.execute('SELECT payload FROM events WHERE ack=0 ORDER BY stored_ns LIMIT ?', (min(limit, 200),))]
+            events = [json.loads(row[0]) for row in db.execute('SELECT payload FROM events WHERE ack=0 ORDER BY stored_ns LIMIT ?', (min(limit, 200),))]
+        # Events stored before redaction existed would otherwise be rejected on every retry.
+        for event in events:
+            event['input']['attributes'] = redact(event['input'].get('attributes'))
+        return events
 
     def acknowledge(self, ids):
         with self._db() as db:
@@ -178,10 +221,10 @@ class ObservationUploader:
 
     def once(self):
         import urllib.request
-        events = self.journal.pending(64)
+        events = self.journal.pending(UPLOAD_BATCH_EVENTS)
         if not events: return 0
         payload = json.dumps({'events': events}).encode()
-        while len(payload) > 900*1024:
+        while len(payload) > MAX_UPLOAD_BATCH_BYTES:
             events.pop()
             payload = json.dumps({'events': events}).encode()
         request = urllib.request.Request(self.endpoint+'/v1/events', data=payload,

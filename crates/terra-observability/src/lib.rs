@@ -1,5 +1,7 @@
 //! Bounded operational evidence, independent of the control and experiment recorder policies.
 mod config;
+mod contract;
+pub use contract::*;
 mod diagnostics;
 pub use diagnostics::DiagnosticRecorder;
 #[cfg(test)]

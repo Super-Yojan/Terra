@@ -19,7 +19,8 @@ impl Store {
         bytes: &[u8],
     ) -> Result<(), JournalError> {
         if scope.read
-            || (!scope.rovers.iter().any(|r| r == rover) && rover != "_producer")
+            || (!scope.rovers.iter().any(|r| r == rover)
+                && rover != terra_observability::PRODUCER_ROVER)
             || !valid_hash(hash)
             || bytes.len() > 32 * 1024 * 1024
             || bytes.len() as u64 > self.config.attachment_max_bytes
@@ -87,7 +88,8 @@ impl Store {
             })?
             .filter_map(Result::ok)
             .any(|(r, p)| {
-                scope.rovers.contains(&r) || (r == "_producer" && scope.producer_id == p)
+                scope.rovers.contains(&r)
+                    || (r == terra_observability::PRODUCER_ROVER && scope.producer_id == p)
             });
         if !allowed {
             return Err("attachment not found".into());

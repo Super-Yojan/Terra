@@ -216,7 +216,9 @@ fn run_export_inner(
                 losses.extend(
                     events
                         .iter()
-                        .filter(|e| e.cursor == 0 && e.event.input.kind == "observability.gap")
+                        .filter(|e| {
+                            e.cursor == 0 && e.event.input.kind == terra_observability::GAP_KIND
+                        })
                         .cloned(),
                 );
             }
@@ -277,7 +279,11 @@ fn run_export_inner(
                 append(&e, Some(association))?;
             }
         }
-        if scope.rovers.iter().any(|r| r == "_producer") {
+        if scope
+            .rovers
+            .iter()
+            .any(|r| r == terra_observability::PRODUCER_ROVER)
+        {
             let mut router_context=db.prepare("SELECT cursor,received_ns,payload FROM observations WHERE producer='gcp-router' AND rover='_producer' AND json_extract(payload,'$.input.wall_time_ns') BETWEEN ? AND ? ORDER BY cursor LIMIT 100001")?;
             for row in router_context.query_map(
                 rusqlite::params![
@@ -299,11 +305,11 @@ fn run_export_inner(
         }
         for e in losses {
             if e.event.input.rover_id == request.rover_id
-                || (e.event.input.rover_id == "_producer"
+                || (e.event.input.rover_id == terra_observability::PRODUCER_ROVER
                     && (sources
                         .iter()
                         .any(|(producer, _)| producer == &e.event.id.producer_id)
-                        || e.event.id.producer_id == "gcp-router"))
+                        || e.event.id.producer_id == terra_observability::ROUTER_PRODUCER))
             {
                 append(&e, Some("retention_loss_context"))?;
             }

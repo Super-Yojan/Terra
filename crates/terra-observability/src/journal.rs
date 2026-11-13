@@ -1,5 +1,8 @@
 use crate::storage::{StorageHandle, Work, read_connection};
-use crate::{EventEnvelope, EventId, EventInput, JournalConfig, wall_time_ns};
+use crate::{
+    EventEnvelope, EventId, EventInput, GAP_KIND, JournalConfig, MAX_EVENT_BYTES, PRODUCER_ROVER,
+    SCHEMA_VERSION, wall_time_ns,
+};
 use serde::Serialize;
 use std::{
     path::{Path, PathBuf},
@@ -31,16 +34,16 @@ pub(crate) struct Counters {
 impl Counters {
     pub(crate) fn gap(&self, lost: u64) -> EventEnvelope {
         EventEnvelope {
-            schema_version: 1,
+            schema_version: SCHEMA_VERSION,
             id: EventId {
                 producer_id: self.producer.clone(),
                 boot_id: self.boot.clone(),
                 sequence: self.sequence.fetch_add(1, Ordering::Relaxed),
             },
             input: EventInput::new(
-                "_producer",
+                PRODUCER_ROVER,
                 "observability",
-                "observability.gap",
+                GAP_KIND,
                 serde_json::json!({"dropped":lost}),
             ),
         }
@@ -85,11 +88,13 @@ impl Journal {
     /// Bounded in-memory admission only. Never waits on disk, network or a mutex.
     pub fn try_record(&self, mut input: EventInput) -> RecordOutcome {
         crate::redact(&mut input.attributes);
-        if !input.validate() || serde_json::to_vec(&input).map_or(true, |b| b.len() > 128 * 1024) {
+        if !input.validate()
+            || serde_json::to_vec(&input).map_or(true, |b| b.len() > MAX_EVENT_BYTES)
+        {
             return RecordOutcome::Invalid;
         }
         let event = EventEnvelope {
-            schema_version: 1,
+            schema_version: SCHEMA_VERSION,
             id: EventId {
                 producer_id: self.counters.producer.clone(),
                 boot_id: self.counters.boot.clone(),
@@ -163,7 +168,7 @@ impl JournalReader {
         event.id.boot_id = format!("delivery-{identity}");
         event.id.sequence = 0;
         event.input.cause_id = Some(source.id.clone());
-        event.input.kind = "observability.gap".into();
+        event.input.kind = GAP_KIND.into();
         event.input.component = "observability".into();
         event.input.wall_time_ns = wall_time_ns();
         event.input.monotonic_ns = 0;
