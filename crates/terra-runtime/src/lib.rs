@@ -822,7 +822,10 @@ impl Runtime {
                 StopReason::SensorNotReady
             })
         } else if mode == ActuationMode::DirectEffort {
-            let (forward, turn) = (output.twist.linear / 0.5, output.twist.angular);
+            let (forward, turn) = (
+                output.twist.linear / MANUAL_FULL_FORWARD,
+                output.twist.angular,
+            );
             let managed = output.command_origin != CommandOrigin::LocalManual;
             let turn = if managed
                 && !self.navigation.parameters.turning.allow_in_place
