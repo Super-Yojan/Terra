@@ -3,7 +3,6 @@
 //! Usage: `terra-run-summary <run.jsonl>`. An interrupted final line is ignored;
 //! malformed complete records, missing arguments, and I/O errors produce an error exit.
 
-/// Read the requested recording, compute metrics, and print the summary.
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let path = std::env::args()
         .nth(1)

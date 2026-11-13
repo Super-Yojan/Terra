@@ -32,7 +32,6 @@ pub enum CommandKind {
 /// per-actuator limits are the receiving service's checks.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CommandFrame {
-    /// Requested command action.
     pub kind: CommandKind,
     /// Service-issued session identifier.
     pub session: u32,

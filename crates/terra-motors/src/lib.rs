@@ -104,7 +104,6 @@ impl WheelPwm {
         direction: None,
     };
 
-    /// Return whether duty is exactly zero and direction is absent.
     pub fn is_coast(self) -> bool {
         self.duty == 0.0 && self.direction.is_none()
     }
@@ -188,9 +187,7 @@ impl std::fmt::Display for OutputHold {
 /// Both wheels plus the driver-enable gate. This is the only struct that should be written to hardware.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ChassisPwm {
-    /// PWM command for the left wheel.
     pub left: WheelPwm,
-    /// PWM command for the right wheel.
     pub right: WheelPwm,
     /// Logical driver enable. False means deassert EN / hold the driver asleep, and both wheels coast.
     pub drive_enabled: bool,

@@ -142,7 +142,6 @@ pub fn route_commands(
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DriveProfile {
-    /// Actuator ID.
     pub id: u8,
     /// Output kind. Servo profiles must use a servo route.
     pub kind: crate::OutputKind,

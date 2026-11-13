@@ -33,7 +33,6 @@ pub struct RunSummary {
     pub duration: f64,
     /// Accepted authority changes whose reason is `operator_selection`.
     pub mode_changes: u64,
-    /// Number of operator takeover events.
     pub takeovers: u64,
     /// Takeovers, approvals, rejections, and redirects divided by run minutes.
     pub interventions_per_minute: f64,
