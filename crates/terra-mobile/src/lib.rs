@@ -263,7 +263,8 @@ pub struct ControlOutput {
     pub actuator_frame: Option<String>,
     /// Dump-gate servo position chosen by the bucket dock this tick, when the
     /// rover profile names a gate servo. Already in `actuator_frame`; a host
-    /// that routes servos itself applies it as that servo's target.
+    /// that routes servos itself applies it as that servo's target. `None`
+    /// when the actuator layout refuses that servo.
     pub gate_servo: Option<GateServo>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, uniffi::Record)]
@@ -338,6 +339,8 @@ struct Brain {
     actuators: Option<actuators::ActiveLayout>,
     /// Object-map revision and body for the `objects` topic.
     objects_published: Option<(u64, String)>,
+    /// Why the layout last refused the dock's gate servo target, journaled once.
+    gate_rejected: Option<String>,
 }
 impl std::ops::Deref for Brain {
     type Target = terra_runtime::Runtime;
@@ -453,6 +456,7 @@ impl MobileController {
                 last_tick: 0.,
                 actuators: None,
                 objects_published: None,
+                gate_rejected: None,
             }),
         }))
     }
@@ -670,9 +674,25 @@ impl MobileController {
         let mut output = runtime_output.autonomy;
         let status = runtime_output.status;
         // The dock owns the gate: open only on its request, closed otherwise.
-        let gate = brain.runtime.gate_servo(output.gate_open);
+        let mut gate = brain.runtime.gate_servo(output.gate_open);
         if let (Some((id, position)), Some(layout)) = (gate, brain.actuators.as_mut()) {
-            let _ = layout.set_servo(id, position);
+            let rejected = layout.set_servo(id, position).err().map(|e| e.to_string());
+            if rejected.is_some() {
+                // Not in the actuator frame, so not reported as applied.
+                gate = None;
+            }
+            if rejected != brain.gate_rejected {
+                if let Some(error) = &rejected {
+                    self.observation.event(
+                        "actuators",
+                        "actuators.gate_rejected",
+                        serde_json::json!({"servo": id, "error": error}),
+                        &run_id,
+                        timestamp,
+                    );
+                }
+                brain.gate_rejected = rejected;
+            }
         }
         let pose = brain.pose().unwrap_or_default();
         let map = brain.map().cloned();
