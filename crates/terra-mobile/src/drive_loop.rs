@@ -301,11 +301,9 @@ fn tick(shared: &Shared, now: f64) -> Result<MotorCommand, ControllerError> {
             }
         }
         DriveSource::Phone | DriveSource::Simulation => {
-            // An attached fleet owns velocity intent; an idle phone stick must
-            // not overwrite it. A held stick, and its return to neutral, is sent.
-            if !(s.ble_active && fleet)
-                && (s.local != (0.0, 0.0) || s.last_local_sent != Some(s.local))
-            {
+            // A working fleet link owns velocity intent. Otherwise a held
+            // stick, and its return to neutral, is sent.
+            if !fleet && (s.local != (0.0, 0.0) || s.last_local_sent != Some(s.local)) {
                 controller.set_target(TwistSetpoint {
                     timestamp: now,
                     forward: s.local.0,
@@ -468,6 +466,26 @@ mod tests {
         gate.set_mount_confirmed(true).unwrap();
         let next = drive.step_once(0.1).unwrap();
         assert!(matches!(next, MotorCommand::Drive { .. }), "{next:?}");
+    }
+
+    #[test]
+    /// A working fleet link owns velocity intent whether or not Bluetooth is
+    /// up: the phone stick is not sent, and the loop keeps ticking.
+    fn fleet_link_without_bluetooth_keeps_the_loop_running() {
+        let socket = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("tcp/127.0.0.1:{}", socket.local_addr().unwrap().port());
+        drop(socket);
+        let controller = MobileController::new(default_control_settings()).unwrap();
+        controller
+            .host_dashboard(endpoint, "drive-loop-fleet".into(), 7)
+            .unwrap();
+        assert!(controller.fleet_owns_intent());
+        let drive = PhoneDriveLoop::new(controller, MotorGate::new(), DriveSource::Phone, 0.0);
+        drive.set_local_input(0.2, 0.0);
+        for i in 0..5 {
+            drive.step_once(i as f64 * 0.01).unwrap();
+        }
+        assert!(drive.snapshot().error.is_none());
     }
 
     #[test]

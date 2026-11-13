@@ -1,7 +1,7 @@
+use terra_autonomy::outdoor::OutdoorPhase;
 use terra_mobile::outdoor::{
     CourseFix, Evidence, GpsFix, HeadingFix, OutdoorController, distance_bearing,
 };
-use terra_autonomy::outdoor::OutdoorPhase;
 use terra_navigation::Pose;
 fn evidence() -> Evidence {
     Evidence {
