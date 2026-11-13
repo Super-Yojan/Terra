@@ -30,18 +30,6 @@ impl Runtime {
     pub fn fail_task_query(&mut self, query_id: u64, reason: String) -> bool {
         self.autonomy.fail_task_query(query_id, reason)
     }
-    /// A point the phone recognised, in local metres, that a task may target.
-    pub fn observe_task_landmark(
-        &mut self,
-        label: &str,
-        x: f64,
-        y: f64,
-        confidence: f64,
-        now: f64,
-    ) {
-        self.autonomy
-            .observe_task_landmark(label, x, y, confidence, now);
-    }
     /// The agent's view of the map around the rover.
     pub fn agent_view(&mut self, now: f64) -> Result<String, &'static str> {
         let pose = self.pose.map(|p| p.0).unwrap_or_default();

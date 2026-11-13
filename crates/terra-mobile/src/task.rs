@@ -50,21 +50,4 @@ impl MobileController {
             .lock()
             .is_ok_and(|mut b| b.runtime.fail_task_query(query_id, reason))
     }
-    /// Name a point the phone recognised (for example a detector hit) in local metres,
-    /// so the model can choose it as a landmark target.
-    pub fn observe_task_landmark(
-        &self,
-        label: String,
-        x: f64,
-        y: f64,
-        confidence: f64,
-        timestamp: f64,
-    ) -> Result<(), ControllerError> {
-        self.brain
-            .lock()
-            .map_err(|_| ControllerError::Internal)?
-            .runtime
-            .observe_task_landmark(&label, x, y, confidence, timestamp);
-        Ok(())
-    }
 }

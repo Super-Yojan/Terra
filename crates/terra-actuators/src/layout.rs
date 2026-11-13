@@ -406,21 +406,3 @@ pub fn validate_layout(
         Err(errors)
     }
 }
-
-/// Return whether a structurally valid layout has both left/right effort routes
-/// and no manual propulsion mixes. This does not certify hardware compatibility.
-pub fn supports_feedback(layout: &Layout) -> bool {
-    validate_structure(layout).is_ok()
-        && layout
-            .actuators
-            .iter()
-            .any(|a| matches!(a.route, Route::LeftEffort))
-        && layout
-            .actuators
-            .iter()
-            .any(|a| matches!(a.route, Route::RightEffort))
-        && !layout
-            .actuators
-            .iter()
-            .any(|a| matches!(a.route, Route::Manual { .. }))
-}

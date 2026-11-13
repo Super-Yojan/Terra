@@ -91,7 +91,7 @@ The arbiter tick reason while L5 holds is `task_planning`, `task_waiting_operato
 
 ## Landmarks
 
-`MobileController::observe_task_landmark(label, x, y, confidence, timestamp)` adds a named point to the next prompts as `L#`. Every confirmed detector object (the YOLO bucket and ball model) is added this way as `"{color} {class} {id}"`, so a model or agent can name it in `go`.
+Every confirmed detector object (the YOLO bucket and ball model) becomes a named point in the next prompts as `L#`, labelled `"{color} {class} {id}"`, so a model or agent can name it in `go`. The runtime adds them from its object map; there is no separate landmark call.
 
 ## MCP agent
 

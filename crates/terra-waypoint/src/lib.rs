@@ -390,28 +390,6 @@ impl WaypointController {
         self.goal_id = 0;
     }
 
-    /// Follow an intermediate route point without replacing the original goal or its status.
-    /// Return `(forward m/s, yaw rad/s)` toward an intermediate local point.
-    ///
-    /// Pose and target coordinates are metres; yaw is radians. Arrival tolerance is
-    /// reduced to at most 0.05 m and no final-heading alignment is requested. Invalid
-    /// pose/distance yields zero intent. This does not require a latched goal.
-    pub fn route_intent(
-        &self,
-        x: f64,
-        y: f64,
-        yaw: f64,
-        target_x: f64,
-        target_y: f64,
-    ) -> (f64, f64) {
-        // Intermediate corners need a tighter tolerance than final-goal arrival.
-        // Otherwise the rover can stop short of the corner before the next leg is visible.
-        let mut config = self.config.clone();
-        config.arrive_radius = config.arrive_radius.min(0.05);
-        let output = pursuit(x, y, yaw, target_x, target_y, None, &config);
-        (output.linear, output.angular)
-    }
-
     /// `x` and `y` are the rover pose in the origin frame, metres. `yaw` is radians, 0 facing +x.
     /// Compute local goal-following intent; downstream planning checks obstacles.
     /// Return zero intent and idle status without a goal. Otherwise turn toward the
