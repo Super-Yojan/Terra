@@ -19,8 +19,7 @@ fn busy_telemetry_lock_is_unknown_not_stale() {
         base: "diag/7".into(),
         batches: Default::default(),
         stop: Default::default(),
-        failed: Default::default(),
-        failure_reason: Default::default(),
+        failure: Default::default(),
         worker: None,
         rover_id: 7,
     };

@@ -65,7 +65,7 @@ mod tests {
             "webrtc/state",
         ] {
             assert!(is_webrtc_topic(kind), "{kind}");
-            assert!(!crate::is_control_topic(kind), "{kind}");
+            assert!(!crate::inbox::is_control_topic(kind), "{kind}");
         }
         assert!(!webrtc_outbound("hardware"));
         assert!(!webrtc_outbound("teleop"));

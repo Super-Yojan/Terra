@@ -19,6 +19,56 @@ const CAPTURE_INBOX_LEN: usize = 4;
 const BULK_QUEUE_LEN: usize = 2;
 type States = Arc<Mutex<BTreeMap<String, (Option<String>, Instant)>>>;
 const TELEMETRY_TTL: Duration = Duration::from_millis(500);
+
+/// Why a control-plane session latched failed. The first failure wins.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+enum FailureReason {
+    RouterUnavailable = 1,
+    FleetPublishFailed = 2,
+    TelemetryPublishFailed = 3,
+    BatchPublishFailed = 4,
+}
+impl FailureReason {
+    const ALL: [Self; 4] = [
+        Self::RouterUnavailable,
+        Self::FleetPublishFailed,
+        Self::TelemetryPublishFailed,
+        Self::BatchPublishFailed,
+    ];
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::RouterUnavailable => "router_unavailable",
+            Self::FleetPublishFailed => "fleet_publish_failed",
+            Self::TelemetryPublishFailed => "telemetry_publish_failed",
+            Self::BatchPublishFailed => "batch_publish_failed",
+        }
+    }
+}
+
+/// Latched failure flag plus the first reason. Atomic so diagnostics never wait on the worker.
+#[derive(Default)]
+struct Failure {
+    failed: AtomicBool,
+    reason: AtomicU8,
+}
+impl Failure {
+    fn latch(&self, reason: FailureReason) {
+        self.reason
+            .compare_exchange(0, reason as u8, Ordering::Release, Ordering::Relaxed)
+            .ok();
+        self.failed.store(true, Ordering::Release);
+    }
+    fn failed(&self) -> bool {
+        self.failed.load(Ordering::Acquire)
+    }
+    fn reason(&self) -> Option<FailureReason> {
+        let code = self.reason.load(Ordering::Acquire);
+        FailureReason::ALL
+            .into_iter()
+            .find(|reason| *reason as u8 == code)
+    }
+}
 #[cfg(test)]
 #[path = "../tests/internal/control_plane_diagnostics.rs"]
 mod diagnostic_tests;
@@ -73,8 +123,7 @@ pub struct ControlPlane {
     base: String,
     batches: Arc<Mutex<BTreeMap<String, (Vec<String>, Instant)>>>,
     stop: Arc<AtomicBool>,
-    failed: Arc<AtomicBool>,
-    failure_reason: Arc<AtomicU8>,
+    failure: Arc<Failure>,
     worker: Option<JoinHandle<()>>,
     /// Rover identity used in topic paths and fleet advertisements.
     pub rover_id: u64,
@@ -163,8 +212,7 @@ impl ControlPlane {
         let captures: CaptureInbox = Arc::new(Mutex::new(VecDeque::new()));
         let states: States = Arc::new(Mutex::new(BTreeMap::new()));
         let stop = Arc::new(AtomicBool::new(false));
-        let failed = Arc::new(AtomicBool::new(false));
-        let failure_reason = Arc::new(AtomicU8::new(0));
+        let failure = Arc::new(Failure::default());
         let base = format!("{prefix}/{id}");
         let queue = inbox.clone();
         let signaling_queue = signaling.clone();
@@ -208,14 +256,14 @@ impl ControlPlane {
                     }
                     return;
                 }
-                if !crate::is_control_topic(kind) {
+                if !crate::inbox::is_control_topic(kind) {
                     return;
                 }
                 if bytes.len() > 2048 {
                     return;
                 }
                 let mut queue = queue.lock().unwrap();
-                crate::enqueue_control_action(
+                crate::inbox::enqueue_control_action(
                     &mut queue,
                     kind.into(),
                     bytes.to_vec(),
@@ -228,8 +276,7 @@ impl ControlPlane {
         let batch_state = batches.clone();
         let state = states.clone();
         let stopped = stop.clone();
-        let fault = failed.clone();
-        let reason = failure_reason.clone();
+        let fault = failure.clone();
         let fleet = format!("{prefix}/fleet/state");
         let publication = session.clone();
         let key_base = base.clone();
@@ -252,10 +299,7 @@ impl ControlPlane {
             let mut last_batch = Instant::now() - Duration::from_secs(1);
             while !stopped.load(Ordering::Acquire) {
                 if outbound && session.info().routers_zid().wait().next().is_none() {
-                    reason
-                        .compare_exchange(0, 1, Ordering::Release, Ordering::Relaxed)
-                        .ok();
-                    fault.store(true, Ordering::Release);
+                    fault.latch(FailureReason::RouterUnavailable);
                     break;
                 }
                 let (active, snapshots) = telemetry_snapshot(&mut state.lock().unwrap());
@@ -272,18 +316,12 @@ impl ControlPlane {
                     .wait()
                     .is_err()
                 {
-                    reason
-                        .compare_exchange(0, 2, Ordering::Release, Ordering::Relaxed)
-                        .ok();
-                    fault.store(true, Ordering::Release);
+                    fault.latch(FailureReason::FleetPublishFailed);
                     break;
                 }
                 for (kind, value) in snapshots {
                     if session.put(format!("{base}/{kind}"), value).wait().is_err() {
-                        reason
-                            .compare_exchange(0, 3, Ordering::Release, Ordering::Relaxed)
-                            .ok();
-                        fault.store(true, Ordering::Release);
+                        fault.latch(FailureReason::TelemetryPublishFailed);
                     }
                 }
                 if last_batch.elapsed() >= Duration::from_secs(1) {
@@ -293,15 +331,7 @@ impl ControlPlane {
                         if at.elapsed() < TELEMETRY_TTL {
                             for value in values {
                                 if session.put(format!("{base}/{kind}"), value).wait().is_err() {
-                                    reason
-                                        .compare_exchange(
-                                            0,
-                                            4,
-                                            Ordering::Release,
-                                            Ordering::Relaxed,
-                                        )
-                                        .ok();
-                                    fault.store(true, Ordering::Release);
+                                    fault.latch(FailureReason::BatchPublishFailed);
                                 }
                             }
                         }
@@ -323,8 +353,7 @@ impl ControlPlane {
             base: key_base,
             batches,
             stop,
-            failed,
-            failure_reason,
+            failure,
             worker: Some(worker),
             rover_id: id,
         })
@@ -337,7 +366,7 @@ impl ControlPlane {
             self.inbox.lock().unwrap().clear();
             return vec![];
         }
-        crate::drain_control_actions(&mut self.inbox.lock().unwrap())
+        crate::inbox::drain_control_actions(&mut self.inbox.lock().unwrap())
             .into_iter()
             .map(|(kind, payload, received)| (kind, payload, received.elapsed().as_secs_f64()))
             .collect()
@@ -450,12 +479,11 @@ impl ControlPlane {
     /// Return the latched router-loss or publication-failure flag.
     /// Once set, intent draining discards queued commands; this service does not reconnect.
     pub fn failed(&self) -> bool {
-        self.failed.load(Ordering::Acquire)
+        self.failure.failed()
     }
     /// Safe diagnostic metadata only; contains no topic payloads, credentials or endpoints.
     /// A stale producer can stop fleet advertisements without a transport failure.
     pub fn diagnostics(&self) -> serde_json::Value {
-        let failure = self.failure_reason.load(Ordering::Acquire);
         let states = self.states.try_lock().ok();
         let age = states
             .as_ref()
@@ -463,9 +491,7 @@ impl ControlPlane {
         let fresh = states
             .as_ref()
             .map(|_| age.is_some_and(|age| age < TELEMETRY_TTL));
-        serde_json::json!({"state":if self.failed(){"failed"}else{"connected"},"failure_reason":match failure {
-            1=>Some("router_unavailable"),2=>Some("fleet_publish_failed"),3=>Some("telemetry_publish_failed"),4=>Some("batch_publish_failed"),_=>None
-        },"freshest_telemetry_age_ms":age.map(|age|age.as_millis() as u64),"telemetry_fresh":fresh,"telemetry_sample_available":states.is_some(),"telemetry_ttl_ms":TELEMETRY_TTL.as_millis() as u64})
+        serde_json::json!({"state":if self.failed(){"failed"}else{"connected"},"failure_reason":self.failure.reason().map(FailureReason::as_str),"freshest_telemetry_age_ms":age.map(|age|age.as_millis() as u64),"telemetry_fresh":fresh,"telemetry_sample_available":states.is_some(),"telemetry_ttl_ms":TELEMETRY_TTL.as_millis() as u64})
     }
 }
 impl Drop for ControlPlane {
