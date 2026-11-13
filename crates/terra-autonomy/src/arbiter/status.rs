@@ -36,7 +36,7 @@ impl AutonomyArbiter {
                 .trace
                 .as_ref()
                 .filter(|(at, _)| {
-                    input.now - at >= 0. && input.now - at < timing::PLANNER_TRACE_FRESHNESS_SECONDS
+                    timing::fresh(input.now, Some(*at), timing::PLANNER_TRACE_FRESHNESS_SECONDS)
                 })
                 .map(|(at, trace)| {
                     let mut trace = trace.clone();

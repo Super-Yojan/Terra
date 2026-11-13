@@ -591,9 +591,7 @@ impl AutonomyArbiter {
                 gx,
                 gy,
                 &self.hybrid_config(),
-                // A goal against an obstacle moves to where the rover fits,
-                // still inside the arrival radius so reaching it arrives.
-                (self.follower.config().arrive_radius - 0.1).max(0.),
+                self.route_goal_tolerance(),
             ) {
                 Ok(job) => self.route_job = Some(job),
                 Err(terra_navigation::RouteError::StartBlocked) if self.recover_from_start_blocked(input) => {
@@ -688,6 +686,13 @@ impl AutonomyArbiter {
         decision.route_failure = Some(why);
     }
 
+    /// How far a route may end from its goal: a goal against an obstacle
+    /// moves to where the rover fits, still 0.1 m inside the follower's
+    /// arrival radius so that reaching it counts as arriving.
+    fn route_goal_tolerance(&self) -> f64 {
+        (self.follower.config().arrive_radius - 0.1).max(0.)
+    }
+
     /// Hybrid A* settings for a one-off synchronous check (approval, task
     /// planning): the same body and turning, with a tighter expansion cap. A
     /// goal counts as reached inside the follower's arrival radius, as when driving.
@@ -695,7 +700,7 @@ impl AutonomyArbiter {
         let base = self.hybrid_config();
         terra_navigation::HybridConfig {
             max_expansions: BOUNDED_ROUTE_EXPANSIONS,
-            goal_tolerance: (self.follower.config().arrive_radius - 0.1).max(base.goal_tolerance),
+            goal_tolerance: self.route_goal_tolerance().max(base.goal_tolerance),
             ..base
         }
     }

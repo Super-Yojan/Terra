@@ -1,15 +1,14 @@
 //! Content caching for visualization only. Never use this gate for safety or authority.
 use std::time::{Duration, Instant};
 
+/// Oldest map sample, seconds, worth drawing: dashboard telemetry expires
+/// after 500 ms, so an older map would be shown as current after it lapsed.
+const MAP_VISUALIZATION_FRESHNESS_SECONDS: f64 = 0.5;
+
 /// Source and control timestamps share the phone monotonic clock. Do not turn
 /// an old cached map into fresh visualization evidence after gate reset.
 pub(crate) fn fresh_map_sample(now: f64, sample: f64) -> bool {
-    now.is_finite()
-        && sample.is_finite()
-        && now >= 0.
-        && sample >= 0.
-        && now >= sample
-        && now - sample < 0.5
+    terra_types::timing::fresh(now, Some(sample), MAP_VISUALIZATION_FRESHNESS_SECONDS)
 }
 
 /// Dashboard limits are intentionally narrower than onboard mapping.

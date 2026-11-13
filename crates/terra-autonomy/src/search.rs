@@ -170,10 +170,8 @@ impl SearchController {
             || !o.confidence.is_finite()
             || !(CONFIRM_CONFIDENCE..=1.).contains(&o.confidence)
             || !self.request.bounds.contains(o.world_x, o.world_y)
-            || !o.received_at.is_finite()
             || o.received_at < self.started_at
-            || o.received_at > now
-            || now - o.received_at > CONFIRM_FRESHNESS_S
+            || !terra_types::timing::fresh(now, Some(o.received_at), CONFIRM_FRESHNESS_S)
             || self.last_frame.is_some_and(|f| o.frame_id <= f)
             || self
                 .candidate
@@ -238,10 +236,9 @@ impl SearchController {
     ) -> Result<Option<(f64, f64)>, SearchError> {
         self.update_time(now)?;
         if self.phase == SearchPhase::Confirming
-            && self
-                .candidate
-                .last()
-                .is_some_and(|c| now - c.received_at > CONFIRM_FRESHNESS_S)
+            && self.candidate.last().is_some_and(|c| {
+                !terra_types::timing::fresh(now, Some(c.received_at), CONFIRM_FRESHNESS_S)
+            })
         {
             self.candidate.clear();
             self.transition(SearchPhase::Searching, "candidate_expired");
