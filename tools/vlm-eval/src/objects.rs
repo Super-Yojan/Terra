@@ -179,7 +179,7 @@ fn approach_point(map: &MapSnapshot, pose: Pose, target: [f64; 2]) -> Option<[f6
                 target[1] + ring * angle.sin(),
             ];
             if geom::occupancy_at(map, point[0], point[1])
-                .is_some_and(|value| (0..65).contains(&value))
+                .is_some_and(|value| (0..terra_mapping::OCCUPIED).contains(&value))
             {
                 candidates.push((ring_index, step, point));
             }
@@ -204,7 +204,7 @@ fn occupied_components(map: &MapSnapshot) -> Vec<Component> {
     let mut seen = vec![false; map.occupancy.len()];
     let mut seeds = Vec::new();
     for (index, value) in map.occupancy.iter().enumerate() {
-        if *value >= 65 {
+        if *value >= terra_mapping::OCCUPIED {
             let col = (index % map.width as usize) as i32;
             let row = (index / map.width as usize) as i32;
             seeds.push((col, row));
@@ -229,7 +229,7 @@ fn occupied_components(map: &MapSnapshot) -> Vec<Component> {
                 let Some(index) = cell_index(map, nx, ny) else {
                     continue;
                 };
-                if seen[index] || map.occupancy[index] < 65 {
+                if seen[index] || map.occupancy[index] < terra_mapping::OCCUPIED {
                     continue;
                 }
                 seen[index] = true;
@@ -378,7 +378,7 @@ fn local_viewpoint(map: &MapSnapshot, pose: Pose, cluster: &[(f64, f64)]) -> Opt
         for (dx, dy) in [(0.1, 0.0), (-0.1, 0.0), (0.0, 0.1), (0.0, -0.1)] {
             let x = cell.0 + dx;
             let y = cell.1 + dy;
-            if geom::occupancy_at(map, x, y).is_some_and(|value| (0..65).contains(&value)) {
+            if geom::occupancy_at(map, x, y).is_some_and(|value| (0..terra_mapping::OCCUPIED).contains(&value)) {
                 sx += x;
                 sy += y;
                 n += 1.0;
@@ -422,7 +422,7 @@ fn frontier_cells(map: &MapSnapshot) -> Vec<(f64, f64)> {
                 .into_iter()
                 .any(|(dx, dy)| {
                     cell_index(map, col + dx, row + dy)
-                        .is_some_and(|neighbor| (0..65).contains(&map.occupancy[neighbor]))
+                        .is_some_and(|neighbor| (0..terra_mapping::OCCUPIED).contains(&map.occupancy[neighbor]))
                 });
             if touches_free {
                 cells.push(cell_center(map, col, row));

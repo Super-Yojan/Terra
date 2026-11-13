@@ -14,8 +14,9 @@
 //! obstacle-aware 2D distance, both scaled so they never overestimate. Near the
 //! goal, a direct curve to it is tried as a shortcut: a Dubins curve with a goal
 //! heading, otherwise one turn and a straight line.
-use crate::footprint::{OCCUPIED, distance_field, for_each_overlapping_cell};
-use crate::{Footprint, Pose, cell, valid_map};
+use terra_mapping::OCCUPIED;
+use crate::footprint::{distance_field, for_each_overlapping_cell};
+use crate::{Footprint, Pose};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap, HashSet};
@@ -248,7 +249,7 @@ impl HybridSearch {
         config: &HybridConfig,
         unknown_cost: Option<f64>,
     ) -> Result<Self, &'static str> {
-        if !valid_map(map)
+        if !map.valid()
             || map.occupancy.len() > MAX_CELLS
             || !config.valid()
             || !start.finite()
@@ -259,8 +260,8 @@ impl HybridSearch {
         {
             return Err("route_invalid_map");
         }
-        let start_cell = cell(map, start.x, start.y).ok_or("route_start_outside_map")?;
-        let goal_cell = cell(map, goal.x, goal.y).ok_or("route_goal_outside_map")?;
+        let start_cell = map.cell(start.x, start.y).ok_or("route_start_outside_map")?;
+        let goal_cell = map.cell(goal.x, goal.y).ok_or("route_goal_outside_map")?;
         let mut search = Self {
             map: map.clone(),
             config: config.clone(),
@@ -296,7 +297,7 @@ impl HybridSearch {
         });
         // The camera's blind zone around the start (see Footprint::blind_zone_radius).
         let reach = (config.footprint.blind_zone_radius() / map.resolution).ceil() as i64 + 1;
-        if let Some((c0, r0)) = cell(map, start.x, start.y) {
+        if let Some((c0, r0)) = map.cell(start.x, start.y) {
             for r in (r0 as i64 - reach).max(0)..=(r0 as i64 + reach).min(map.height as i64 - 1) {
                 for c in (c0 as i64 - reach).max(0)..=(c0 as i64 + reach).min(map.width as i64 - 1)
                 {
@@ -473,7 +474,7 @@ impl HybridSearch {
     /// whether it overlaps unknown cells the search was told it may cross.
     fn body(&self, x: f64, y: f64, yaw: f64, pad: f64) -> Option<bool> {
         let (a, b) = self.half_extents(pad);
-        let c = cell(&self.map, x, y)?;
+        let c = self.map.cell(x, y)?;
         // Far from everything blocked or unknown: no need to look at cells.
         let lower_bound = (self.blocked_distance[index(&self.map, c)] / OCTILE_OVER_EUCLID
             - 2. * HALF_DIAGONAL)
@@ -568,7 +569,7 @@ impl HybridSearch {
     }
 
     fn h(&self, x: f64, y: f64) -> f64 {
-        let Some(c) = cell(&self.map, x, y) else {
+        let Some(c) = self.map.cell(x, y) else {
             return f64::INFINITY;
         };
         let straight = (self.goal.x - x).hypot(self.goal.y - y);
@@ -579,7 +580,7 @@ impl HybridSearch {
     /// State bin: map cell, heading, and whether the state was reached in
     /// reverse (a reversed state may not reverse further, so the two differ).
     fn bin(&self, x: f64, y: f64, yaw: f64, reverse: bool) -> Option<usize> {
-        let c = cell(&self.map, x, y)?;
+        let c = self.map.cell(x, y)?;
         let bins = self.config.heading_bins as usize;
         let heading = ((yaw.rem_euclid(TAU) / TAU) * bins as f64) as usize % bins;
         Some((index(&self.map, c) * bins + heading) * 2 + usize::from(reverse))
@@ -590,7 +591,7 @@ impl HybridSearch {
             && self
                 .goal
                 .yaw
-                .is_none_or(|g| wrap(yaw - g).abs() <= self.config.goal_heading_tolerance)
+                .is_none_or(|g| terra_types::wrap_angle(yaw - g).abs() <= self.config.goal_heading_tolerance)
     }
 
     fn cost(&self, parent: &Node, curvature: f64, length: f64) -> f64 {
@@ -619,7 +620,7 @@ impl HybridSearch {
         if c.clearance_penalty == 0. || c.preferred_clearance == 0. {
             return 0.;
         }
-        let Some(cell_xy) = cell(&self.map, x, y) else {
+        let Some(cell_xy) = self.map.cell(x, y) else {
             return 0.;
         };
         let centre = self.obstacle_distance[index(&self.map, cell_xy)] / OCTILE_OVER_EUCLID
@@ -701,7 +702,7 @@ impl HybridSearch {
                 out.push(HybridWaypoint {
                     x,
                     y,
-                    yaw: wrap(yaw),
+                    yaw: terra_types::wrap_angle(yaw),
                     reverse: length < 0.,
                     curvature,
                 });
@@ -725,9 +726,6 @@ fn drive((x, y, yaw): (f64, f64, f64), curvature: f64, length: f64) -> (f64, f64
     )
 }
 
-fn wrap(angle: f64) -> f64 {
-    (angle + PI).rem_euclid(TAU) - PI
-}
 
 fn index(map: &MapSnapshot, (column, row): (usize, usize)) -> usize {
     row * map.width as usize + column
@@ -867,7 +865,7 @@ fn dubins(from: (f64, f64, f64), to: (f64, f64, f64), radius: f64) -> Option<Vec
         .map(|word| word.map(|(curvature, units)| (curvature, units * radius)))
         .filter(|word| {
             let end = word.iter().fold(from, |at, &(c, len)| drive(at, c, len));
-            (end.0 - to.0).hypot(end.1 - to.1) < 1e-6 && wrap(end.2 - to.2).abs() < 1e-6
+            (end.0 - to.0).hypot(end.1 - to.1) < 1e-6 && terra_types::wrap_angle(end.2 - to.2).abs() < 1e-6
         })
         .min_by(|x, y| {
             let total = |w: &[(f64, f64); 3]| w.iter().map(|(_, len)| len).sum::<f64>();

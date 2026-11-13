@@ -96,7 +96,7 @@ private fun OccupancyGrid.toBitmap(): Bitmap {
             val color = when {
                 value < 0 -> unknown
                 value < 45 -> free
-                value > 65 -> occupied
+                value >= 65 -> occupied
                 else -> uncertain
             }
             pixels[(height - 1 - row) * width + col] = color

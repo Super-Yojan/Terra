@@ -403,7 +403,7 @@ fn through_unknown_finds_a_frontier_in_the_camera_wedge() {
     assert!(candidate.distance_m > 0.8);
     assert!(candidate.information_gain > 0);
     // The goal is a cell the camera saw as free, not a guess in unknown space.
-    let (column, row) = terra_navigation::grid_cell(&wedge, candidate.x, candidate.y).unwrap();
+    let (column, row) = wedge.cell(candidate.x, candidate.y).unwrap();
     assert_eq!(wedge.occupancy[row * 200 + column], 0);
     // The explorer seeks it instead of turning in place.
     let mut explorer = Explorer::default();

@@ -361,7 +361,7 @@ impl AutonomyArbiter {
             while self
                 .maneuver
                 .front()
-                .is_some_and(|s| wrap_heading(s.end.yaw - input.pose.yaw).abs() < 0.08)
+                .is_some_and(|s| terra_types::wrap_angle(s.end.yaw - input.pose.yaw).abs() < 0.08)
             {
                 self.maneuver.pop_front();
             }
@@ -679,7 +679,7 @@ impl AutonomyArbiter {
             {
                 return false;
             }
-            if wrap_heading(route[end].yaw - pose.yaw).abs() > ROUTE_SWITCH_HEADING {
+            if terra_types::wrap_angle(route[end].yaw - pose.yaw).abs() > ROUTE_SWITCH_HEADING {
                 return true;
             }
             at = end;

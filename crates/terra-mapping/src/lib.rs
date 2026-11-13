@@ -130,6 +130,40 @@ pub struct MapSnapshot {
     /// Row-major; rows increase in world +Y. -1 unknown, 0..100 occupancy probability.
     pub occupancy: Vec<i8>,
 }
+/// Occupancy at or above this value is an obstacle; `0..OCCUPIED` is free and
+/// negative values are unknown.
+pub const OCCUPIED: i8 = 65;
+impl MapSnapshot {
+    /// Non-empty, at most 1000 cells a side, storage matching the size, finite
+    /// origin and a resolution of at least 1 cm.
+    pub fn valid(&self) -> bool {
+        self.width > 0
+            && self.height > 0
+            && self.width <= 1000
+            && self.height <= 1000
+            && self.occupancy.len() == self.width as usize * self.height as usize
+            && self.resolution.is_finite()
+            && self.resolution >= 0.01
+            && self.origin_x.is_finite()
+            && self.origin_y.is_finite()
+    }
+    /// `(column, row)` of the cell holding world point `(x, y)`; `None` off the
+    /// grid or for an invalid snapshot.
+    pub fn cell(&self, x: f64, y: f64) -> Option<(usize, usize)> {
+        if !self.valid() || !x.is_finite() || !y.is_finite() {
+            return None;
+        }
+        let column = ((x - self.origin_x) / self.resolution).floor();
+        let row = ((y - self.origin_y) / self.resolution).floor();
+        (column >= 0. && row >= 0. && column < self.width as f64 && row < self.height as f64)
+            .then_some((column as usize, row as usize))
+    }
+    /// Occupancy at world point `(x, y)`; `None` off the grid.
+    pub fn at(&self, x: f64, y: f64) -> Option<i8> {
+        self.cell(x, y)
+            .map(|(c, r)| self.occupancy[r * self.width as usize + c])
+    }
+}
 /// Invalid mapping input; rejected frames do not update evidence or the last timestamp.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MapError {

@@ -4,13 +4,10 @@
 //! occupied cells (occupancy at least [`OCCUPIED`]) and off-map cells always,
 //! unknown cells (occupancy below 0) unless they also lie under the body at the
 //! starting pose, so the rover can drive off its own unobserved underbody.
-use crate::{Pose, valid_map};
+use crate::Pose;
 use serde::{Deserialize, Serialize};
 use std::f64::consts::SQRT_2;
-use terra_mapping::MapSnapshot;
-
-/// Occupancy at or above this value is an obstacle.
-pub const OCCUPIED: i8 = 65;
+use terra_mapping::{MapSnapshot, OCCUPIED};
 
 /// Rover body size and the safety margin kept around it.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -123,7 +120,7 @@ pub(crate) fn rejection(
     pad: f64,
     unknown: Unknown,
 ) -> Option<&'static str> {
-    if !valid_map(map) || !pose.finite() {
+    if !map.valid() || !pose.finite() {
         return Some("outside_map");
     }
     let (a, b) = footprint.half_extents(pad);
@@ -259,7 +256,7 @@ pub fn pull_forward_clear(
 fn straight_clear(map: &MapSnapshot, footprint: &Footprint, pose: Pose, travel: f64) -> bool {
     let distance = travel.abs();
     let sign = if travel < 0. { -1. } else { 1. };
-    if !valid_map(map)
+    if !map.valid()
         || !pose.finite()
         || !footprint.valid()
         || !distance.is_finite()
@@ -321,7 +318,7 @@ impl<'a> FitGrid<'a> {
     pub fn new(map: &'a MapSnapshot, footprint: &Footprint, start: Option<Pose>) -> Self {
         let n = map.occupancy.len();
         let mut tolerated = vec![false; n];
-        if let Some(s) = start.filter(|_| valid_map(map)) {
+        if let Some(s) = start.filter(|_| map.valid()) {
             let (a, b) = footprint.half_extents(0.);
             for_each_overlapping_cell(map, s.x, s.y, s.yaw, a, b, |i| {
                 if let Some(i) = i {
@@ -333,7 +330,7 @@ impl<'a> FitGrid<'a> {
                 *t |= in_blind_zone(map, footprint, i, s);
             }
         }
-        let distance = if valid_map(map) {
+        let distance = if map.valid() {
             distance_field(map, |i, v| v >= OCCUPIED || v < 0 && !tolerated[i])
         } else {
             Vec::new()
@@ -461,7 +458,7 @@ pub fn rectangle_clearance(
     pose: Pose,
     reach: f64,
 ) -> Option<f64> {
-    if !valid_map(map) || !pose.finite() || !footprint.valid() {
+    if !map.valid() || !pose.finite() || !footprint.valid() {
         return None;
     }
     let (a, b) = footprint.half_extents(0.);

@@ -143,14 +143,7 @@ impl SearchNavigator {
         }
     }
     fn merge(&mut self, m: &MapSnapshot, revision: u64) -> Result<(), &'static str> {
-        if m.width == 0
-            || m.height == 0
-            || m.occupancy.len() != m.width as usize * m.height as usize
-            || !m.resolution.is_finite()
-            || m.resolution <= 0.
-            || !m.origin_x.is_finite()
-            || !m.origin_y.is_finite()
-        {
+        if !m.valid() {
             return Err("invalid_map");
         }
         if let Some(old) = self.last_revision {
@@ -269,7 +262,7 @@ impl SearchNavigator {
         if let Some(&(x, y)) = self.route.first() {
             if (pose.x - x).hypot(pose.y - y) < 0.3 {
                 self.route.remove(0);
-            } else if crate::cell(m, x, y).is_some() && !reachable(m, pose, &self.footprint, x, y) {
+            } else if m.cell(x, y).is_some() && !reachable(m, pose, &self.footprint, x, y) {
                 self.invalidate_goal(now);
             }
         }

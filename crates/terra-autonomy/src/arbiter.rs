@@ -607,6 +607,3 @@ fn fresh(now: f64, time: Option<f64>, limit: f64) -> bool {
     time.is_some_and(|t| t.is_finite() && t >= 0. && now >= t && now - t < limit)
 }
 
-fn wrap_heading(x: f64) -> f64 {
-    (x + std::f64::consts::PI).rem_euclid(std::f64::consts::TAU) - std::f64::consts::PI
-}

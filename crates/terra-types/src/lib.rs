@@ -9,6 +9,11 @@ pub mod connectivity_policy;
 pub mod point_capture;
 pub mod timing;
 
+/// `angle` in radians wrapped to `[-π, π)`.
+pub fn wrap_angle(angle: f64) -> f64 {
+    (angle + std::f64::consts::PI).rem_euclid(std::f64::consts::TAU) - std::f64::consts::PI
+}
+
 /// Three-component vector; units and reference frame are defined by the containing field.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Vector3 {

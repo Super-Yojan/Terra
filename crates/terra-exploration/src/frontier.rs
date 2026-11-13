@@ -1,32 +1,21 @@
 use crate::{FrontierCandidate, GoalScorer};
 use std::collections::VecDeque;
 use terra_mapping::MapSnapshot;
-use terra_navigation::{FitGrid, Footprint, Pose, grid_cell};
+use terra_navigation::{FitGrid, Footprint, Pose};
 /// Return observed free area in square metres and the fraction of cells no longer unknown.
 ///
-/// Free occupancy is 0–64; negative cells are unknown. Returns `None` for empty
-/// dimensions, dimensions above 1000, mismatched storage, nonfinite origins, or
-/// nonfinite resolution, or resolution below 0.01 m/cell.
+/// Returns `None` for a snapshot that is not [`MapSnapshot::valid`].
 pub fn map_coverage(map: &MapSnapshot) -> Option<(f64, f64)> {
-    let cells = map.width as usize * map.height as usize;
-    if map.width == 0
-        || map.height == 0
-        || map.width > 1000
-        || map.height > 1000
-        || map.occupancy.len() != cells
-        || !map.resolution.is_finite()
-        || map.resolution < 0.01
-        || !map.origin_x.is_finite()
-        || !map.origin_y.is_finite()
-    {
+    if !map.valid() {
         return None;
     }
+    let cells = map.occupancy.len();
     let mut known = 0u32;
     let mut free = 0u32;
     for value in &map.occupancy {
         if *value >= 0 {
             known += 1;
-            if *value < 65 {
+            if *value < terra_mapping::OCCUPIED {
                 free += 1;
             }
         }
@@ -103,7 +92,7 @@ fn select_frontier_in(
     } else {
         1.
     };
-    let (start_x, start_y) = grid_cell(map, pose.x, pose.y)?;
+    let (start_x, start_y) = map.cell(pose.x, pose.y)?;
     let mut seen = vec![false; map.occupancy.len()];
     let mut queue = VecDeque::from([(start_x, start_y, 0usize)]);
     let mut best: Option<FrontierCandidate> = None;

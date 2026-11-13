@@ -8,7 +8,7 @@
 //! A* to the far goal and returns where that path leaves the local window.
 //! The fine Hybrid A* route then drives to that point instead of to the
 //! straight-line clamp.
-use crate::OCCUPIED;
+use terra_mapping::OCCUPIED;
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 use terra_mapping::MapSnapshot;
@@ -103,12 +103,7 @@ impl LongRangeMemory {
     /// by what it shows now; the rest keep their memory.
     pub fn absorb(&mut self, map: &MapSnapshot) {
         let (w, h) = (map.width as usize, map.height as usize);
-        if w == 0
-            || h == 0
-            || map.occupancy.len() != w * h
-            || !map.resolution.is_finite()
-            || map.resolution <= 0.
-        {
+        if !map.valid() {
             return;
         }
         let cx = map.origin_x + w as f64 * map.resolution / 2.;

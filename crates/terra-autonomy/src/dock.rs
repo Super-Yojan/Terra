@@ -22,7 +22,6 @@ use terra_mapping::MapSnapshot;
 use terra_navigation::{Pose, Twist};
 
 /// Occupancy at or above this blocks the docking corridor (the planner's own threshold).
-const OCCUPIED: i8 = 65;
 
 /// How far past the dock range the camera may already have lost the bucket
 /// (out of view under the phone, or nearer than the depth minimum), metres.
@@ -861,8 +860,8 @@ impl Dock {
                 let (wx, wy) = (pose.x + x * cos - y * sin, pose.y + x * sin + y * cos);
                 let near_target = (wx - self.target.x).hypot(wy - self.target.y) <= clear;
                 if !near_target
-                    && let Some((c, r)) = terra_navigation::grid_cell(map, wx, wy)
-                    && map.occupancy[r * map.width as usize + c] >= OCCUPIED
+                    && let Some((c, r)) = map.cell(wx, wy)
+                    && map.occupancy[r * map.width as usize + c] >= terra_mapping::OCCUPIED
                 {
                     return true;
                 }
@@ -1522,7 +1521,7 @@ mod tests {
             occupancy: vec![0; 1600],
         };
         // A box at x = 0.9 m on the rover axis, short of the bucket at 2 m.
-        let (c, r) = terra_navigation::grid_cell(&map, 0.9, 0.).unwrap();
+        let (c, r) = map.cell(0.9, 0.).unwrap();
         map.occupancy[r * 40 + c] = 100;
         let mut dock = Dock::start(
             DockConfig::default(),

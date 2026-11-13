@@ -467,7 +467,7 @@ fn pursuit(
                 arrived: true,
             };
         };
-        let error = wrap(target - yaw);
+        let error = terra_types::wrap_angle(target - yaw);
         if error.abs() <= config.align_yaw {
             return Pursuit {
                 linear: 0.0,
@@ -483,7 +483,7 @@ fn pursuit(
             arrived: false,
         };
     }
-    let error = wrap(dy.atan2(dx) - yaw);
+    let error = terra_types::wrap_angle(dy.atan2(dx) - yaw);
     let angular = (error * config.yaw_gain).clamp(-config.max_yaw_rate, config.max_yaw_rate);
     let linear = if error.abs() >= config.heading_gate {
         0.0
@@ -578,9 +578,6 @@ fn inside_square(x: f64, y: f64, half_extent: f64) -> bool {
     bevy_x.abs() <= half_extent && bevy_z.abs() <= half_extent
 }
 
-fn wrap(angle: f64) -> f64 {
-    (angle + std::f64::consts::PI).rem_euclid(std::f64::consts::TAU) - std::f64::consts::PI
-}
 
 fn finite(value: &serde_json::Value) -> Option<f64> {
     let number = value.as_f64()?;
@@ -595,7 +592,7 @@ fn optional_yaw(object: &serde_json::Map<String, serde_json::Value>) -> Option<O
             if yaw.abs() > std::f64::consts::TAU {
                 return None;
             }
-            Some(Some(wrap(yaw)))
+            Some(Some(terra_types::wrap_angle(yaw)))
         }
     }
 }
@@ -754,7 +751,7 @@ mod tests {
                 break;
             }
             let dt = 0.05;
-            yaw = wrap(yaw + output.angular * dt);
+            yaw = terra_types::wrap_angle(yaw + output.angular * dt);
             x += output.linear * dt * yaw.cos();
             y += output.linear * dt * yaw.sin();
         }

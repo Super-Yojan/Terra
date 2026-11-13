@@ -368,7 +368,7 @@ impl Reach {
         if width == 0 || height == 0 || map.occupancy.len() != width * height || !pose.finite() {
             return None;
         }
-        let start = terra_navigation::grid_cell(map, pose.x, pose.y)?;
+        let start = map.cell(pose.x, pose.y)?;
         // A cell counts if the body fits there at some heading.
         let mut traverse = FitGrid::new(map, footprint, Some(pose));
         let mut standing = FitGrid::new(map, footprint, None);
@@ -459,7 +459,7 @@ impl Reach {
         best.map(|b| [tidy(b.2[0]), tidy(b.2[1])])
     }
     fn travel(&self, map: &MapSnapshot, x: f64, y: f64) -> Option<f64> {
-        let (c, r) = terra_navigation::grid_cell(map, x, y)?;
+        let (c, r) = map.cell(x, y)?;
         let d = self.distance[r * self.width + c];
         (d != u32::MAX).then(|| f64::from(d) * map.resolution)
     }
@@ -470,13 +470,10 @@ fn tidy(value: f64) -> f64 {
     if rounded.abs() < 5e-3 { 0. } else { rounded }
 }
 
-fn wrap(angle: f64) -> f64 {
-    (angle + std::f64::consts::PI).rem_euclid(std::f64::consts::TAU) - std::f64::consts::PI
-}
 
 /// Relative bearing in degrees and a word for it.
 fn bearing(pose: Pose, x: f64, y: f64) -> (f64, &'static str) {
-    let rel = wrap((y - pose.y).atan2(x - pose.x) - pose.yaw).to_degrees();
+    let rel = terra_types::wrap_angle((y - pose.y).atan2(x - pose.x) - pose.yaw).to_degrees();
     let word = match rel {
         r if r.abs() <= 20. => "ahead",
         r if (20. ..70.).contains(&r) => "ahead-left",
@@ -498,7 +495,7 @@ pub(crate) fn symbolic_grid(map: &MapSnapshot, pose: Pose) -> String {
     let rows = (map.height as usize).div_ceil(child);
     let width = map.width as usize;
     let rover =
-        terra_navigation::grid_cell(map, pose.x, pose.y).map(|(c, r)| (c / child, r / child));
+        map.cell(pose.x, pose.y).map(|(c, r)| (c / child, r / child));
     let mut lines = Vec::with_capacity(rows + 2);
     for br in (0..rows).rev() {
         let y0 = map.origin_y + (br * child) as f64 * map.resolution;
@@ -509,7 +506,7 @@ pub(crate) fn symbolic_grid(map: &MapSnapshot, pose: Pose) -> String {
                 for c in bc * child..((bc + 1) * child).min(width) {
                     match map.occupancy[r * width + c] {
                         v if v < 0 => unknown += 1,
-                        v if v >= 65 => occupied += 1,
+                        v if v >= terra_mapping::OCCUPIED => occupied += 1,
                         _ => free += 1,
                     }
                 }
@@ -542,7 +539,7 @@ fn obstacle_blobs(map: &MapSnapshot) -> Vec<Vec<(f64, f64)>> {
     let mut seen = vec![false; width * height];
     let mut blobs = Vec::new();
     for start in 0..width * height {
-        if seen[start] || map.occupancy[start] < 65 {
+        if seen[start] || map.occupancy[start] < terra_mapping::OCCUPIED {
             continue;
         }
         let mut cells = Vec::new();
@@ -561,7 +558,7 @@ fn obstacle_blobs(map: &MapSnapshot) -> Vec<Vec<(f64, f64)>> {
                         continue;
                     }
                     let n = nr as usize * width + nc as usize;
-                    if !seen[n] && map.occupancy[n] >= 65 {
+                    if !seen[n] && map.occupancy[n] >= terra_mapping::OCCUPIED {
                         seen[n] = true;
                         stack.push(n);
                     }
@@ -651,7 +648,7 @@ pub(crate) fn summarize(
     for v in &map.occupancy {
         match *v {
             v if v < 0 => unknown += 1,
-            v if v >= 65 => occupied += 1,
+            v if v >= terra_mapping::OCCUPIED => occupied += 1,
             _ => free += 1,
         }
     }
@@ -1005,8 +1002,8 @@ pub(crate) fn resolve_waypoint(
         }
         RequestedWaypoint::Point(x, y) => {
             // A point on an obstacle is a mistake, not a place to go near.
-            if terra_navigation::grid_cell(map, *x, *y).is_some_and(|(c, r)| {
-                map.occupancy[r * map.width as usize + c] >= terra_navigation::OCCUPIED
+            if map.cell(*x, *y).is_some_and(|(c, r)| {
+                map.occupancy[r * map.width as usize + c] >= terra_mapping::OCCUPIED
             }) {
                 return Err(format!("({x:.1}, {y:.1}) is on an obstacle"));
             }
@@ -1088,7 +1085,7 @@ ROVER: at ({:.1}, {:.1}), heading {:.0} deg, body {:.2} x {:.2} m with {:.2} m m
         instruction.trim(),
         pose.x,
         pose.y,
-        wrap(pose.yaw).to_degrees(),
+        terra_types::wrap_angle(pose.yaw).to_degrees(),
         footprint.length,
         footprint.width,
         footprint.margin,

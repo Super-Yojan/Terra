@@ -55,7 +55,7 @@
 
 mod footprint;
 pub use footprint::{
-    FitGrid, Footprint, OCCUPIED, backoff_clear, footprint_fits, footprint_fits_some_heading,
+    FitGrid, Footprint, backoff_clear, footprint_fits, footprint_fits_some_heading,
     footprint_rejection_at, pull_forward_clear, rectangle_clearance,
 };
 mod hybrid_astar;
@@ -205,26 +205,6 @@ pub struct CandidateTrace {
     pub rejection: Option<String>,
 }
 
-fn valid_map(map: &MapSnapshot) -> bool {
-    map.width > 0
-        && map.height > 0
-        && map.width <= 1000
-        && map.height <= 1000
-        && map.occupancy.len() == map.width as usize * map.height as usize
-        && map.resolution.is_finite()
-        && map.resolution >= 0.01
-        && map.origin_x.is_finite()
-        && map.origin_y.is_finite()
-}
-fn cell(map: &MapSnapshot, x: f64, y: f64) -> Option<(usize, usize)> {
-    if !valid_map(map) || !x.is_finite() || !y.is_finite() {
-        return None;
-    }
-    let column = ((x - map.origin_x) / map.resolution).floor();
-    let row = ((y - map.origin_y) / map.resolution).floor();
-    (column >= 0. && row >= 0. && column < (map.width as f64) && row < (map.height as f64))
-        .then_some((column as usize, row as usize))
-}
 impl LocalPlanner {
     fn valid(&self) -> bool {
         let config = &self.config;
@@ -263,7 +243,7 @@ impl LocalPlanner {
     ) -> (Option<&'static str>, Vec<[i32; 2]>) {
         let mut points = Vec::new();
         if !self.valid()
-            || !valid_map(map)
+            || !map.valid()
             || !pose.finite()
             || !trajectory.linear.is_finite()
             || !trajectory.angular.is_finite()
@@ -497,14 +477,6 @@ impl LocalPlanner {
         (decision, trace)
     }
 }
-/// Convert world coordinates in metres to a zero-based `(column, row)` index.
-///
-/// Cells include their lower boundaries and exclude their upper boundaries.
-/// Returns `None` for invalid map geometry, nonfinite coordinates, or a point
-/// outside the map, including its upper x/y edges.
-pub fn grid_cell(m: &MapSnapshot, x: f64, y: f64) -> Option<(usize, usize)> {
-    cell(m, x, y)
-}
 /// Whether the body fits centred at `(x, y)` at some heading (one of eight, 22.5
 /// degrees apart). Use it where the heading is not yet known.
 ///
@@ -558,7 +530,7 @@ pub fn frontier(
         return None;
     }
     let radius = footprint.circumradius();
-    let start = cell(map, pose.x, pose.y)?;
+    let start = map.cell(pose.x, pose.y)?;
     let mut traverse = FitGrid::new(map, footprint, Some(pose));
     let mut observed = FitGrid::new(map, footprint, None);
     let mut seen = vec![false; map.occupancy.len()];
@@ -621,10 +593,10 @@ pub fn frontier(
 /// rover cannot turn into: confirm real decisions with [`hybrid_astar_route`] or
 /// [`RouteJob`]. Returns `false` for invalid inputs, a blocked target, or no path.
 pub fn reachable(map: &MapSnapshot, pose: Pose, footprint: &Footprint, x: f64, y: f64) -> bool {
-    let Some(start) = cell(map, pose.x, pose.y) else {
+    let Some(start) = map.cell(pose.x, pose.y) else {
         return false;
     };
-    let Some(target) = cell(map, x, y) else {
+    let Some(target) = map.cell(x, y) else {
         return false;
     };
     if !pose.finite() || !footprint.valid() || !footprint_clear(map, footprint, x, y, None) {

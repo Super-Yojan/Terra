@@ -15,7 +15,7 @@ struct OccupancyMapView: View {
                     let value = grid.occupancy[row * Int(grid.width) + col]
                     if value < 0 { unknown.addRect(rect) }
                     else if value < 45 { free.addRect(rect) }
-                    else if value > 65 { occupied.addRect(rect) }
+                    else if value >= 65 { occupied.addRect(rect) }
                     else { uncertain.addRect(rect) }
                 }
             }
@@ -60,7 +60,7 @@ struct OccupancyMapView: View {
     private var accessibilitySummary: String {
         guard let grid else { return "No depth observations yet" }
         let known = grid.occupancy.filter { $0 >= 0 }.count
-        let occupied = grid.occupancy.filter { $0 > 65 }.count
+        let occupied = grid.occupancy.filter { $0 >= 65 }.count
         return "\(known) observed cells, \(occupied) occupied cells. Rover position \(String(format: "%.1f", rover.x)), \(String(format: "%.1f", rover.y)) metres."
     }
 }

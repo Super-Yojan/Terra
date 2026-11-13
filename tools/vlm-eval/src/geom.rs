@@ -10,9 +10,9 @@ pub const ORIGIN: f64 = -10.0;
 
 #[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub struct Counts {
-    /// Cells with observed occupancy below 65.
+    /// Cells with observed occupancy below [`terra_mapping::OCCUPIED`].
     pub free: usize,
-    /// Cells with occupancy at least 65.
+    /// Cells with occupancy at least [`terra_mapping::OCCUPIED`].
     pub occupied: usize,
     /// Cells with negative occupancy values.
     pub unknown: usize,
@@ -91,7 +91,7 @@ pub fn counts(map: &MapSnapshot) -> Counts {
     for value in &map.occupancy {
         if *value < 0 {
             out.unknown += 1;
-        } else if *value >= 65 {
+        } else if *value >= terra_mapping::OCCUPIED {
             out.occupied += 1;
         } else {
             out.free += 1;
@@ -124,7 +124,7 @@ pub fn symbolic_grid(map: &MapSnapshot, pose_x: f64, pose_y: f64) -> String {
                         let value = map.occupancy[index];
                         if value < 0 {
                             unknown += 1;
-                        } else if value >= 65 {
+                        } else if value >= terra_mapping::OCCUPIED {
                             occupied += 1;
                         } else {
                             free += 1;
@@ -155,7 +155,7 @@ pub fn segment_hits_occupied(map: &MapSnapshot, from: [f64; 2], to: [f64; 2]) ->
         let t = step as f64 / steps.max(1) as f64;
         let x = from[0] + (to[0] - from[0]) * t;
         let y = from[1] + (to[1] - from[1]) * t;
-        occupancy_at(map, x, y).is_some_and(|value| value >= 65)
+        occupancy_at(map, x, y).is_some_and(|value| value >= terra_mapping::OCCUPIED)
     })
 }
 

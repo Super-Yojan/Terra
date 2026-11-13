@@ -13,7 +13,7 @@
 //!    to the edge of what it has seen, the map fills in, and the caller replans.
 use crate::footprint::{self, Unknown};
 use crate::{
-    HybridConfig, HybridGoal, HybridSearch, HybridWaypoint, OCCUPIED, Pose, cell, valid_map,
+    HybridConfig, HybridGoal, HybridSearch, HybridWaypoint, Pose,
 };
 use terra_mapping::MapSnapshot;
 
@@ -65,7 +65,7 @@ impl RouteJob {
         config: &HybridConfig,
         snap: f64,
     ) -> Result<Self, &'static str> {
-        if !valid_map(map)
+        if !map.valid()
             || !start.finite()
             || !x.is_finite()
             || !y.is_finite()
@@ -73,15 +73,15 @@ impl RouteJob {
         {
             return Err("route_invalid_map");
         }
-        cell(map, start.x, start.y).ok_or("route_start_outside_map")?;
+        map.cell(start.x, start.y).ok_or("route_start_outside_map")?;
         let mut moved = false;
         let (mut gx, mut gy) = (x, y);
-        match cell(map, x, y) {
+        match map.at(x, y) {
             None => {
                 (gx, gy) = inside_map(map, x, y, config.footprint.circumradius());
                 moved = true;
             }
-            Some((c, r)) if map.occupancy[r * map.width as usize + c] >= OCCUPIED => {
+            Some(v) if v >= terra_mapping::OCCUPIED => {
                 return Err("route_goal_blocked");
             }
             Some(_) => {}
@@ -191,7 +191,7 @@ fn snap_goal(
 ) -> Option<(f64, f64)> {
     let res = map.resolution;
     let reach = (snap / res).ceil() as i64;
-    let (c0, r0) = cell(map, x, y)?;
+    let (c0, r0) = map.cell(x, y)?;
     let mut candidates = Vec::new();
     for dr in -reach..=reach {
         for dc in -reach..=reach {

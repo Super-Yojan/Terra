@@ -5,7 +5,7 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 use terra_mapping::MapSnapshot;
-use terra_navigation::{Footprint, Pose, footprint_clear, grid_cell, reachable};
+use terra_navigation::{Footprint, Pose, footprint_clear, reachable};
 /// Lifecycle phase of a frontier exploration run.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -575,7 +575,7 @@ impl Explorer {
         });
         let clearance = passable.as_ref().or(tick.map);
         if let Some(map) = tick.map
-            && let Some((cx, cy)) = grid_cell(map, target.x, target.y)
+            && let Some((cx, cy)) = map.cell(target.x, target.y)
             && unknown_cells_around(map, cx, cy, self.config.footprint.circumradius()) == 0
         {
             self.target = None;
@@ -637,9 +637,7 @@ impl Explorer {
         }
         let scan = match self.scan.as_mut() {
             Some(scan) => {
-                let step = (pose.yaw - scan.last_yaw + std::f64::consts::PI)
-                    .rem_euclid(std::f64::consts::TAU)
-                    - std::f64::consts::PI;
+                let step = terra_types::wrap_angle(pose.yaw - scan.last_yaw);
                 scan.turned += step.abs();
                 scan.last_yaw = pose.yaw;
                 *scan
@@ -798,7 +796,7 @@ impl Explorer {
 }
 /// Whether any unknown cell centre lies within `distance` metres of `pose`.
 fn unknown_within(map: &MapSnapshot, pose: Pose, distance: f64) -> bool {
-    let Some((cx, cy)) = terra_navigation::grid_cell(map, pose.x, pose.y) else {
+    let Some((cx, cy)) = map.cell(pose.x, pose.y) else {
         return false;
     };
     let reach = (distance / map.resolution).ceil() as isize + 1;
