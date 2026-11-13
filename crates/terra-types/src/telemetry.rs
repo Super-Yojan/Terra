@@ -12,6 +12,10 @@ use crate::point_capture;
 pub const DEFAULT_MAX_BYTES: usize = 65536;
 /// Byte cap for one occupancy grid snapshot.
 pub const MAP_OCCUPANCY_MAX_BYTES: usize = 2_000_000;
+/// Largest localization report the phone accepts from its platform. The
+/// published `localization` body adds the run and connectivity policy and
+/// stays under [`DEFAULT_MAX_BYTES`].
+pub const LOCALIZATION_INPUT_MAX_BYTES: usize = 4096;
 /// Most outstanding records in one `search/report` batch.
 pub const SEARCH_REPORT_MAX_RECORDS: usize = 128;
 

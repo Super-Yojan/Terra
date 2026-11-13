@@ -283,10 +283,10 @@ impl MobileController {
         self.detach_dashboard_link()
     }
     /// Publish positioning quality without changing the controller's local motion frame.
-    /// Requires version 1 JSON at most 4096 bytes. With no dashboard this is a no-op.
+    /// Requires version 1 JSON within `LOCALIZATION_INPUT_MAX_BYTES`. With no dashboard this is a no-op.
     /// Returns `InvalidInput` for size, JSON, or version rejection, or `Internal` on lock failure.
     pub fn publish_localization(&self, payload: String) -> Result<(), ControllerError> {
-        if payload.len() > 4096 {
+        if payload.len() > telemetry::LOCALIZATION_INPUT_MAX_BYTES {
             return Err(ControllerError::InvalidInput {
                 message: "localization payload too large".into(),
             });
