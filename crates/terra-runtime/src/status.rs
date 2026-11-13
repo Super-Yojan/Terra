@@ -47,7 +47,8 @@ impl Runtime {
         let mut status = self
             .outdoor
             .status(now, outdoor::evidence(self, now), &self.run_id);
-        if !self.outdoor.selected {
+        self.outdoor_admission.annotate(&mut status);
+        if !self.outdoor.selected() {
             return status;
         }
         if let Some(goal) = self.outdoor.mission_status() {
@@ -57,13 +58,13 @@ impl Runtime {
         let hold_reason = |status: &Value| {
             status["hold_reason"]
                 .as_str()
-                .unwrap_or(self.outdoor.phase())
+                .unwrap_or(self.outdoor.phase().as_str())
                 .to_string()
         };
         if !outdoor_motion && !manual && !emergency {
             output.status.reason = hold_reason(&status);
         }
-        if self.outdoor.phase() == "planning"
+        if self.outdoor.phase() == terra_autonomy::outdoor::OutdoorPhase::Planning
             && Reason::known(&output.status.reason).is_some_and(Reason::is_route_blocked)
         {
             status["hold_reason"] = json!("route_blocked");

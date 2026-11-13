@@ -1,6 +1,7 @@
 use terra_mobile::outdoor::{
     CourseFix, Evidence, GpsFix, HeadingFix, OutdoorController, distance_bearing,
 };
+use terra_autonomy::outdoor::OutdoorPhase;
 use terra_navigation::Pose;
 fn evidence() -> Evidence {
     Evidence {
@@ -77,7 +78,7 @@ fn stale_pause_requires_explicit_resume_and_distinct_arrival() {
     c.start(0.001, 0., "one".into(), 5., 1., evidence())
         .unwrap();
     c.tick(5., evidence());
-    assert_eq!(c.phase(), "paused");
+    assert_eq!(c.phase(), OutdoorPhase::Paused);
     sensors(&mut c, 5., 0.);
     assert!(c.tick(5., evidence()).is_none());
     c.resume(5., evidence()).unwrap();
@@ -90,7 +91,7 @@ fn stale_pause_requires_explicit_resume_and_distinct_arrival() {
         sensors(&mut c, t, 0.001);
         c.tick(t, evidence());
         c.tick(t + 0.1, evidence());
-        if c.phase() == "arrived" {
+        if c.phase() == OutdoorPhase::Arrived {
             arrived_at = Some(i);
             break;
         }
@@ -350,7 +351,7 @@ fn rejected_sensor_latches_pause_immediately() {
         )
         .is_err()
     );
-    assert_eq!(c.phase(), "paused");
+    assert_eq!(c.phase(), OutdoorPhase::Paused);
     assert!(c.tick(1.1, evidence()).is_none());
 }
 #[test]
@@ -399,19 +400,19 @@ fn simulated_geographic_mission_confirms_only_after_stopping() {
             sensors_at(&mut c, t, north / 111_195., 0., e.pose);
         }
         c.tick(t, e);
-        if c.phase() == "planning" {
+        if c.phase() == OutdoorPhase::Planning {
             north += 0.3 * 0.05;
             e.pose.x = north;
         }
-        if c.phase() == "confirming_arrival" {
+        if c.phase() == OutdoorPhase::ConfirmingArrival {
             saw_confirmation = true;
         }
-        if c.phase() == "arrived" {
+        if c.phase() == OutdoorPhase::Arrived {
             break;
         }
     }
     assert!(saw_confirmation);
-    assert_eq!(c.phase(), "arrived");
+    assert_eq!(c.phase(), OutdoorPhase::Arrived);
     assert!((5.0..6.1).contains(&north));
 }
 
@@ -424,7 +425,7 @@ fn vio_loss_pauses_without_encoders_and_recovery_does_not_resume() {
     let mut e = evidence();
     e.pose_ready = false;
     assert!(c.tick(1.1, e).is_none());
-    assert_eq!(c.phase(), "paused");
+    assert_eq!(c.phase(), OutdoorPhase::Paused);
     assert!(c.tick(1.2, evidence()).is_none());
     c.resume(1.2, evidence()).unwrap();
     assert!(c.tick(1.2, evidence()).is_some());
@@ -444,7 +445,7 @@ fn three_metre_default_radius_still_accepts_ten_metre_gps_but_not_worse() {
         1.1,
     )
     .unwrap();
-    assert_eq!(c.radius, 3.);
+    assert_eq!(c.arrival_radius(), 3.);
     assert!(c.readiness(1.1, evidence()).is_none());
     c.gps(
         GpsFix {

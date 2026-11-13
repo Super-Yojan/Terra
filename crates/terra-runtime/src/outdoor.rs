@@ -1,13 +1,27 @@
 //! Source admission and integration with the existing L3 local planner.
 use crate::*;
-use terra_autonomy::outdoor::Evidence;
+use terra_autonomy::outdoor::{Evidence, NavigationSource, OutdoorPhase};
 use terra_waypoint::MAX_LOCAL_GOAL_M;
 
-/// Replay memory for outdoor source requests and geographic goals.
+/// Outdoor request admission: replay memory for source requests and
+/// geographic goals, the navigation revision requests are reviewed against,
+/// and the last source request's token and result.
 #[derive(Default)]
 pub(crate) struct Admission {
     requests: replay::ReplayGuard<128>,
     goals: replay::ReplayGuard<128>,
+    /// Bumped by every settings change a reviewed outdoor request depends on.
+    pub(crate) revision: u64,
+    token: Option<String>,
+    result: Option<String>,
+}
+impl Admission {
+    /// Add the request bookkeeping to the controller's `outdoor` status.
+    pub(crate) fn annotate(&self, status: &mut serde_json::Value) {
+        status["navigation_revision"] = self.revision.into();
+        status["token"] = self.token.clone().into();
+        status["result"] = self.result.clone().into();
+    }
 }
 
 pub fn evidence(b: &Runtime, now: f64) -> Evidence {
@@ -15,10 +29,7 @@ pub fn evidence(b: &Runtime, now: f64) -> Evidence {
         pose: b.pose.unwrap_or_default().0,
         pose_ready: pose_quality::ready(b, now),
         // L2 direct drives without the occupancy map, so a stale map never holds it.
-        map_ready: !b.autonomy.needs_map()
-            || b.map.as_ref().is_some_and(|(_, t, _)| {
-                now.is_finite() && (0.0..=b.autonomy.map_freshness_timeout()).contains(&(now - t))
-            }),
+        map_ready: !b.autonomy.needs_map() || b.autonomy.map_fresh(now, b.map.as_ref().map(|m| m.1)),
         hardware_ready: b.hardware.is_some_and(|h| h.fresh_and_ready(now)),
         authority: b.autonomy.outdoor_authority(),
     }
@@ -45,15 +56,15 @@ pub fn request(
     if !b.outdoor_admission.requests.admit(token) {
         return Err(invalid("replayed request"));
     }
-    b.outdoor.token = Some(token.into());
+    b.outdoor_admission.token = Some(token.into());
     let result = (|| {
         if v["schema_version"] != 1
             || v["run_id"] != b.run_id
-            || v["navigation_revision"] != b.outdoor.revision
+            || v["navigation_revision"] != b.outdoor_admission.revision
         {
             return Err(invalid("run or navigation revision changed"));
         }
-        if !b.outdoor.supported {
+        if !b.outdoor.supported() {
             return Err(invalid("outdoor GPS unsupported"));
         }
         let e = evidence(b, now);
@@ -62,10 +73,8 @@ pub fn request(
         }
         let source = v["source"]
             .as_str()
+            .and_then(NavigationSource::parse)
             .ok_or_else(|| invalid("invalid source"))?;
-        if !matches!(source, "local" | "outdoor_gps") {
-            return Err(invalid("invalid source"));
-        }
         let output_idle = b.hardware.is_some_and(|h| h.fresh_and_idle(now));
         if !output_idle || b.outdoor.active() || b.autonomy.has_active_goal(e.pose) {
             return Err(invalid(
@@ -75,23 +84,18 @@ pub fn request(
         let radius = v
             .get("arrival_radius_m")
             .and_then(|v| v.as_f64())
-            .unwrap_or(b.outdoor.radius);
-        if !radius.is_finite() || !(2.0..=20.).contains(&radius) {
-            return Err(invalid("invalid arrival radius"));
-        }
-        if b.outdoor.revision == u64::MAX {
+            .unwrap_or(b.outdoor.arrival_radius());
+        if b.outdoor_admission.revision == u64::MAX {
             return Err(invalid("revision exhausted"));
         }
+        b.outdoor.select_source(source, radius).map_err(invalid)?;
         b.bump_navigation_revision();
-        b.outdoor.cancel();
-        b.outdoor.selected = source == "outdoor_gps";
-        b.outdoor.radius = radius;
         b.autonomy
             .accept_goal(&terra_waypoint::GoalCommand::Cancel, MAX_LOCAL_GOAL_M);
         b.controller.reset();
         Ok(())
     })();
-    b.outdoor.result = Some(match &result {
+    b.outdoor_admission.result = Some(match &result {
         Ok(()) => "accepted".into(),
         Err(e) => format!("rejected: {e}"),
     });
@@ -103,7 +107,7 @@ pub fn goal(b: &mut Runtime, g: &terra_waypoint::GoalCommand, now: f64, radius: 
         b.outdoor.cancel();
         return b.autonomy.accept_goal(g, MAX_LOCAL_GOAL_M);
     }
-    if !b.outdoor.selected {
+    if !b.outdoor.selected() {
         return b.autonomy.accept_goal(g, MAX_LOCAL_GOAL_M);
     }
     let GoalCommand::Wgs84 {
@@ -153,7 +157,7 @@ pub fn goal(b: &mut Runtime, g: &terra_waypoint::GoalCommand, now: f64, radius: 
     true
 }
 pub fn update(b: &mut Runtime, now: f64) -> bool {
-    if !b.outdoor.selected {
+    if !b.outdoor.selected() {
         b.autonomy.set_outdoor_destination(None);
         return true;
     }
@@ -165,7 +169,7 @@ pub fn update(b: &mut Runtime, now: f64) -> bool {
         // destination: the level keeps working locally until an explicit resume.
         b.autonomy
             .set_outdoor_destination(b.outdoor.destination_local(e.pose));
-        if b.outdoor.phase() == "arrived" {
+        if b.outdoor.phase() == OutdoorPhase::Arrived {
             b.autonomy.finish_explore_at_destination();
         }
         return true;
@@ -174,12 +178,14 @@ pub fn update(b: &mut Runtime, now: f64) -> bool {
     if let Some((x, y)) = guidance {
         b.autonomy.update_guidance(x, y);
     }
-    if b.outdoor.phase() != "planning" {
+    if b.outdoor.phase() != OutdoorPhase::Planning {
         // Never retain a moving local target through a pause or arrival confirmation.
         // With recovered sensors, an idle follower permits an explicit mission resume.
         b.autonomy.clear_guidance();
     }
-    !b.outdoor.active() || b.outdoor.phase() == "planning" || b.outdoor.recovery_ready(now, e)
+    !b.outdoor.active()
+        || b.outdoor.phase() == OutdoorPhase::Planning
+        || b.outdoor.recovery_ready(now, e)
 }
 
 /// Decode the outdoor envelope before stripping its reviewed metadata for the legacy local decoder.
@@ -190,9 +196,9 @@ pub fn dispatch_goal(b: &mut Runtime, bytes: &[u8], now: f64, age: f64) -> bool 
     let Ok(mut value) = serde_json::from_slice::<serde_json::Value>(bytes) else {
         return false;
     };
-    let outdoor = b.outdoor.selected && value["cancel"] != true;
+    let outdoor = b.outdoor.selected() && value["cancel"] != true;
     let radius = value["arrival_radius_m"].as_f64();
-    let bound = value["run_id"] == b.run_id && value["navigation_revision"] == b.outdoor.revision;
+    let bound = value["run_id"] == b.run_id && value["navigation_revision"] == b.outdoor_admission.revision;
     if outdoor {
         if let Some(o) = value.as_object_mut() {
             o.remove("run_id");
@@ -216,5 +222,5 @@ pub fn dispatch_goal(b: &mut Runtime, bytes: &[u8], now: f64, age: f64) -> bool 
         b.autonomy.reject_goal(&g, "outdoor_review_expired");
         return false;
     }
-    goal(b, &g, now, radius.unwrap_or(b.outdoor.radius))
+    goal(b, &g, now, radius.unwrap_or(b.outdoor.arrival_radius()))
 }

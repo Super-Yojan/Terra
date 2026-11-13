@@ -1,6 +1,8 @@
 //! Geographic mission state, independent of the local pose and occupancy frame.
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use terra_navigation::Pose;
+use terra_types::timing::fresh;
 use terra_waypoint::{EARTH_RADIUS_M, valid_coordinates as coordinates};
 mod anchor;
 mod heading;
@@ -9,8 +11,78 @@ pub use heading::{CourseFix, HeadingFusion, Source as HeadingSource};
 /// Arrival radius when the operator does not choose one, in metres. GPS accuracy
 /// no longer has to fit inside it: arrival uses the smoothed anchor position.
 const DEFAULT_ARRIVAL_RADIUS_M: f64 = 3.;
+/// Arrival radii an operator may choose, in metres.
+pub const ARRIVAL_RADIUS_RANGE_M: std::ops::RangeInclusive<f64> = 2.0..=20.0;
 /// Guidance lookahead along the destination bearing, in metres.
 const LOOKAHEAD_M: f64 = 3.;
+/// Oldest GPS fix guidance or geolocation uses, in seconds.
+const GPS_FRESHNESS_SECONDS: f64 = 3.;
+/// Worst GPS accuracy guidance or geolocation accepts, in metres.
+const GPS_MAX_ACCURACY_M: f64 = 10.;
+/// Oldest compass sample, and oldest fused heading, guidance uses, in seconds.
+const HEADING_FRESHNESS_SECONDS: f64 = 2.;
+/// Worst fused heading accuracy guidance or geolocation accepts, in degrees.
+const HEADING_MAX_ACCURACY_DEG: f64 = 35.;
+/// Farthest local point [`OutdoorController::geolocate`] places, in metres.
+const GEOLOCATE_MAX_DISTANCE_M: f64 = 20.;
+/// Farthest destination a mission may start toward, in metres.
+const MAX_GOAL_DISTANCE_M: f64 = 500.;
+/// Distinct GPS fixes inside the arrival radius that confirm arrival.
+const ARRIVAL_FIXES: u8 = 3;
+/// Shortest interval between guidance target updates, in seconds.
+const GUIDANCE_INTERVAL_SECONDS: f64 = 0.5;
+
+/// Where navigation goals come from: the local frame, or GPS destinations.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NavigationSource {
+    #[default]
+    Local,
+    OutdoorGps,
+}
+impl NavigationSource {
+    /// Wire name: `local` or `outdoor_gps`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            NavigationSource::Local => "local",
+            NavigationSource::OutdoorGps => "outdoor_gps",
+        }
+    }
+    /// The source with this wire name.
+    pub fn parse(name: &str) -> Option<Self> {
+        [NavigationSource::Local, NavigationSource::OutdoorGps]
+            .into_iter()
+            .find(|s| s.as_str() == name)
+    }
+}
+
+/// Where a geographic mission stands.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OutdoorPhase {
+    /// No mission.
+    #[default]
+    Idle,
+    /// Guiding toward the destination.
+    Planning,
+    /// Held until an explicit resume (sensors, authority or operator).
+    Paused,
+    /// Inside the arrival radius, waiting for more fixes to agree.
+    ConfirmingArrival,
+    Arrived,
+}
+impl OutdoorPhase {
+    /// Wire name, such as `confirming_arrival`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            OutdoorPhase::Idle => "idle",
+            OutdoorPhase::Planning => "planning",
+            OutdoorPhase::Paused => "paused",
+            OutdoorPhase::ConfirmingArrival => "confirming_arrival",
+            OutdoorPhase::Arrived => "arrived",
+        }
+    }
+}
 #[derive(Clone, Copy, Debug)]
 pub struct GpsFix {
     pub timestamp: f64,
@@ -42,19 +114,18 @@ struct Mission {
     last_fix: Option<f64>,
 }
 pub struct OutdoorController {
-    pub supported: bool,
-    pub selected: bool,
-    pub revision: u64,
-    pub radius: f64,
-    pub token: Option<String>,
-    pub result: Option<String>,
+    /// The platform measures GPS and a mount-aware true heading.
+    supported: bool,
+    source: NavigationSource,
+    /// Arrival radius for the next mission, in metres.
+    radius: f64,
     gps: Option<GpsFix>,
     gps_time: Option<f64>,
     heading_time: Option<f64>,
     heading: HeadingFusion,
     anchor: GeoAnchor,
     mission: Option<Mission>,
-    phase: &'static str,
+    phase: OutdoorPhase,
     hold: Option<&'static str>,
     last_guidance: Option<f64>,
     remaining: Option<f64>,
@@ -63,26 +134,20 @@ impl Default for OutdoorController {
     fn default() -> Self {
         Self {
             supported: false,
-            selected: false,
-            revision: 0,
+            source: NavigationSource::Local,
             radius: DEFAULT_ARRIVAL_RADIUS_M,
-            token: None,
-            result: None,
             gps: None,
             gps_time: None,
             heading_time: None,
             heading: HeadingFusion::default(),
             anchor: GeoAnchor::default(),
             mission: None,
-            phase: "idle",
+            phase: OutdoorPhase::Idle,
             hold: None,
             last_guidance: None,
             remaining: None,
         }
     }
-}
-fn fresh(now: f64, t: f64, limit: f64) -> bool {
-    now.is_finite() && t.is_finite() && t >= 0. && (0.0..=limit).contains(&(now - t))
 }
 /// Great-circle metres and true-north clockwise bearing in degrees.
 pub fn distance_bearing(lat: f64, lon: f64, to_lat: f64, to_lon: f64) -> (f64, f64) {
@@ -108,17 +173,57 @@ pub fn destination(lat: f64, lon: f64, distance: f64, bearing: f64) -> (f64, f64
     )
 }
 impl OutdoorController {
+    /// Accept outdoor GPS navigation (or not), for platforms with measured
+    /// GPS and mount-aware true heading.
+    pub fn set_supported(&mut self, supported: bool) {
+        self.supported = supported;
+    }
+    pub fn supported(&self) -> bool {
+        self.supported
+    }
+    /// Whether goals come from GPS destinations.
+    pub fn selected(&self) -> bool {
+        self.source == NavigationSource::OutdoorGps
+    }
+    /// Arrival radius for the next mission, in metres.
+    pub fn arrival_radius(&self) -> f64 {
+        self.radius
+    }
+    /// Switch the goal source and the arrival radius for later missions,
+    /// cancelling any mission. Rejects a radius outside
+    /// [`ARRIVAL_RADIUS_RANGE_M`] and an unsupported GPS source, changing nothing.
+    pub fn select_source(
+        &mut self,
+        source: NavigationSource,
+        radius: f64,
+    ) -> Result<(), &'static str> {
+        if source == NavigationSource::OutdoorGps && !self.supported {
+            return Err("outdoor GPS unsupported");
+        }
+        if !ARRIVAL_RADIUS_RANGE_M.contains(&radius) {
+            return Err("invalid arrival radius");
+        }
+        self.cancel();
+        self.source = source;
+        self.radius = radius;
+        Ok(())
+    }
+    /// Back to local goals, cancelling any mission; the radius stays.
+    pub fn select_local(&mut self) {
+        self.cancel();
+        self.source = NavigationSource::Local;
+    }
     pub fn invalidate_sensors(&mut self) {
         self.gps = None;
         self.heading.reset();
         self.anchor.reset();
         self.pause("tracking_lost");
     }
-    pub fn phase(&self) -> &str {
+    pub fn phase(&self) -> OutdoorPhase {
         self.phase
     }
     pub fn active(&self) -> bool {
-        self.mission.is_some() && self.phase != "arrived"
+        self.mission.is_some() && self.phase != OutdoorPhase::Arrived
     }
     /// Sensor recovery restores readiness, but never releases the explicit resume latch.
     pub fn recovery_ready(&self, now: f64, e: Evidence) -> bool {
@@ -129,7 +234,7 @@ impl OutdoorController {
         if !coordinates(s.latitude, s.longitude)
             || !s.accuracy.is_finite()
             || s.accuracy < 0.
-            || !fresh(now, s.timestamp, 3.)
+            || !fresh(now, Some(s.timestamp), GPS_FRESHNESS_SECONDS)
             || self.gps_time.is_some_and(|t| s.timestamp <= t)
         {
             self.gps = None;
@@ -147,7 +252,7 @@ impl OutdoorController {
             || !(0.0..360.).contains(&s.true_heading)
             || !s.accuracy.is_finite()
             || s.accuracy < 0.
-            || !fresh(now, s.timestamp, 2.)
+            || !fresh(now, Some(s.timestamp), HEADING_FRESHNESS_SECONDS)
             || self.heading_time.is_some_and(|t| s.timestamp <= t)
         {
             self.heading.reset();
@@ -187,7 +292,7 @@ impl OutdoorController {
     /// `None` without a mission, a position or a heading.
     pub fn destination_local(&self, pose: Pose) -> Option<(f64, f64)> {
         // Kept through arrival so L5 sees it is there; withdrawn while paused.
-        let m = self.mission.as_ref().filter(|_| self.phase != "paused")?;
+        let m = self.mission.as_ref().filter(|_| self.phase != OutdoorPhase::Paused)?;
         let (lat, lon) = self.guidance_position()?;
         let (distance, bearing) = distance_bearing(lat, lon, m.latitude, m.longitude);
         let yaw = self.heading.local_yaw(bearing)?;
@@ -195,18 +300,14 @@ impl OutdoorController {
     }
     /// Latitude, longitude and rough one-sigma accuracy in metres of local point
     /// (`x`, `y`) seen from rover pose `from`. `None` unless the GPS fix is fresh
-    /// and within 10 m and the fused heading is fresh and within 35°.
+    /// and accurate enough, the fused heading is fresh and accurate enough, and
+    /// the point is within 20 m.
     pub fn geolocate(&self, now: f64, from: Pose, x: f64, y: f64) -> Option<(f64, f64, f64)> {
-        let g = self
-            .gps
-            .filter(|g| fresh(now, g.timestamp, 3.) && g.accuracy <= 10.)?;
-        let (_, heading_accuracy, age) = self.heading.heading(now)?;
-        if !(0.0..=2.).contains(&age) || heading_accuracy > 35. {
-            return None;
-        }
+        let g = self.gps.filter(|g| self.gps_good(now, g))?;
+        let (_, heading_accuracy, _) = self.heading_good(now)?;
         let (dx, dy) = (x - from.x, y - from.y);
         let distance = dx.hypot(dy);
-        if !distance.is_finite() || distance > 20. {
+        if !distance.is_finite() || distance > GEOLOCATE_MAX_DISTANCE_M {
             return None;
         }
         let bearing = self
@@ -217,16 +318,25 @@ impl OutdoorController {
         let accuracy = g.accuracy + distance * heading_accuracy.to_radians().sin();
         coordinates(lat, lon).then_some((lat, lon, accuracy))
     }
+    fn gps_good(&self, now: f64, g: &GpsFix) -> bool {
+        fresh(now, Some(g.timestamp), GPS_FRESHNESS_SECONDS) && g.accuracy <= GPS_MAX_ACCURACY_M
+    }
+    /// The fused heading, when fresh and accurate enough to steer by.
+    fn heading_good(&self, now: f64) -> Option<(f64, f64, f64)> {
+        self.heading.heading(now).filter(|&(_, accuracy, age)| {
+            (0.0..HEADING_FRESHNESS_SECONDS).contains(&age)
+                && accuracy <= HEADING_MAX_ACCURACY_DEG
+        })
+    }
     pub fn readiness(&self, now: f64, e: Evidence) -> Option<&'static str> {
-        if self.gps.is_none_or(|g| !fresh(now, g.timestamp, 3.)) {
-            Some("gps_stale")
-        } else if self.gps.is_some_and(|g| g.accuracy > 10.) {
-            Some("gps_uncertain")
-        } else if self
-            .heading
-            .heading(now)
-            .is_none_or(|(_, accuracy, age)| !(0.0..=2.).contains(&age) || accuracy > 35.)
+        if self
+            .gps
+            .is_none_or(|g| !fresh(now, Some(g.timestamp), GPS_FRESHNESS_SECONDS))
         {
+            Some("gps_stale")
+        } else if self.gps.is_some_and(|g| !self.gps_good(now, &g)) {
+            Some("gps_uncertain")
+        } else if self.heading_good(now).is_none() {
             Some("heading_uncertain")
         } else if !e.pose_ready {
             Some("tracking_lost")
@@ -248,8 +358,7 @@ impl OutdoorController {
         e: Evidence,
     ) -> Result<(), &'static str> {
         if !coordinates(lat, lon)
-            || !radius.is_finite()
-            || !(2.0..=20.).contains(&radius)
+            || !ARRIVAL_RADIUS_RANGE_M.contains(&radius)
             || !crate::valid_token(&token)
         {
             return Err("invalid_goal");
@@ -261,7 +370,7 @@ impl OutdoorController {
             return Err("authority_lost");
         }
         let g = self.gps.unwrap();
-        if distance_bearing(g.latitude, g.longitude, lat, lon).0 > 500. {
+        if distance_bearing(g.latitude, g.longitude, lat, lon).0 > MAX_GOAL_DISTANCE_M {
             return Err("goal_too_far");
         }
         self.mission = Some(Mission {
@@ -272,7 +381,7 @@ impl OutdoorController {
             count: 0,
             last_fix: None,
         });
-        self.phase = "planning";
+        self.phase = OutdoorPhase::Planning;
         self.hold = None;
         self.last_guidance = None;
         self.remaining = None;
@@ -280,7 +389,7 @@ impl OutdoorController {
     }
     pub fn pause(&mut self, reason: &'static str) {
         if self.active() {
-            self.phase = "paused";
+            self.phase = OutdoorPhase::Paused;
             self.hold = Some(reason);
             self.last_guidance = None;
             if let Some(m) = self.mission.as_mut() {
@@ -290,7 +399,7 @@ impl OutdoorController {
     }
     pub fn resume(&mut self, now: f64, e: Evidence) -> Result<(), &'static str> {
         self.mission.as_ref().ok_or("no_mission")?;
-        if self.phase != "paused" {
+        if self.phase != OutdoorPhase::Paused {
             return Err("not_paused");
         }
         if let Some(why) = self.readiness(now, e) {
@@ -299,14 +408,14 @@ impl OutdoorController {
         if !e.authority {
             return Err("authority_lost");
         }
-        self.phase = "planning";
+        self.phase = OutdoorPhase::Planning;
         self.hold = None;
         self.last_guidance = None;
         Ok(())
     }
     pub fn cancel(&mut self) {
         self.mission = None;
-        self.phase = "idle";
+        self.phase = OutdoorPhase::Idle;
         self.hold = None;
         self.last_guidance = None;
         self.remaining = None;
@@ -324,7 +433,7 @@ impl OutdoorController {
             self.pause("authority_lost");
             return None;
         }
-        if self.phase == "paused" {
+        if self.phase == OutdoorPhase::Paused {
             return None;
         }
         let g = self.gps?;
@@ -339,10 +448,10 @@ impl OutdoorController {
                 m.count += 1;
                 m.last_fix = Some(g.timestamp);
             }
-            self.phase = if m.count >= 3 {
-                "arrived"
+            self.phase = if m.count >= ARRIVAL_FIXES {
+                OutdoorPhase::Arrived
             } else {
-                "confirming_arrival"
+                OutdoorPhase::ConfirmingArrival
             };
             self.last_guidance = None;
             return None;
@@ -350,8 +459,11 @@ impl OutdoorController {
         m.count = 0;
         m.last_fix = Some(g.timestamp);
         let (to_lat, to_lon) = (m.latitude, m.longitude);
-        self.phase = "planning";
-        if self.last_guidance.is_some_and(|t| now - t < 0.5) {
+        self.phase = OutdoorPhase::Planning;
+        if self
+            .last_guidance
+            .is_some_and(|t| now - t < GUIDANCE_INTERVAL_SECONDS)
+        {
             return None;
         }
         self.last_guidance = Some(now);
@@ -366,19 +478,21 @@ impl OutdoorController {
             e.pose.y + lookahead * yaw.sin(),
         ))
     }
+    /// Status for the `outdoor` topic, without the request bookkeeping the
+    /// host adds (`navigation_revision`, `token`, `result`).
     pub fn status(&self, now: f64, e: Evidence, run: &str) -> Value {
         let radius = self.mission.as_ref().map_or(self.radius, |m| m.radius);
         let reason = self.hold.or_else(|| self.readiness(now, e));
         let heading = self.heading.heading(now);
-        json!({"schema_version":1,"capability":"outdoor_gps","supported":self.supported,"acknowledged":self.selected,
-   "source":if self.selected {"outdoor_gps"} else {"local"},"run_id":run,"navigation_revision":self.revision,
-   "ready":reason.is_none() && self.phase!="paused", "hold_reason":reason,"phase":self.phase,"arrival_radius_m":radius,
+        json!({"schema_version":1,"capability":"outdoor_gps","supported":self.supported,"acknowledged":self.selected(),
+   "source":self.source,"run_id":run,
+   "ready":reason.is_none() && self.phase!=OutdoorPhase::Paused, "hold_reason":reason,"phase":self.phase,"arrival_radius_m":radius,
    "gps":self.gps.map(|g|json!({"latitude":g.latitude,"longitude":g.longitude,"accuracy_m":g.accuracy,"age_s":now-g.timestamp})),
    "gps_age_s":self.gps.map(|g|now-g.timestamp),"gps_accuracy_m":self.gps.map(|g|g.accuracy),
    "heading_age_s":heading.map(|h|h.2),"heading_accuracy_deg":heading.map(|h|h.1),"heading_deg":heading.map(|h|h.0),
    "heading_source":self.heading.source().map(|s|s.name()),"heading_correction_age_s":self.heading.correction_age(now),
    "destination":self.mission.as_ref().map(|m|json!({"latitude":m.latitude,"longitude":m.longitude})),
-   "remaining_m":self.remaining,"token":self.token,"result":self.result,"goal_levels":crate::Level::ALL.iter().filter(|l| l.accepts_outdoor_goal()).map(|l| l.as_str()).collect::<Vec<_>>(),
+   "remaining_m":self.remaining,"goal_levels":crate::Level::ALL.iter().filter(|l| l.accepts_outdoor_goal()).map(|l| l.as_str()).collect::<Vec<_>>(),
    "destination_local":self.destination_local(e.pose).map(|(x,y)|json!({"x":x,"y":y})),
    "anchor":self.anchor.position().map(|(_,_,sigma)|json!({"sigma_m":sigma,"reanchors":self.anchor.reanchors,"innovation_m":self.anchor.last_innovation})),
    "mission_token":self.mission.as_ref().map(|m|&m.token)})
@@ -386,7 +500,7 @@ impl OutdoorController {
     pub fn mission_status(&self) -> Option<terra_waypoint::WaypointStatus> {
         let m = self.mission.as_ref()?;
         let mut s = terra_waypoint::WaypointStatus::idle();
-        s.state = if self.phase == "arrived" {
+        s.state = if self.phase == OutdoorPhase::Arrived {
             terra_waypoint::GoalState::Arrived
         } else {
             terra_waypoint::GoalState::Active

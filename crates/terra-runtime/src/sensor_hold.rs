@@ -73,7 +73,7 @@ impl Runtime {
             }
             self.holds.held = true;
             if !self.holds.goal_dropped
-                && !self.outdoor.selected
+                && !self.outdoor.selected()
                 && now - since >= SENSOR_HOLD_GOAL_TIMEOUT_SECONDS
                 && self
                     .autonomy

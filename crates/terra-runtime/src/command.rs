@@ -34,7 +34,7 @@ impl Runtime {
             }
         }
         // A local-frame goal or a cancel is not bound to the outdoor review.
-        let strip = if kind == requests::GOAL && (!self.outdoor.selected || v["cancel"] == true) {
+        let strip = if kind == requests::GOAL && (!self.outdoor.selected() || v["cancel"] == true) {
             Strip::Authority
         } else {
             request.strip
