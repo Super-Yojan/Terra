@@ -179,7 +179,7 @@ fn approach_point(map: &MapSnapshot, pose: Pose, target: [f64; 2]) -> Option<[f6
                 target[0] + ring * angle.cos(),
                 target[1] + ring * angle.sin(),
             ];
-            if geom::occupancy_at(map, point[0], point[1])
+            if map.at(point[0], point[1])
                 .is_some_and(|value| (0..terra_mapping::OCCUPIED).contains(&value))
             {
                 candidates.push((ring_index, step, point));
@@ -381,7 +381,7 @@ fn local_viewpoint(map: &MapSnapshot, pose: Pose, cluster: &[(f64, f64)]) -> Opt
         for (dx, dy) in [(0.1, 0.0), (-0.1, 0.0), (0.0, 0.1), (0.0, -0.1)] {
             let x = cell.0 + dx;
             let y = cell.1 + dy;
-            if geom::occupancy_at(map, x, y)
+            if map.at(x, y)
                 .is_some_and(|value| (0..terra_mapping::OCCUPIED).contains(&value))
             {
                 sx += x;
