@@ -1,0 +1,32 @@
+{
+  "description": "BLE actuator control contract shared by terra-actuators (phone encoder) and apps/rover-pi (rover decoder). `rust` and `pi` say whether each side accepts the envelope. Change both implementations and this file together.",
+  "json_limit": 16384,
+  "max_actuators": 16,
+  "envelopes": [
+    {"operation": "capabilities", "payload": {}, "rust": true, "pi": true},
+    {"operation": "read_layout", "payload": {}, "rust": true, "pi": true},
+    {"operation": "reset_fault", "payload": {}, "rust": true, "pi": true},
+    {"operation": "commit_layout", "payload": {"staged_revision": 2, "staged_request_id": 7}, "rust": true, "pi": true},
+    {"operation": "stage_layout", "payload": {"layout": {"schema_version": 1, "revision": 2, "actuators": [
+      {"id": 0, "name": "left", "port": "M0", "kind": "dc_motor", "inverted": false,
+       "limits": {"min": -1.0, "max": 1.0},
+       "calibration": {"type": "dc_motor", "max_power_fraction": 1.0},
+       "route": {"type": "left_effort"}, "safe": {"type": "zero"}}
+    ]}}, "rust": true, "pi": true},
+    {"operation": "reset_emergency_stop", "payload": {}, "rust": true, "pi": false},
+    {"operation": "layout_index", "payload": {}, "rust": false, "pi": true},
+    {"operation": "read_actuator", "payload": {"expected_revision": 2, "actuator_id": 0}, "rust": false, "pi": true},
+    {"operation": "read_drive_profile", "payload": {"expected_revision": 2, "actuator_id": 0}, "rust": false, "pi": true},
+    {"operation": "begin_layout_edit", "payload": {"expected_revision": 2, "mode": "existing"}, "rust": false, "pi": true},
+    {"operation": "stage_actuator", "payload": {"edit_token": "t", "edit_version": 1, "actuator":
+      {"id": 1, "name": "right", "port": "M1", "kind": "dc_motor", "inverted": false,
+       "limits": {"min": -1.0, "max": 1.0},
+       "calibration": {"type": "dc_motor", "max_power_fraction": 1.0},
+       "route": {"type": "right_effort"}, "safe": {"type": "zero"}}}, "rust": false, "pi": true},
+    {"operation": "remove_actuator", "payload": {"edit_token": "t", "edit_version": 1, "actuator_id": 1}, "rust": false, "pi": true},
+    {"operation": "validate_layout_edit", "payload": {"edit_token": "t", "edit_version": 1}, "rust": false, "pi": true},
+    {"operation": "commit_layout_edit", "payload": {"edit_token": "t", "edit_version": 1, "base_revision": 2}, "rust": false, "pi": true},
+    {"operation": "discard_layout_edit", "payload": {"edit_token": "t"}, "rust": false, "pi": true},
+    {"operation": "reboot", "payload": {}, "rust": false, "pi": false}
+  ]
+}

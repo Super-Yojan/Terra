@@ -4,7 +4,9 @@ use std::sync::{Arc, Mutex};
 
 use serde::Deserialize;
 use terra_actuators::protocol::{self, CommandFrame, CommandKind, RelaySample};
-use terra_actuators::{ActuatorValue, Capabilities, DriveProfile, Layout, RoutingInput};
+use terra_actuators::{
+    ActuatorValue, Capabilities, DriveProfile, DriveProfileSet, Layout, RoutingInput,
+};
 #[derive(Debug, thiserror::Error, uniffi::Error)]
 /// Validation, JSON decoding, routing, or binary-protocol encoding failure.
 pub enum MobileActuatorError {
@@ -62,7 +64,7 @@ pub fn actuator_route(
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct FrameWire {
-    kind: String,
+    kind: CommandKind,
     session: u32,
     revision: u32,
     sequence: u32,
@@ -81,15 +83,8 @@ pub fn actuator_encode_frame(frame_json: String) -> Result<Vec<u8>, MobileActuat
     if wire.sequence == u32::MAX {
         return Err(invalid("sequence exhausted"));
     }
-    let kind = match wire.kind.as_str() {
-        "drive" => CommandKind::Drive,
-        "arm" => CommandKind::Arm,
-        "disarm" => CommandKind::Disarm,
-        "emergency_stop" => CommandKind::EmergencyStop,
-        _ => return Err(invalid("unknown command kind")),
-    };
     protocol::encode_frame(&CommandFrame {
-        kind,
+        kind: wire.kind,
         session: wire.session,
         revision: wire.revision,
         sequence: wire.sequence,
@@ -128,24 +123,6 @@ pub fn actuator_supports_feedback(layout_json: String) -> Result<bool, MobileAct
     Ok(terra_actuators::supports_feedback(&layout))
 }
 
-fn stick_input(forward: f32, turn: f32) -> Result<RoutingInput, MobileActuatorError> {
-    if !forward.is_finite()
-        || !turn.is_finite()
-        || !(-1.0..=1.0).contains(&forward)
-        || !(-1.0..=1.0).contains(&turn)
-    {
-        return Err(invalid("stick inputs must be finite and in [-1, 1]"));
-    }
-    // Positive turn is a left turn: left effort falls, right effort rises.
-    Ok(RoutingInput {
-        left_effort: (forward - turn).clamp(-1.0, 1.0),
-        right_effort: (forward + turn).clamp(-1.0, 1.0),
-        forward,
-        turn,
-        servo_positions: BTreeMap::new(),
-    })
-}
-
 #[uniffi::export]
 /// Route a stick through a full layout.
 ///
@@ -163,24 +140,12 @@ pub fn actuator_route_stick(
     turn: f32,
 ) -> Result<String, MobileActuatorError> {
     let layout: Layout = parse(&layout_json)?;
-    let values =
-        terra_actuators::route_commands(&layout, &stick_input(forward, turn)?).map_err(invalid)?;
+    let values = terra_actuators::route_commands(
+        &layout,
+        &RoutingInput::stick(forward, turn).map_err(invalid)?,
+    )
+    .map_err(invalid)?;
     serde_json::to_string(&values).map_err(invalid)
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct DriveProfileSet {
-    #[serde(default = "default_schema")]
-    schema_version: u8,
-    #[allow(dead_code)]
-    #[serde(default)]
-    revision: u32,
-    actuators: Vec<DriveProfile>,
-}
-
-fn default_schema() -> u8 {
-    1
 }
 
 #[uniffi::export]
@@ -199,12 +164,12 @@ pub fn actuator_route_profiles(
     turn: f32,
 ) -> Result<String, MobileActuatorError> {
     let set: DriveProfileSet = parse(&profiles_json)?;
-    if set.schema_version != 1 {
-        return Err(invalid("unsupported drive profile schema"));
-    }
-    let values =
-        terra_actuators::route_drive_profiles(&set.actuators, &stick_input(forward, turn)?)
-            .map_err(invalid)?;
+    set.validate().map_err(invalid)?;
+    let values = terra_actuators::route_drive_profiles(
+        &set.actuators,
+        &RoutingInput::stick(forward, turn).map_err(invalid)?,
+    )
+    .map_err(invalid)?;
     serde_json::to_string(&values).map_err(invalid)
 }
 
@@ -227,34 +192,15 @@ impl ActiveLayout {
     /// Accepts drive profiles, or a full layout (as framed sessions read it),
     /// whose port and calibration are dropped.
     pub(crate) fn parse(profiles_json: &str) -> Result<Self, MobileActuatorError> {
-        let (schema_version, profiles) = match parse::<DriveProfileSet>(profiles_json) {
-            Ok(set) => (set.schema_version, set.actuators),
-            Err(profile_error) => match parse::<Layout>(profiles_json) {
-                Ok(layout) => (
-                    layout.schema_version,
-                    layout
-                        .actuators
-                        .into_iter()
-                        .map(|a| DriveProfile {
-                            id: a.id,
-                            kind: a.kind,
-                            limits: a.limits,
-                            route: a.route,
-                            safe: a.safe,
-                        })
-                        .collect(),
-                ),
-                Err(_) => return Err(profile_error),
-            },
+        let set = match parse::<DriveProfileSet>(profiles_json) {
+            Ok(set) => set,
+            Err(profile_error) => parse::<Layout>(profiles_json)
+                .map(DriveProfileSet::from)
+                .map_err(|_| profile_error)?,
         };
-        if schema_version != 1 {
-            return Err(invalid("unsupported drive profile schema"));
-        }
-        // Validate once here so routing a tick can only fail on its inputs.
-        terra_actuators::route_drive_profiles(&profiles, &RoutingInput::default())
-            .map_err(invalid)?;
+        set.validate().map_err(invalid)?;
         Ok(Self {
-            profiles,
+            profiles: set.actuators,
             servos: BTreeMap::new(),
         })
     }
@@ -280,17 +226,9 @@ impl ActiveLayout {
         Ok(())
     }
 
-    /// Route wheel efforts the way the phone does: manual mixes see
-    /// `forward = (l + r) / 2` and `turn = (r - l) / 2`.
+    /// Route wheel efforts the way the phone does; see [`RoutingInput::wheels`].
     pub(crate) fn frame(&self, left: f64, right: f64) -> Result<String, MobileActuatorError> {
-        let (left, right) = (left as f32, right as f32);
-        let input = RoutingInput {
-            left_effort: left,
-            right_effort: right,
-            forward: (left + right) / 2.,
-            turn: (right - left) / 2.,
-            servo_positions: self.servos.clone(),
-        };
+        let input = RoutingInput::wheels(left as f32, right as f32, self.servos.clone());
         let values =
             terra_actuators::route_drive_profiles(&self.profiles, &input).map_err(invalid)?;
         serde_json::to_string(&values).map_err(invalid)

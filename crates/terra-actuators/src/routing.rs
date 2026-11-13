@@ -23,6 +23,43 @@ pub struct RoutingInput {
     pub servo_positions: BTreeMap<u8, f32>,
 }
 
+impl RoutingInput {
+    /// Mix a normalized stick. Positive `turn` is a left turn, so left-effort
+    /// routes receive `forward - turn` and right-effort routes `forward + turn`,
+    /// each clamped to `[-1, 1]`. Returns [`ActuatorError::InvalidInput`] for a
+    /// non-finite stick or one outside `[-1, 1]`.
+    pub fn stick(forward: f32, turn: f32) -> Result<Self, ActuatorError> {
+        if !forward.is_finite()
+            || !turn.is_finite()
+            || !(-1.0..=1.0).contains(&forward)
+            || !(-1.0..=1.0).contains(&turn)
+        {
+            return Err(ActuatorError::InvalidInput(
+                "stick inputs must be finite and in [-1, 1]".into(),
+            ));
+        }
+        Ok(Self {
+            left_effort: (forward - turn).clamp(-1.0, 1.0),
+            right_effort: (forward + turn).clamp(-1.0, 1.0),
+            forward,
+            turn,
+            servo_positions: BTreeMap::new(),
+        })
+    }
+
+    /// Wheel efforts as the phone drives them: manual mixes see
+    /// `forward = (l + r) / 2` and `turn = (r - l) / 2`. Range is checked when routed.
+    pub fn wheels(left: f32, right: f32, servo_positions: BTreeMap<u8, f32>) -> Self {
+        Self {
+            left_effort: left,
+            right_effort: right,
+            forward: (left + right) / 2.,
+            turn: (right - left) / 2.,
+            servo_positions,
+        }
+    }
+}
+
 fn check_input(input: &RoutingInput) -> Result<(), ActuatorError> {
     if ![
         input.left_effort,
@@ -115,6 +152,61 @@ pub struct DriveProfile {
     pub route: Route,
     /// Loss-of-link policy. Unused servo targets fall back to it.
     pub safe: SafeOutput,
+}
+
+impl From<crate::Actuator> for DriveProfile {
+    /// Drop the rover-side port, name, inversion and calibration.
+    fn from(actuator: crate::Actuator) -> Self {
+        Self {
+            id: actuator.id,
+            kind: actuator.kind,
+            limits: actuator.limits,
+            route: actuator.route,
+            safe: actuator.safe,
+        }
+    }
+}
+
+/// Drive profiles as a rover reports them: `{schema_version, revision, actuators}`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DriveProfileSet {
+    /// Schema format version; routing accepts only 1. Defaults to 1 when omitted.
+    #[serde(default = "DriveProfileSet::default_schema")]
+    pub schema_version: u8,
+    /// Layout revision the profiles were read from; 0 when omitted.
+    #[serde(default)]
+    pub revision: u32,
+    /// Profiles in layout order.
+    pub actuators: Vec<DriveProfile>,
+}
+
+impl DriveProfileSet {
+    fn default_schema() -> u8 {
+        1
+    }
+
+    /// Check the schema and that the profiles route, so later ticks can only fail on their inputs.
+    pub fn validate(&self) -> Result<(), ActuatorError> {
+        if self.schema_version != 1 {
+            return Err(invalid_profile("unsupported drive profile schema"));
+        }
+        route_drive_profiles(&self.actuators, &RoutingInput::default()).map(|_| ())
+    }
+}
+
+impl From<Layout> for DriveProfileSet {
+    fn from(layout: Layout) -> Self {
+        Self {
+            schema_version: layout.schema_version,
+            revision: layout.revision,
+            actuators: layout
+                .actuators
+                .into_iter()
+                .map(DriveProfile::from)
+                .collect(),
+        }
+    }
 }
 
 fn invalid_profile(message: &str) -> ActuatorError {

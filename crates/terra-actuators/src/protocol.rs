@@ -1,20 +1,20 @@
 //! BLE application framing. Authentication and hardware arming belong to the service.
-use crate::{ActuatorError, ActuatorValue, Layout, LayoutError};
+use crate::{ActuatorError, ActuatorValue, Layout};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 /// Binary frame version byte; currently 1.
 pub const PROTOCOL_VERSION: u8 = 1;
-/// Maximum binary command size in bytes, including its 16-byte header.
-pub const COMMAND_LIMIT: usize = 96;
 /// Maximum serialized JSON control/reply size in bytes (16 KiB).
 pub const JSON_LIMIT: usize = 16 * 1024;
 /// Maximum assembly age in milliseconds; age equal to this limit expires.
-pub const ASSEMBLY_TIMEOUT_MS: u64 = 100;
+const ASSEMBLY_TIMEOUT_MS: u64 = 100;
 fn error(message: &str) -> ActuatorError {
     ActuatorError::InvalidInput(message.into())
 }
 /// Binary command discriminator. Only drive frames carry actuator records.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// JSON spells it in snake case: `drive`, `arm`, `disarm`, `emergency_stop`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 #[repr(u8)]
 pub enum CommandKind {
     /// Request a complete set of normalized actuator commands.
@@ -26,10 +26,10 @@ pub enum CommandKind {
     /// Request the service emergency-stop policy.
     EmergencyStop = 4,
 }
-/// Decoded binary command with session, layout, and ordering metadata.
+/// Binary command with session, layout, and ordering metadata.
 ///
-/// Encoding checks shape and normalized values. [`validate_command`] adds active
-/// session/revision, sequence, coverage, and per-actuator limit checks.
+/// Encoding checks shape and normalized values. Session, revision, sequence and
+/// per-actuator limits are the receiving service's checks.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CommandFrame {
     /// Requested command action.
@@ -38,7 +38,7 @@ pub struct CommandFrame {
     pub session: u32,
     /// Active layout revision expected by the sender.
     pub revision: u32,
-    /// Monotonically increasing session sequence; `u32::MAX` is rejected on validation.
+    /// Monotonically increasing session sequence.
     pub sequence: u32,
     /// Up to 16 unique-ID records for drive; empty for all other commands.
     pub values: Vec<ActuatorValue>,
@@ -67,89 +67,10 @@ pub fn encode_frame(frame: &CommandFrame) -> Result<Vec<u8>, ActuatorError> {
     }
     Ok(out)
 }
-/// Decode and validate a binary frame without authorizing it.
-///
-/// Returns [`ActuatorError::InvalidInput`] for invalid size, alignment, magic,
-/// version, command kind, or any record rejected by [`encode_frame`].
-pub fn decode_frame(bytes: &[u8]) -> Result<CommandFrame, ActuatorError> {
-    if bytes.len() < 16
-        || bytes.len() > COMMAND_LIMIT
-        || (bytes.len() - 16) % 5 != 0
-        || &bytes[..2] != b"TA"
-        || bytes[2] != PROTOCOL_VERSION
-    {
-        return Err(error("invalid frame header or length"));
-    }
-    let kind = match bytes[3] {
-        1 => CommandKind::Drive,
-        2 => CommandKind::Arm,
-        3 => CommandKind::Disarm,
-        4 => CommandKind::EmergencyStop,
-        _ => return Err(error("unknown command kind")),
-    };
-    let word = |offset| u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap());
-    let values = bytes[16..]
-        .chunks_exact(5)
-        .map(|record| ActuatorValue {
-            id: record[0],
-            value: f32::from_le_bytes(record[1..5].try_into().unwrap()),
-        })
-        .collect();
-    let frame = CommandFrame {
-        kind,
-        session: word(4),
-        revision: word(8),
-        sequence: word(12),
-        values,
-    };
-    encode_frame(&frame)?;
-    Ok(frame)
-}
-/// Validate a fully decoded command without advancing sequence state on rejection.
-/// The caller advances its last sequence only after safety acceptance.
-/// Return success only for the supplied session/layout revision and a sequence
-/// strictly above `last_sequence` and below `u32::MAX`. Drive frames must cover
-/// every layout actuator exactly once and respect its inclusive limits.
-///
-/// All rejection paths return [`ActuatorError::InvalidInput`]. The caller must
-/// separately validate the layout and authorize the requested hardware action.
-pub fn validate_command(
-    frame: &CommandFrame,
-    session: u32,
-    layout: &Layout,
-    last_sequence: Option<u32>,
-) -> Result<(), ActuatorError> {
-    encode_frame(frame)?;
-    if frame.session != session
-        || frame.revision != layout.revision
-        || frame.sequence == u32::MAX
-        || last_sequence.is_some_and(|last| frame.sequence <= last)
-    {
-        return Err(error("stale session, revision or sequence"));
-    }
-    if frame.kind == CommandKind::Drive {
-        if frame.values.len() != layout.actuators.len() {
-            return Err(error("incomplete actuator coverage"));
-        }
-        for value in &frame.values {
-            let actuator = layout
-                .actuators
-                .iter()
-                .find(|actuator| actuator.id == value.id)
-                .ok_or_else(|| error("unknown actuator"))?;
-            if value.value < actuator.limits.min || value.value > actuator.limits.max {
-                return Err(error("actuator value outside layout limits"));
-            }
-        }
-    }
-    Ok(())
-}
 /// Bounded in-order reassembly of one logical message at a time.
 ///
 /// Fragments have a four-byte header: little-endian `u16` message ID, zero-based
-/// index, and total count. Payloads must be nonempty. Default uses [`COMMAND_LIMIT`];
-/// [`Self::new`] selects an explicit limit. Authentication belongs to the service.
-#[derive(Default)]
+/// index, and total count. Payloads must be nonempty. Authentication belongs to the service.
 pub struct FragmentAssembler {
     limit: usize,
     active: Option<Assembly>,
@@ -181,7 +102,7 @@ impl FragmentAssembler {
     /// Accept one fragment at monotonic `now_ms` milliseconds.
     ///
     /// Returns `Ok(None)` while incomplete and `Ok(Some(bytes))` on completion.
-    /// A backwards clock or age at least [`ASSEMBLY_TIMEOUT_MS`] discards the old
+    /// A backwards clock or an age of at least 100 ms discards the old
     /// assembly before processing this fragment. Invalid headers, ordering, IDs,
     /// counts, or size return [`ActuatorError::InvalidInput`] and clear the assembly.
     pub fn push(&mut self, bytes: &[u8], now_ms: u64) -> Result<Option<Vec<u8>>, ActuatorError> {
@@ -224,12 +145,7 @@ impl FragmentAssembler {
         if id != a.id || count != a.count || index != a.next {
             return Err(error("duplicate, conflicting or out-of-order fragment"));
         }
-        let limit = if self.limit == 0 {
-            COMMAND_LIMIT
-        } else {
-            self.limit
-        };
-        if a.data.len() + bytes.len() - 4 > limit {
+        if a.data.len() + bytes.len() - 4 > self.limit {
             return Err(error("logical message too large"));
         }
         a.data.extend_from_slice(&bytes[4..]);
@@ -238,46 +154,6 @@ impl FragmentAssembler {
         }
         a.next += 1;
         Ok(None)
-    }
-}
-/// Separate characteristic paths: priority binary control never waits for drive.
-pub struct CommandAssemblers {
-    /// Independent assembly state for ordinary drive traffic.
-    pub drive: FragmentAssembler,
-    /// Independent assembly state for arm, disarm, and emergency-stop traffic.
-    pub priority: FragmentAssembler,
-}
-impl Default for CommandAssemblers {
-    fn default() -> Self {
-        Self {
-            drive: FragmentAssembler::default(),
-            priority: FragmentAssembler::default(),
-        }
-    }
-}
-impl CommandAssemblers {
-    /// Assemble and decode a priority fragment at `now_ms` monotonic milliseconds.
-    ///
-    /// Returns `None` until complete; drive frames on this path return an input error.
-    /// A decoded disarm/emergency-stop clears any partial drive message, even before
-    /// session acceptance. Assembly and binary decoding errors propagate unchanged.
-    pub fn push_priority(
-        &mut self,
-        bytes: &[u8],
-        now_ms: u64,
-    ) -> Result<Option<CommandFrame>, ActuatorError> {
-        let Some(data) = self.priority.push(bytes, now_ms)? else {
-            return Ok(None);
-        };
-        let frame = decode_frame(&data)?;
-        if frame.kind == CommandKind::Drive {
-            return Err(error("drive forbidden on priority path"));
-        }
-        // Clearing is fail-safe and does not imply command/session acceptance.
-        if matches!(frame.kind, CommandKind::Disarm | CommandKind::EmergencyStop) {
-            self.drive.clear();
-        }
-        Ok(Some(frame))
     }
 }
 /// One actuator command and the inclusive normalized limits used to quantize it.
@@ -505,50 +381,16 @@ pub fn encode_control(envelope: &ControlEnvelope) -> Result<Vec<u8>, ActuatorErr
     decode_control(&bytes)?;
     Ok(bytes)
 }
-/// Service result serialized as `ok` or `error`.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ControlResult {
-    /// Operation succeeded.
-    Ok,
-    /// Operation failed; inspect reply errors and payload.
-    Error,
-}
-/// Versioned service response correlated with a control request.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ControlReply {
-    /// Reply schema version; currently 1.
-    pub schema_version: u32,
-    /// Correlation identifier copied from the request.
-    pub request_id: u32,
-    /// Success or failure reported by the service.
-    pub result: ControlResult,
-    /// Layout revision active after processing the request.
-    pub active_revision: u32,
-    /// Collected layout validation errors, if applicable.
-    pub errors: Vec<LayoutError>,
-    /// Operation-specific response data.
-    pub payload: serde_json::Value,
-}
-/// Serialize a schema-1 reply no larger than [`JSON_LIMIT`] bytes.
-///
-/// Returns [`ActuatorError::InvalidInput`] for unsupported schema, serialization
-/// failure, or excessive encoded size. Payload semantics are service-defined.
-pub fn encode_reply(reply: &ControlReply) -> Result<Vec<u8>, ActuatorError> {
-    if reply.schema_version != 1 {
-        return Err(error("unsupported reply schema"));
-    }
-    let bytes = serde_json::to_vec(reply).map_err(|e| error(&e.to_string()))?;
-    if bytes.len() > JSON_LIMIT {
-        return Err(error("JSON reply too large"));
-    }
-    Ok(bytes)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn command_kind_parses_its_wire_name() {
+        let kind: CommandKind = serde_json::from_str(r#""emergency_stop""#).unwrap();
+        assert_eq!(kind, CommandKind::EmergencyStop);
+        assert!(serde_json::from_str::<CommandKind>(r#""reboot""#).is_err());
+    }
 
     fn sample(id: u8, value: f32) -> RelaySample {
         RelaySample {
