@@ -156,18 +156,7 @@ impl Runtime {
             "task/action" => terra_autonomy::decode_task_action(&bytes)
                 .is_some_and(|a| self.autonomy.apply_task_action(a, now).is_ok()),
             "dock" => terra_autonomy::decode_dock(bytes).is_some_and(|r| {
-                let target = r.object_id.and_then(|id| {
-                    self.objects
-                        .objects()
-                        .iter()
-                        .find(|o| o.id == id && o.confirmed && o.class == "bucket")
-                        .map(|o| terra_autonomy::DockTarget {
-                            object_id: Some(o.id),
-                            color: o.color.clone(),
-                            x: o.x,
-                            y: o.y,
-                        })
-                });
+                let target = r.object_id.and_then(|id| self.objects.dock_target(id));
                 let pose = self.pose.unwrap_or_default().0;
                 let accepted = self.autonomy.apply_dock_request(r, target, pose, now);
                 if self.autonomy.dock_active() {

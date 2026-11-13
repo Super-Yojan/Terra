@@ -210,8 +210,7 @@ impl RoverProfile {
             self.min_turn_radius,
         );
         if let Some(ahead) = self.dock.outlet_ahead {
-            config.outlet_ahead = ahead;
-            config.blind_range = ahead + terra_autonomy::DOCK_BLIND_MARGIN;
+            config = config.with_outlet_ahead(ahead);
         }
         config.gate_open_seconds = self.dock.gate_open_seconds;
         // Stay under the profile's own speed limit.

@@ -8,6 +8,8 @@ const MERGE_RADIUS_M: f64 = 1.0;
 const CONFIRM_FRAMES: u32 = 3;
 /// Detections below this confidence are ignored.
 const MIN_CONFIDENCE: f64 = 0.5;
+/// Detector class of the buckets a dock lines the outlet up over.
+pub const BUCKET_CLASS: &str = "bucket";
 /// Oldest unconfirmed objects are dropped beyond this many.
 pub const MAX_OBJECTS: usize = 64;
 
@@ -68,6 +70,19 @@ fn valid_token(s: &str) -> bool {
 impl ObjectMap {
     pub fn objects(&self) -> &[MappedObject] {
         &self.objects
+    }
+    /// The dock target for confirmed bucket `id`, or `None` when the id is
+    /// unknown, unconfirmed or not a bucket.
+    pub fn dock_target(&self, id: u32) -> Option<crate::DockTarget> {
+        self.objects
+            .iter()
+            .find(|o| o.id == id && o.confirmed && o.class == BUCKET_CLASS)
+            .map(|o| crate::DockTarget {
+                object_id: Some(o.id),
+                color: o.color.clone(),
+                x: o.x,
+                y: o.y,
+            })
     }
     pub fn clear(&mut self) {
         if !self.objects.is_empty() {

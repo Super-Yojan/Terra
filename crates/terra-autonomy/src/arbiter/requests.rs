@@ -618,10 +618,8 @@ impl AutonomyArbiter {
         self.operator_origin = origin;
         true
     }
-    /// Accept or cancel a waypoint and return whether it was accepted.
-    ///
-    /// Local coordinates and `extent` use metres; WGS84 coordinates use degrees and yaw uses radians.
-    /// Invalid, out-of-bounds, unauthorized, or conflicting-token goals return `false`; cancellation clears active intent.
+    /// Refuse goal `g` for `reason`: acknowledge its token (if any) as
+    /// rejected and log a `goal_rejected` event.
     pub fn reject_goal(&mut self, g: &GoalCommand, reason: &str) {
         let token = match g {
             GoalCommand::Local { token, .. } | GoalCommand::Wgs84 { token, .. } => token.clone(),
@@ -632,6 +630,10 @@ impl AutonomyArbiter {
         }
         self.event("goal_rejected", token, reason);
     }
+    /// Accept or cancel a waypoint and return whether it was accepted.
+    ///
+    /// Local coordinates and `extent` use metres; WGS84 coordinates use degrees and yaw uses radians.
+    /// Invalid, out-of-bounds, unauthorized, or conflicting-token goals return `false`; cancellation clears active intent.
     pub fn accept_goal(&mut self, g: &GoalCommand, extent: f64) -> bool {
         if self.level == Level::TargetSearch {
             self.event("goal_rejected", None, "search_active");
