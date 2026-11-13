@@ -591,10 +591,14 @@ impl AutonomyArbiter {
             self.plan.command = None;
             self.event("route_failed", None, Reason::ObstacleBlocked.as_str());
         }
+        // A planner input error (a late tick upsets the turning limiter's
+        // timing) is a one-tick hold: it says nothing about the search.
         if decision.held
             && self.level == Level::TargetSearch
-            && decision.reason != Reason::SearchHold
-            && decision.reason != Reason::ObstacleBlocked
+            && !matches!(
+                decision.reason,
+                Reason::SearchHold | Reason::ObstacleBlocked | Reason::PlannerInvalidInput
+            )
         {
             if let Some(search) = self.search.as_mut() {
                 search.hold(decision.reason.as_str());

@@ -256,3 +256,44 @@ fn measured_overspeed_does_not_expand_candidate_limits() {
         plan.twist
     );
 }
+/// A turning-limiter timing error (a tick too long after the last) is invalid
+/// input, not an obstacle, and samples nothing.
+#[test]
+fn turning_timing_error_is_invalid_input() {
+    use terra_types::turning::{TurningConfig, TurningLimiter};
+    let mut limiter = TurningLimiter::new(TurningConfig::default()).unwrap();
+    limiter
+        .step(terra_types::VelocityTarget {
+            timestamp: 0.,
+            forward: 0.,
+            yaw_rate: 0.,
+        })
+        .unwrap();
+    let intent = Twist {
+        linear: 0.5,
+        angular: 0.,
+    };
+    let planner = LocalPlanner::default();
+    let (late, trace) = planner.plan_with_turning(
+        &map(),
+        Pose::default(),
+        Twist::default(),
+        intent,
+        0.1,
+        &limiter,
+        1.,
+    );
+    assert_eq!(late.reason, PlanReason::InvalidInput);
+    assert_eq!(late.twist, Twist::default());
+    assert!(trace.candidates.is_empty());
+    let (on_time, _) = planner.plan_with_turning(
+        &map(),
+        Pose::default(),
+        Twist::default(),
+        intent,
+        0.1,
+        &limiter,
+        0.01,
+    );
+    assert!(!on_time.reason.holds());
+}

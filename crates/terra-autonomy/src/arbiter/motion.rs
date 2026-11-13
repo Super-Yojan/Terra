@@ -141,9 +141,10 @@ impl AutonomyArbiter {
 
             self.note_blocked(input, decision);
             self.update_frontier_proposal(input, decision);
-            if self.level == Level::Explore {
+            if self.level == Level::Explore && decision.reason != Reason::PlannerInvalidInput {
                 // A missing route holds the rover just like an obstacle does, so
                 // it counts toward the short blocked window, not the no-progress one.
+                // A planner input error sampled nothing and leaves the flag as it was.
                 self.explore_blocked =
                     decision.reason == Reason::ObstacleBlocked || decision.route_failure.is_some();
             }

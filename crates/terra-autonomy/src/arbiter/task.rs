@@ -734,7 +734,8 @@ impl AutonomyArbiter {
         let Some(task) = self.task.as_mut() else {
             return;
         };
-        if task.phase != TaskPhase::Navigating {
+        // A planner input error sampled nothing: no evidence either way.
+        if task.phase != TaskPhase::Navigating || decision.reason == Reason::PlannerInvalidInput {
             return;
         }
         let blocked = decision.route_failure.is_some() || decision.reason.is_route_blocked();

@@ -121,6 +121,10 @@ impl AutonomyArbiter {
             self.reset_recovery();
             return;
         }
+        if decision.reason == Reason::PlannerInvalidInput {
+            // Nothing was sampled this tick: no evidence of progress or blockage.
+            return;
+        }
         let stalled = matches!(decision.reason, Reason::Active | Reason::Assisted)
             && decision.goal.state == GoalState::Active
             && decision.twist.linear.abs() < STALL_SPEED
