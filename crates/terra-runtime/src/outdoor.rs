@@ -23,7 +23,7 @@ impl Admission {
     }
 }
 
-pub fn evidence(b: &Runtime, now: f64) -> Evidence {
+pub(crate) fn evidence(b: &Runtime, now: f64) -> Evidence {
     Evidence {
         pose: b.pose.unwrap_or_default().0,
         pose_ready: pose_quality::ready(b, now),
@@ -34,19 +34,14 @@ pub fn evidence(b: &Runtime, now: f64) -> Evidence {
         authority: b.autonomy.outdoor_authority(),
     }
 }
-pub fn request(
+/// A `navigation/source` or `navigation/resume` request, already admitted
+/// for size, age and authority.
+pub(crate) fn request(
     b: &mut Runtime,
     kind: &str,
     bytes: &[u8],
     now: f64,
-    age: f64,
 ) -> Result<(), RuntimeError> {
-    if bytes.len() > requests::MAX_REQUEST_BYTES
-        || !age.is_finite()
-        || !(0.0..CONTROL_REQUEST_FRESHNESS_SECONDS).contains(&age)
-    {
-        return Err(invalid("request expired"));
-    }
     let v: serde_json::Value =
         serde_json::from_slice(bytes).map_err(|_| invalid("invalid request"))?;
     let token = v["token"]
@@ -100,7 +95,7 @@ pub fn request(
     });
     result
 }
-pub fn goal(b: &mut Runtime, g: &terra_waypoint::GoalCommand, now: f64, radius: f64) -> bool {
+fn goal(b: &mut Runtime, g: &terra_waypoint::GoalCommand, now: f64, radius: f64) -> bool {
     use terra_waypoint::GoalCommand;
     if matches!(g, GoalCommand::Cancel) {
         b.outdoor.cancel();
@@ -155,7 +150,7 @@ pub fn goal(b: &mut Runtime, g: &terra_waypoint::GoalCommand, now: f64, radius: 
     }
     true
 }
-pub fn update(b: &mut Runtime, now: f64) -> bool {
+pub(crate) fn update(b: &mut Runtime, now: f64) -> bool {
     if !b.outdoor.selected() {
         b.autonomy.set_outdoor_destination(None);
         return true;
@@ -187,11 +182,11 @@ pub fn update(b: &mut Runtime, now: f64) -> bool {
         || b.outdoor.recovery_ready(now, e)
 }
 
-/// Decode the outdoor envelope before stripping its reviewed metadata for the legacy local decoder.
-pub fn dispatch_goal(b: &mut Runtime, bytes: &[u8], now: f64, age: f64) -> bool {
-    if bytes.len() > terra_types::requests::MAX_REQUEST_BYTES {
-        return false;
-    }
+/// Decode a goal request, already admitted for size, age and authority. An
+/// outdoor goal carries its review (run, navigation revision and arrival
+/// radius); it is checked here and removed, with `run_id`, before the
+/// waypoint decoder.
+pub(crate) fn dispatch_goal(b: &mut Runtime, bytes: &[u8], now: f64) -> bool {
     let Ok(mut value) = serde_json::from_slice::<serde_json::Value>(bytes) else {
         return false;
     };
@@ -199,9 +194,9 @@ pub fn dispatch_goal(b: &mut Runtime, bytes: &[u8], now: f64, age: f64) -> bool 
     let radius = value["arrival_radius_m"].as_f64();
     let bound =
         value["run_id"] == b.run_id && value["navigation_revision"] == b.outdoor_admission.revision;
-    if outdoor {
-        if let Some(o) = value.as_object_mut() {
-            o.remove("run_id");
+    if let Some(o) = value.as_object_mut() {
+        o.remove("run_id");
+        if outdoor {
             o.remove("navigation_revision");
             o.remove("arrival_radius_m");
         }
@@ -213,12 +208,7 @@ pub fn dispatch_goal(b: &mut Runtime, bytes: &[u8], now: f64, age: f64) -> bool 
         b.autonomy.reject_goal(&g, "pose_degraded");
         return false;
     }
-    if outdoor
-        && (!bound
-            || radius.is_none()
-            || !age.is_finite()
-            || !(0.0..CONTROL_REQUEST_FRESHNESS_SECONDS).contains(&age))
-    {
+    if outdoor && (!bound || radius.is_none()) {
         b.autonomy.reject_goal(&g, "outdoor_review_expired");
         return false;
     }

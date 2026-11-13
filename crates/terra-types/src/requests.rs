@@ -48,6 +48,10 @@ pub struct RequestKind {
     pub local: bool,
     /// Authority fields removed before decoding.
     pub strip: Strip,
+    /// The handler keeps its own accepted/rejected result in status
+    /// (navigation settings and source), so a refusal is not also reported
+    /// as a rejected autonomy request.
+    pub records_own_result: bool,
     neutral: fn(&Value) -> bool,
 }
 
@@ -67,84 +71,98 @@ pub const ALL: [RequestKind; 14] = [
         topic: AUTONOMY,
         local: true,
         strip: Strip::Authority,
+        records_own_result: false,
         neutral: never,
     },
     RequestKind {
         topic: TELEOP,
         local: false,
         strip: Strip::Nothing,
+        records_own_result: false,
         neutral: |v| v["linear"].as_f64() == Some(0.) && v["angular"].as_f64() == Some(0.),
     },
     RequestKind {
         topic: SAFETY,
         local: true,
         strip: Strip::Authority,
+        records_own_result: false,
         neutral: |v| v["action"] == "stop",
     },
     RequestKind {
         topic: GOAL,
         local: true,
         strip: Strip::Revision,
+        records_own_result: false,
         neutral: |v| v["cancel"] == true,
     },
     RequestKind {
         topic: GOAL_DECISION,
         local: true,
         strip: Strip::Revision,
+        records_own_result: false,
         neutral: never,
     },
     RequestKind {
         topic: NAVIGATION_SETTINGS,
         local: true,
         strip: Strip::Nothing,
+        records_own_result: true,
         neutral: never,
     },
     RequestKind {
         topic: NAVIGATION_SOURCE,
         local: true,
         strip: Strip::Nothing,
+        records_own_result: true,
         neutral: never,
     },
     RequestKind {
         topic: NAVIGATION_RESUME,
         local: true,
         strip: Strip::Nothing,
+        records_own_result: true,
         neutral: never,
     },
     RequestKind {
         topic: SEARCH,
         local: true,
         strip: Strip::Revision,
+        records_own_result: false,
         neutral: never,
     },
     RequestKind {
         topic: SEARCH_ACTION,
         local: true,
         strip: Strip::Revision,
+        records_own_result: false,
         neutral: |v| matches!(v["action"].as_str(), Some("pause" | "cancel")),
     },
     RequestKind {
         topic: SEARCH_REPORT_ACK,
         local: true,
         strip: Strip::Revision,
+        records_own_result: false,
         neutral: always,
     },
     RequestKind {
         topic: TASK,
         local: true,
         strip: Strip::Revision,
+        records_own_result: false,
         neutral: never,
     },
     RequestKind {
         topic: TASK_ACTION,
         local: true,
         strip: Strip::Revision,
+        records_own_result: false,
         neutral: cancel_action,
     },
     RequestKind {
         topic: DOCK,
         local: true,
         strip: Strip::Revision,
+        records_own_result: false,
         neutral: cancel_action,
     },
 ];

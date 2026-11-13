@@ -212,8 +212,6 @@ fn local_teleop(linear: f64, angular: f64) -> terra_autonomy::TeleopRequest {
 const MANUAL_FULL_FORWARD: f64 = 0.5;
 /// Largest local velocity target accepted, m/s and rad/s.
 const MAX_LOCAL_VELOCITY: f64 = 5.0;
-/// Execution-time admission age for settings and outdoor source requests.
-pub const CONTROL_REQUEST_FRESHNESS_SECONDS: f64 = 0.5;
 /// Speed cap, m/s, while the outdoor GPS source is selected.
 const OUTDOOR_MAX_FORWARD: f64 = 0.3;
 /// Inputs to one arbiter call. `healthy` is the caller's sensor verdict:

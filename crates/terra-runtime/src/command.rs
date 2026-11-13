@@ -33,17 +33,11 @@ impl Runtime {
                 return Err("current_authority_required");
             }
         }
-        // A local-frame goal or a cancel is not bound to the outdoor review.
-        let strip = if kind == requests::GOAL && (!self.outdoor.selected() || v["cancel"] == true) {
-            Strip::Authority
-        } else {
-            request.strip
-        };
         let o = v.as_object_mut().ok_or("invalid_json")?;
-        if strip != Strip::Nothing {
+        if request.strip != Strip::Nothing {
             o.remove("authority_revision");
         }
-        if strip == Strip::Authority {
+        if request.strip == Strip::Authority {
             o.remove("run_id");
         }
         serde_json::to_vec(&v).map_err(|_| "invalid_json")
@@ -72,7 +66,7 @@ impl Runtime {
             let accepted = self.dispatch_action(&kind, &bytes, now, at);
             if !accepted
                 && self.autonomy.authority_revision() == revision_before
-                && !kind.starts_with("navigation/")
+                && !RequestKind::find(&kind).is_some_and(|k| k.records_own_result)
             {
                 self.autonomy
                     .reject_remote_request(request_token(&bytes).as_deref(), "invalid_request");
@@ -99,7 +93,7 @@ impl Runtime {
     }
     fn dispatch_action(&mut self, kind: &str, bytes: &[u8], now: f64, at: f64) -> bool {
         match kind {
-            "autonomy"
+            requests::AUTONOMY
                 if serde_json::from_slice::<Value>(bytes)
                     .is_ok_and(|v| v.get("assigned_level").is_some()) =>
             {
@@ -109,18 +103,18 @@ impl Runtime {
                     self.autonomy.request_receipt() == Some((token.as_str(), true))
                 })
             }
-            "autonomy" => terra_autonomy::decode_level_with_task(&bytes)
+            requests::AUTONOMY => terra_autonomy::decode_level_with_task(bytes)
                 .map(|(r, task)| {
                     let token = r.token.clone();
                     self.autonomy.set_level_with_task(r, task);
                     self.autonomy.request_receipt() == Some((token.as_str(), true))
                 })
                 .unwrap_or(false),
-            "teleop" => terra_autonomy::decode_teleop(&bytes).is_some_and(|r| {
+            requests::TELEOP => terra_autonomy::decode_teleop(bytes).is_some_and(|r| {
                 self.autonomy
                     .accept_operator_from(r, at, CommandOrigin::FleetTeleop)
             }),
-            "safety" => terra_autonomy::decode_safety(&bytes)
+            requests::SAFETY => terra_autonomy::decode_safety(bytes)
                 .map(|r| {
                     let reset = r.action == terra_autonomy::SafetyAction::Reset;
                     // A tilt stop clears only once the rover is upright again.
@@ -143,19 +137,19 @@ impl Runtime {
                     ok
                 })
                 .unwrap_or(false),
-            "navigation/settings" => navigation::apply(self, &bytes, now - at, now),
-            "navigation/source" | "navigation/resume" => {
-                outdoor::request(self, &kind, &bytes, now, now - at).is_ok()
+            requests::NAVIGATION_SETTINGS => navigation::apply(self, bytes, now),
+            requests::NAVIGATION_SOURCE | requests::NAVIGATION_RESUME => {
+                outdoor::request(self, kind, bytes, now).is_ok()
             }
-            "goal" => outdoor::dispatch_goal(self, &bytes, now, now - at),
-            "search" | "search/action" | "search/report/ack" => {
-                search::dispatch_search(self, &kind, &bytes, now).is_ok()
+            requests::GOAL => outdoor::dispatch_goal(self, bytes, now),
+            requests::SEARCH | requests::SEARCH_ACTION | requests::SEARCH_REPORT_ACK => {
+                search::dispatch_search(self, kind, bytes, now).is_ok()
             }
-            "task" => terra_autonomy::decode_task_request(&bytes)
+            requests::TASK => terra_autonomy::decode_task_request(bytes)
                 .is_some_and(|r| self.autonomy.start_task(r, now).is_ok()),
-            "task/action" => terra_autonomy::decode_task_action(&bytes)
+            requests::TASK_ACTION => terra_autonomy::decode_task_action(bytes)
                 .is_some_and(|a| self.autonomy.apply_task_action(a, now).is_ok()),
-            "dock" => terra_autonomy::decode_dock(bytes).is_some_and(|r| {
+            requests::DOCK => terra_autonomy::decode_dock(bytes).is_some_and(|r| {
                 let target = r.object_id.and_then(|id| self.objects.dock_target(id));
                 let pose = self.pose.unwrap_or_default().0;
                 let accepted = self.autonomy.apply_dock_request(r, target, pose, now);
@@ -165,7 +159,7 @@ impl Runtime {
                 }
                 accepted
             }),
-            "goal/decision" => {
+            requests::GOAL_DECISION => {
                 if let Some(r) = terra_autonomy::decode_decision(bytes) {
                     let healthy = self.sensors_ready(now);
                     let token = r.token.clone();

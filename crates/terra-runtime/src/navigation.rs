@@ -143,14 +143,11 @@ struct Request {
     settings_revision: u64,
     parameters: Parameters,
 }
-/// Apply one bounded, fresh, run/revision-bound settings request only while live
-/// authority, goal, and hardware state permit reconfiguration. `age` is receipt
-/// age in seconds. Invalid envelopes are ignored; unique valid tokens record
+/// Apply one run/revision-bound settings request, already admitted for size
+/// and age, only while live authority, goal, and hardware state permit
+/// reconfiguration. Invalid envelopes are ignored; unique valid tokens record
 /// an acceptance or rejection result and cannot be replayed.
-pub fn apply(b: &mut super::Runtime, bytes: &[u8], age: f64, now: f64) -> bool {
-    if bytes.len() > terra_types::requests::MAX_REQUEST_BYTES {
-        return false;
-    }
+pub fn apply(b: &mut super::Runtime, bytes: &[u8], now: f64) -> bool {
     let Ok(r) = serde_json::from_slice::<Request>(bytes) else {
         return false;
     };
@@ -163,8 +160,6 @@ pub fn apply(b: &mut super::Runtime, bytes: &[u8], age: f64, now: f64) -> bool {
     let pose = b.pose.map(|p| p.0).unwrap_or_default();
     let reason = if !r.parameters.valid() {
         Some("invalid dimensions or avoidance limits")
-    } else if !age.is_finite() || !(0.0..super::CONTROL_REQUEST_FRESHNESS_SECONDS).contains(&age) {
-        Some("settings request expired")
     } else if r.run_id != b.run_id
         || tick.is_none_or(|t| t.run_id != r.run_id || t.revision != r.authority_revision)
         || r.settings_revision != b.navigation.revision
