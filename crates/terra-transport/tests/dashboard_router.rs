@@ -128,15 +128,11 @@ fn unreachable_router_returns_an_error() {
 }
 
 #[test]
-/// Transports realistic cloud and occupancy payloads above the ordinary 64 KiB budget,
-/// then verifies oversized cloud and ordinary pose messages are dropped.
-fn sends_real_sized_cloud_and_occupancy_snapshots_but_bounds_other_topics() {
+/// Transports a realistic occupancy payload above the ordinary 64 KiB budget,
+/// then verifies oversized occupancy and ordinary pose messages are dropped.
+fn sends_real_sized_occupancy_snapshots_but_bounds_other_topics() {
     let (_router, endpoint) = router();
     let operator = client(&endpoint);
-    let cloud = operator
-        .declare_subscriber("phone-large/7/pointcloud")
-        .wait()
-        .unwrap();
     let map = operator
         .declare_subscriber("phone-large/7/map/occupancy")
         .wait()
@@ -146,31 +142,20 @@ fn sends_real_sized_cloud_and_occupancy_snapshots_but_bounds_other_topics() {
         .wait()
         .unwrap();
     let service = ControlPlane::connect(&endpoint, "phone-large", 7).unwrap();
-    let points =
-        serde_json::json!({"version": 1,"points": vec![[1.123456789,2.123456789,3.123456789];1800]})
-            .to_string();
     let cells = serde_json::json!({"schema_version": 1,"width": 200,"height": 200,"occupancy": vec![100;40000]}).to_string();
-    assert!(points.len() > 65536 && points.len() <= 262144);
     assert!(cells.len() > 65536 && cells.len() <= 262144);
-    service.publish("pointcloud", points.clone());
     service.publish("map/occupancy", cells.clone());
-    let received = cloud
-        .recv_timeout(Duration::from_secs(2))
-        .unwrap()
-        .expect("large cloud dropped");
-    assert_eq!(received.payload().to_bytes().as_ref(), points.as_bytes());
     let received = map
         .recv_timeout(Duration::from_secs(2))
         .unwrap()
         .expect("large occupancy dropped");
     assert_eq!(received.payload().to_bytes().as_ref(), cells.as_bytes());
     std::thread::sleep(Duration::from_millis(600));
-    while cloud.try_recv().unwrap().is_some() {}
-    service.publish("pointcloud", "x".repeat(262145));
+    while map.try_recv().unwrap().is_some() {}
+    service.publish("map/occupancy", "x".repeat(2_000_001));
     service.publish("pose", "x".repeat(65537));
     assert!(
-        cloud
-            .recv_timeout(Duration::from_millis(300))
+        map.recv_timeout(Duration::from_millis(300))
             .unwrap()
             .is_none()
     );
@@ -212,7 +197,7 @@ fn capture_requests_bypass_control_and_bulk_frames_arrive() {
         .unwrap()
         .expect("bulk frame dropped");
     assert_eq!(received.payload().to_bytes().as_ref(), frame.as_slice());
-    assert!(!service.publish_bulk("pointcloud", vec![1]));
+    assert!(!service.publish_bulk("map/occupancy", vec![1]));
     assert!(!service.publish_bulk(
         "pointcloud/full",
         vec![0; terra_types::point_capture::MAX_FRAME_BYTES + 1]

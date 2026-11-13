@@ -2,11 +2,9 @@
 //! phone names topics from here and transport admits only these suffixes,
 //! each with its own byte cap and delivery rule.
 //!
-//! Content heartbeats carry the version key of the full payload they refresh:
-//! `map/occupancy/heartbeat` uses `schema_version` like occupancy telemetry,
-//! `pointcloud/heartbeat` uses `version` like the point cloud. Dashboards
-//! (ARGOS `content_heartbeat.rs`) read each key by topic, so the two differ on
-//! purpose.
+//! `map/occupancy/heartbeat` carries `schema_version`, the version key of the
+//! occupancy payload it refreshes; dashboards (ARGOS `content_heartbeat.rs`)
+//! read the version key by topic.
 
 use crate::point_capture;
 
@@ -14,8 +12,6 @@ use crate::point_capture;
 pub const DEFAULT_MAX_BYTES: usize = 65536;
 /// Byte cap for one occupancy grid snapshot.
 pub const MAP_OCCUPANCY_MAX_BYTES: usize = 2_000_000;
-/// Byte cap for one thinned point cloud.
-pub const POINTCLOUD_MAX_BYTES: usize = 262144;
 /// Most outstanding records in one `search/report` batch.
 pub const SEARCH_REPORT_MAX_RECORDS: usize = 128;
 
@@ -35,8 +31,6 @@ pub const EXPLORATION_STATUS: &str = "exploration/status";
 pub const TASK_STATUS: &str = "task/status";
 pub const MAP_OCCUPANCY: &str = "map/occupancy";
 pub const MAP_OCCUPANCY_HEARTBEAT: &str = "map/occupancy/heartbeat";
-pub const POINTCLOUD: &str = "pointcloud";
-pub const POINTCLOUD_HEARTBEAT: &str = "pointcloud/heartbeat";
 
 /// How transport delivers a topic.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -77,7 +71,7 @@ const fn visualization(topic: &'static str, max_bytes: usize) -> TelemetryTopic 
 }
 
 /// Every outbound telemetry topic.
-pub const ALL: [TelemetryTopic; 20] = [
+pub const ALL: [TelemetryTopic; 18] = [
     state(AUTONOMY_STATUS),
     state(EXPERIMENT_STATUS),
     state(NAVIGATION_OUTDOOR),
@@ -99,8 +93,6 @@ pub const ALL: [TelemetryTopic; 20] = [
     state(point_capture::PROGRESS_TOPIC),
     visualization(MAP_OCCUPANCY, MAP_OCCUPANCY_MAX_BYTES),
     visualization(MAP_OCCUPANCY_HEARTBEAT, DEFAULT_MAX_BYTES),
-    visualization(POINTCLOUD, POINTCLOUD_MAX_BYTES),
-    visualization(POINTCLOUD_HEARTBEAT, DEFAULT_MAX_BYTES),
     TelemetryTopic {
         topic: point_capture::FRAME_TOPIC,
         max_bytes: point_capture::MAX_FRAME_BYTES,

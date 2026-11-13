@@ -194,7 +194,6 @@ impl MobileController {
         })?;
         let mut brain = self.brain.lock().map_err(|_| ControllerError::Internal)?;
         brain.map_gate = Default::default();
-        brain.cloud_gate = Default::default();
         capture::reset(&mut brain);
         let at = brain.last_tick;
         brain.runtime.ingest(terra_runtime::RuntimeEvent::Link {
@@ -282,66 +281,6 @@ impl MobileController {
             self.apply_dashboard_link_loss(&mut b, timestamp);
         }
         self.detach_dashboard_link()
-    }
-    /// Bounded world-space visualization points; never a source of motor authority.
-    /// Requires version 1 JSON, at most 4096 points, and within the `pointcloud` byte cap.
-    /// Published only while a dashboard point capture runs; otherwise accepted and dropped.
-    /// Full content is coalesced; unchanged newer samples can emit heartbeats.
-    /// Returns `InvalidInput` for size/schema rejection and `Internal` for malformed
-    /// JSON or lock failure. No dashboard means no network publication.
-    pub fn publish_point_cloud(&self, payload: String) -> Result<(), ControllerError> {
-        if payload.len() > telemetry::POINTCLOUD_MAX_BYTES {
-            return Err(ControllerError::InvalidInput {
-                message: "point cloud too large".into(),
-            });
-        }
-        let mut value: serde_json::Value =
-            serde_json::from_str(&payload).map_err(|_| ControllerError::Internal)?;
-        if value["version"].as_u64() != Some(1)
-            || value["points"].as_array().is_none_or(|p| p.len() > 4096)
-        {
-            return Err(ControllerError::InvalidInput {
-                message: "invalid point cloud".into(),
-            });
-        }
-        let mut brain = self.brain.lock().map_err(|_| ControllerError::Internal)?;
-        // Exact parsed content comparison; preserve original full-payload bytes.
-        let frame_id = value["frameID"].as_str().map(str::to_owned);
-        let publication = if brain.dashboard.is_some() && capture::thinned_cloud_wanted(&brain) {
-            if let (Some(sequence), Some(_)) = (value["sequence"].as_u64(), frame_id.as_ref()) {
-                value.as_object_mut().unwrap().remove("sequence");
-                brain.cloud_gate.observe(
-                    value,
-                    frame_id.clone().unwrap(),
-                    sequence,
-                    std::time::Instant::now(),
-                    std::time::Duration::from_millis(500),
-                )
-            } else {
-                brain.cloud_gate = Default::default();
-                publication::Publication::Full
-            }
-        } else {
-            publication::Publication::Skip
-        };
-        let mut full_rejected = false;
-        if let Some(dashboard) = brain.dashboard.as_ref() {
-            match publication {
-                publication::Publication::Full => {
-                    full_rejected =
-                        !dashboard.publish_visualization(telemetry::POINTCLOUD, payload);
-                }
-                publication::Publication::Heartbeat(sequence) => dashboard.publish(
-                    telemetry::POINTCLOUD_HEARTBEAT,
-                    serde_json::json!({"version":1,"rover_id":dashboard.rover_id(),
-                        "frameID":frame_id,"sequence":sequence})
-                    .to_string(),
-                ),
-                publication::Publication::Skip => {}
-            }
-        }
-        brain.cloud_gate.full_enqueued(!full_rejected);
-        Ok(())
     }
     /// Publish positioning quality without changing the controller's local motion frame.
     /// Requires version 1 JSON at most 4096 bytes. With no dashboard this is a no-op.

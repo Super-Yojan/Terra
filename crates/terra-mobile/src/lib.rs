@@ -331,7 +331,6 @@ struct Brain {
     recorder: Option<terra_experiment::RunRecorder>,
     near_miss: terra_experiment::NearMiss,
     map_gate: publication::MapGate,
-    cloud_gate: publication::CloudGate,
     dashboard: Option<terra_transport::ControlPlane>,
     /// Running point capture, if the dashboard asked for one.
     capture: Option<capture::Capture>,
@@ -450,7 +449,6 @@ impl MobileController {
                 recorder: None,
                 near_miss: Default::default(),
                 map_gate: Default::default(),
-                cloud_gate: Default::default(),
                 dashboard: None,
                 capture: None,
                 last_tick: 0.,
@@ -858,7 +856,6 @@ impl MobileController {
         brain.last_tick = 0.;
         brain.dashboard = None;
         brain.map_gate = Default::default();
-        brain.cloud_gate = Default::default();
         if let Some(mut r) = brain.recorder.take() {
             let _ = r.close();
         }

@@ -174,9 +174,3 @@ fn encode(
         .encode()
         .ok()
 }
-
-/// Whether the always-on thinned cloud should go out: only during a recorded
-/// capture, not a live stream, which already carries the points it needs.
-pub(crate) fn thinned_cloud_wanted(brain: &Brain) -> bool {
-    brain.capture.as_ref().is_some_and(|c| !c.live)
-}

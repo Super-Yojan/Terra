@@ -70,36 +70,21 @@ fn capture_sends_labelled_frames_only_on_request() {
         .declare_subscriber("capture/7/pointcloud/full")
         .wait()
         .unwrap();
-    let thinned = dashboard
-        .declare_subscriber("capture/7/pointcloud")
-        .wait()
-        .unwrap();
     let progress = dashboard
         .declare_subscriber("capture/7/pointcloud/capture")
         .wait()
         .unwrap();
     std::thread::sleep(Duration::from_millis(300));
-    let cloud = |sequence: u64| {
-        serde_json::json!({"version":1,"sequence":sequence,"frameID":"f","points":[[1.0,2.0,0.0]]})
-            .to_string()
-    };
 
-    // Idle: depth and the thinned cloud go nowhere.
+    // Idle: depth goes nowhere.
     let mut t = 1.0;
     for _ in 0..5 {
         map.integrate_depth(depth_frame(t)).unwrap();
-        controller.publish_point_cloud(cloud(t as u64)).unwrap();
         controller.step(t).unwrap();
         t += 0.1;
     }
     assert!(
         full.recv_timeout(Duration::from_millis(300))
-            .unwrap()
-            .is_none()
-    );
-    assert!(
-        thinned
-            .recv_timeout(Duration::from_millis(100))
             .unwrap()
             .is_none()
     );
@@ -119,22 +104,18 @@ fn capture_sends_labelled_frames_only_on_request() {
         .unwrap();
     std::thread::sleep(Duration::from_millis(200));
     let mut frames = Vec::new();
-    let mut thinned_seen = false;
-    for i in 0..30 {
+    for _ in 0..30 {
         controller.step(t).unwrap();
         map.integrate_depth(depth_frame(t + 0.01)).unwrap();
-        controller.publish_point_cloud(cloud(100 + i)).unwrap();
         std::thread::sleep(Duration::from_millis(30));
         while let Ok(Some(sample)) = full.try_recv() {
             frames.push(CaptureFrame::decode(&sample.payload().to_bytes()).unwrap());
         }
-        thinned_seen |= thinned.try_recv().unwrap().is_some();
         t += 0.1;
     }
     while let Ok(Some(sample)) = full.recv_timeout(Duration::from_millis(500)) {
         frames.push(CaptureFrame::decode(&sample.payload().to_bytes()).unwrap());
     }
-    assert!(thinned_seen, "thinned cloud should flow during a capture");
     assert_eq!(frames.len(), 2);
     let frame = &frames[1];
     assert_eq!(
@@ -164,21 +145,6 @@ fn capture_sends_labelled_frames_only_on_request() {
     let last = last.expect("no progress");
     assert_eq!(last.state, CaptureState::Done);
     assert_eq!((last.frames_sent, last.frames_total), (2, 2));
-
-    // Done: the thinned cloud stops again.
-    std::thread::sleep(Duration::from_millis(600));
-    while thinned.try_recv().unwrap().is_some() {}
-    for i in 0..3 {
-        controller.publish_point_cloud(cloud(500 + i)).unwrap();
-        controller.step(t).unwrap();
-        t += 0.1;
-    }
-    assert!(
-        thinned
-            .recv_timeout(Duration::from_millis(300))
-            .unwrap()
-            .is_none()
-    );
 }
 
 #[test]
@@ -261,10 +227,6 @@ fn live_stream_decimates_renews_and_lapses() {
         .declare_subscriber("capture-live/7/pointcloud/full")
         .wait()
         .unwrap();
-    let thinned = dashboard
-        .declare_subscriber("capture-live/7/pointcloud")
-        .wait()
-        .unwrap();
     let progress = dashboard
         .declare_subscriber("capture-live/7/pointcloud/capture")
         .wait()
@@ -280,23 +242,16 @@ fn live_stream_decimates_renews_and_lapses() {
             .unwrap();
         std::thread::sleep(Duration::from_millis(200));
     };
-    let cloud = |sequence: u64| {
-        serde_json::json!({"version":1,"sequence":sequence,"frameID":"f","points":[[1.0,2.0,0.0]]})
-            .to_string()
-    };
     let mut frames = Vec::new();
-    let mut thinned_seen = false;
     let mut t = 1.0;
     let mut run = |until: f64, t: &mut f64| {
         while *t < until {
             controller.step(*t).unwrap();
             map.integrate_depth(depth_frame(*t + 0.01)).unwrap();
-            controller.publish_point_cloud(cloud(*t as u64)).unwrap();
             std::thread::sleep(Duration::from_millis(20));
             while let Ok(Some(sample)) = full.try_recv() {
                 frames.push(CaptureFrame::decode(&sample.payload().to_bytes()).unwrap());
             }
-            thinned_seen |= thinned.try_recv().unwrap().is_some();
             *t += 0.1;
         }
     };
@@ -309,10 +264,6 @@ fn live_stream_decimates_renews_and_lapses() {
     while let Ok(Some(sample)) = full.recv_timeout(Duration::from_millis(500)) {
         frames.push(CaptureFrame::decode(&sample.payload().to_bytes()).unwrap());
     }
-    assert!(
-        !thinned_seen,
-        "a live stream must not also send the thinned cloud"
-    );
     assert!(
         (9..=15).contains(&frames.len()),
         "about 5 Hz for 2.6 s, got {}",
