@@ -10,6 +10,7 @@ use terra_state::{EstimatorConfig, VelocityEstimator};
 use terra_types::*;
 pub const SOURCE_REVISION: &str = env!("TERRA_RUNTIME_REVISION");
 mod command;
+mod dock;
 pub mod ground;
 pub mod mapping;
 pub mod navigation;
@@ -17,7 +18,9 @@ pub mod outdoor;
 pub mod pose_quality;
 pub mod rover_profile;
 pub mod search;
+mod sensor_hold;
 pub mod tilt;
+pub use sensor_hold::SENSOR_HOLD_GOAL_TIMEOUT_SECONDS;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RuntimeError {
     InvalidInput { message: String },
@@ -50,7 +53,7 @@ pub enum ActuationMode {
     #[default]
     VelocityFeedback,
 }
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct RuntimeConfig {
     pub estimator: EstimatorConfig,
     pub controller: ControllerConfig,
@@ -59,19 +62,6 @@ pub struct RuntimeConfig {
     pub connectivity: connectivity_policy::ConnectivityPolicySettings,
     pub mode: ActuationMode,
     pub outdoor_supported: bool,
-}
-impl Default for RuntimeConfig {
-    fn default() -> Self {
-        Self {
-            estimator: Default::default(),
-            controller: Default::default(),
-            navigation: Default::default(),
-            mapping: Default::default(),
-            connectivity: Default::default(),
-            mode: Default::default(),
-            outdoor_supported: false,
-        }
-    }
 }
 impl RuntimeConfig {
     pub fn identity(&self) -> String {
@@ -166,6 +156,60 @@ pub enum RuntimeEvent {
         received_at: f64,
     },
 }
+impl RuntimeEvent {
+    fn received_at(&self) -> f64 {
+        match self {
+            Self::Imu { received_at, .. }
+            | Self::Vio { received_at, .. }
+            | Self::Depth { received_at, .. }
+            | Self::Map { received_at, .. }
+            | Self::LocalManual { received_at, .. }
+            | Self::LocalVelocity { received_at, .. }
+            | Self::Remote { received_at, .. }
+            | Self::Link { received_at, .. }
+            | Self::Recording { received_at, .. }
+            | Self::Hardware { received_at, .. }
+            | Self::Mode { received_at, .. }
+            | Self::Gps { received_at, .. }
+            | Self::Heading { received_at, .. }
+            | Self::Course { received_at, .. }
+            | Self::Detector { received_at, .. }
+            | Self::Target { received_at, .. } => *received_at,
+        }
+    }
+}
+/// Reject evidence stamped after it was received.
+fn not_future(timestamp: f64, received: f64, message: &str) -> Result<(), RuntimeError> {
+    if timestamp > received {
+        return Err(invalid(message));
+    }
+    Ok(())
+}
+/// An operator request from the phone itself, bound to no run or session.
+fn local_teleop(linear: f64, angular: f64) -> terra_autonomy::TeleopRequest {
+    terra_autonomy::TeleopRequest {
+        linear,
+        angular,
+        run_id: None,
+        authority_revision: None,
+        operator_session_id: None,
+        sequence: None,
+    }
+}
+/// Apply the planner, turning and exploration settings in `parameters`. The
+/// planner is optional because configuring it bumps the arbiter's revision.
+fn configure_autonomy(
+    autonomy: &mut AutonomyArbiter,
+    parameters: &navigation::Parameters,
+    planner: bool,
+) -> Result<(), RuntimeError> {
+    if planner {
+        autonomy.configure_planner(parameters.planner());
+    }
+    autonomy.configure_turning(parameters.turning)?;
+    autonomy.explorer.config_mut().through_unknown = parameters.explore_through_unknown;
+    Ok(())
+}
 #[derive(Clone, Debug, PartialEq)]
 pub struct RuntimeSnapshot {
     pub value: Value,
@@ -210,50 +254,24 @@ pub struct Runtime {
     last_step: Option<f64>,
     local_manual: Option<(f64, f64)>,
     last_snapshot: RuntimeSnapshot,
-    /// Latest `sensor_unhealthy` hold and when it happened.
-    sensor_hold: Option<(f64, terra_autonomy::SensorHold)>,
-    sensor_holds: u64,
-    sensor_held: bool,
-    /// Start of the current unbroken `sensor_unhealthy` hold.
-    sensor_hold_since: Option<f64>,
+    /// `sensor_unhealthy` hold bookkeeping for this run.
+    holds: sensor_hold::SensorHolds,
     /// When the wheels last started pushing without the rover moving.
     drive_stall_since: Option<f64>,
-    /// When data came back fresh after a long hold; motion waits out
-    /// [`SENSOR_SETTLE_SECONDS`] from here.
-    sensor_settle_since: Option<f64>,
-    /// The current hold already dropped its goal.
-    sensor_goal_dropped: bool,
     /// Dump outlet and gate servo in use: the rover profile's, with the
     /// phone's local settings on top.
     pub dock_profile: rover_profile::DockProfile,
     rover_profile: Option<rover_profile::RoverProfile>,
-    dock_local: DockLocal,
+    dock_local: dock::DockLocal,
     /// Gate test from the setup screen while no dock runs: open or closed.
     gate_test: Option<bool>,
     /// Tilt and flip hold; survives a new run, cleared by operator reset.
     pub tilt: tilt::TiltMonitor,
 }
-/// Dock values set on the phone, kept across rover profile changes.
-#[derive(Clone, Debug, Default, PartialEq)]
-struct DockLocal {
-    outlet_ahead: Option<f64>,
-    gate: Option<(u8, f64, f64)>,
-}
-/// How long a `sensor_unhealthy` hold stays in the status after it clears.
-const SENSOR_HOLD_DISPLAY_SECONDS: f64 = 10.;
 /// Forward command, m/s, from which a rover that does not move counts as stalled.
 const DRIVE_STALL_MIN_COMMAND: f64 = 0.05;
 /// Measured forward speed, m/s, below which a pushing rover counts as stalled.
 const DRIVE_STALL_SPEED: f64 = 0.03;
-/// A hold at least this long must see fresh data for
-/// [`SENSOR_SETTLE_SECONDS`] before motion resumes. Shorter holds resume on
-/// the next fresh tick, as before.
-const SENSOR_SETTLE_AFTER_SECONDS: f64 = 1.;
-/// How long data must stay fresh after a long hold before the rover drives.
-const SENSOR_SETTLE_SECONDS: f64 = 0.5;
-/// An unbroken hold this long drops the active L2/L3 goal, so the rover does
-/// not lurch toward an old goal minutes later. The operator resends it.
-pub const SENSOR_HOLD_GOAL_TIMEOUT_SECONDS: f64 = 30.;
 impl Runtime {
     pub fn new(config: RuntimeConfig, run_id: String) -> Result<Self, RuntimeError> {
         if run_id.is_empty()
@@ -265,13 +283,9 @@ impl Runtime {
         let configuration = config.clone();
         let mut autonomy = AutonomyArbiter::default();
         autonomy.run_id = run_id.clone();
-        if serde_json::to_value(config.navigation.planner()).ok()
-            != serde_json::to_value(terra_navigation::PlannerConfig::default()).ok()
-        {
-            autonomy.configure_planner(config.navigation.planner());
-        }
-        autonomy.configure_turning(config.navigation.turning)?;
-        autonomy.explorer.config_mut().through_unknown = config.navigation.explore_through_unknown;
+        let custom_planner = serde_json::to_value(config.navigation.planner()).ok()
+            != serde_json::to_value(terra_navigation::PlannerConfig::default()).ok();
+        configure_autonomy(&mut autonomy, &config.navigation, custom_planner)?;
         let mut outdoor = terra_autonomy::outdoor::OutdoorController::default();
         outdoor.supported = config.outdoor_supported;
         let mut navigation = navigation::State::default();
@@ -309,17 +323,12 @@ impl Runtime {
             events: vec![],
             last_step: None,
             local_manual: None,
-            sensor_hold: None,
-            sensor_holds: 0,
-            sensor_held: false,
-            sensor_hold_since: None,
+            holds: Default::default(),
             drive_stall_since: None,
-            sensor_settle_since: None,
-            sensor_goal_dropped: false,
             last_snapshot: RuntimeSnapshot { value: json!({}) },
             dock_profile: Default::default(),
             rover_profile: None,
-            dock_local: DockLocal::default(),
+            dock_local: Default::default(),
             gate_test: None,
             tilt: Default::default(),
         })
@@ -337,12 +346,7 @@ impl Runtime {
         self.events.clear();
         self.controller.reset();
         self.sequence = 0;
-        self.sensor_hold = None;
-        self.sensor_holds = 0;
-        self.sensor_held = false;
-        self.sensor_hold_since = None;
-        self.sensor_settle_since = None;
-        self.sensor_goal_dropped = false;
+        self.holds = Default::default();
         self.outdoor.cancel();
         self.outdoor.invalidate_sensors();
         self.objects.clear();
@@ -352,25 +356,17 @@ impl Runtime {
         self.autonomy = AutonomyArbiter::default();
         self.autonomy.run_id = self.run_id.clone();
         self.autonomy.configure_dock(dock);
-        self.autonomy
-            .configure_planner(self.navigation.parameters.planner());
-        self.autonomy
-            .configure_turning(self.navigation.parameters.turning)?;
-        self.autonomy.explorer.config_mut().through_unknown =
-            self.navigation.parameters.explore_through_unknown;
-        Ok(())
+        configure_autonomy(&mut self.autonomy, &self.navigation.parameters, true)
     }
     /// Begin a fresh control session while retaining configured policy and calibration.
     pub fn reset(&mut self) -> Result<(), RuntimeError> {
+        // `begin_run` also clears the queue, events and velocity loop.
         self.begin_run(self.run_id.clone())?;
         self.estimator.reset();
-        self.controller.reset();
         self.pose = None;
         self.imu_time = None;
         self.map = None;
         self.hardware_observation = None;
-        self.queue.clear();
-        self.events.clear();
         self.last_step = None;
         self.local_manual = None;
         self.last_snapshot = RuntimeSnapshot { value: json!({}) };
@@ -414,90 +410,6 @@ impl Runtime {
         }
         Ok(())
     }
-    /// The dock's gate request this tick as a servo position, when a gate
-    /// servo is set: `(actuator id, normalized position)`. With no dock
-    /// running, a gate test from the setup screen holds the gate where it put it.
-    pub fn gate_servo(&self, gate_open: bool) -> Option<(u8, f64)> {
-        let open = if self.autonomy.dock_active() {
-            gate_open
-        } else {
-            gate_open || self.gate_test == Some(true)
-        };
-        self.dock_profile.gate_servo.map(|id| {
-            (
-                id,
-                if open {
-                    self.dock_profile.gate_open
-                } else {
-                    self.dock_profile.gate_closed
-                },
-            )
-        })
-    }
-    /// Outlet distance ahead of the rover centre set on the phone, metres, in
-    /// place of the profile's. `None` returns to the profile's value.
-    ///
-    /// # Errors
-    /// Outside 0.05..=3 m; the current value stays.
-    pub fn set_dock_outlet(&mut self, ahead: Option<f64>) -> Result<(), RuntimeError> {
-        if ahead.is_some_and(|v| !(v.is_finite() && (0.05..=3.).contains(&v))) {
-            return Err(invalid("dock outlet must be 0.05 to 3 m ahead"));
-        }
-        self.dock_local.outlet_ahead = ahead;
-        self.apply_dock();
-        Ok(())
-    }
-    /// Gate servo and its open and closed positions set on the phone, in place
-    /// of the profile's. `None` returns to the profile's servo.
-    ///
-    /// # Errors
-    /// Positions outside -1..=1 or equal; the current gate stays.
-    pub fn set_dock_gate(&mut self, gate: Option<(u8, f64, f64)>) -> Result<(), RuntimeError> {
-        if let Some((_, open, closed)) = gate
-            && !([open, closed]
-                .iter()
-                .all(|v| v.is_finite() && (-1.0..=1.0).contains(v))
-                && open != closed)
-        {
-            return Err(invalid("gate positions must differ and lie in -1..=1"));
-        }
-        self.dock_local.gate = gate;
-        self.apply_dock();
-        Ok(())
-    }
-    /// Hold the gate open (`Some(true)`) or closed to try its positions, or end
-    /// the test (`None`). A running dock always controls the gate itself.
-    ///
-    /// # Errors
-    /// While a dock runs, or without a gate servo.
-    pub fn test_dock_gate(&mut self, open: Option<bool>) -> Result<(), RuntimeError> {
-        if open.is_some() && self.autonomy.dock_active() {
-            return Err(invalid("a dock is running"));
-        }
-        if open.is_some() && self.dock_profile.gate_servo.is_none() {
-            return Err(invalid("no gate servo set"));
-        }
-        self.gate_test = open;
-        Ok(())
-    }
-    fn apply_dock(&mut self) {
-        let mut profile = self
-            .rover_profile
-            .clone()
-            .unwrap_or_else(rover_profile::RoverProfile::terra);
-        if let Some(ahead) = self.dock_local.outlet_ahead {
-            profile.dock.outlet_ahead = Some(ahead);
-        }
-        if let Some((id, open, closed)) = self.dock_local.gate {
-            profile.dock.gate_servo = Some(id);
-            profile.dock.gate_open = open;
-            profile.dock.gate_closed = closed;
-        }
-        if self.rover_profile.is_some() || self.dock_local != DockLocal::default() {
-            self.autonomy.configure_dock(profile.dock_config());
-        }
-        self.dock_profile = profile.dock;
-    }
     pub fn configuration_identity(&self) -> String {
         let mut config = self.configuration.clone();
         config.mapping = self.grid.config();
@@ -522,9 +434,7 @@ impl Runtime {
         if !navigation.valid() || controller.validate().is_err() {
             return Err(invalid("invalid rover profile"));
         }
-        self.autonomy.configure_planner(navigation.planner());
-        self.autonomy.configure_turning(navigation.turning)?;
-        self.autonomy.explorer.config_mut().through_unknown = navigation.explore_through_unknown;
+        configure_autonomy(&mut self.autonomy, &navigation, true)?;
         self.controller = VelocityController::new(controller)?;
         self.configuration.controller = controller;
         self.control_limits = (controller.max_forward, controller.max_yaw_rate);
@@ -547,41 +457,20 @@ impl Runtime {
         self.map = None;
     }
     pub fn ingest(&mut self, event: RuntimeEvent) -> Result<(), RuntimeError> {
-        let received = match &event {
-            RuntimeEvent::Imu { received_at, .. }
-            | RuntimeEvent::Vio { received_at, .. }
-            | RuntimeEvent::Depth { received_at, .. }
-            | RuntimeEvent::Map { received_at, .. }
-            | RuntimeEvent::LocalManual { received_at, .. }
-            | RuntimeEvent::LocalVelocity { received_at, .. }
-            | RuntimeEvent::Remote { received_at, .. }
-            | RuntimeEvent::Link { received_at, .. }
-            | RuntimeEvent::Recording { received_at, .. }
-            | RuntimeEvent::Hardware { received_at, .. }
-            | RuntimeEvent::Mode { received_at, .. }
-            | RuntimeEvent::Gps { received_at, .. }
-            | RuntimeEvent::Heading { received_at, .. }
-            | RuntimeEvent::Course { received_at, .. }
-            | RuntimeEvent::Detector { received_at, .. }
-            | RuntimeEvent::Target { received_at, .. } => *received_at,
-        };
+        let received = event.received_at();
         if !received.is_finite() || received < 0.0 {
             return Err(invalid("invalid receipt timestamp"));
         }
         match event {
             RuntimeEvent::Imu { sample, .. } => {
-                if sample.timestamp > received {
-                    return Err(invalid("future sensor timestamp"));
-                }
+                not_future(sample.timestamp, received, "future sensor timestamp")?;
                 self.estimator.push_imu(sample)?;
                 self.imu_time = Some(sample.timestamp);
                 self.tilt
                     .observe_gyro(sample.angular_velocity, sample.timestamp);
             }
             RuntimeEvent::Vio { sample, .. } => {
-                if sample.timestamp > received {
-                    return Err(invalid("future sensor timestamp"));
-                }
+                not_future(sample.timestamp, received, "future sensor timestamp")?;
                 self.estimator.push_vio(sample)?;
                 if sample.tracked {
                     let q = sample
@@ -611,9 +500,7 @@ impl Runtime {
                 ground,
                 ..
             } => {
-                if timestamp > received {
-                    return Err(invalid("future depth timestamp"));
-                }
+                not_future(timestamp, received, "future depth timestamp")?;
                 let p = self.pose.unwrap_or_default().0;
                 self.grid.recenter(p.x, p.y)?;
                 match ground {
@@ -636,9 +523,7 @@ impl Runtime {
                 sequence,
                 ..
             } => {
-                if timestamp > received {
-                    return Err(invalid("future map timestamp"));
-                }
+                not_future(timestamp, received, "future map timestamp")?;
                 if self.map.as_ref().is_none_or(|m| timestamp > m.1) {
                     self.map = Some((snapshot, timestamp, sequence));
                 }
@@ -652,17 +537,8 @@ impl Runtime {
                     return Err(invalid("invalid manual input"));
                 }
                 self.local_manual = Some((forward, turn));
-                self.autonomy.accept_operator(
-                    terra_autonomy::TeleopRequest {
-                        linear: forward * 0.5,
-                        angular: turn,
-                        run_id: None,
-                        authority_revision: None,
-                        operator_session_id: None,
-                        sequence: None,
-                    },
-                    received,
-                );
+                self.autonomy
+                    .accept_operator(local_teleop(forward * 0.5, turn), received);
             }
             RuntimeEvent::LocalVelocity { target, .. } => {
                 if !target.timestamp.is_finite()
@@ -676,14 +552,7 @@ impl Runtime {
                     return Err(invalid("invalid local velocity input"));
                 }
                 self.autonomy.accept_operator(
-                    terra_autonomy::TeleopRequest {
-                        linear: target.forward,
-                        angular: target.yaw_rate,
-                        run_id: None,
-                        authority_revision: None,
-                        operator_session_id: None,
-                        sequence: None,
-                    },
+                    local_teleop(target.forward, target.yaw_rate),
                     target.timestamp,
                 );
             }
@@ -776,81 +645,6 @@ impl Runtime {
         self.events
             .push(json!({"kind":if connected{"connection.established"}else{"connection.lost"}}));
     }
-    /// Whether fresh data must wait out the settle period after a long hold.
-    /// Called once per tick with the health the sensors report on their own.
-    fn settling(&mut self, healthy: bool, now: f64) -> bool {
-        let Some(since) = self.sensor_hold_since.filter(|_| healthy) else {
-            self.sensor_settle_since = None;
-            return false;
-        };
-        let back = *self.sensor_settle_since.get_or_insert(now);
-        back - since >= SENSOR_SETTLE_AFTER_SECONDS && now - back < SENSOR_SETTLE_SECONDS
-    }
-    /// Name the cause of a `sensor_unhealthy` hold in the status, and log
-    /// each new hold, so holds of a single tick are not silent. A hold that
-    /// outlasts [`SENSOR_HOLD_GOAL_TIMEOUT_SECONDS`] drops the L2/L3 goal.
-    fn note_sensor_hold(
-        &mut self,
-        output: &mut ArbiterOutput,
-        now: f64,
-        outdoor_motion: bool,
-        settling: bool,
-    ) {
-        if output.status.reason == "sensor_unhealthy" {
-            let since = *self.sensor_hold_since.get_or_insert(now);
-            if settling && let Some((at, _)) = self.sensor_hold.as_mut() {
-                // Keep the cause that started the hold while data settles.
-                *at = now;
-            } else {
-                let mut hold = pose_quality::hold(self, now, outdoor_motion);
-                hold.goal_dropped = self.sensor_goal_dropped;
-                if !self.sensor_held {
-                    self.sensor_holds += 1;
-                    self.events.push(json!({"kind":"autonomy.sensor_hold","cause":hold.cause,"pose_age_s":hold.pose_age_s,"imu_age_s":hold.imu_age_s,"count":self.sensor_holds}));
-                }
-                self.sensor_hold = Some((now, hold));
-            }
-            self.sensor_held = true;
-            if !self.sensor_goal_dropped
-                && !self.outdoor.selected
-                && now - since >= SENSOR_HOLD_GOAL_TIMEOUT_SECONDS
-                && self
-                    .autonomy
-                    .drop_goal_for_sensor_hold(self.pose.unwrap_or_default().0)
-            {
-                self.sensor_goal_dropped = true;
-                if let Some((_, hold)) = self.sensor_hold.as_mut() {
-                    hold.goal_dropped = true;
-                }
-                self.events.push(json!({"kind":"autonomy.goal_dropped","reason":"sensor_hold_timeout","held_s":now - since}));
-            }
-        } else {
-            if self.sensor_held
-                && let Some(since) = self.sensor_hold_since
-            {
-                self.events
-                    .push(json!({"kind":"autonomy.sensor_hold_cleared","held_s":now - since}));
-            }
-            self.sensor_held = false;
-            self.sensor_hold_since = None;
-            self.sensor_settle_since = None;
-        }
-        let held_s = self.sensor_hold_since.map_or(0., |since| now - since);
-        if !self.sensor_held {
-            self.sensor_goal_dropped = false;
-        }
-        output.status.sensor_hold = self
-            .sensor_hold
-            .as_ref()
-            .filter(|(at, _)| now - at <= SENSOR_HOLD_DISPLAY_SECONDS)
-            .map(|(at, hold)| terra_autonomy::SensorHold {
-                age_s: now - at,
-                count: self.sensor_holds,
-                held_s,
-                settling: settling && self.sensor_held,
-                ..hold.clone()
-            });
-    }
     /// What the wheels are doing this tick, for the dashboard: the commanded
     /// and measured forward speed, wheel efforts, whether the rover is backing
     /// up, and how long it has pushed without moving.
@@ -875,6 +669,79 @@ impl Runtime {
             "right_effort": motor.right,
             "reversing": commanded < 0.0,
             "stalled_s": self.drive_stall_since.map_or(0.0, |since| now - since),
+        })
+    }
+    /// Direct-effort mode only applies to teleop; docking and every
+    /// autonomous level run through the velocity loop.
+    fn effective_mode(&self, output: &ArbiterOutput) -> ActuationMode {
+        let teleop = matches!(
+            output.status.requested_level,
+            terra_autonomy::Level::Teleop | terra_autonomy::Level::AssistedTeleop
+        );
+        if self.mode == ActuationMode::DirectEffort
+            && (output.status.active_source == "dock" || !teleop)
+        {
+            ActuationMode::VelocityFeedback
+        } else {
+            self.mode
+        }
+    }
+    /// Wheel efforts for this tick: stopped unless safety is clear, mixed
+    /// straight from the twist in direct-effort mode, otherwise from the
+    /// velocity loop tracking the twist.
+    fn motor_output(
+        &mut self,
+        output: &ArbiterOutput,
+        estimate: VelocityEstimate,
+        mode: ActuationMode,
+        now: f64,
+    ) -> Result<MotorOutput, RuntimeError> {
+        Ok(if output.status.safety != "clear" {
+            self.controller.reset();
+            MotorOutput::stopped(if estimate.health == Health::Ready {
+                StopReason::StaleTarget
+            } else {
+                StopReason::SensorNotReady
+            })
+        } else if mode == ActuationMode::DirectEffort {
+            let (forward, turn) = (output.twist.linear / 0.5, output.twist.angular);
+            let managed = output.command_origin != CommandOrigin::LocalManual;
+            let turn = if managed
+                && !self.navigation.parameters.turning.allow_in_place
+                && !output.in_place_turn
+            {
+                turn.clamp(-forward.abs(), forward.abs())
+            } else {
+                turn
+            };
+            let scale = (forward - turn).abs().max((forward + turn).abs()).max(1.);
+            let (left, right) = ((forward - turn) / scale, (forward + turn) / scale);
+            MotorOutput {
+                left,
+                right,
+                estimated_forward: estimate.forward,
+                estimated_yaw_rate: estimate.yaw_rate,
+                target_forward: output.twist.linear,
+                target_yaw_rate: output.twist.angular,
+                stop_reason: StopReason::None,
+            }
+        } else {
+            self.controller.set_turning_constraint(
+                (output.command_origin != CommandOrigin::LocalManual).then_some(
+                    terra_control::TurningConfig {
+                        // The exploration look-around is a slow turn in place.
+                        allow_in_place: self.navigation.parameters.turning.allow_in_place
+                            || output.in_place_turn,
+                        ..self.navigation.parameters.turning
+                    },
+                ),
+            );
+            self.controller.set_target(VelocityTarget {
+                timestamp: now,
+                forward: output.twist.linear,
+                yaw_rate: output.twist.angular,
+            })?;
+            self.controller.step(estimate)
         })
     }
     pub fn step(&mut self, now: f64) -> Result<RuntimeOutput, RuntimeError> {
@@ -949,63 +816,8 @@ impl Runtime {
         if output.reset_controller {
             self.controller.reset();
         }
-        let effective_mode = if self.mode == ActuationMode::DirectEffort
-            && (output.status.active_source == "dock"
-                || !matches!(
-                    output.status.requested_level,
-                    terra_autonomy::Level::Teleop | terra_autonomy::Level::AssistedTeleop
-                )) {
-            ActuationMode::VelocityFeedback
-        } else {
-            self.mode
-        };
-        let motor = if output.status.safety != "clear" {
-            self.controller.reset();
-            MotorOutput::stopped(if estimate.health == Health::Ready {
-                StopReason::StaleTarget
-            } else {
-                StopReason::SensorNotReady
-            })
-        } else if effective_mode == ActuationMode::DirectEffort {
-            let (forward, turn) = (output.twist.linear / 0.5, output.twist.angular);
-            let managed = output.command_origin != CommandOrigin::LocalManual;
-            let turn = if managed
-                && !self.navigation.parameters.turning.allow_in_place
-                && !output.in_place_turn
-            {
-                turn.clamp(-forward.abs(), forward.abs())
-            } else {
-                turn
-            };
-            let scale = (forward - turn).abs().max((forward + turn).abs()).max(1.);
-            let (left, right) = ((forward - turn) / scale, (forward + turn) / scale);
-            MotorOutput {
-                left,
-                right,
-                estimated_forward: estimate.forward,
-                estimated_yaw_rate: estimate.yaw_rate,
-                target_forward: output.twist.linear,
-                target_yaw_rate: output.twist.angular,
-                stop_reason: StopReason::None,
-            }
-        } else {
-            self.controller.set_turning_constraint(
-                (output.command_origin != CommandOrigin::LocalManual).then_some(
-                    terra_control::TurningConfig {
-                        // The exploration look-around is a slow turn in place.
-                        allow_in_place: self.navigation.parameters.turning.allow_in_place
-                            || output.in_place_turn,
-                        ..self.navigation.parameters.turning
-                    },
-                ),
-            );
-            self.controller.set_target(VelocityTarget {
-                timestamp: now,
-                forward: output.twist.linear,
-                yaw_rate: output.twist.angular,
-            })?;
-            self.controller.step(estimate)
-        };
+        let effective_mode = self.effective_mode(&output);
+        let motor = self.motor_output(&output, estimate, effective_mode, now)?;
         self.sequence += 1;
         let drive = self.drive_status(now, &motor);
         let quality = pose_quality::value(self, now);

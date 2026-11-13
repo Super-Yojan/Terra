@@ -3,14 +3,14 @@
 Start with `AutonomyArbiter::step()` in `../arbiter.rs`.
 It answers one question each control tick: **what motion may the rover execute now?**
 
-| Stage | Function | What it does |
-| --- | --- | --- |
-| 1 | `begin_tick` | Reset cached turning state when authority changes; check the clock |
-| 2 | `check_initial_safety` | Check stop, sensors, map freshness and supervision pause |
-| 3 | `select_motion` | Choose operator or goal intent; check the path and obstacles |
-| 4 | `limit_turning` | Apply the vehicle's turning constraints |
-| 5 | `finish_holds` | Update search holds and force held motion to zero |
-| 6 | `status_for_tick` | Build the status report that ARGOS displays |
+| Stage | Function               | What it does                                                       |
+|-------|------------------------|--------------------------------------------------------------------|
+| 1     | `begin_tick`           | Reset cached turning state when authority changes; check the clock |
+| 2     | `check_initial_safety` | Check stop, sensors, map freshness and supervision pause           |
+| 3     | `select_motion`        | Choose operator or goal intent; check the path and obstacles       |
+| 4     | `limit_turning`        | Apply the vehicle's turning constraints                            |
+| 5     | `finish_holds`         | Update search holds and force held motion to zero                  |
+| 6     | `status_for_tick`      | Build the status report that ARGOS displays                        |
 
 ## The four values to follow
 
