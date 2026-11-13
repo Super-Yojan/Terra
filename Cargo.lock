@@ -2924,6 +2924,7 @@ version = "0.1.0"
 name = "terra-mapping"
 version = "0.1.0"
 dependencies = [
+ "serde_json",
  "terra-types",
 ]
 

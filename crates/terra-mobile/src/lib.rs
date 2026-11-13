@@ -776,13 +776,7 @@ impl MobileController {
                     Some(publication::Publication::Full) => {
                         map_full_rejected = !d.publish_visualization(
                             telemetry::MAP_OCCUPANCY,
-                            terra_autonomy::occupancy_telemetry(
-                                d.rover_id(),
-                                &run_id,
-                                *sequence,
-                                grid,
-                            )
-                            .to_string(),
+                            grid.telemetry(d.rover_id(), &run_id, *sequence).to_string(),
                         );
                     }
                     Some(publication::Publication::Heartbeat(sequence)) => d.publish(

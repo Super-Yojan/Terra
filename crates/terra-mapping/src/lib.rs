@@ -140,6 +140,23 @@ pub const OCCUPIED: i8 = 65;
 /// planning, search coverage) accept; bounds their time and memory per call.
 pub const MAX_PLANNING_CELLS: usize = 250_000;
 impl MapSnapshot {
+    /// The `map/occupancy` telemetry body: schema version 1, the caller's
+    /// rover, run and sequence, and the grid as it is. Observed cells only, so
+    /// simulator ground truth never reaches the dashboard. Does not validate.
+    pub fn telemetry(&self, rover_id: u64, run_id: &str, sequence: u64) -> serde_json::Value {
+        serde_json::json!({
+            "schema_version": 1,
+            "rover_id": rover_id,
+            "run_id": run_id,
+            "sequence": sequence,
+            "width": self.width,
+            "height": self.height,
+            "resolution": self.resolution,
+            "origin_x": self.origin_x,
+            "origin_y": self.origin_y,
+            "occupancy": self.occupancy,
+        })
+    }
     /// Non-empty, at most 1000 cells a side, storage matching the size, finite
     /// origin and a resolution of at least 1 cm.
     pub fn valid(&self) -> bool {
