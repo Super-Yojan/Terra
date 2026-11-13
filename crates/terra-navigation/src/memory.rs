@@ -279,7 +279,6 @@ impl LongRangeMemory {
         loop {
             let (c, r) = ((i % MEMORY_CELLS) as i64, (i / MEMORY_CELLS) as i64);
             let (x, y) = self.centre_of(c, r);
-            // Skip points the window itself shows as an obstacle.
             if inside(x, y) && !window_occupied(window, x, y) {
                 return Some((x, y));
             }

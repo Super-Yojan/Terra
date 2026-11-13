@@ -286,7 +286,6 @@ fn a_goal_behind_is_reached_by_turning_round_not_by_reversing_all_the_way() {
         longest <= config.max_reverse_length + 1e-6,
         "reversed {longest:.2} m in one go"
     );
-    // It ends up driving forward into the goal.
     assert!(!route.last().unwrap().reverse);
 }
 
