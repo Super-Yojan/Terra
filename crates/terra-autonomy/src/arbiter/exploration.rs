@@ -22,7 +22,7 @@ impl AutonomyArbiter {
             && sustained(
                 &mut self.explore_stale_since,
                 now,
-                self.explorer.config().map_stale_timeout,
+                timing::EXPLORATION_MAP_STALE_GRACE_SECONDS,
             )
         {
             self.explorer.stop(EndReason::MapStale);
@@ -34,7 +34,7 @@ impl AutonomyArbiter {
             && sustained(
                 &mut self.explore_unhealthy_since,
                 now,
-                self.explorer.config().safety_hold_timeout,
+                timing::EXPLORATION_SAFETY_HOLD_GRACE_SECONDS,
             )
         {
             self.explorer.stop(EndReason::SafetyHold);
@@ -42,7 +42,6 @@ impl AutonomyArbiter {
     }
     /// `Some` when exploration itself is holding or finished. `None` when the follower should move.
     pub(super) fn drive_explore(&mut self, input: &ArbiterInput<'_>) -> Option<&'static str> {
-        self.explorer.set_footprint(self.planner.config.footprint);
         self.update_explore_bias();
         self.explore_scan = None;
         let preview = self

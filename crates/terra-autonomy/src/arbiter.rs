@@ -585,7 +585,7 @@ impl AutonomyArbiter {
             && decision.reason == Reason::ObstacleBlocked
         {
             if let Some(search) = self.search.as_mut() {
-                search.navigator.invalidate_goal(input.now);
+                search.invalidate_goal(input.now);
             }
             // Retire cached motion, but keep fresh diagnostics explaining the route failure.
             self.plan.command = None;

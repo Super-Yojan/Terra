@@ -41,7 +41,7 @@ pub struct SearchController {
     /// Validated session request retained for correlation and bounds checks.
     pub request: SearchRequest,
     /// Frontier navigation state used to select search destinations.
-    pub navigator: terra_exploration::SearchNavigator,
+    navigator: terra_exploration::SearchNavigator,
     phase: SearchPhase,
     reason: String,
     started_at: f64,
@@ -52,20 +52,17 @@ pub struct SearchController {
     goal: Option<(f64, f64)>,
     revision: u64,
     /// Latest request token and whether it was accepted.
-    pub receipt: Option<(String, bool)>,
+    receipt: Option<(String, bool)>,
 }
 impl SearchController {
-    /// Start a validated search at finite nonnegative `now` seconds with a
-    /// 0.495 m square body (0.35 m circumscribed radius).
-    ///
-    /// Returns `invalid_search` for malformed request/time, or a navigation configuration error.
-    pub fn start(request: SearchRequest, now: f64) -> Result<Self, SearchError> {
-        let body = terra_navigation::Footprint {
-            length: 0.495,
-            width: 0.495,
-            margin: 0.,
-        };
-        Self::new(request, now, body)
+    /// Abandon the current search goal after a route failure (see
+    /// [`terra_exploration::SearchNavigator::invalidate_goal`]).
+    pub fn invalidate_goal(&mut self, now: f64) {
+        self.navigator.invalidate_goal(now);
+    }
+    /// Record the latest request on this session for status.
+    pub fn note_request(&mut self, token: String, accepted: bool) {
+        self.receipt = Some((token, accepted));
     }
     /// Start a search for a rover with this body.
     ///

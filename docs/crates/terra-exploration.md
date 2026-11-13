@@ -54,4 +54,4 @@ A blacklisted frontier is skipped for `blacklist_seconds` (30 s) while other fro
 
 Coverage is the area of observed free cells (occupancy 0–64), in square metres. `explored_ratio` is the fraction of cells that are no longer unknown.
 
-While `explore` is active the arbiter caps the local-planner horizon at `approach_horizon` (default 1 s). Unknown cells stay blocked. The shorter lookahead is what lets a goal on the edge of the map be reached. Occupied cells still stop the rover.
+While `explore` is active the arbiter caps the local-planner horizon at `timing::EXPLORATION_APPROACH_HORIZON_SECONDS` (1 s). Unknown cells stay blocked. The shorter lookahead is what lets a goal on the edge of the map be reached. Occupied cells still stop the rover.

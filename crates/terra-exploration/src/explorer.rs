@@ -76,7 +76,7 @@ impl Default for ExplorationStatus {
 /// Knobs for one explorer. The time budget is per run, not part of this struct.
 #[derive(Clone, Debug)]
 pub struct ExplorationConfig {
-    /// Rover body for the shared clearance checks. The arbiter overwrites this from the planner.
+    /// Rover body for the shared clearance checks. The arbiter sets it from the planner.
     pub footprint: Footprint,
     /// Seconds a goal may stay blocked (planner hold or no route) before it is blacklisted.
     pub stuck_timeout: f64,
@@ -90,18 +90,8 @@ pub struct ExplorationConfig {
     pub exclude_radius: f64,
     /// Metres of progress that resets the stuck timer.
     pub progress_epsilon: f64,
-    /// Cap on the local planner horizon while exploring.
-    ///
-    /// Frontier goals sit on the boundary of unknown space, and the shared planner treats
-    /// unknown cells as occupied. A multi-second rollout therefore stops short of every
-    /// frontier. The obstacle check still runs; only the lookahead is shortened.
-    pub approach_horizon: f64,
     /// Seconds between `exploration_progress` log events.
     pub progress_period: f64,
-    /// Continuous seconds of map staleness before the run ends. `0` ends on the first stale tick.
-    pub map_stale_timeout: f64,
-    /// Continuous seconds of an unhealthy sensor hold before the run ends. Emergency stop is immediate.
-    pub safety_hold_timeout: f64,
     /// Look-around turn rate in rad/s. Zero or less disables the look-around.
     ///
     /// A front depth camera cannot see beside or behind the chassis. When no
@@ -132,10 +122,7 @@ impl Default for ExplorationConfig {
             max_attempts: 3,
             exclude_radius: 1.,
             progress_epsilon: 0.2,
-            approach_horizon: terra_types::timing::EXPLORATION_APPROACH_HORIZON_SECONDS,
             progress_period: terra_types::timing::EXPLORATION_PROGRESS_PERIOD_SECONDS,
-            map_stale_timeout: terra_types::timing::EXPLORATION_MAP_STALE_GRACE_SECONDS,
-            safety_hold_timeout: terra_types::timing::EXPLORATION_SAFETY_HOLD_GRACE_SECONDS,
             scan_yaw_rate: 0.35,
             scan_radius: 1.,
             scan_timeout: terra_types::timing::EXPLORATION_SCAN_TIMEOUT_SECONDS,

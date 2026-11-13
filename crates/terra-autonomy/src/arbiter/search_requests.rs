@@ -135,7 +135,10 @@ impl AutonomyArbiter {
             result.is_ok(),
             result.err().unwrap_or("search_action"),
         );
-        self.search.as_mut().unwrap().receipt = Some((r.token.clone(), result.is_ok()));
+        self.search
+            .as_mut()
+            .unwrap()
+            .note_request(r.token.clone(), result.is_ok());
         if result.is_ok() {
             self.follower.cancel();
             self.plan.forget();

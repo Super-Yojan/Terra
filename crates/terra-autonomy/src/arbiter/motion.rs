@@ -445,10 +445,13 @@ impl AutonomyArbiter {
             } else {
                 let mut planner = self.planner.clone();
                 if self.level == Level::Explore {
-                    let cap = self.explorer.config().approach_horizon;
-                    if cap.is_finite() && cap > 0. {
-                        planner.config.horizon = planner.config.horizon.min(cap);
-                    }
+                    // Frontier goals sit on the edge of unknown space, which the
+                    // planner treats as occupied: a multi-second rollout stops
+                    // short of every frontier. Only the lookahead shortens.
+                    planner.config.horizon = planner
+                        .config
+                        .horizon
+                        .min(timing::EXPLORATION_APPROACH_HORIZON_SECONDS);
                 }
                 let (planned, trace) = if managed {
                     planner.plan_with_turning(
