@@ -20,8 +20,9 @@
 
 mod barrier;
 mod floor;
-pub use barrier::{BARRIER_HEIGHT_MARGIN, BARRIER_MIN_FACES, BarrierSurface};
-pub use floor::{FLOOR_BELOW_CAMERA, FLOOR_OUTLIER, FloorSurface};
+mod square_grid;
+pub use barrier::BarrierSurface;
+pub use floor::FloorSurface;
 use std::sync::Arc;
 pub use terra_types::point_capture::PointLabel;
 use terra_types::{Quaternion, Vector3};
@@ -200,11 +201,10 @@ pub struct LocalOccupancyMap {
     barrier: Option<Arc<BarrierSurface>>,
     /// Centre last requested by [`Self::recenter`], to spot local frame jumps.
     last_center: Option<(f64, f64)>,
-    frame_jumps: u64,
 }
 /// A recentre farther than this from the previous one is a local frame jump
 /// (VIO relocalization or a reset), not travel, in metres.
-pub const FRAME_JUMP_M: f64 = 1.0;
+const FRAME_JUMP_M: f64 = 1.0;
 impl LocalOccupancyMap {
     /// Allocate an unknown grid centered on world `(0, 0)`.
     ///
@@ -226,12 +226,7 @@ impl LocalOccupancyMap {
             floor: None,
             barrier: None,
             last_center: None,
-            frame_jumps: 0,
         })
-    }
-    /// Times [`Self::recenter`] cleared the map after a local frame jump.
-    pub fn frame_jumps(&self) -> u64 {
-        self.frame_jumps
     }
     /// Erase observations, timestamp history and the mesh surfaces while
     /// retaining geometry and origin.
@@ -266,8 +261,8 @@ impl LocalOccupancyMap {
     }
     /// Shift by whole cells, preserving overlapping world cells. Newly exposed cells are unknown.
     ///
-    /// Callers recentre on the rover every frame. A centre more than
-    /// [`FRAME_JUMP_M`] from the previous one is treated as a local frame jump
+    /// Callers recentre on the rover every frame. A centre more than 1 m
+    /// from the previous one is treated as a local frame jump
     /// and clears the map (see [`Self::clear`]) before shifting.
     ///
     /// The requested center `(x, y)` is in world metres; shifts round to the
@@ -291,7 +286,6 @@ impl LocalOccupancyMap {
             .is_some_and(|(px, py)| (x - px).hypot(y - py) > FRAME_JUMP_M)
         {
             self.clear();
-            self.frame_jumps += 1;
         }
         let resolution = self.config.resolution;
         let column_shift = ((x - self.config.width as f64 * resolution / 2.0 - self.origin_x)
@@ -742,34 +736,6 @@ struct Mesh<'a> {
     floor: Option<&'a FloorSurface>,
     barrier: Option<&'a BarrierSurface>,
 }
-/// Label every pixel of a depth frame without mesh surfaces; see
-/// [`label_depth_with_mesh`].
-///
-/// # Errors
-/// As [`label_depth_with_mesh`].
-pub fn label_depth(
-    config: &MapConfig,
-    intrinsics: CameraIntrinsics,
-    pose: CameraPose,
-    depth: &[f32],
-    classifier: DepthClassifier,
-) -> Result<Vec<LabeledPoint>, MapError> {
-    label_depth_with_mesh(config, intrinsics, pose, depth, classifier, None, None)
-}
-/// [`label_depth_with_mesh`] with a floor surface and no barrier surface.
-///
-/// # Errors
-/// As [`label_depth_with_mesh`].
-pub fn label_depth_with_floor(
-    config: &MapConfig,
-    intrinsics: CameraIntrinsics,
-    pose: CameraPose,
-    depth: &[f32],
-    classifier: DepthClassifier,
-    floor: Option<&FloorSurface>,
-) -> Result<Vec<LabeledPoint>, MapError> {
-    label_depth_with_mesh(config, intrinsics, pose, depth, classifier, floor, None)
-}
 /// Label every pixel of a depth frame with exactly the rules
 /// [`LocalOccupancyMap::integrate_classified`] applies to its sampled pixels,
 /// including the floor veto and barrier stops when `floor` and `barrier` are
@@ -841,10 +807,10 @@ pub struct DepthCapture {
     pub barrier: Option<Arc<BarrierSurface>>,
 }
 impl DepthCapture {
-    /// Label every pixel; see [`label_depth`].
+    /// Label every pixel; see [`label_depth_with_mesh`].
     ///
     /// # Errors
-    /// As [`label_depth`]; a frame the map accepted does not fail.
+    /// As [`label_depth_with_mesh`]; a frame the map accepted does not fail.
     pub fn label(&self) -> Result<Vec<LabeledPoint>, MapError> {
         label_depth_with_mesh(
             &self.config,
@@ -860,6 +826,25 @@ impl DepthCapture {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn label_depth(
+        config: &MapConfig,
+        intrinsics: CameraIntrinsics,
+        pose: CameraPose,
+        depth: &[f32],
+        classifier: DepthClassifier,
+    ) -> Result<Vec<LabeledPoint>, MapError> {
+        label_depth_with_mesh(config, intrinsics, pose, depth, classifier, None, None)
+    }
+    fn label_depth_with_floor(
+        config: &MapConfig,
+        intrinsics: CameraIntrinsics,
+        pose: CameraPose,
+        depth: &[f32],
+        classifier: DepthClassifier,
+        floor: Option<&FloorSurface>,
+    ) -> Result<Vec<LabeledPoint>, MapError> {
+        label_depth_with_mesh(config, intrinsics, pose, depth, classifier, floor, None)
+    }
     /// Use a single-pixel camera looking along world +X from 0.5 m above ground.
     fn setup() -> (LocalOccupancyMap, CameraIntrinsics, CameraPose) {
         let map = LocalOccupancyMap::new(MapConfig {
@@ -930,10 +915,8 @@ mod tests {
         map.recenter(0.05, 0.0).unwrap();
         map.recenter(0.1, 0.0).unwrap();
         assert!(map.snapshot().occupancy.iter().any(|x| *x > 50));
-        assert_eq!(map.frame_jumps(), 0);
         map.recenter(2.85, 0.0).unwrap();
         assert!(map.snapshot().occupancy.iter().all(|x| *x == -1));
-        assert_eq!(map.frame_jumps(), 1);
         map.integrate_depth(0.0, camera_intrinsics, p, &[2.0])
             .unwrap();
     }
