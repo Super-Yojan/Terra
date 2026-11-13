@@ -319,21 +319,6 @@ impl PairingCandidates {
     }
 }
 
-#[uniffi::export]
-/// Radio availability and permission failures retry; protocol and
-/// authentication failures stop automatic connection.
-pub fn bluetooth_failure_retryable(reason: String) -> bool {
-    ![
-        "Malformed",
-        "Encrypted",
-        "Invalid",
-        "Terra service unavailable",
-        "Status unavailable",
-    ]
-    .iter()
-    .any(|marker| reason.contains(marker))
-}
-
 /// Validated router settings.
 #[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
 pub struct RouterSettings {
@@ -453,18 +438,8 @@ mod tests {
     }
 
     #[test]
-    /// Failure classes and router settings, as in the Swift tests.
-    fn failures_and_router_settings() {
-        assert!(bluetooth_failure_retryable("Bluetooth unavailable".into()));
-        assert!(bluetooth_failure_retryable(
-            "Bluetooth permission required".into()
-        ));
-        assert!(!bluetooth_failure_retryable(
-            "Malformed Bluetooth message".into()
-        ));
-        assert!(!bluetooth_failure_retryable(
-            "Encrypted read/notification failed".into()
-        ));
+    /// Router settings, as in the Swift tests.
+    fn router_settings() {
         let parse =
             |e: &str, p: &str, id: &str| parse_router_settings(e.into(), p.into(), id.into());
         assert_eq!(

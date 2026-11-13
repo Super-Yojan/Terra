@@ -4,9 +4,7 @@ use std::sync::{Arc, Mutex};
 
 use serde::Deserialize;
 use terra_actuators::protocol::{self, RelaySample};
-use terra_actuators::{
-    ActuatorValue, Capabilities, DriveProfile, DriveProfileSet, Layout, RoutingInput,
-};
+use terra_actuators::{ActuatorValue, DriveProfile, DriveProfileSet, Layout, RoutingInput};
 #[derive(Debug, thiserror::Error, uniffi::Error)]
 /// Validation, JSON decoding, routing, or binary-protocol encoding failure.
 pub enum MobileActuatorError {
@@ -27,39 +25,6 @@ fn parse<T: serde::de::DeserializeOwned>(json: &str) -> Result<T, MobileActuator
         return Err(invalid("JSON document too large"));
     }
     serde_json::from_str(json).map_err(invalid)
-}
-#[uniffi::export]
-/// Decode bounded layout and capabilities JSON and return validation errors as a JSON array.
-/// An empty array means the layout passed validation.
-///
-/// # Errors
-/// Returns `InvalidInput` for oversized or malformed JSON, incompatible schemas,
-/// or serialization failure. Layout validation findings are returned in the array.
-pub fn actuator_validate_layout(
-    layout_json: String,
-    capabilities_json: String,
-) -> Result<String, MobileActuatorError> {
-    let layout: Layout = parse(&layout_json)?;
-    let capabilities: Capabilities = parse(&capabilities_json)?;
-    let errors = terra_actuators::validate_layout(&layout, &capabilities)
-        .err()
-        .unwrap_or_default();
-    serde_json::to_string(&errors).map_err(invalid)
-}
-#[uniffi::export]
-/// Route a layout and routing-input JSON document into command-values JSON.
-///
-/// # Errors
-/// Returns `InvalidInput` for oversized or malformed documents, routing rejection,
-/// or serialization failure. This function does not send commands to hardware.
-pub fn actuator_route(
-    layout_json: String,
-    input_json: String,
-) -> Result<String, MobileActuatorError> {
-    let layout: Layout = parse(&layout_json)?;
-    let input: RoutingInput = parse(&input_json)?;
-    serde_json::to_string(&terra_actuators::route_commands(&layout, &input).map_err(invalid)?)
-        .map_err(invalid)
 }
 #[uniffi::export]
 /// Largest control or reply JSON document in bytes; the limit for an
@@ -86,16 +51,6 @@ pub fn actuator_fragment(
         protocol::JSON_LIMIT,
     )
     .map_err(invalid)
-}
-
-#[uniffi::export]
-/// Return whether a decoded layout supports closed-loop feedback.
-///
-/// # Errors
-/// Returns `InvalidInput` for oversized JSON or layout decoding failure.
-pub fn actuator_supports_feedback(layout_json: String) -> Result<bool, MobileActuatorError> {
-    let layout: Layout = parse(&layout_json)?;
-    Ok(terra_actuators::supports_feedback(&layout))
 }
 
 #[uniffi::export]
@@ -146,15 +101,6 @@ pub fn actuator_route_profiles(
     )
     .map_err(invalid)?;
     serde_json::to_string(&values).map_err(invalid)
-}
-
-#[uniffi::export]
-/// Return whether drive profiles can carry closed-loop left/right wheel efforts.
-///
-/// # Errors
-/// Returns `InvalidInput` for oversized, malformed, or unsupported profile JSON.
-pub fn actuator_supports_vio_control(profiles_json: String) -> Result<bool, MobileActuatorError> {
-    Ok(ActiveLayout::parse(&profiles_json)?.supports_vio_control())
 }
 
 /// The rover's synchronized drive profiles plus any servo targets set since.
@@ -420,10 +366,11 @@ mod tests {
         );
         assert!(ActiveLayout::parse(&servo_on_motor).is_err());
         assert!(
-            !actuator_supports_vio_control(
-                PROFILES.replace(r#""turn_coefficient":-1.0"#, r#""turn_coefficient":-0.5"#)
+            !ActiveLayout::parse(
+                &PROFILES.replace(r#""turn_coefficient":-1.0"#, r#""turn_coefficient":-0.5"#)
             )
             .unwrap()
+            .supports_vio_control()
         );
     }
 }

@@ -124,6 +124,46 @@ pub(crate) fn remote_action(
     b.runtime.remote_action(kind, bytes, age)
 }
 
+/// Link variants only the Rust tests use; the apps call
+/// `reconnect_dashboard_authenticated`.
+impl MobileController {
+    /// Host a loopback-only TCP dashboard endpoint for the selected rover.
+    pub fn host_dashboard(
+        &self,
+        endpoint: String,
+        prefix: String,
+        rover_id: u64,
+    ) -> Result<(), ControllerError> {
+        self.attach_dashboard(|| {
+            terra_transport::ControlPlane::listen(&endpoint, &prefix, rover_id)
+        })
+    }
+    /// Close any fleet link the way the operator does, then connect without credentials.
+    pub fn connect_dashboard(
+        &self,
+        endpoint: String,
+        prefix: String,
+        rover_id: u64,
+    ) -> Result<(), ControllerError> {
+        self.disconnect_dashboard()?;
+        self.attach_dashboard(|| {
+            terra_transport::ControlPlane::connect(&endpoint, &prefix, rover_id)
+        })
+    }
+    /// Replace the link without credentials, keeping an accepted local mission.
+    pub fn reconnect_dashboard(
+        &self,
+        endpoint: String,
+        prefix: String,
+        rover_id: u64,
+    ) -> Result<(), ControllerError> {
+        self.detach_dashboard_link()?;
+        self.attach_dashboard(|| {
+            terra_transport::ControlPlane::connect(&endpoint, &prefix, rover_id)
+        })
+    }
+}
+
 impl MobileController {
     /// Whether an attached, working fleet link owns velocity intent, so local
     /// manual input and targets are refused.
@@ -141,10 +181,17 @@ impl MobileController {
             );
         }
     }
-    fn install_dashboard(
+    /// Open a fleet link with `open` and attach it; a failure to open is journaled.
+    fn attach_dashboard(
         &self,
-        service: terra_transport::ControlPlane,
+        open: impl FnOnce() -> Result<terra_transport::ControlPlane, terra_transport::TransportError>,
     ) -> Result<(), ControllerError> {
+        let service = open().map_err(|e| {
+            self.observation.router_connect_failed(&e);
+            ControllerError::InvalidInput {
+                message: e.to_string(),
+            }
+        })?;
         let mut brain = self.brain.lock().map_err(|_| ControllerError::Internal)?;
         brain.map_gate = Default::default();
         brain.cloud_gate = Default::default();
@@ -322,69 +369,6 @@ impl MobileController {
         }
         Ok(())
     }
-    /// Host a loopback-only TCP dashboard endpoint for the selected rover.
-    /// Run off the UI thread. Returns `InvalidInput` for endpoint/prefix or network
-    /// failure, or `Internal` for a poisoned mutex.
-    pub fn host_dashboard(
-        &self,
-        endpoint: String,
-        prefix: String,
-        rover_id: u64,
-    ) -> Result<(), ControllerError> {
-        let service =
-            terra_transport::ControlPlane::listen(&endpoint, &prefix, rover_id).map_err(|e| {
-                ControllerError::InvalidInput {
-                    message: e.to_string(),
-                }
-            })?;
-        self.install_dashboard(service)?;
-        Ok(())
-    }
-    /// Attach an outbound dashboard session to this controller; no hardware arming.
-    /// Clears previous remote intent before connecting; run off the UI thread.
-    /// Returns `InvalidInput` for transport validation/connection failure or `Internal`
-    /// for lock failure. Connection does not arm hardware.
-    pub fn connect_dashboard(
-        &self,
-        endpoint: String,
-        prefix: String,
-        rover_id: u64,
-    ) -> Result<(), ControllerError> {
-        self.disconnect_dashboard()?;
-        let service = terra_transport::ControlPlane::connect(&endpoint, &prefix, rover_id)
-            .map_err(|e| {
-                self.observation.router_connect_failed(&e);
-                ControllerError::InvalidInput {
-                    message: e.to_string(),
-                }
-            })?;
-        self.install_dashboard(service)?;
-        Ok(())
-    }
-    /// Clear remote intent and open an outbound dashboard session with Zenoh credentials.
-    /// An empty user omits credential configuration. Run off the UI thread.
-    /// Returns `InvalidInput` for transport failure or `Internal` for lock failure.
-    pub fn connect_dashboard_authenticated(
-        &self,
-        endpoint: String,
-        prefix: String,
-        rover_id: u64,
-        user: String,
-        password: String,
-    ) -> Result<(), ControllerError> {
-        self.disconnect_dashboard()?;
-        let service = terra_transport::ControlPlane::connect_authenticated(
-            &endpoint, &prefix, rover_id, &user, &password,
-        )
-        .map_err(|e| {
-            self.observation.router_connect_failed(&e);
-            ControllerError::InvalidInput {
-                message: e.to_string(),
-            }
-        })?;
-        self.install_dashboard(service)?;
-        Ok(())
-    }
     /// Drop network transport without clearing an accepted local mission.
     /// Clears queued hardware requests and tokens; closes the old link asynchronously.
     /// Returns `Internal` for a poisoned mutex.
@@ -399,26 +383,6 @@ impl MobileController {
         }
         Ok(())
     }
-    /// Replace the dashboard transport while preserving accepted local mission state.
-    /// Old hardware requests are discarded. Run off the UI thread. Returns `InvalidInput`
-    /// for transport failure or `Internal` for lock failure.
-    pub fn reconnect_dashboard(
-        &self,
-        endpoint: String,
-        prefix: String,
-        rover_id: u64,
-    ) -> Result<(), ControllerError> {
-        self.detach_dashboard_link()?;
-        let service = terra_transport::ControlPlane::connect(&endpoint, &prefix, rover_id)
-            .map_err(|e| {
-                self.observation.router_connect_failed(&e);
-                ControllerError::InvalidInput {
-                    message: e.to_string(),
-                }
-            })?;
-        self.install_dashboard(service)?;
-        Ok(())
-    }
     /// Replace the link using Zenoh credentials while preserving accepted local mission state.
     /// An empty user omits credential configuration. Old hardware requests are discarded.
     /// Returns `InvalidInput` for transport failure or `Internal` for lock failure.
@@ -431,17 +395,11 @@ impl MobileController {
         password: String,
     ) -> Result<(), ControllerError> {
         self.detach_dashboard_link()?;
-        let service = terra_transport::ControlPlane::connect_authenticated(
-            &endpoint, &prefix, rover_id, &user, &password,
-        )
-        .map_err(|e| {
-            self.observation.router_connect_failed(&e);
-            ControllerError::InvalidInput {
-                message: e.to_string(),
-            }
-        })?;
-        self.install_dashboard(service)?;
-        Ok(())
+        self.attach_dashboard(|| {
+            terra_transport::ControlPlane::connect_authenticated(
+                &endpoint, &prefix, rover_id, &user, &password,
+            )
+        })
     }
     /// Clear remote intent while preserving sensors, recording and a latched emergency stop.
     /// Switches authority back to teleop, resets the velocity loop, and closes the

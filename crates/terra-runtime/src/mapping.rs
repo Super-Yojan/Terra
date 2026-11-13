@@ -75,9 +75,6 @@ impl MappingState {
     pub fn disarm_capture(&self) {
         *lock(&self.capture) = CaptureSlot::default();
     }
-    pub fn capture_armed(&self) -> bool {
-        lock(&self.capture).armed
-    }
     /// Take the newest accepted frame since the previous take, if armed.
     pub fn take_capture(&self) -> Option<DepthCapture> {
         lock(&self.capture).latest.take()
@@ -203,7 +200,6 @@ mod tests {
         assert!(state.take_capture().is_none());
         state.integrate_depth(3.0, k, pose, &[2.0]).unwrap();
         state.disarm_capture();
-        assert!(!state.capture_armed());
         assert!(state.take_capture().is_none());
     }
 }

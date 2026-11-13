@@ -435,11 +435,6 @@ impl PhonePosePipeline {
         Ok(self.lock()?.calibration)
     }
 
-    /// The compass edge for this calibration.
-    pub fn heading_edge(&self) -> Result<HeadingEdge, ControllerError> {
-        Ok(self.lock()?.edge)
-    }
-
     /// Replace the calibration. Rejects implausible values and any change while
     /// a turn fit is collecting. Clears velocity history.
     pub fn set_calibration(

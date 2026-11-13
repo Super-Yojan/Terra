@@ -72,9 +72,6 @@ impl Runtime {
     pub fn connectivity_revision(&self) -> u64 {
         self.connectivity.revision
     }
-    pub fn router_loss_handled(&self) -> bool {
-        self.connectivity.loss_handled
-    }
     pub fn set_connectivity_policy(
         &mut self,
         policy: ConnectivityPolicySettings,

@@ -32,8 +32,8 @@ A sample the runtime rejects when it is applied (older than one already applied,
 | `MobileController` | Estimator, PI, arbiter, recorder. |
 | `MobileWaypoint` | `terra-waypoint`. |
 | `MobileOccupancyMap` | `terra-mapping`. |
-| `host_dashboard` | Loopback `ControlPlane`. |
-| `actuator_route` | `route_commands`. |
+| `reconnectDashboardAuthenticated` | Fleet `ControlPlane`. |
+| `actuatorRouteProfiles` | `route_drive_profiles`. |
 
 ![Wireframe of the screen that calls these objects](../assets/phone-home.svg)
 

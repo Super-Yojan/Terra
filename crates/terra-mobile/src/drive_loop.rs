@@ -151,16 +151,6 @@ impl PhoneDriveLoop {
         }
     }
 
-    /// Re-pair the loop clock with the sensor clock, e.g. after the app resumes.
-    pub fn resync_clock(&self, now_s: f64) {
-        if let Ok(mut clock) = self.shared.clock.lock() {
-            *clock = Clock {
-                base_s: now_s,
-                base: Instant::now(),
-            };
-        }
-    }
-
     /// Current time on the loop clock (the sensor clock), seconds.
     pub fn now(&self) -> f64 {
         self.shared.clock.lock().map(|c| c.now()).unwrap_or(0.0)
@@ -436,7 +426,7 @@ mod tests {
             drive.take_motor_command(1e9),
             MotorCommand::Drive { .. }
         ));
-        drive.resync_clock(200.0);
+        drive.shared.state.lock().unwrap().latest_drive = Some(("[]".into(), 99.0));
         assert_eq!(drive.take_motor_command(0.15), MotorCommand::Idle);
     }
 

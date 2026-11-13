@@ -257,17 +257,6 @@ impl MobileController {
             })
             .unwrap_or(false)
     }
-    pub fn observability_health(&self) -> String {
-        self.observation
-            .attached
-            .try_read()
-            .ok()
-            .and_then(|a| {
-                a.as_ref()
-                    .map(|a| serde_json::json!({"enabled":true,"journal":a.journal.health(),"upload":a.uploader.as_ref().map(|u|u.health())}).to_string())
-            })
-            .unwrap_or_else(|| "{\"enabled\":false}".into())
-    }
     /// Administrative/testing barrier. Never call from a live control tick.
     pub fn flush_observability(&self, seconds: f64) -> Result<(), ControllerError> {
         if !seconds.is_finite() || seconds <= 0. || seconds > 30. {
