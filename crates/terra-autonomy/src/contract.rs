@@ -25,7 +25,18 @@ pub enum Level {
     Task,
 }
 impl Level {
-    /// Levels every arbiter offers. `target_search` is added while a detector is
+    /// Every level, in rung order (L0 to L5).
+    pub const ALL: [Level; 8] = [
+        Level::Teleop,
+        Level::AssistedTeleop,
+        Level::WaypointDirect,
+        Level::Waypoint,
+        Level::Supervised,
+        Level::Explore,
+        Level::TargetSearch,
+        Level::Task,
+    ];
+    /// Levels every arbiter offers, in the order the phone pickers list them. `target_search` is added while a detector is
     /// fresh and `task` while a language model or MCP agent is attached.
     pub const BASE: [Level; 6] = [
         Level::Teleop,
@@ -50,10 +61,7 @@ impl Level {
     }
     /// The level with this wire name.
     pub fn parse(name: &str) -> Option<Level> {
-        [Level::TargetSearch, Level::Task]
-            .into_iter()
-            .chain(Level::BASE)
-            .find(|level| level.as_str() == name)
+        Level::ALL.into_iter().find(|level| level.as_str() == name)
     }
     /// L0: direct operator effort without sensor-based navigation.
     pub fn is_manual(self) -> bool {

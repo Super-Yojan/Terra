@@ -90,12 +90,7 @@ impl ObjectMap {
             return Err("object confidence too low");
         }
         let geo = s.geo.filter(|(lat, lon, acc)| {
-            lat.is_finite()
-                && lon.is_finite()
-                && (-85.0..=85.).contains(lat)
-                && (-180.0..=180.).contains(lon)
-                && acc.is_finite()
-                && *acc >= 0.
+            terra_waypoint::valid_coordinates(*lat, *lon) && acc.is_finite() && *acc >= 0.
         });
         let nearest = self
             .objects

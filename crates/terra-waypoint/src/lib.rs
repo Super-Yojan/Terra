@@ -14,7 +14,19 @@ const MAX_GOAL_BYTES: usize = 2048;
 /// local goal beyond it, and hosts pass it as the follower's `half_extent`
 /// when every decoded goal should fit.
 pub const MAX_LOCAL_GOAL_M: f64 = 20_000.;
-const METRES_PER_DEGREE: f64 = 40_075_016.686 / 360.0;
+/// Mean Earth radius, metres: the sphere every geographic conversion in Terra uses
+/// (this local projection, the outdoor GPS anchor, and great-circle distances).
+pub const EARTH_RADIUS_M: f64 = 6_371_000.;
+const METRES_PER_DEGREE: f64 = EARTH_RADIUS_M * std::f64::consts::PI / 180.;
+
+/// Whether `latitude` and `longitude` are finite degrees inside the range local
+/// projection accepts: latitude within `[-85, 85]`, longitude within `[-180, 180]`.
+pub fn valid_coordinates(latitude: f64, longitude: f64) -> bool {
+    latitude.is_finite()
+        && longitude.is_finite()
+        && (-85.0..=85.0).contains(&latitude)
+        && (-180.0..=180.0).contains(&longitude)
+}
 
 /// Map origin. Goals in WGS84 are projected into robotics metres: +x north, +y west.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -28,14 +40,9 @@ pub struct GeoOrigin {
 impl GeoOrigin {
     /// Construct a projection origin from finite geographic degrees.
     ///
-    /// Returns [`InputError::OutOfRange`] for non-finite values or latitude outside
-    /// `[-85, 85]` / longitude outside `[-180, 180]`.
+    /// Returns [`InputError::OutOfRange`] unless [`valid_coordinates`] holds.
     pub fn new(latitude: f64, longitude: f64) -> Result<Self, InputError> {
-        if !latitude.is_finite()
-            || !longitude.is_finite()
-            || !(-85.0..=85.0).contains(&latitude)
-            || !(-180.0..=180.0).contains(&longitude)
-        {
+        if !valid_coordinates(latitude, longitude) {
             return Err(InputError::OutOfRange);
         }
         Ok(Self {
@@ -46,8 +53,8 @@ impl GeoOrigin {
 
     /// Project geographic degrees into `(north, west)` metres relative to this origin.
     ///
-    /// Uses a constant metres-per-degree scale and the origin latitude cosine;
-    /// intended for local distances. Inputs are not validated or longitude-wrapped.
+    /// Equirectangular on a sphere of [`EARTH_RADIUS_M`], scaled by the origin
+    /// latitude cosine; intended for local distances. Inputs are not validated or longitude-wrapped.
     pub fn to_local(self, latitude: f64, longitude: f64) -> (f64, f64) {
         let north = (latitude - self.latitude) * METRES_PER_DEGREE;
         let east =
@@ -553,7 +560,7 @@ pub fn decode_goal(bytes: &[u8]) -> Option<GoalCommand> {
             }
             let latitude = finite(object.get("latitude")?)?;
             let longitude = finite(object.get("longitude")?)?;
-            if !(-85.0..=85.0).contains(&latitude) || !(-180.0..=180.0).contains(&longitude) {
+            if !valid_coordinates(latitude, longitude) {
                 return None;
             }
             Some(GoalCommand::Wgs84 {
