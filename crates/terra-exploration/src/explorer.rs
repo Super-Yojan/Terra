@@ -765,8 +765,7 @@ fn unknown_within(map: &MapSnapshot, pose: Pose, distance: f64) -> bool {
             if a < 0 || b < 0 || a >= map.width as isize || b >= map.height as isize {
                 continue;
             }
-            let x = map.origin_x + (a as f64 + 0.5) * map.resolution;
-            let y = map.origin_y + (b as f64 + 0.5) * map.resolution;
+            let (x, y) = map.centre(a as usize, b as usize);
             if (x - pose.x).hypot(y - pose.y) <= distance
                 && map.occupancy[b as usize * map.width as usize + a as usize] < 0
             {

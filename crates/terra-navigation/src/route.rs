@@ -195,8 +195,7 @@ fn snap_goal(
             if c < 0 || r < 0 || c >= map.width as i64 || r >= map.height as i64 {
                 continue;
             }
-            let cx = map.origin_x + (c as f64 + 0.5) * res;
-            let cy = map.origin_y + (r as f64 + 0.5) * res;
+            let (cx, cy) = map.centre(c as usize, r as usize);
             let distance = (cx - x).hypot(cy - y);
             if distance <= snap {
                 candidates.push((distance, cx, cy));

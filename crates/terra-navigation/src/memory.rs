@@ -125,9 +125,8 @@ impl LongRangeMemory {
         let mut seen = vec![0u32; n * n];
         let mut hit = vec![0u32; n * n];
         for row in 0..h {
-            let y = map.origin_y + (row as f64 + 0.5) * map.resolution;
             for col in 0..w {
-                let x = map.origin_x + (col as f64 + 0.5) * map.resolution;
+                let (x, y) = map.centre(col, row);
                 let (c, r) = self.cell_of(x, y);
                 let Some(i) = self.index(c, r) else { continue };
                 total[i] += 1;

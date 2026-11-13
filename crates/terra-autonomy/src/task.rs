@@ -433,8 +433,7 @@ impl Reach {
                 if !self.goal_cell(index) {
                     continue;
                 }
-                let cx = map.origin_x + (c as f64 + 0.5) * map.resolution;
-                let cy = map.origin_y + (r as f64 + 0.5) * map.resolution;
+                let (cx, cy) = map.centre(c as usize, r as usize);
                 let d = points
                     .iter()
                     .map(|&(x, y)| (cx - x).hypot(cy - y))
@@ -542,10 +541,7 @@ fn obstacle_blobs(map: &MapSnapshot) -> Vec<Vec<(f64, f64)>> {
         seen[start] = true;
         while let Some(index) = stack.pop() {
             let (c, r) = ((index % width) as isize, (index / width) as isize);
-            cells.push((
-                map.origin_x + (c as f64 + 0.5) * map.resolution,
-                map.origin_y + (r as f64 + 0.5) * map.resolution,
-            ));
+            cells.push(map.centre(c as usize, r as usize));
             for dy in -1..=1 {
                 for dx in -1..=1 {
                     let (nc, nr) = (c + dx, r + dy);
@@ -581,8 +577,7 @@ fn frontier_points(
             continue;
         }
         let (c, r) = ((index % width) as isize, (index / width) as isize);
-        let x = map.origin_x + (c as f64 + 0.5) * map.resolution;
-        let y = map.origin_y + (r as f64 + 0.5) * map.resolution;
+        let (x, y) = map.centre(index % width, index / width);
         if (x - pose.x).hypot(y - pose.y) < radius.max(0.8) {
             continue;
         }

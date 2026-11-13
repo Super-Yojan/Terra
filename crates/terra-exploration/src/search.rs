@@ -155,7 +155,7 @@ impl SearchNavigator {
         if self.map.is_none() {
             let w = ((self.bounds.max_x - self.bounds.min_x) / m.resolution).ceil() as u32;
             let h = ((self.bounds.max_y - self.bounds.min_y) / m.resolution).ceil() as u32;
-            if w as u64 * h as u64 > 250_000 {
+            if w as u64 * h as u64 > terra_mapping::MAX_PLANNING_CELLS as u64 {
                 return Err("search_map_capacity");
             }
             self.map = Some(MapSnapshot {
@@ -178,12 +178,9 @@ impl SearchNavigator {
                 if value < 0 {
                     continue;
                 }
-                let px = m.origin_x + (x as f64 + 0.5) * m.resolution;
-                let py = m.origin_y + (y as f64 + 0.5) * m.resolution;
-                let ix = ((px - memory.origin_x) / memory.resolution).floor() as isize;
-                let iy = ((py - memory.origin_y) / memory.resolution).floor() as isize;
-                if ix >= 0 && iy >= 0 && ix < memory.width as isize && iy < memory.height as isize {
-                    memory.occupancy[iy as usize * memory.width as usize + ix as usize] = value;
+                let (px, py) = m.centre(x as usize, y as usize);
+                if let Some((ix, iy)) = memory.cell(px, py) {
+                    memory.occupancy[iy * memory.width as usize + ix] = value;
                 }
             }
         }
