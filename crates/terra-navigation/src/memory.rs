@@ -54,7 +54,7 @@ impl Default for LongRangeMemory {
 
 impl LongRangeMemory {
     /// Forget everything.
-    pub fn clear(&mut self) {
+    fn clear(&mut self) {
         *self = Self::default();
     }
 
@@ -153,8 +153,9 @@ impl LongRangeMemory {
         }
     }
 
+    #[cfg(test)]
     /// Whether the remembered cell at world `(x, y)` is blocked.
-    pub fn blocked_at(&self, x: f64, y: f64) -> bool {
+    fn blocked_at(&self, x: f64, y: f64) -> bool {
         let (c, r) = self.cell_of(x, y);
         self.index(c, r).is_some_and(|i| self.cells[i] == BLOCKED)
     }

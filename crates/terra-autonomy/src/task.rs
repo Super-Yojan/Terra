@@ -19,15 +19,15 @@ use terra_navigation::{FitGrid, Footprint, HybridConfig, HybridGoal, Pose, hybri
 use crate::valid_token;
 
 /// Longest accepted task instruction or operator reply, in characters.
-pub const TASK_TEXT_MAX_CHARS: usize = 500;
+pub(crate) const TASK_TEXT_MAX_CHARS: usize = 500;
 /// Budget used when a task omits `budget_seconds`.
-pub const TASK_DEFAULT_BUDGET_SECONDS: f64 = 300.;
+pub(crate) const TASK_DEFAULT_BUDGET_SECONDS: f64 = 300.;
 /// Largest accepted task budget.
-pub const TASK_MAX_BUDGET_SECONDS: f64 = 3600.;
+pub(crate) const TASK_MAX_BUDGET_SECONDS: f64 = 3600.;
 /// Model calls allowed when a task omits `max_steps`.
-pub const TASK_DEFAULT_MAX_STEPS: u32 = 20;
+pub(crate) const TASK_DEFAULT_MAX_STEPS: u32 = 20;
 /// Largest accepted `max_steps`.
-pub const TASK_MAX_STEPS: u32 = 100;
+pub(crate) const TASK_MAX_STEPS: u32 = 100;
 /// Waypoints taken from one reply; extra entries are dropped.
 pub const TASK_MAX_WAYPOINTS: usize = 5;
 /// Largest model reply the arbiter parses.
@@ -35,11 +35,11 @@ const TASK_RESPONSE_MAX_BYTES: usize = 8192;
 /// A query with no answer after this long counts as a failed step.
 pub const TASK_QUERY_TIMEOUT_SECONDS: f64 = 90.;
 /// A route failure lasting this long abandons the active waypoint and asks the model again.
-pub const TASK_BLOCKED_SECONDS: f64 = 4.;
+pub(crate) const TASK_BLOCKED_SECONDS: f64 = 4.;
 /// A waypoint not reached in this long is abandoned and the model is asked again.
-pub const TASK_WAYPOINT_TIMEOUT_SECONDS: f64 = 90.;
+pub(crate) const TASK_WAYPOINT_TIMEOUT_SECONDS: f64 = 90.;
 /// Consecutive invalid replies, timeouts or model errors that fail the task.
-pub const TASK_MAX_CONSECUTIVE_FAILURES: u32 = 3;
+pub(crate) const TASK_MAX_CONSECUTIVE_FAILURES: u32 = 3;
 /// Landmarks older than this are left out of the prompt.
 const TASK_LANDMARK_MAX_AGE_SECONDS: f64 = 120.;
 /// Free point snapped to observed, clear space within this distance.
@@ -47,7 +47,7 @@ const TASK_SNAP_RADIUS: f64 = 0.5;
 /// Longest raw-drive grant an operator can approve, in seconds.
 pub const TASK_DRIVE_MAX_GRANT_SECONDS: f64 = 60.;
 /// A drive request the operator has not answered expires after this many seconds.
-pub const TASK_DRIVE_REQUEST_SECONDS: f64 = 60.;
+pub(crate) const TASK_DRIVE_REQUEST_SECONDS: f64 = 60.;
 /// Longest single `drive` command, in seconds. The agent repeats it to keep moving.
 pub const TASK_DRIVE_COMMAND_SECONDS: f64 = 1.;
 /// Speed caps for agent drive, in m/s and rad/s. The planner can only lower them.
@@ -299,7 +299,7 @@ pub struct TaskQuery {
 }
 
 /// Rules sent as the system prompt on every query.
-pub fn task_system_prompt() -> String {
+pub(crate) fn task_system_prompt() -> String {
     "You plan for Terra, a small ground rover with an iPhone for sensing. \
 An operator gives you a task. Each step you see the rover's local map and decide what to do next.\n\
 \n\

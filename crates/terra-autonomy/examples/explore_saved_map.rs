@@ -3,8 +3,8 @@
 //! sight) reveals the world at 10 Hz while the arbiter runs at 100 Hz, and every
 //! frontier event is printed. Unseen cells of the saved map count as walls.
 //!
-//!   TERRA_MAP=../../maps/run2.json TERRA_START=-1.05,1.65,0 TERRA_SECONDS=120 \
-//!   cargo test --release -p terra-autonomy --test explore_saved_map -- --ignored --nocapture
+//!   TERRA_MAP=maps/run2.json TERRA_START=-1.05,1.65,0 TERRA_SECONDS=120 \
+//!   cargo run --release -p terra-autonomy --example explore_saved_map
 //!
 //! Optional: `TERRA_TRACE=from,to` prints pose, command, route and local planner
 //! candidates between those times; `TERRA_DUMP=t` prints the known map around
@@ -13,10 +13,9 @@ use terra_autonomy::*;
 use terra_mapping::MapSnapshot;
 use terra_navigation::{Pose, Twist};
 
-#[test]
-#[ignore]
-fn explore_saved_map() {
+fn main() {
     let Ok(path) = std::env::var("TERRA_MAP") else {
+        eprintln!("set TERRA_MAP (see the header for the other variables)");
         return;
     };
     let start: Vec<f64> = std::env::var("TERRA_START")
