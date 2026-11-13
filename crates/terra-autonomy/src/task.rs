@@ -1219,7 +1219,7 @@ mod tests {
     }
 
     fn route() -> HybridConfig {
-        HybridConfig::for_body(body(), &terra_control::TurningConfig::default())
+        HybridConfig::for_body(body(), &terra_types::turning::TurningConfig::default())
     }
 
     #[test]

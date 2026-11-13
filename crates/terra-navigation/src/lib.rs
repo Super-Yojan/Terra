@@ -359,7 +359,7 @@ impl LocalPlanner {
         current: Twist,
         intent: Twist,
         dt: f64,
-        limiter: &terra_control::TurningLimiter,
+        limiter: &terra_types::turning::TurningLimiter,
         now: f64,
     ) -> (PlanningDecision, PlannerTrace) {
         self.plan_recorded(map, pose, current, intent, dt, true, Some((limiter, now)))
@@ -372,7 +372,7 @@ impl LocalPlanner {
         intent: Twist,
         dt: f64,
         record: bool,
-        turning: Option<(&terra_control::TurningLimiter, f64)>,
+        turning: Option<(&terra_types::turning::TurningLimiter, f64)>,
     ) -> (PlanningDecision, PlannerTrace) {
         let mut trace = PlannerTrace {
             maneuver_segments: Vec::new(),

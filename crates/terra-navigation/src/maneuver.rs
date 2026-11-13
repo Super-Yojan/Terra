@@ -15,7 +15,7 @@ impl LocalPlanner {
         map: &MapSnapshot,
         pose: Pose,
         target_yaw: f64,
-        c: &terra_control::TurningConfig,
+        c: &terra_types::turning::TurningConfig,
     ) -> Option<Vec<ManeuverSegment>> {
         if !target_yaw.is_finite() || c.validate().is_err() || !self.valid() || !pose.finite() {
             return None;

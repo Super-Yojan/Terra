@@ -25,8 +25,7 @@
 //! ```
 
 use terra_types::*;
-mod turning;
-pub use turning::{TurningConfig, TurningLimiter};
+use terra_types::turning::TurningConfig;
 /// PI gains and safety limits for differential wheel control.
 ///
 /// Defaults target a small rover. All numbers must be finite; call [`Self::validate`]

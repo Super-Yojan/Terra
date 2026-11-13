@@ -211,7 +211,7 @@ impl RoverProfile {
         base: &crate::navigation::Parameters,
     ) -> crate::navigation::Parameters {
         crate::navigation::Parameters {
-            turning: terra_control::TurningConfig {
+            turning: terra_types::turning::TurningConfig {
                 min_turn_radius: self.min_turn_radius,
                 allow_in_place: self.allow_in_place,
                 ..base.turning

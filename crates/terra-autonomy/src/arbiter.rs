@@ -12,7 +12,7 @@
 use crate::*;
 use serde::Serialize;
 use std::collections::VecDeque;
-use terra_control::{TurningConfig, TurningLimiter};
+use terra_types::turning::{TurningConfig, TurningLimiter};
 use terra_exploration::{EndReason, ExplorationStatus, ExploreAction, ExploreTick, Explorer};
 use terra_mapping::MapSnapshot;
 use terra_navigation::{LocalPlanner, Pose, Twist, frontier};

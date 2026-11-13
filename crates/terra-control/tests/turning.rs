@@ -1,4 +1,4 @@
-use terra_control::{TurningConfig, TurningLimiter};
+use terra_types::turning::{TurningConfig, TurningLimiter};
 use terra_types::VelocityTarget;
 fn target(t: f64, v: f64, w: f64) -> VelocityTarget {
     VelocityTarget {

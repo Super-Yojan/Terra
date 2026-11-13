@@ -331,7 +331,7 @@ fn simulated_rover_explores_until_the_budget_expires() {
 fn spinning_arbiter() -> AutonomyArbiter {
     let mut arbiter = AutonomyArbiter::default();
     arbiter
-        .configure_turning(terra_control::TurningConfig {
+        .configure_turning(terra_types::turning::TurningConfig {
             allow_in_place: true,
             ..Default::default()
         })

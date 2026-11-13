@@ -210,7 +210,7 @@ fn trace_matches_decision_and_records_rejected_candidates() {
 #[test]
 fn managed_reverse_checks_unknown_rear_and_marks_trace() {
     let planner = LocalPlanner::default();
-    let limiter = terra_control::TurningLimiter::new(Default::default()).unwrap();
+    let limiter = terra_types::turning::TurningLimiter::new(Default::default()).unwrap();
     let (out, trace) = planner.plan_with_turning(
         &map(),
         Pose::default(),
@@ -237,7 +237,7 @@ fn managed_reverse_checks_unknown_rear_and_marks_trace() {
 #[test]
 fn multipoint_turn_precedes_hold_and_prefers_forward_when_clear() {
     let planner = LocalPlanner::default();
-    let c = terra_control::TurningConfig::default();
+    let c = terra_types::turning::TurningConfig::default();
     let segments = planner
         .heading_maneuver(&map(), Pose::default(), std::f64::consts::PI, &c)
         .unwrap();
@@ -255,7 +255,7 @@ fn multipoint_turn_precedes_hold_and_prefers_forward_when_clear() {
             angular: 0.,
         },
         0.1,
-        &terra_control::TurningLimiter::new(c).unwrap(),
+        &terra_types::turning::TurningLimiter::new(c).unwrap(),
         0.,
     );
     assert!(out.twist.linear > 0.);

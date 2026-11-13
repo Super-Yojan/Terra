@@ -96,7 +96,7 @@ impl Default for HybridConfig {
 
 impl HybridConfig {
     /// The planner's footprint and the turn radius from the turning policy.
-    pub fn for_body(footprint: Footprint, turning: &terra_control::TurningConfig) -> Self {
+    pub fn for_body(footprint: Footprint, turning: &terra_types::turning::TurningConfig) -> Self {
         Self {
             footprint,
             min_turn_radius: turning.min_turn_radius,

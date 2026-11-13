@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 pub struct Parameters {
     /// Managed turn constraints; omitted by older clients.
     #[serde(default)]
-    pub turning: terra_control::TurningConfig,
+    pub turning: terra_types::turning::TurningConfig,
     /// Planner reverse cap and penalty; defaults support older clients.
     #[serde(default = "default_reverse")]
     pub max_reverse: f64,

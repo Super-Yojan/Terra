@@ -728,7 +728,7 @@ impl Runtime {
         } else {
             self.controller.set_turning_constraint(
                 (output.command_origin != CommandOrigin::LocalManual).then_some(
-                    terra_control::TurningConfig {
+                    terra_types::turning::TurningConfig {
                         // The exploration look-around is a slow turn in place.
                         allow_in_place: self.navigation.parameters.turning.allow_in_place
                             || output.in_place_turn,

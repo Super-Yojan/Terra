@@ -8,6 +8,7 @@
 pub mod connectivity_policy;
 pub mod point_capture;
 pub mod timing;
+pub mod turning;
 
 /// `angle` in radians wrapped to `[-π, π)`.
 pub fn wrap_angle(angle: f64) -> f64 {
