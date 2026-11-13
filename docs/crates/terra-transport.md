@@ -2,11 +2,15 @@
 
 > [!TIP]
 > **TL;DR**
-> `ControlPlane` listens only on `tcp/127.0.0.1`, or connects out to a configured router.
-> Stops are never evicted from the intent inbox and are drained last.
+> `RoverConnection` is a TCP client. Simulator only.
+> It publishes `cmd_vel` at 20 Hz and drops the lease after 250 ms.
+> `ControlPlane` listens only on `tcp/127.0.0.1`.
 
 ```mermaid
 flowchart LR
+  UI[TerraPhone Simulator] --> Client[RoverConnection]
+  Client -->|cmd_vel| Z[Zorvane]
+  Z -->|camera/depth| Client
   Dash[host_dashboard] --> Loop[ControlPlane]
   Loop --> Local[127.0.0.1]
 ```
@@ -15,6 +19,20 @@ flowchart LR
 
 [API](https://super-yojan.dev/Terra/api/terra_transport/index.html) · [readme](https://github.com/Super-Yojan/Terra/blob/main/crates/terra-transport/README.md)
 
+## Client contract
+
+`set_target` allows ±2 m/s and ±2 rad/s.
+
+An invalid target forgets the previous one.
+
+Disconnect publishes a final zero.
+
+`status` means the socket is open. It does not mean the wheels moved.
+
+![Depth frames fill this grid](../assets/occupancy.svg)
+
+*Subscribe key: `terra/rover/<id>/camera/depth`. Encoding `32FC1_LE`.*
+
 ## Loopback plane
 
 Accepts `autonomy`, `safety`, `goal`, `goal/decision`, `teleop`, and `cmd_vel`.
@@ -22,7 +40,7 @@ Accepts `autonomy`, `safety`, `goal`, `goal/decision`, `teleop`, and `cmd_vel`.
 Publishes `terra/rover/fleet/state` every 100 ms for that one rover id.
 
 ```sh
-cargo test -p terra-transport
+cargo test -p terra-transport -- --ignored
 ```
 
 WebRTC signaling uses the same session and a separate queue. The cap is 65536 bytes. Control messages stay at 2048. Message types live in [fpv-signaling](fpv-signaling.md). See [FPV video](../phone/fpv.md).

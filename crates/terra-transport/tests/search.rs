@@ -105,3 +105,44 @@ fn all_pending_reports_are_replayed_on_contract_topic() {
         std::thread::sleep(Duration::from_millis(30));
     }
 }
+
+#[test]
+fn phone_remote_actions_bind_the_observed_authority_generation() {
+    let endpoint = loopback();
+    let service = ControlPlane::listen(&endpoint, "phone-bind", 7).unwrap();
+    let client = terra_transport::RoverConnection::connect(&endpoint, "phone-bind", 7).unwrap();
+    assert!(
+        client
+            .send_action("autonomy", r#"{"level":"waypoint","token":"unbound"}"#)
+            .is_err()
+    );
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        service.publish(
+            "autonomy/status",
+            r#"{"requested_level":"teleop","run_id":"run","revision":7}"#.into(),
+        );
+        if client.autonomy_status().contains("run_id") {
+            break;
+        }
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    client
+        .send_action("autonomy", r#"{"level":"waypoint","token":"new"}"#)
+        .unwrap();
+    loop {
+        if let Some((_, raw, _)) = service
+            .take_actions()
+            .into_iter()
+            .find(|a| a.0 == "autonomy")
+        {
+            let v: serde_json::Value = serde_json::from_slice(&raw).unwrap();
+            assert_eq!(v["run_id"], "run");
+            assert_eq!(v["authority_revision"], 7);
+            break;
+        }
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}

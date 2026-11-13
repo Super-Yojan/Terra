@@ -3,16 +3,23 @@
 > [!TIP]
 > **TL;DR**
 > Prefix: `terra/rover/<id>/…`
+> The `RoverConnection` client publishes `cmd_vel` at 20 Hz. No TerraPhone app uses it.
+> Lease is 250 ms, then zeros.
 > TerraPhone iOS does not open this socket. It uses Bluetooth.
 
 ```mermaid
 flowchart LR
   ARGOS[ARGOS] -->|teleop goal safety| Z[Zorvane]
+  Client[RoverConnection client] -->|cmd_vel| Z
+  Z -->|camera/depth| Client
   Dash[Loopback dashboard] --> Local[127.0.0.1 only]
 ```
 
+*Two Terra sessions. They are not the same socket.*
+
 | Session | Who | Address |
 | --- | --- | --- |
+| `RoverConnection` | `terra-transport` tests and tools | Any `tcp/` endpoint. Usually `tcp/127.0.0.1:7447`. |
 | `ControlPlane` | `host_dashboard` | `tcp/127.0.0.1` only. `0.0.0.0` is rejected. |
 
 ## Keys

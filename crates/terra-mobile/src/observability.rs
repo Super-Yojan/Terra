@@ -47,6 +47,7 @@ impl ObservationState {
                     "network"
                 }
             }
+            _ => "transport",
         };
         self.router_event(
             "router.connect.failed",
