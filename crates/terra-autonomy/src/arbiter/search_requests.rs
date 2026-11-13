@@ -68,7 +68,7 @@ impl AutonomyArbiter {
             Some("report_capacity")
         } else if !self.detector_available(&r.target_class, input.now) {
             Some("detector_unavailable")
-        } else if !body_inside(&self.planner.config.footprint, input.pose, &r.bounds) {
+        } else if !r.bounds.contains_body(&self.planner.config.footprint, input.pose) {
             Some("outside_search_bounds")
         } else if !input.healthy
             || !input.pose.finite()
@@ -234,16 +234,4 @@ impl AutonomyArbiter {
                 .contains(&(r.run_id, r.search_id, r.report_id))
         }
     }
-}
-
-/// Whether the body rectangle at the pose's heading lies inside the bounds.
-fn body_inside(footprint: &terra_navigation::Footprint, pose: Pose, bounds: &SearchBounds) -> bool {
-    let (a, b) = footprint.half_extents(0.);
-    let (sin, cos) = pose.yaw.sin_cos();
-    let reach_x = a * cos.abs() + b * sin.abs();
-    let reach_y = a * sin.abs() + b * cos.abs();
-    pose.x - reach_x >= bounds.min_x
-        && pose.x + reach_x <= bounds.max_x
-        && pose.y - reach_y >= bounds.min_y
-        && pose.y + reach_y <= bounds.max_y
 }

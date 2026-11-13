@@ -79,16 +79,7 @@ impl SearchController {
         if !request.valid() || !now.is_finite() || now < 0. {
             return Err("invalid_search");
         }
-        let b = request.bounds;
-        let navigator = terra_exploration::SearchNavigator::new(
-            terra_exploration::SearchBounds {
-                min_x: b.min_x,
-                min_y: b.min_y,
-                max_x: b.max_x,
-                max_y: b.max_y,
-            },
-            footprint,
-        )?;
+        let navigator = terra_exploration::SearchNavigator::new(request.bounds, footprint)?;
         let token = request.token.clone();
         Ok(Self {
             request,
