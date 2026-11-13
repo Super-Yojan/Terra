@@ -3,11 +3,11 @@
 use serde::Serialize;
 
 /// Sightings closer than this, of the same class and colour, are one object.
-pub const MERGE_RADIUS_M: f64 = 1.0;
+const MERGE_RADIUS_M: f64 = 1.0;
 /// Distinct camera frames needed before an object counts as found.
-pub const CONFIRM_FRAMES: u32 = 3;
+const CONFIRM_FRAMES: u32 = 3;
 /// Detections below this confidence are ignored.
-pub const MIN_CONFIDENCE: f64 = 0.5;
+const MIN_CONFIDENCE: f64 = 0.5;
 /// Oldest unconfirmed objects are dropped beyond this many.
 pub const MAX_OBJECTS: usize = 64;
 

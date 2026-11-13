@@ -8,9 +8,9 @@ pub use anchor::GeoAnchor;
 pub use heading::{CourseFix, HeadingFusion, Source as HeadingSource};
 /// Arrival radius when the operator does not choose one, in metres. GPS accuracy
 /// no longer has to fit inside it: arrival uses the smoothed anchor position.
-pub const DEFAULT_ARRIVAL_RADIUS_M: f64 = 3.;
+const DEFAULT_ARRIVAL_RADIUS_M: f64 = 3.;
 /// Guidance lookahead along the destination bearing, in metres.
-pub const LOOKAHEAD_M: f64 = 3.;
+const LOOKAHEAD_M: f64 = 3.;
 #[derive(Clone, Copy, Debug)]
 pub struct GpsFix {
     pub timestamp: f64,

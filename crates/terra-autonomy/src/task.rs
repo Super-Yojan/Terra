@@ -31,7 +31,7 @@ pub const TASK_MAX_STEPS: u32 = 100;
 /// Waypoints taken from one reply; extra entries are dropped.
 pub const TASK_MAX_WAYPOINTS: usize = 5;
 /// Largest model reply the arbiter parses.
-pub const TASK_RESPONSE_MAX_BYTES: usize = 8192;
+const TASK_RESPONSE_MAX_BYTES: usize = 8192;
 /// A query with no answer after this long counts as a failed step.
 pub const TASK_QUERY_TIMEOUT_SECONDS: f64 = 90.;
 /// A route failure lasting this long abandons the active waypoint and asks the model again.
@@ -41,9 +41,9 @@ pub const TASK_WAYPOINT_TIMEOUT_SECONDS: f64 = 90.;
 /// Consecutive invalid replies, timeouts or model errors that fail the task.
 pub const TASK_MAX_CONSECUTIVE_FAILURES: u32 = 3;
 /// Landmarks older than this are left out of the prompt.
-pub const TASK_LANDMARK_MAX_AGE_SECONDS: f64 = 120.;
+const TASK_LANDMARK_MAX_AGE_SECONDS: f64 = 120.;
 /// Free point snapped to observed, clear space within this distance.
-pub const TASK_SNAP_RADIUS: f64 = 0.5;
+const TASK_SNAP_RADIUS: f64 = 0.5;
 /// Longest raw-drive grant an operator can approve, in seconds.
 pub const TASK_DRIVE_MAX_GRANT_SECONDS: f64 = 60.;
 /// A drive request the operator has not answered expires after this many seconds.

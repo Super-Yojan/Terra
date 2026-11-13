@@ -574,15 +574,6 @@ pub fn decode_goal(bytes: &[u8]) -> Option<GoalCommand> {
     }
 }
 
-/// Serialize a status snapshot to JSON bytes, omitting absent optional fields.
-///
-/// Returns `None` on serialization failure or size above 65,536 bytes. This function
-/// does not validate status semantics or numeric finiteness before serialization.
-pub fn encode_status(status: &WaypointStatus) -> Option<Vec<u8>> {
-    let bytes = serde_json::to_vec(status).ok()?;
-    (bytes.len() <= 65_536).then_some(bytes)
-}
-
 fn inside_square(x: f64, y: f64, half_extent: f64) -> bool {
     let bevy_x = -y;
     let bevy_z = -x;
@@ -783,7 +774,7 @@ mod tests {
                 49.0,
             )
             .unwrap();
-        let bytes = encode_status(&follower.step(0.0, 0.0, 0.0).status).unwrap();
+        let bytes = serde_json::to_vec(&follower.step(0.0, 0.0, 0.0).status).unwrap();
         let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(value["state"], "active");
         assert_eq!(value["goal_id"], 1);
@@ -793,7 +784,7 @@ mod tests {
         assert!(value["x"].as_f64().unwrap() > 10.0);
         assert!(value.get("yaw").is_none());
         let idle: serde_json::Value =
-            serde_json::from_slice(&encode_status(&WaypointStatus::idle()).unwrap()).unwrap();
+            serde_json::from_slice(&serde_json::to_vec(&WaypointStatus::idle()).unwrap()).unwrap();
         assert_eq!(idle["state"], "idle");
         assert_eq!(idle["goal_id"], 0);
         assert!(idle.get("latitude").is_none());
