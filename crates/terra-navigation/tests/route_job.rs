@@ -3,7 +3,7 @@
 //! the phone builds from one view (as in astar_hidden_goals.rs).
 use std::f64::consts::PI;
 use terra_mapping::MapSnapshot;
-use terra_navigation::{HybridConfig, HybridRoute, Pose, RouteJob, footprint_rejection_at};
+use terra_navigation::{HybridConfig, HybridRoute, Pose, RouteError, RouteJob, footprint_rejection_at};
 
 /// L3 arrival radius minus a margin, as the arbiter passes it.
 const SNAP: f64 = 0.65;
@@ -61,7 +61,7 @@ fn plan(
     start: Pose,
     x: f64,
     y: f64,
-) -> (Result<HybridRoute, &'static str>, usize) {
+) -> (Result<HybridRoute, RouteError>, usize) {
     let mut job = match RouteJob::new(map, start, x, y, &HybridConfig::default(), SNAP) {
         Ok(job) => job,
         Err(why) => return (Err(why), 0),
@@ -129,7 +129,7 @@ fn rover_at_the_box_face_still_routes_round() {
 #[test]
 fn goal_on_the_box_is_refused() {
     let map = view_with_box(2.0, 0.6);
-    assert_eq!(plan(&map, rover(), 2.1, 0.).0, Err("route_goal_blocked"));
+    assert_eq!(plan(&map, rover(), 2.1, 0.).0, Err(RouteError::GoalBlocked));
 }
 
 #[test]
@@ -166,7 +166,7 @@ fn an_enclosed_goal_is_refused() {
             map.occupancy[i] = 0;
         }
     }
-    assert_eq!(plan(&map, rover(), 5.5, 0.).0, Err("route_no_path"));
+    assert_eq!(plan(&map, rover(), 5.5, 0.).0, Err(RouteError::NoPath));
 }
 
 #[test]

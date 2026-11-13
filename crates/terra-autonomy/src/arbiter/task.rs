@@ -748,7 +748,7 @@ impl AutonomyArbiter {
         let since = *task.blocked_since.get_or_insert(input.now);
         task.reason = "route_blocked".into();
         if input.now - since >= TASK_BLOCKED_SECONDS {
-            let why = decision.route_failure.unwrap_or(decision.reason.as_str());
+            let why = decision.route_failure.unwrap_or(decision.reason).as_str();
             if let Some(w) = task.plan.front().cloned() {
                 task.note(
                     "blocked",

@@ -171,7 +171,7 @@ pub struct AutonomyArbiter {
     route_job: Option<terra_navigation::RouteJob>,
     /// Why the last search for the current goal failed; reported while a
     /// retry runs, so a failing route never hides behind `route_planning`.
-    route_last_failure: Option<&'static str>,
+    route_last_failure: Option<Reason>,
     route_goal: Option<(u64, f64, f64)>,
     /// Coarse 100 m memory of the rolling map, for goals beyond its edge.
     memory: terra_navigation::LongRangeMemory,
@@ -330,7 +330,7 @@ struct TickDecision {
     twist: Twist,
     /// A hold forces the final command to zero, even if intent is nonzero.
     held: bool,
-    route_failure: Option<&'static str>,
+    route_failure: Option<Reason>,
     /// A route search is still running over the next ticks.
     route_pending: bool,
 }

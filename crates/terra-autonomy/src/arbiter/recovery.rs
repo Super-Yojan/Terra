@@ -93,7 +93,7 @@ impl AutonomyArbiter {
                     self.force_replan();
                     None
                 } else {
-                    decision.route_failure = Some("boxed_in");
+                    decision.route_failure = Some(Reason::BoxedIn);
                     Some(Twist::default())
                 }
             }
@@ -214,7 +214,7 @@ impl AutonomyArbiter {
         };
         self.blocked_since = None;
         self.clear_route();
-        decision.route_failure = Some("boxed_in");
+        decision.route_failure = Some(Reason::BoxedIn);
     }
 
     /// Drop the route and plan again on this tick.

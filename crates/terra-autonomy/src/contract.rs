@@ -224,6 +224,8 @@ pub enum Reason {
     RouteGoalBlocked,
     HeadingRequiresSpinOrReplan,
     InvalidTurnTiming,
+    /// Recovery could not free the rover; a route failure retried after a wait.
+    BoxedIn,
     ExplorationScan,
     SearchHold,
     /// Dock creeping forward at zero twist between pulses, which is not a hold.
@@ -232,7 +234,7 @@ pub enum Reason {
     Other(&'static str),
 }
 impl Reason {
-    const KNOWN: [Reason; 18] = [
+    const KNOWN: [Reason; 19] = [
         Reason::Idle,
         Reason::Active,
         Reason::Assisted,
@@ -248,6 +250,7 @@ impl Reason {
         Reason::RouteGoalBlocked,
         Reason::HeadingRequiresSpinOrReplan,
         Reason::InvalidTurnTiming,
+        Reason::BoxedIn,
         Reason::ExplorationScan,
         Reason::SearchHold,
         Reason::DockCreep,
@@ -270,6 +273,7 @@ impl Reason {
             Reason::RouteGoalBlocked => "route_goal_blocked",
             Reason::HeadingRequiresSpinOrReplan => "heading_requires_spin_or_replan",
             Reason::InvalidTurnTiming => "invalid_turn_timing",
+            Reason::BoxedIn => "boxed_in",
             Reason::ExplorationScan => "exploration_scan",
             Reason::SearchHold => "search_hold",
             Reason::DockCreep => "dock_creep",
@@ -297,6 +301,11 @@ impl Reason {
 impl From<&'static str> for Reason {
     fn from(name: &'static str) -> Self {
         Reason::known(name).unwrap_or(Reason::Other(name))
+    }
+}
+impl From<terra_navigation::RouteError> for Reason {
+    fn from(error: terra_navigation::RouteError) -> Self {
+        Reason::from(error.as_str())
     }
 }
 impl From<terra_navigation::PlanReason> for Reason {
