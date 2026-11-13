@@ -8,8 +8,6 @@
 use serde::Serialize;
 use terra_types::InputError;
 
-/// Maximum accepted goal JSON size in bytes, including whitespace.
-const MAX_GOAL_BYTES: usize = 2048;
 /// Largest local goal coordinate magnitude, metres: [`decode_goal`] refuses a
 /// local goal beyond it, and hosts pass it as the follower's `half_extent`
 /// when every decoded goal should fit.
@@ -149,7 +147,8 @@ impl WaypointConfig {
 /// Decoded destination or cancellation request.
 ///
 /// Prefer [`decode_goal`] for untrusted inputs. Direct construction bypasses its
-/// geographic, yaw, and token checks; [`WaypointController::accept`] does not repeat all of them.
+/// checks; [`GoalCommand::valid`] repeats them (except the local extent, which
+/// [`WaypointController::accept`] applies).
 #[derive(Clone, Debug, PartialEq)]
 pub enum GoalCommand {
     /// Clear the active goal and reset its ID to zero.
@@ -524,7 +523,7 @@ fn pursuit(
 /// characters or `.`, `_`, `:`, `-`. Optional nulls mean absent. Empty, oversized,
 /// malformed, unknown-field, and otherwise invalid messages return `None`.
 pub fn decode_goal(bytes: &[u8]) -> Option<GoalCommand> {
-    if bytes.is_empty() || bytes.len() > MAX_GOAL_BYTES {
+    if bytes.is_empty() || bytes.len() > terra_types::requests::MAX_REQUEST_BYTES {
         return None;
     }
     let value: serde_json::Value = serde_json::from_slice(bytes).ok()?;
@@ -574,6 +573,27 @@ pub fn decode_goal(bytes: &[u8]) -> Option<GoalCommand> {
     }
 }
 
+impl GoalCommand {
+    /// Well formed: finite coordinates (geographic ones inside
+    /// [`valid_coordinates`]), a finite yaw of at most one turn, and a token
+    /// that passes [`valid_token`]. Does not bound the local extent.
+    pub fn valid(&self) -> bool {
+        let (point, yaw, token) = match self {
+            GoalCommand::Cancel => return true,
+            GoalCommand::Local { x, y, yaw, token } => (x.is_finite() && y.is_finite(), yaw, token),
+            GoalCommand::Wgs84 {
+                latitude,
+                longitude,
+                yaw,
+                token,
+            } => (valid_coordinates(*latitude, *longitude), yaw, token),
+        };
+        point
+            && yaw.is_none_or(|v| v.is_finite() && v.abs() <= std::f64::consts::TAU)
+            && token.as_deref().is_none_or(valid_token)
+    }
+}
+
 fn inside_square(x: f64, y: f64, half_extent: f64) -> bool {
     let bevy_x = -y;
     let bevy_z = -x;
@@ -606,7 +626,9 @@ fn optional_token(object: &serde_json::Map<String, serde_json::Value>) -> Option
     }
 }
 
-fn valid_token(token: &str) -> bool {
+/// Whether `token` is a request correlation token: 1–64 ASCII letters,
+/// digits, or `._:-`.
+pub fn valid_token(token: &str) -> bool {
     let bytes = token.as_bytes();
     (1..=64).contains(&bytes.len())
         && bytes

@@ -1,7 +1,6 @@
 //! Source admission and integration with the existing L3 local planner.
 use crate::*;
 use terra_autonomy::outdoor::{Evidence, NavigationSource, OutdoorPhase};
-use terra_waypoint::MAX_LOCAL_GOAL_M;
 
 /// Outdoor request admission: replay memory for source requests and
 /// geographic goals, the navigation revision requests are reviewed against,
@@ -29,7 +28,8 @@ pub fn evidence(b: &Runtime, now: f64) -> Evidence {
         pose: b.pose.unwrap_or_default().0,
         pose_ready: pose_quality::ready(b, now),
         // L2 direct drives without the occupancy map, so a stale map never holds it.
-        map_ready: !b.autonomy.needs_map() || b.autonomy.map_fresh(now, b.map.as_ref().map(|m| m.1)),
+        map_ready: !b.autonomy.needs_map()
+            || b.autonomy.map_fresh(now, b.map.as_ref().map(|m| m.1)),
         hardware_ready: b.hardware.is_some_and(|h| h.fresh_and_ready(now)),
         authority: b.autonomy.outdoor_authority(),
     }
@@ -90,8 +90,7 @@ pub fn request(
         }
         b.outdoor.select_source(source, radius).map_err(invalid)?;
         b.bump_navigation_revision();
-        b.autonomy
-            .accept_goal(&terra_waypoint::GoalCommand::Cancel, MAX_LOCAL_GOAL_M);
+        b.autonomy.accept_goal(&terra_waypoint::GoalCommand::Cancel);
         b.controller.reset();
         Ok(())
     })();
@@ -105,10 +104,10 @@ pub fn goal(b: &mut Runtime, g: &terra_waypoint::GoalCommand, now: f64, radius: 
     use terra_waypoint::GoalCommand;
     if matches!(g, GoalCommand::Cancel) {
         b.outdoor.cancel();
-        return b.autonomy.accept_goal(g, MAX_LOCAL_GOAL_M);
+        return b.autonomy.accept_goal(g);
     }
     if !b.outdoor.selected() {
-        return b.autonomy.accept_goal(g, MAX_LOCAL_GOAL_M);
+        return b.autonomy.accept_goal(g);
     }
     let GoalCommand::Wgs84 {
         latitude,
@@ -150,7 +149,7 @@ pub fn goal(b: &mut Runtime, g: &terra_waypoint::GoalCommand, now: f64, radius: 
         yaw: None,
         token: Some(token.clone()),
     };
-    if !b.autonomy.accept_goal(&local, MAX_LOCAL_GOAL_M) {
+    if !b.autonomy.accept_goal(&local) {
         b.outdoor.cancel();
         return false;
     }
@@ -198,7 +197,8 @@ pub fn dispatch_goal(b: &mut Runtime, bytes: &[u8], now: f64, age: f64) -> bool 
     };
     let outdoor = b.outdoor.selected() && value["cancel"] != true;
     let radius = value["arrival_radius_m"].as_f64();
-    let bound = value["run_id"] == b.run_id && value["navigation_revision"] == b.outdoor_admission.revision;
+    let bound =
+        value["run_id"] == b.run_id && value["navigation_revision"] == b.outdoor_admission.revision;
     if outdoor {
         if let Some(o) = value.as_object_mut() {
             o.remove("run_id");

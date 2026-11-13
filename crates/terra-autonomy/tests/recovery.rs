@@ -31,15 +31,12 @@ fn waypoint_arbiter(x: f64, y: f64) -> AutonomyArbiter {
         budget_seconds: None,
         budget_minutes: None,
     });
-    assert!(arbiter.accept_goal(
-        &GoalCommand::Local {
-            x,
-            y,
-            yaw: None,
-            token: Some("goal".into()),
-        },
-        20.
-    ));
+    assert!(arbiter.accept_goal(&GoalCommand::Local {
+        x,
+        y,
+        yaw: None,
+        token: Some("goal".into()),
+    }));
     arbiter
 }
 

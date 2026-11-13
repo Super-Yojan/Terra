@@ -141,11 +141,7 @@ impl AutonomyArbiter {
             yaw: None,
             token,
         };
-        // The extent is a valid constant, so `accept` cannot return `Err`.
-        let ok = self
-            .follower
-            .accept(&goal, terra_waypoint::MAX_LOCAL_GOAL_M)
-            .unwrap_or(false);
+        let ok = follow(&mut self.follower, &goal);
         if !ok {
             self.event("goal_rejected", None, "goal_out_of_bounds");
         }
@@ -178,6 +174,7 @@ impl AutonomyArbiter {
         if settings.planner != self.planner_config {
             self.planner_config = settings.planner.clone();
             self.apply_planner();
+            self.explorer.set_footprint(settings.planner.footprint);
             self.plan.forget();
             self.reset_route();
             self.route_map_revision = 0;
@@ -632,9 +629,9 @@ impl AutonomyArbiter {
     }
     /// Accept or cancel a waypoint and return whether it was accepted.
     ///
-    /// Local coordinates and `extent` use metres; WGS84 coordinates use degrees and yaw uses radians.
+    /// Local coordinates use metres (at most [`terra_waypoint::MAX_LOCAL_GOAL_M`] from the origin); WGS84 coordinates use degrees and yaw uses radians.
     /// Invalid, out-of-bounds, unauthorized, or conflicting-token goals return `false`; cancellation clears active intent.
-    pub fn accept_goal(&mut self, g: &GoalCommand, extent: f64) -> bool {
+    pub fn accept_goal(&mut self, g: &GoalCommand) -> bool {
         if self.level == Level::TargetSearch {
             self.event("goal_rejected", None, "search_active");
             return false;
@@ -655,26 +652,7 @@ impl AutonomyArbiter {
             GoalCommand::Local { token, .. } | GoalCommand::Wgs84 { token, .. } => token.clone(),
             _ => None,
         };
-        let valid = match g {
-            GoalCommand::Local { x, y, yaw, token } => {
-                x.is_finite()
-                    && y.is_finite()
-                    && yaw.is_none_or(|v| v.is_finite() && v.abs() <= std::f64::consts::TAU)
-                    && token.as_ref().is_none_or(|t| valid_token(t))
-            }
-            GoalCommand::Wgs84 {
-                latitude,
-                longitude,
-                yaw,
-                token,
-            } => {
-                terra_waypoint::GeoOrigin::new(*latitude, *longitude).is_ok()
-                    && yaw.is_none_or(|v| v.is_finite() && v.abs() <= std::f64::consts::TAU)
-                    && token.as_ref().is_none_or(|t| valid_token(t))
-            }
-            GoalCommand::Cancel => true,
-        };
-        if !valid {
+        if !g.valid() {
             self.event("goal_rejected", token, "invalid_goal");
             return false;
         }
@@ -697,8 +675,7 @@ impl AutonomyArbiter {
             self.event("goal_rejected", token, reason);
             return false;
         }
-        // `Err` is an invalid extent from the caller: refuse the goal.
-        let ok = self.follower.accept(g, extent).unwrap_or(false);
+        let ok = follow(&mut self.follower, g);
         if ok {
             self.plan.forget();
             self.proposal = None;
@@ -808,4 +785,13 @@ impl AutonomyArbiter {
             },
         );
     }
+}
+
+/// Latch `goal` on `follower` anywhere within
+/// [`terra_waypoint::MAX_LOCAL_GOAL_M`] of the origin; whether it latched.
+pub(super) fn follow(follower: &mut WaypointController, goal: &GoalCommand) -> bool {
+    // The extent is a valid constant, so `accept` cannot return `Err`.
+    follower
+        .accept(goal, terra_waypoint::MAX_LOCAL_GOAL_M)
+        .unwrap_or(false)
 }

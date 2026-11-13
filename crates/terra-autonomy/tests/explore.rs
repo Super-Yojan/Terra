@@ -235,7 +235,7 @@ fn goal_cancel_stops_exploration() {
     let mut arbiter = AutonomyArbiter::default();
     arbiter.set_level(explore("cancel", 30.));
     let _ = arbiter.step(input_at(0.3, Pose::default(), &map));
-    assert!(arbiter.accept_goal(&terra_waypoint::GoalCommand::Cancel, 50.));
+    assert!(arbiter.accept_goal(&terra_waypoint::GoalCommand::Cancel));
     let cancelled = arbiter.step(input_at(0.4, Pose::default(), &map));
     assert_eq!(
         cancelled
@@ -453,15 +453,12 @@ fn level_change_ends_the_look_around() {
     assert!(!manual.in_place_turn);
 
     arbiter.set_level(LevelRequest::new(Level::WaypointDirect, "direct"));
-    assert!(arbiter.accept_goal(
-        &terra_waypoint::GoalCommand::Local {
-            x: 2.,
-            y: 0.,
-            yaw: None,
-            token: Some("goal".into()),
-        },
-        50.,
-    ));
+    assert!(arbiter.accept_goal(&terra_waypoint::GoalCommand::Local {
+        x: 2.,
+        y: 0.,
+        yaw: None,
+        token: Some("goal".into()),
+    }));
     let direct = arbiter.step(input_at(0.3, Pose::default(), &map));
     assert_ne!(direct.status.reason, "obstacle_blocked");
     assert!(direct.twist.linear > 0.);

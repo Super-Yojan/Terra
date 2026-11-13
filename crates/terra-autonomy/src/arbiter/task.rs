@@ -604,19 +604,15 @@ impl AutonomyArbiter {
                     && (status.x - w.x).abs() < 1e-9
                     && (status.y - w.y).abs() < 1e-9;
                 if !latched {
-                    // `Err` is impossible: the extent is a valid constant.
-                    let accepted = self
-                        .follower
-                        .accept(
-                            &GoalCommand::Local {
-                                x: w.x,
-                                y: w.y,
-                                yaw: None,
-                                token: None,
-                            },
-                            terra_waypoint::MAX_LOCAL_GOAL_M,
-                        )
-                        .unwrap_or(false);
+                    let accepted = super::requests::follow(
+                        &mut self.follower,
+                        &GoalCommand::Local {
+                            x: w.x,
+                            y: w.y,
+                            yaw: None,
+                            token: None,
+                        },
+                    );
                     self.plan.forget();
                     if accepted {
                         task.waypoint_started = now;

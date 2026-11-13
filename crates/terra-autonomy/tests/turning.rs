@@ -51,15 +51,12 @@ fn forged_exemption_rejected_and_stop_immediate() {
 fn heading_uses_checked_multipoint_segments_and_measured_yaw() {
     let mut a = AutonomyArbiter::default();
     a.set_level(decode_level(br#"{"level":"waypoint_direct","token":"heading-mode"}"#).unwrap());
-    assert!(a.accept_goal(
-        &terra_waypoint::GoalCommand::Local {
-            x: 0.,
-            y: 0.,
-            yaw: Some(3.0),
-            token: Some("heading".into())
-        },
-        100.
-    ));
+    assert!(a.accept_goal(&terra_waypoint::GoalCommand::Local {
+        x: 0.,
+        y: 0.,
+        yaw: Some(3.0),
+        token: Some("heading".into())
+    }));
     let map = terra_mapping::MapSnapshot {
         width: 80,
         height: 80,
@@ -110,15 +107,12 @@ fn heading_uses_checked_multipoint_segments_and_measured_yaw() {
 fn three_point_turn_completes_from_measured_motion_not_elapsed_time() {
     let mut a = AutonomyArbiter::default();
     a.set_level(decode_level(br#"{"level":"waypoint_direct","token":"turn-mode"}"#).unwrap());
-    a.accept_goal(
-        &terra_waypoint::GoalCommand::Local {
-            x: 0.,
-            y: 0.,
-            yaw: Some(3.),
-            token: Some("turn".into()),
-        },
-        100.,
-    );
+    a.accept_goal(&terra_waypoint::GoalCommand::Local {
+        x: 0.,
+        y: 0.,
+        yaw: Some(3.),
+        token: Some("turn".into()),
+    });
     let map = terra_mapping::MapSnapshot {
         width: 80,
         height: 80,
@@ -171,24 +165,18 @@ fn local_and_wgs84_waypoints_share_turning_policy() {
     }
     let origin = terra_waypoint::GeoOrigin::new(38.8, -77.3).unwrap();
     let (lat, lon) = origin.from_local(1., 0.2);
-    local.accept_goal(
-        &terra_waypoint::GoalCommand::Local {
-            x: 1.,
-            y: 0.2,
-            yaw: None,
-            token: None,
-        },
-        100.,
-    );
-    geo.accept_goal(
-        &terra_waypoint::GoalCommand::Wgs84 {
-            latitude: lat,
-            longitude: lon,
-            yaw: None,
-            token: None,
-        },
-        100.,
-    );
+    local.accept_goal(&terra_waypoint::GoalCommand::Local {
+        x: 1.,
+        y: 0.2,
+        yaw: None,
+        token: None,
+    });
+    geo.accept_goal(&terra_waypoint::GoalCommand::Wgs84 {
+        latitude: lat,
+        longitude: lon,
+        yaw: None,
+        token: None,
+    });
     let l = tick(&mut local, 0.);
     let g = tick(&mut geo, 0.);
     assert!((l.twist.angular - g.twist.angular).abs() < 1e-6);

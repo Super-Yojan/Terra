@@ -61,12 +61,6 @@ pub struct ObjectMap {
     pub revision: u64,
 }
 
-fn valid_token(s: &str) -> bool {
-    (1..=32).contains(&s.len())
-        && s.bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b"_-".contains(&b))
-}
-
 impl ObjectMap {
     pub fn objects(&self) -> &[MappedObject] {
         &self.objects
@@ -92,7 +86,9 @@ impl ObjectMap {
     }
     /// Merge one sighting into the nearest matching object, or start a new one.
     pub fn observe(&mut self, s: ObjectSighting) -> Result<(), &'static str> {
-        if !valid_token(&s.class) || s.color.as_deref().is_some_and(|c| !valid_token(c)) {
+        if !crate::valid_class(&s.class)
+            || s.color.as_deref().is_some_and(|c| !crate::valid_class(c))
+        {
             return Err("invalid object class");
         }
         if !(s.x.is_finite() && s.y.is_finite() && s.timestamp.is_finite()) {

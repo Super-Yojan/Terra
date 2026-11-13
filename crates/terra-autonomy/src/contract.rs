@@ -541,14 +541,8 @@ pub struct SensorHold {
     #[serde(default)]
     pub goal_dropped: bool,
 }
-/// Return whether `s` is 1–64 ASCII letters, digits, or characters from `._:-`.
-pub fn valid_token(s: &str) -> bool {
-    (1..=64).contains(&s.len())
-        && s.bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b"._:-".contains(&b))
-}
-/// Largest autonomy request payload, in bytes.
-pub(crate) const MAX_REQUEST_BYTES: usize = 2048;
+pub use terra_waypoint::valid_token;
+use terra_types::requests::MAX_REQUEST_BYTES;
 /// Decode one strict JSON request of 1 to [`MAX_REQUEST_BYTES`] bytes.
 pub(crate) fn decode<T: serde::de::DeserializeOwned>(b: &[u8]) -> Option<T> {
     if b.is_empty() || b.len() > MAX_REQUEST_BYTES {

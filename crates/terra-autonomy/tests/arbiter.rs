@@ -82,15 +82,12 @@ fn takeover_clears_old_lease_and_stop_is_latched() {
 #[test]
 fn stale_inputs_and_no_implicit_goal_mode() {
     let mut a = AutonomyArbiter::default();
-    assert!(!a.accept_goal(
-        &terra_waypoint::GoalCommand::Local {
-            x: 3.,
-            y: 0.,
-            yaw: None,
-            token: Some("g".into())
-        },
-        50.
-    ));
+    assert!(!a.accept_goal(&terra_waypoint::GoalCommand::Local {
+        x: 3.,
+        y: 0.,
+        yaw: None,
+        token: Some("g".into())
+    }));
     a.accept_operator(tele(), 0.);
     assert_eq!(a.step(input(0.6)).twist, Twist::default());
     a.set_level(LevelRequest {
@@ -190,14 +187,14 @@ fn duplicate_goal_token_does_not_relaunch() {
         yaw: None,
         token: Some("goal-1".into()),
     };
-    assert!(a.accept_goal(&g, 50.));
+    assert!(a.accept_goal(&g));
     a.set_level(LevelRequest {
         level: Level::Teleop,
         token: "take".into(),
         budget_seconds: None,
         budget_minutes: None,
     });
-    assert!(a.accept_goal(&g, 50.));
+    assert!(a.accept_goal(&g));
     assert_eq!(
         a.step(input(0.1)).goal.state,
         terra_waypoint::GoalState::Idle
@@ -213,15 +210,12 @@ fn invalid_direct_goal_is_rejected() {
         budget_seconds: None,
         budget_minutes: None,
     });
-    assert!(!a.accept_goal(
-        &terra_waypoint::GoalCommand::Local {
-            x: 1.,
-            y: 0.,
-            yaw: Some(f64::NAN),
-            token: Some("g".into())
-        },
-        50.
-    ));
+    assert!(!a.accept_goal(&terra_waypoint::GoalCommand::Local {
+        x: 1.,
+        y: 0.,
+        yaw: Some(f64::NAN),
+        token: Some("g".into())
+    }));
 }
 /// Accept a zero command then a backward-time motion packet before ticking; the rover must stay stopped.
 #[test]
@@ -357,22 +351,19 @@ fn direct_waypoint_needs_no_map_but_retains_sensor_and_cancel_safety() {
         budget_seconds: None,
         budget_minutes: None,
     });
-    assert!(a.accept_goal(
-        &terra_waypoint::GoalCommand::Local {
-            x: 2.,
-            y: 0.,
-            yaw: None,
-            token: Some("direct-goal".into())
-        },
-        50.
-    ));
+    assert!(a.accept_goal(&terra_waypoint::GoalCommand::Local {
+        x: 2.,
+        y: 0.,
+        yaw: None,
+        token: Some("direct-goal".into())
+    }));
     let out = a.step(input(0.1));
     assert!(out.twist.linear > 0.);
     assert!(out.status.supported_levels.contains(&Level::WaypointDirect));
     let mut stale = input(1.);
     stale.pose_time = 0.;
     assert_eq!(a.step(stale).twist, Twist::default());
-    assert!(a.accept_goal(&terra_waypoint::GoalCommand::Cancel, 50.));
+    assert!(a.accept_goal(&terra_waypoint::GoalCommand::Cancel));
     assert_eq!(a.step(input(1.1)).twist, Twist::default());
 }
 
@@ -395,15 +386,12 @@ fn l2_bypasses_occupied_map_while_l3_stops_and_stop_still_latches() {
             budget_seconds: None,
             budget_minutes: None,
         });
-        assert!(a.accept_goal(
-            &terra_waypoint::GoalCommand::Local {
-                x: 2.,
-                y: 0.,
-                yaw: None,
-                token: Some("goal".into())
-            },
-            50.
-        ));
+        assert!(a.accept_goal(&terra_waypoint::GoalCommand::Local {
+            x: 2.,
+            y: 0.,
+            yaw: None,
+            token: Some("goal".into())
+        }));
         let out = a.step(ArbiterInput {
             map: Some(&map),
             map_time: Some(0.1),
@@ -418,15 +406,12 @@ fn l2_bypasses_occupied_map_while_l3_stops_and_stop_still_latches() {
             true,
         );
         assert_eq!(a.step(input(0.2)).twist, Twist::default());
-        assert!(!a.accept_goal(
-            &terra_waypoint::GoalCommand::Local {
-                x: 3.,
-                y: 0.,
-                yaw: None,
-                token: Some("new-goal".into())
-            },
-            50.
-        ));
+        assert!(!a.accept_goal(&terra_waypoint::GoalCommand::Local {
+            x: 3.,
+            y: 0.,
+            yaw: None,
+            token: Some("new-goal".into())
+        }));
     }
 }
 
@@ -446,10 +431,10 @@ fn cancelled_l2_token_never_replays_motion() {
         yaw: None,
         token: Some("direct-goal".into()),
     };
-    assert!(a.accept_goal(&goal, 50.));
+    assert!(a.accept_goal(&goal));
     assert!(a.step(input(0.1)).twist.linear > 0.);
-    assert!(a.accept_goal(&terra_waypoint::GoalCommand::Cancel, 50.));
-    assert!(a.accept_goal(&goal, 50.)); // Correlated receipt, not a new execution.
+    assert!(a.accept_goal(&terra_waypoint::GoalCommand::Cancel));
+    assert!(a.accept_goal(&goal)); // Correlated receipt, not a new execution.
     assert_eq!(a.step(input(0.2)).twist, Twist::default());
 }
 
@@ -637,7 +622,7 @@ fn goal_while_stopped_names_the_stop() {
         yaw: None,
         token: Some(token.into()),
     };
-    assert!(!a.accept_goal(&goal("g-stopped"), 50.));
+    assert!(!a.accept_goal(&goal("g-stopped")));
     let status = a.step(input(0.1)).status;
     assert_eq!(status.request_reason.as_deref(), Some(SAFETY_STOPPED));
     a.set_safety(
@@ -653,7 +638,7 @@ fn goal_while_stopped_names_the_stop() {
         budget_seconds: None,
         budget_minutes: None,
     });
-    assert!(!a.accept_goal(&goal("g-teleop"), 50.));
+    assert!(!a.accept_goal(&goal("g-teleop")));
     let status = a.step(input(0.2)).status;
     assert_eq!(status.request_reason.as_deref(), Some("authority_required"));
 }
