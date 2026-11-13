@@ -692,7 +692,6 @@ impl MobileController {
                 brain.gate_rejected = rejected;
             }
         }
-        let pose = brain.pose().unwrap_or_default();
         let map = brain.map().cloned();
         let map_publication = if brain.dashboard.is_some() {
             map.as_ref().map(|(grid, time, sequence)| {
@@ -702,7 +701,7 @@ impl MobileController {
                 if !brain.map_gate.is_newer(&run_id, *sequence) {
                     return publication::Publication::Skip;
                 }
-                if !publication::map_visualization_valid(grid, &run_id) {
+                if !grid.telemetry_valid(&run_id) {
                     brain.map_gate.reject_source(run_id.clone(), *sequence);
                     return publication::Publication::Skip;
                 }
@@ -768,25 +767,11 @@ impl MobileController {
                     }
                     Some(publication::Publication::Heartbeat(sequence)) => d.publish(
                         telemetry::MAP_OCCUPANCY_HEARTBEAT,
-                        serde_json::json!({"schema_version":1,"rover_id":d.rover_id(),
-                            "run_id":run_id,"sequence":sequence})
-                        .to_string(),
+                        terra_mapping::MapSnapshot::heartbeat(d.rover_id(), &run_id, sequence)
+                            .to_string(),
                     ),
                     _ => {}
                 }
-            }
-            if brain.pose_ready(timestamp) {
-                d.publish(
-                    telemetry::POSE,
-                    serde_json::json!({
-                        "rover_id": d.rover_id(),
-                        "sequence": brain.sequence(),
-                        "x": pose.0.x,
-                        "y": pose.0.y,
-                        "yaw": pose.0.yaw,
-                    })
-                    .to_string(),
-                );
             }
         }
         brain.map_gate.full_enqueued(!map_full_rejected);

@@ -139,7 +139,43 @@ pub const OCCUPIED: i8 = 65;
 /// Largest map, in cells, that grid searches over a whole snapshot (route
 /// planning, search coverage) accept; bounds their time and memory per call.
 pub const MAX_PLANNING_CELLS: usize = 250_000;
+/// Most cells a side a dashboard draws; narrower than onboard maps.
+const TELEMETRY_MAX_SIDE: u32 = 512;
+/// Most cells in one `map/occupancy` body.
+const TELEMETRY_MAX_CELLS: usize = 250_000;
+/// Longest run id, in bytes, a dashboard accepts.
+const TELEMETRY_MAX_RUN_ID_BYTES: usize = 256;
 impl MapSnapshot {
+    /// Whether this grid fits the dashboard's `map/occupancy` envelope under
+    /// `run_id`: 1 to 512 cells a side and at most 250 000 cells, values
+    /// -1..=100, resolution 0.01..=2 m, finite origin and extent, and a run id
+    /// of 1 to 256 bytes. Narrower than [`Self::valid`]; onboard planning
+    /// still uses maps that fail it.
+    pub fn telemetry_valid(&self, run_id: &str) -> bool {
+        !run_id.is_empty()
+            && run_id.len() <= TELEMETRY_MAX_RUN_ID_BYTES
+            && (1..=TELEMETRY_MAX_SIDE).contains(&self.width)
+            && (1..=TELEMETRY_MAX_SIDE).contains(&self.height)
+            && self.width as usize * self.height as usize <= TELEMETRY_MAX_CELLS
+            && self.occupancy.len() == self.width as usize * self.height as usize
+            && self.resolution.is_finite()
+            && (0.01..=2.).contains(&self.resolution)
+            && self.origin_x.is_finite()
+            && self.origin_y.is_finite()
+            && (self.origin_x + f64::from(self.width) * self.resolution).is_finite()
+            && (self.origin_y + f64::from(self.height) * self.resolution).is_finite()
+            && self.occupancy.iter().all(|cell| (-1..=100).contains(cell))
+    }
+    /// The `map/occupancy/heartbeat` body: the last full snapshot's run and
+    /// sequence are still current. Carries `schema_version` like the snapshot.
+    pub fn heartbeat(rover_id: u64, run_id: &str, sequence: u64) -> serde_json::Value {
+        serde_json::json!({
+            "schema_version": 1,
+            "rover_id": rover_id,
+            "run_id": run_id,
+            "sequence": sequence,
+        })
+    }
     /// The `map/occupancy` telemetry body: schema version 1, the caller's
     /// rover, run and sequence, and the grid as it is. Observed cells only, so
     /// simulator ground truth never reaches the dashboard. Does not validate.
@@ -819,6 +855,46 @@ pub fn label_depth_with_mesh(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    /// Exercises accepted dashboard dimensions and rejects excessive dimensions/cell count,
+    /// invalid resolution/cells/origin, and empty or oversized run identities.
+    fn visualization_envelope_matches_dashboard_without_narrowing_local_maps() {
+        // Build unknown-free test geometry with the requested dimensions and valid 0.1 m cells.
+        let map = |width, height| MapSnapshot {
+            width,
+            height,
+            resolution: 0.1,
+            origin_x: 0.,
+            origin_y: 0.,
+            occupancy: vec![0; width as usize * height as usize],
+        };
+        for (width, height) in [(400, 400), (500, 500), (512, 1)] {
+            assert!(map(width, height).telemetry_valid("run"));
+        }
+        for (width, height) in [(600, 500), (512, 500), (513, 1), (1, 513)] {
+            let unsupported = map(width, height);
+            // All examples fit the wire cap; byte acceptance alone is insufficient.
+            assert!(serde_json::to_vec(&unsupported.occupancy).unwrap().len() < 2_000_000);
+            assert!(!unsupported.telemetry_valid("run"));
+        }
+        for resolution in [0.009, 2.001, f64::NAN, f64::INFINITY] {
+            let mut unsupported = map(2, 2);
+            unsupported.resolution = resolution;
+            assert!(!unsupported.telemetry_valid("run"));
+        }
+        for cell in [-2, 101] {
+            let mut unsupported = map(2, 2);
+            unsupported.occupancy[0] = cell;
+            assert!(!unsupported.telemetry_valid("run"));
+        }
+        let mut unsupported = map(2, 2);
+        unsupported.origin_x = f64::INFINITY;
+        assert!(!unsupported.telemetry_valid("run"));
+        assert!(!map(2, 2).telemetry_valid(""));
+        assert!(!map(2, 2).telemetry_valid(&"x".repeat(257)));
+        assert!(map(2, 2).telemetry_valid(&"x".repeat(256)));
+    }
+
     fn label_depth(
         config: &MapConfig,
         intrinsics: CameraIntrinsics,

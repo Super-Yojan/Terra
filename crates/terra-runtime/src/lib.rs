@@ -239,6 +239,8 @@ pub struct RuntimeOutput {
     /// Observed clearance around the rover body, metres; `None` without a
     /// tracked pose, a map, or an observed obstacle nearby.
     pub clearance: Option<f64>,
+    /// The `pose` telemetry body, while the pose is ready.
+    pose: Option<Value>,
 }
 pub struct Runtime {
     /// Authority, planning and mission state; hosts read it through
@@ -940,7 +942,20 @@ impl Runtime {
             drive,
             events,
             clearance,
+            pose: self.pose_telemetry(now),
         })
+    }
+    /// Tracked pose for the dashboard, with the tick sequence; `None` until
+    /// the pose is fresh and the velocity estimate ready.
+    fn pose_telemetry(&self, now: f64) -> Option<Value> {
+        let (pose, _) = self.pose.filter(|_| pose_quality::ready(self, now))?;
+        Some(json!({
+            "rover_id": self.rover_id,
+            "sequence": self.sequence,
+            "x": pose.x,
+            "y": pose.y,
+            "yaw": pose.yaw,
+        }))
     }
     /// Clearance of the body at the tracked pose in the current map.
     fn observed_clearance(&self) -> Option<f64> {

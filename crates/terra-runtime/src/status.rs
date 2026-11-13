@@ -28,8 +28,8 @@ impl RuntimeOutput {
     /// This tick's fleet telemetry, one payload per topic. The
     /// `autonomy/status` record is the arbiter status with the runtime,
     /// drive, connectivity policy, navigation (with outdoor) and pose quality
-    /// attached. Search reports, objects, maps and the pose are published
-    /// separately.
+    /// attached; `pose` only while the pose is ready. Search reports, objects
+    /// and maps are published separately.
     pub fn telemetry(&self) -> Vec<(&'static str, String)> {
         let s = &self.status;
         let mut autonomy = serde_json::to_value(&self.autonomy.status).expect("status serializes");
@@ -55,6 +55,9 @@ impl RuntimeOutput {
         }
         if let Some(task) = &self.autonomy.task {
             topics.push((telemetry::TASK_STATUS, body(task)));
+        }
+        if let Some(pose) = &self.pose {
+            topics.push((telemetry::POSE, pose.to_string()));
         }
         topics
     }

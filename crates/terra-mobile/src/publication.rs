@@ -11,23 +11,6 @@ pub(crate) fn fresh_map_sample(now: f64, sample: f64) -> bool {
     terra_types::timing::fresh(now, Some(sample), MAP_VISUALIZATION_FRESHNESS_SECONDS)
 }
 
-/// Dashboard limits are intentionally narrower than onboard mapping.
-pub(crate) fn map_visualization_valid(map: &terra_mapping::MapSnapshot, run: &str) -> bool {
-    !run.is_empty()
-        && run.len() <= 256
-        && (1..=512).contains(&map.width)
-        && (1..=512).contains(&map.height)
-        && map.width as usize * map.height as usize <= 250_000
-        && map.occupancy.len() == map.width as usize * map.height as usize
-        && map.resolution.is_finite()
-        && (0.01..=2.).contains(&map.resolution)
-        && map.origin_x.is_finite()
-        && map.origin_y.is_finite()
-        && (map.origin_x + f64::from(map.width) * map.resolution).is_finite()
-        && (map.origin_y + f64::from(map.height) * map.resolution).is_finite()
-        && map.occupancy.iter().all(|cell| (-1..=100).contains(cell))
-}
-
 #[derive(Debug, PartialEq)]
 /// Decision for a newer visualization source sample.
 pub(crate) enum Publication {
@@ -145,46 +128,6 @@ pub(crate) type MapGate = Gate<(String, u32, u32, f64, f64, f64, Vec<i8>), Strin
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    /// Exercises accepted dashboard dimensions and rejects excessive dimensions/cell count,
-    /// invalid resolution/cells/origin, and empty or oversized run identities.
-    fn visualization_envelope_matches_dashboard_without_narrowing_local_maps() {
-        // Build unknown-free test geometry with the requested dimensions and valid 0.1 m cells.
-        let map = |width, height| terra_mapping::MapSnapshot {
-            width,
-            height,
-            resolution: 0.1,
-            origin_x: 0.,
-            origin_y: 0.,
-            occupancy: vec![0; width as usize * height as usize],
-        };
-        for (width, height) in [(400, 400), (500, 500), (512, 1)] {
-            assert!(map_visualization_valid(&map(width, height), "run"));
-        }
-        for (width, height) in [(600, 500), (512, 500), (513, 1), (1, 513)] {
-            let unsupported = map(width, height);
-            // All examples fit the wire cap; byte acceptance alone is insufficient.
-            assert!(serde_json::to_vec(&unsupported.occupancy).unwrap().len() < 2_000_000);
-            assert!(!map_visualization_valid(&unsupported, "run"));
-        }
-        for resolution in [0.009, 2.001, f64::NAN, f64::INFINITY] {
-            let mut unsupported = map(2, 2);
-            unsupported.resolution = resolution;
-            assert!(!map_visualization_valid(&unsupported, "run"));
-        }
-        for cell in [-2, 101] {
-            let mut unsupported = map(2, 2);
-            unsupported.occupancy[0] = cell;
-            assert!(!map_visualization_valid(&unsupported, "run"));
-        }
-        let mut unsupported = map(2, 2);
-        unsupported.origin_x = f64::INFINITY;
-        assert!(!map_visualization_valid(&unsupported, "run"));
-        assert!(!map_visualization_valid(&map(2, 2), ""));
-        assert!(!map_visualization_valid(&map(2, 2), &"x".repeat(257)));
-        assert!(map_visualization_valid(&map(2, 2), &"x".repeat(256)));
-    }
 
     #[test]
     /// Rejects a newer source sample, verifies it cannot be retried at the same sequence,
