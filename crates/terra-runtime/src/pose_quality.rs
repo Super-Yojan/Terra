@@ -10,7 +10,7 @@ fn age(now: f64, time: Option<f64>) -> Option<f64> {
     time.filter(|t| now.is_finite() && t.is_finite() && *t <= now)
         .map(|t| now - t)
 }
-pub fn ready(b: &Runtime, now: f64) -> bool {
+pub(crate) fn ready(b: &Runtime, now: f64) -> bool {
     b.estimator.estimate(now).health == Health::Ready
         && b.pose
             .is_some_and(|(p, t)| p.finite() && age(now, Some(t)).is_some_and(fresh))
@@ -34,7 +34,7 @@ fn reason(b: &Runtime, now: f64) -> &'static str {
 }
 /// The input that made this tick `sensor_unhealthy`, in the order the
 /// runtime and the arbiter test them, with the sensor ages at that moment.
-pub fn hold(b: &Runtime, now: f64, outdoor_motion: bool) -> terra_autonomy::SensorHold {
+pub(crate) fn hold(b: &Runtime, now: f64, outdoor_motion: bool) -> terra_autonomy::SensorHold {
     let pose_age = age(now, b.pose.map(|p| p.1));
     let estimate = b.estimator.estimate(now);
     let cause = if !b.recording_healthy {
@@ -63,7 +63,7 @@ pub fn hold(b: &Runtime, now: f64, outdoor_motion: bool) -> terra_autonomy::Sens
         goal_dropped: false,
     }
 }
-pub fn value(b: &Runtime, now: f64) -> serde_json::Value {
+pub(crate) fn value(b: &Runtime, now: f64) -> serde_json::Value {
     let reason = reason(b, now);
     serde_json::json!({"schema_version":1,"rover_id":b.rover_id,"run_id":b.run_id,"sequence":b.sequence,"degraded":!ready(b,now),"reason":reason,"pose_age_s":age(now,b.pose.map(|p|p.1)),"imu_age_s":age(now,b.imu_time)})
 }

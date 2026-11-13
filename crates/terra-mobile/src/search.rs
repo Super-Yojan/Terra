@@ -82,17 +82,6 @@ pub struct MobileSearchSnapshot {
     /// Serialized completion report when available.
     pub report_json: Option<String>,
 }
-pub(crate) fn dispatch_search(
-    b: &mut Brain,
-    kind: &str,
-    bytes: &[u8],
-    timestamp: f64,
-) -> Result<(), ControllerError> {
-    let recording = b.recording_healthy();
-    b.runtime.set_recording_healthy(recording);
-    terra_runtime::search::dispatch_search(&mut b.runtime, kind, bytes, timestamp)
-        .map_err(Into::into)
-}
 #[uniffi::export]
 impl MobileController {
     /// Call on each detector heartbeat, including frames with no detections. Empty classes withdraw capability.
@@ -138,12 +127,7 @@ impl MobileController {
             time_budget_s: r.time_budget_s,
         };
         let mut b = self.brain.lock().map_err(|_| ControllerError::Internal)?;
-        dispatch_search(
-            &mut b,
-            "search",
-            &serde_json::to_vec(&request).map_err(|_| ControllerError::Internal)?,
-            timestamp,
-        )
+        Ok(b.runtime.start_search(request, timestamp)?)
     }
     /// Submit one detector observation for arbiter validation and confirmation.
     /// `timestamp` is current monotonic seconds. Returns `InvalidInput` for rejected

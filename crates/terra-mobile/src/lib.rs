@@ -30,9 +30,6 @@ pub use observability::ObservationAttachment;
 pub mod outdoor;
 mod outdoor_bridge;
 pub use outdoor::{CourseFix, GpsFix, HeadingFix};
-#[cfg(test)]
-mod navigation_settings;
-mod pose_quality;
 mod publication;
 mod search;
 pub use search::{
@@ -394,6 +391,10 @@ impl BrainCell {
                 self.inbox.reject(error.to_string());
             }
         }
+        // The recorder fails on its own thread; admission and the next tick
+        // must already see it.
+        let recording = brain.recording_healthy();
+        brain.runtime.set_recording_healthy(recording);
         Ok(brain)
     }
     /// Lock without waiting and without applying queued samples. Only for reads
@@ -647,7 +648,6 @@ impl MobileController {
             })?;
         }
         let recording = brain.recording_healthy();
-        brain.runtime.set_recording_healthy(recording);
         let runtime_output = brain.runtime.step(timestamp)?;
         let start = brain.run_start().unwrap_or(timestamp);
         let run_id = brain.run_id().to_owned();
@@ -1140,7 +1140,5 @@ mod tests {
     }
 }
 
-#[cfg(test)]
-mod navigation_settings_tests;
 #[cfg(test)]
 mod runtime_parity_tests;

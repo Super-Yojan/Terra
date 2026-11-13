@@ -149,7 +149,7 @@ struct Request {
 /// and age, only while live authority, goal, and hardware state permit
 /// reconfiguration. Invalid envelopes are ignored; unique valid tokens record
 /// an acceptance or rejection result and cannot be replayed.
-pub fn apply(b: &mut super::Runtime, bytes: &[u8], now: f64) -> bool {
+pub(crate) fn apply(b: &mut super::Runtime, bytes: &[u8], now: f64) -> bool {
     let Ok(r) = serde_json::from_slice::<Request>(bytes) else {
         return false;
     };
@@ -200,4 +200,126 @@ pub fn apply(b: &mut super::Runtime, bytes: &[u8], now: f64) -> bool {
     b.settings_changed();
     b.navigation.result = Some("accepted".into());
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{HardwareStatus, Runtime, RuntimeEvent};
+    fn runtime() -> Runtime {
+        Runtime::new(Default::default(), "settings".into()).unwrap()
+    }
+    fn hardware(r: &mut Runtime, output_active: bool) {
+        r.ingest(RuntimeEvent::Hardware {
+            status: HardwareStatus::from_json(
+                &serde_json::json!({"ready":true,"output_active":output_active}),
+            ),
+            received_at: 0.0,
+        })
+        .unwrap();
+    }
+    fn send(r: &mut Runtime, request: &serde_json::Value) {
+        apply(r, &serde_json::to_vec(request).unwrap(), 0.0);
+    }
+    #[test]
+    /// Checks the dimensions become the planner's body rectangle (clearance as the
+    /// margin on every side) and rejects negative clearance or nonfinite dimensions.
+    fn navigation_dimensions_validate_and_derive_a_conservative_footprint() {
+        let mut p = Parameters::default();
+        p.length = 0.8;
+        p.width = 0.6;
+        p.clearance = 0.1;
+        let footprint = p.planner().footprint;
+        assert_eq!(
+            (footprint.length, footprint.width, footprint.margin),
+            (0.8, 0.6, 0.1)
+        );
+        assert!((footprint.circumradius() - 0.6).abs() < 1e-10);
+        assert!(p.valid());
+        p.clearance = -0.1;
+        assert!(!p.valid());
+        p.clearance = 0.1;
+        p.length = f64::NAN;
+        assert!(!p.valid());
+    }
+    #[test]
+    /// Exercises absent hardware, replayed tokens, a successful geometry update,
+    /// stale authority in a batch, and active-output rejection.
+    fn navigation_update_requires_fresh_neutral_idle_hardware_and_current_revisions() {
+        let mut r = runtime();
+        r.step(0.0).unwrap();
+        let payload = serde_json::json!({"token":"settings-one","run_id":r.run_id(),"authority_revision":0,"settings_revision":0,"parameters":Parameters::default()});
+        send(&mut r, &payload);
+        assert_eq!(r.navigation().revision, 0);
+        hardware(&mut r, false);
+        send(&mut r, &payload); // rejected tokens cannot be replayed
+        assert_eq!(r.navigation().revision, 0);
+        let mut p = payload.clone();
+        p["token"] = "settings-two".into();
+        p["parameters"]["length"] = 0.8.into();
+        send(&mut r, &p);
+        assert_eq!(r.navigation().revision, 1);
+        assert_eq!(r.navigation().parameters.length, 0.8);
+        assert_eq!(
+            r.autonomy.footprint(),
+            r.navigation().parameters.planner().footprint
+        );
+        let mut stale = payload.clone();
+        stale["token"] = "second-in-batch".into();
+        stale["settings_revision"] = 1.into();
+        send(&mut r, &stale);
+        assert_eq!(
+            r.navigation().revision,
+            1,
+            "old authority cannot configure twice in one batch"
+        );
+        send(&mut r, &p);
+        assert_eq!(r.navigation().revision, 1);
+        let mut p = payload;
+        p["token"] = "settings-three".into();
+        p["settings_revision"] = 1.into();
+        p["authority_revision"] = 1.into();
+        hardware(&mut r, true);
+        send(&mut r, &p);
+        assert_eq!(r.navigation().revision, 1);
+        assert!(
+            r.navigation()
+                .result
+                .as_deref()
+                .unwrap()
+                .starts_with("rejected")
+        );
+    }
+    #[test]
+    /// Applies either a new goal or mode change before settings in the same tick
+    /// and verifies live authority prevents configuration based on stale cached status.
+    fn preceding_goal_or_mode_change_cannot_use_an_old_status_snapshot() {
+        for change in ["goal", "mode"] {
+            let mut r = runtime();
+            let run = r.run_id().to_owned();
+            r.autonomy.set_level(
+                terra_autonomy::decode_level(br#"{"level":"waypoint_direct","token":"setup"}"#)
+                    .unwrap(),
+            );
+            r.step(0.0).unwrap();
+            hardware(&mut r, false);
+            if change == "goal" {
+                assert!(r.autonomy.accept_goal(
+                    &terra_waypoint::decode_goal(br#"{"frame":"local","x":5,"y":0}"#).unwrap()
+                ));
+            } else {
+                r.autonomy.set_level(
+                    terra_autonomy::decode_level(br#"{"level":"teleop","token":"new-level"}"#)
+                        .unwrap(),
+                );
+            }
+            let request = serde_json::json!({"token":"mixed-settings","run_id":run,"authority_revision":1,"settings_revision":0,"parameters":Parameters::default()});
+            send(&mut r, &request);
+            assert_eq!(
+                r.navigation().revision,
+                0,
+                "must reject after preceding {change}"
+            );
+        }
+    }
 }

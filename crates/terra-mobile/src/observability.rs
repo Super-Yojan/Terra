@@ -135,7 +135,7 @@ impl ObservationState {
         .to_string();
         let transition = key != last.0;
         if transition {
-            self.event("autonomy","autonomy.transition",serde_json::json!({"previous":last.0,"reason":status["status"]["reason"],"status":status,"pose_age":brain.pose().map(|p|time-p.1),"map_age":brain.map().map(|m|time-m.1),"imu_age":brain.imu_time().map(|t|time-t),"map_timeout":brain.autonomy.map_freshness_timeout(),"pose_timeout":super::pose_quality::FRESHNESS_SECONDS,"router_connected":brain.dashboard.as_ref().map(|d|!d.failed()),"recorder_failed":brain.recorder.as_ref().is_some_and(|r|r.failed())}),&brain.run_id(),time);
+            self.event("autonomy","autonomy.transition",serde_json::json!({"previous":last.0,"reason":status["status"]["reason"],"status":status,"pose_age":brain.pose().map(|p|time-p.1),"map_age":brain.map().map(|m|time-m.1),"imu_age":brain.imu_time().map(|t|time-t),"map_timeout":brain.autonomy.map_freshness_timeout(),"pose_timeout":terra_runtime::pose_quality::FRESHNESS_SECONDS,"router_connected":brain.dashboard.as_ref().map(|d|!d.failed()),"recorder_failed":brain.recorder.as_ref().is_some_and(|r|r.failed())}),&brain.run_id(),time);
             last.0 = key;
         }
         let interval = self
