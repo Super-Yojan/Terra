@@ -124,19 +124,35 @@ pub struct MobileAgentPrompt {
 }
 
 fn tools() -> Value {
+    use terra_autonomy::{
+        TASK_DRIVE_COMMAND_SECONDS, TASK_DRIVE_MAX_ANGULAR, TASK_DRIVE_MAX_GRANT_SECONDS,
+        TASK_DRIVE_MAX_LINEAR, TASK_MAX_WAYPOINTS,
+    };
     let empty = json!({"type":"object","properties":{},"additionalProperties":false});
+    let go_to = format!(
+        "Drive to 1 to {TASK_MAX_WAYPOINTS} waypoints in order. Each is {{\"target\":\"F1\"}} from get_map or {{\"x\":1.5,\"y\":-2.0}} in metres. The rover checks each against seen free space and an A* route; a refused plan changes nothing."
+    );
+    let wait = format!(
+        "Wait up to {WAIT_MAX_SECONDS} s for the plan to finish, be blocked or abandoned, or for the operator to answer."
+    );
+    let request_drive = format!(
+        "Ask the operator for raw drive for up to {TASK_DRIVE_MAX_GRANT_SECONDS} s. Only after they approve does drive work."
+    );
+    let drive = format!(
+        "During an approved grant, drive at linear m/s (at most {TASK_DRIVE_MAX_LINEAR:.1}) and angular rad/s (at most {TASK_DRIVE_MAX_ANGULAR:.1}) for up to {TASK_DRIVE_COMMAND_SECONDS} s. The obstacle planner still checks every command."
+    );
     json!([
         {"name":"get_state","description":"Rover pose, autonomy level, safety state and task phase.","inputSchema":empty},
         {"name":"get_task","description":"The operator's task: instruction, phase, time and steps left, current plan, the operator's last answer and history.","inputSchema":empty},
         {"name":"get_map","description":"The task, a 1 m text map around the rover and the ids go_to accepts: frontiers F#, obstacles O#, landmarks L# (detected objects) and the GPS goal G1. Call it before go_to.","inputSchema":empty},
         {"name":"get_detections","description":"Objects the detector has mapped, with class, colour, local x/y, confidence and whether they are confirmed.","inputSchema":empty},
         {"name":"look","description":"The latest camera frame as a JPEG.","inputSchema":{"type":"object","properties":{},"additionalProperties":false}},
-        {"name":"go_to","description":"Drive to 1 to 5 waypoints in order. Each is {\"target\":\"F1\"} from get_map or {\"x\":1.5,\"y\":-2.0} in metres. The rover checks each against seen free space and an A* route; a refused plan changes nothing.","inputSchema":{"type":"object","properties":{"waypoints":{"type":"array","minItems":1,"maxItems":5,"items":{"type":"object","properties":{"target":{"type":"string"},"x":{"type":"number"},"y":{"type":"number"}}}},"rationale":{"type":"string"}},"required":["waypoints"],"additionalProperties":false}},
-        {"name":"wait","description":"Wait up to 30 s for the plan to finish, be blocked or abandoned, or for the operator to answer.","inputSchema":{"type":"object","properties":{"seconds":{"type":"number","minimum":0,"maximum":30}},"additionalProperties":false}},
+        {"name":"go_to","description":go_to,"inputSchema":{"type":"object","properties":{"waypoints":{"type":"array","minItems":1,"maxItems":TASK_MAX_WAYPOINTS,"items":{"type":"object","properties":{"target":{"type":"string"},"x":{"type":"number"},"y":{"type":"number"}}}},"rationale":{"type":"string"}},"required":["waypoints"],"additionalProperties":false}},
+        {"name":"wait","description":wait,"inputSchema":{"type":"object","properties":{"seconds":{"type":"number","minimum":0,"maximum":WAIT_MAX_SECONDS}},"additionalProperties":false}},
         {"name":"ask_operator","description":"Ask the operator a short question. The rover holds until they answer.","inputSchema":{"type":"object","properties":{"question":{"type":"string"}},"required":["question"],"additionalProperties":false}},
         {"name":"finish","description":"End the task: status done when it is accomplished, fail when it cannot be done.","inputSchema":{"type":"object","properties":{"status":{"type":"string","enum":["done","fail"]},"rationale":{"type":"string"}},"required":["status","rationale"],"additionalProperties":false}},
-        {"name":"request_drive","description":"Ask the operator for raw drive for up to 60 s. Only after they approve does drive work.","inputSchema":{"type":"object","properties":{"reason":{"type":"string"},"seconds":{"type":"number","exclusiveMinimum":0,"maximum":60}},"required":["reason","seconds"],"additionalProperties":false}},
-        {"name":"drive","description":"During an approved grant, drive at linear m/s (at most 0.5) and angular rad/s (at most 1.0) for up to 1 s. The obstacle planner still checks every command.","inputSchema":{"type":"object","properties":{"linear":{"type":"number"},"angular":{"type":"number"},"seconds":{"type":"number","exclusiveMinimum":0,"maximum":1}},"required":["linear","angular"],"additionalProperties":false}},
+        {"name":"request_drive","description":request_drive,"inputSchema":{"type":"object","properties":{"reason":{"type":"string"},"seconds":{"type":"number","exclusiveMinimum":0,"maximum":TASK_DRIVE_MAX_GRANT_SECONDS}},"required":["reason","seconds"],"additionalProperties":false}},
+        {"name":"drive","description":drive,"inputSchema":{"type":"object","properties":{"linear":{"type":"number"},"angular":{"type":"number"},"seconds":{"type":"number","exclusiveMinimum":0,"maximum":TASK_DRIVE_COMMAND_SECONDS}},"required":["linear","angular"],"additionalProperties":false}},
         {"name":"stop","description":"Emergency stop. Only the operator can reset it.","inputSchema":empty}
     ])
 }
@@ -401,6 +417,8 @@ impl MobileController {
         };
         let result = result.unwrap_or_else(error);
         if let Some(recorder) = b.recorder.as_ref() {
+            // A rejected record already marks the run incomplete and counts the
+            // drop; the tool call itself must not fail because logging did.
             let _ = recorder.record(json!({
                 "kind": "task.agent_call",
                 "session": session,
@@ -643,6 +661,7 @@ impl MobileController {
                     })
                     .unwrap_or(true);
                 if give_up {
+                    // call_tool logs its own result; nothing here can act on it.
                     let _ = self.call_tool(
                         IN_PROCESS_SESSION,
                         "finish",

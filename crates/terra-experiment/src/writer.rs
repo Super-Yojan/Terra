@@ -108,6 +108,7 @@ impl RunRecorder {
     /// This may block. Returns worker I/O, panic, or incomplete-recording errors; repeated closes are safe.
     pub fn close(&mut self) -> io::Result<()> {
         if let Some(worker) = self.worker.take() {
+            // A send error means the worker already exited; join reports why.
             let _ = self.sender.send(Message::Close);
             worker
                 .join()
@@ -122,6 +123,8 @@ impl RunRecorder {
 }
 impl Drop for RunRecorder {
     fn drop(&mut self) {
+        // Drop cannot report; an incomplete run stays visible through `failed()`
+        // and the missing terminal record.
         let _ = self.close();
     }
 }
