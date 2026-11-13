@@ -38,6 +38,7 @@ import dev.superyojan.terra.core.defaultWaypointSettings
 import dev.superyojan.terra.core.mountCalibrationFromJson
 import dev.superyojan.terra.core.mountCalibrationToJson
 import dev.superyojan.terra.core.mountIsPlausible
+import dev.superyojan.terra.core.defaultRouterPrefix
 import dev.superyojan.terra.core.parseRouterSettings
 import dev.superyojan.terra.core.runVelocityBenchmark
 import dev.superyojan.terra.core.simulatedRoomDepth
@@ -704,7 +705,7 @@ class TerraSession(context: Context) {
 
     fun savedRouter(): SavedRouter = SavedRouter(
         endpoint = prefs.getString(ROUTER_ENDPOINT_KEY, null) ?: DEFAULT_ROUTER_ENDPOINT,
-        prefix = prefs.getString(ROUTER_PREFIX_KEY, null) ?: DEFAULT_ROUTER_PREFIX,
+        prefix = prefs.getString(ROUTER_PREFIX_KEY, null) ?: defaultRouterPrefix(),
         roverId = prefs.getString(ROUTER_ROVER_KEY, null) ?: "0",
         user = prefs.getString(ROUTER_USER_KEY, null) ?: DEFAULT_ROUTER_USER,
         password = prefs.getString(ROUTER_PASSWORD_KEY, null) ?: "",
@@ -1080,7 +1081,6 @@ class TerraSession(context: Context) {
         private const val MOUNT_KEY = "mountCalibration"
         /** Same defaults as the iOS app. */
         const val DEFAULT_ROUTER_ENDPOINT = "tls/argos.34.135.204.210.sslip.io:7448"
-        const val DEFAULT_ROUTER_PREFIX = "terra/phone"
         const val DEFAULT_ROUTER_USER = "terra"
         const val RUN_LOG_DIR = "runs"
         /** A Rust frame older than this is not written; the rover lease then stops it. */
