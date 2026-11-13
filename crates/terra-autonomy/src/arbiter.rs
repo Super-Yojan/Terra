@@ -367,12 +367,23 @@ impl AutonomyArbiter {
         self.map_freshness_timeout_seconds
     }
 
+    /// Whether a map stamped `map_time` is fresh enough to plan on at `now`.
+    pub fn map_fresh(&self, now: f64, map_time: Option<f64>) -> bool {
+        fresh(now, map_time, self.map_freshness_timeout_seconds)
+    }
+
     fn map_is_fresh(&self, input: &ArbiterInput<'_>) -> bool {
-        fresh(
-            input.now,
-            input.map_time,
-            self.map_freshness_timeout_seconds,
-        )
+        self.map_fresh(input.now, input.map_time)
+    }
+
+    /// Healthy platform, a finite fresh pose and a fresh map: what starting
+    /// or resuming planned motion needs.
+    fn inputs_fresh(&self, input: &ArbiterInput<'_>) -> bool {
+        input.healthy
+            && input.pose.finite()
+            && pose_fresh(input)
+            && input.map.is_some()
+            && self.map_is_fresh(input)
     }
 
     /// Backing up never needs the occupancy map. The phone camera faces
@@ -532,11 +543,7 @@ impl AutonomyArbiter {
         } else if !input.healthy
             || (!self.level.is_manual()
                 && (!input.pose.finite()
-                    || !fresh(
-                        input.now,
-                        Some(input.pose_time),
-                        timing::POSE_FRESHNESS_SECONDS,
-                    )
+                    || !pose_fresh(input)
                     || !input.measured.linear.is_finite()
                     || !input.measured.angular.is_finite()))
         {
@@ -568,13 +575,7 @@ impl AutonomyArbiter {
             self.scan_turning = None;
             self.maneuver.clear();
         }
-        if (!input.healthy
-            || !fresh(
-                input.now,
-                Some(input.pose_time),
-                timing::POSE_FRESHNESS_SECONDS,
-            )
-            || !valid_time)
+        if (!input.healthy || !pose_fresh(input) || !valid_time)
             && decision.goal.state == GoalState::Arrived
         {
             decision.goal.state = GoalState::Active;
@@ -629,6 +630,11 @@ impl AutonomyArbiter {
         search_status
     }
 }
-fn fresh(now: f64, time: Option<f64>, limit: f64) -> bool {
-    time.is_some_and(|t| t.is_finite() && t >= 0. && now >= t && now - t < limit)
+use terra_types::timing::fresh;
+fn pose_fresh(input: &ArbiterInput<'_>) -> bool {
+    fresh(
+        input.now,
+        Some(input.pose_time),
+        timing::POSE_FRESHNESS_SECONDS,
+    )
 }

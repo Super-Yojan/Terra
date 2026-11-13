@@ -70,15 +70,7 @@ impl AutonomyArbiter {
             Some("detector_unavailable")
         } else if !r.bounds.contains_body(&self.planner.config.footprint, input.pose) {
             Some("outside_search_bounds")
-        } else if !input.healthy
-            || !input.pose.finite()
-            || !fresh(
-                input.now,
-                Some(input.pose_time),
-                timing::POSE_FRESHNESS_SECONDS,
-            )
-            || input.map.is_none()
-            || !self.map_is_fresh(input)
+        } else if !self.inputs_fresh(input)
             || self.last_time.is_some_and(|t| input.now < t)
         {
             Some("search_inputs_unhealthy")
@@ -127,14 +119,7 @@ impl AutonomyArbiter {
             return Err("wrong_search_or_authority");
         }
         if r.action == SearchAction::Resume
-            && (!input.healthy
-                || input.map.is_none()
-                || !fresh(
-                    input.now,
-                    Some(input.pose_time),
-                    timing::POSE_FRESHNESS_SECONDS,
-                )
-                || !self.map_is_fresh(input)
+            && (!self.inputs_fresh(input)
                 || !self.detector_available(
                     &self.search.as_ref().unwrap().request.target_class,
                     input.now,

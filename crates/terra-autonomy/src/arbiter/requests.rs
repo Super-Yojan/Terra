@@ -759,15 +759,7 @@ impl AutonomyArbiter {
                         .push((p.x, p.y, input.now + timing::REJECTED_PROPOSAL_SECONDS));
                     self.proposal = None;
                     ok = true;
-                } else if r.decision == Decision::Approve
-                    && self.map_is_fresh(input)
-                    && fresh(
-                        input.now,
-                        Some(input.pose_time),
-                        timing::POSE_FRESHNESS_SECONDS,
-                    )
-                    && input.healthy
-                {
+                } else if r.decision == Decision::Approve && self.inputs_fresh(input) {
                     // Revalidate reachability on the latest occupancy snapshot, independently of the proposal revision.
                     if let Some(m) = input.map
                         && self.route_confirms(m, input.pose, p.x, p.y)
