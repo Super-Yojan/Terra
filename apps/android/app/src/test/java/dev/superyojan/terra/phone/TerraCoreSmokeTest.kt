@@ -4,7 +4,6 @@ import dev.superyojan.terra.core.ActuatorAssembler
 import dev.superyojan.terra.core.DriveSource
 import dev.superyojan.terra.core.ImuReading
 import dev.superyojan.terra.core.actuatorEncodeControl
-import dev.superyojan.terra.core.actuatorEncodeFrame
 import dev.superyojan.terra.core.actuatorEncodeRelayDrive
 import dev.superyojan.terra.core.actuatorFragment
 import dev.superyojan.terra.core.actuatorRouteProfiles
@@ -110,15 +109,6 @@ class TerraCoreSmokeTest {
         val fromProfiles = actuatorEncodeRelayDrive(DRIVE_PROFILES, profiles)
         assertTrue(fromProfiles.contentEquals(relay))
 
-        val disarm = actuatorEncodeFrame(
-            """{"kind":"disarm","session":7,"revision":1,"sequence":1,"values":[]}""",
-        )
-        assertEquals(16, disarm.size)
-        assertEquals('T'.code.toByte(), disarm[0])
-        assertEquals('A'.code.toByte(), disarm[1])
-        assertEquals(1.toByte(), disarm[2])
-        assertEquals(3.toByte(), disarm[3])
-
         val payload = "hello".toByteArray()
         val parts = actuatorFragment(7.toUShort(), payload, 7u)
         assertEquals(2, parts.size)
@@ -134,6 +124,11 @@ class TerraCoreSmokeTest {
         val text = control.toString(Charsets.UTF_8)
         assertTrue(text.contains("capabilities"))
         assertTrue(text.contains("1000"))
+
+        val index = actuatorEncodeControl(
+            """{"schema_version":1,"request_id":1001,"operation":"layout_index","payload":{}}""",
+        )
+        assertTrue(index.toString(Charsets.UTF_8).contains("layout_index"))
     }
 }
 
@@ -141,7 +136,7 @@ class PhoneDriveSmokeTest {
     @Test
     fun rustLoopGatesBluetoothFrames() {
         val brain = MobileController(defaultControlSettings())
-        // A framed session's full layout works as well as drive profiles.
+        // A full layout works as well as drive profiles.
         brain.setActuatorLayout(DRIVE_LAYOUT)
         val drive = PhoneDriveLoop(brain, MotorGate(), DriveSource.BLUETOOTH_MANUAL, 10.0)
         drive.setLink(true, true, false, true)

@@ -2,7 +2,7 @@
 from copy import deepcopy
 import math
 import struct
-from .protocol import ProtocolError, _validate_layout_shape
+from .protocol import MAX_ACTUATORS, ProtocolError, _validate_layout_shape
 
 
 def normalize_layout(layout: dict) -> dict:
@@ -38,8 +38,8 @@ def validate_structure(layout: dict) -> list[dict]:
         return errors
     if layout['schema_version'] != 1:
         add(None, 'schema_version', 'schema version must be 1')
-    if len(layout['actuators']) > 16:
-        add(None, 'actuator_count', 'at most 16 actuators are supported')
+    if len(layout['actuators']) > MAX_ACTUATORS:
+        add(None, 'actuator_count', f'at most {MAX_ACTUATORS} actuators are supported')
     ids = set()
     for a in layout['actuators']:
         identifier, kind = a['id'], a['kind']

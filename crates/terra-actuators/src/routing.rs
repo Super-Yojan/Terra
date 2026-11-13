@@ -1,7 +1,9 @@
 //! Convert normalized chassis intent into one value for each configured actuator.
 //! Inversion is deliberately left to the hardware adapter so it is applied once.
 
-use crate::{ActuatorError, ActuatorValue, Layout, Route, SafeOutput, validate_structure};
+use crate::{
+    ActuatorError, ActuatorValue, Layout, MAX_ACTUATORS, Route, SafeOutput, validate_structure,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -222,7 +224,7 @@ pub fn route_drive_profiles(
     profiles: &[DriveProfile],
     input: &RoutingInput,
 ) -> Result<Vec<ActuatorValue>, ActuatorError> {
-    if profiles.is_empty() || profiles.len() > 16 {
+    if profiles.is_empty() || profiles.len() > MAX_ACTUATORS {
         return Err(invalid_profile("expected one to sixteen drive profiles"));
     }
     check_input(input)?;

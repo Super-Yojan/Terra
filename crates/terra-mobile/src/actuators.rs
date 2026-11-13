@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use serde::Deserialize;
-use terra_actuators::protocol::{self, CommandFrame, CommandKind, RelaySample};
+use terra_actuators::protocol::{self, RelaySample};
 use terra_actuators::{
     ActuatorValue, Capabilities, DriveProfile, DriveProfileSet, Layout, RoutingInput,
 };
@@ -61,36 +61,11 @@ pub fn actuator_route(
     serde_json::to_string(&terra_actuators::route_commands(&layout, &input).map_err(invalid)?)
         .map_err(invalid)
 }
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct FrameWire {
-    kind: CommandKind,
-    session: u32,
-    revision: u32,
-    sequence: u32,
-    values: Vec<ActuatorValue>,
-}
 #[uniffi::export]
-/// Encode strict command-frame JSON as the portable actuator binary frame.
-/// Fields are `kind`, `session`, `revision`, `sequence`, and `values`; kind is
-/// `drive`, `arm`, `disarm`, or `emergency_stop`.
-///
-/// # Errors
-/// Returns `InvalidInput` for unknown fields or kinds, exhausted sequence
-/// (`u32::MAX`), oversized JSON, or binary-frame validation failure.
-pub fn actuator_encode_frame(frame_json: String) -> Result<Vec<u8>, MobileActuatorError> {
-    let wire: FrameWire = parse(&frame_json)?;
-    if wire.sequence == u32::MAX {
-        return Err(invalid("sequence exhausted"));
-    }
-    protocol::encode_frame(&CommandFrame {
-        kind: wire.kind,
-        session: wire.session,
-        revision: wire.revision,
-        sequence: wire.sequence,
-        values: wire.values,
-    })
-    .map_err(invalid)
+/// Largest control or reply JSON document in bytes; the limit for an
+/// [`ActuatorAssembler`] that reads whole replies or status documents.
+pub fn actuator_json_limit() -> u32 {
+    protocol::JSON_LIMIT as u32
 }
 #[uniffi::export]
 /// Split payload bytes into protocol fragments for a maximum write size in bytes.
@@ -189,7 +164,7 @@ pub(crate) struct ActiveLayout {
 }
 
 impl ActiveLayout {
-    /// Accepts drive profiles, or a full layout (as framed sessions read it),
+    /// Accepts drive profiles, or a full layout (a rover without paginated reads),
     /// whose port and calibration are dropped.
     pub(crate) fn parse(profiles_json: &str) -> Result<Self, MobileActuatorError> {
         let set = match parse::<DriveProfileSet>(profiles_json) {
@@ -293,9 +268,8 @@ pub fn actuator_encode_relay_drive(
 #[uniffi::export]
 /// Validate and re-encode a schema-1 control envelope.
 ///
-/// Accepted operations are `capabilities`, `read_layout`, `stage_layout`,
-/// `commit_layout`, `reset_fault`, and `reset_emergency_stop`. Paginated rover
-/// operations are not part of this encoder.
+/// Accepts every operation in [`protocol::ControlOperation`]: the five layout
+/// operations plus the rover's paginated reads and layout edits.
 ///
 /// # Errors
 /// Returns `InvalidInput` for oversized JSON, unknown operations, or a payload
@@ -380,13 +354,7 @@ mod tests {
     }
 
     #[test]
-    fn framed_disarm_and_fragment_round_trip() {
-        let frame = actuator_encode_frame(
-            r#"{"kind":"disarm","session":7,"revision":1,"sequence":1,"values":[]}"#.into(),
-        )
-        .unwrap();
-        assert_eq!(&frame[..4], b"TA\x01\x03");
-        assert_eq!(frame.len(), 16);
+    fn fragment_and_control_round_trip() {
         let parts = actuator_fragment(7, b"hello".to_vec(), 7).unwrap();
         let assembler = ActuatorAssembler::new(96).unwrap();
         assert_eq!(assembler.push(parts[0].clone(), 0).unwrap(), None);

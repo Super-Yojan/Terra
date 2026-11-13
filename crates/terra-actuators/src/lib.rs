@@ -2,7 +2,7 @@
 //!
 //! Start with [`Layout`] for hardware assignments, then [`route_commands`] for
 //! turning left/right or manual intent into per-actuator values. The `protocol`
-//! module defines the binary command envelope. Routing does not authorize motion;
+//! module defines the BLE drive and control encodings. Routing does not authorize motion;
 //! the hardware adapter owns inversion, arming, and physical output.
 
 /// Hardware layout schema, calibration, and backend capability validation.
@@ -42,5 +42,5 @@ impl std::fmt::Display for ActuatorError {
     }
 }
 impl std::error::Error for ActuatorError {}
-/// Binary command and JSON control framing with bounded fragment assembly.
+/// Streamed-relay drive bytes and JSON control framing with bounded fragment assembly.
 pub mod protocol;

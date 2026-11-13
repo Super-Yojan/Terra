@@ -31,9 +31,9 @@ import androidx.core.content.ContextCompat
 import dev.superyojan.terra.core.ActuatorAssembler
 import dev.superyojan.terra.core.MotorCommand
 import dev.superyojan.terra.core.actuatorEncodeControl
-import dev.superyojan.terra.core.actuatorEncodeFrame
 import dev.superyojan.terra.core.actuatorEncodeRelayDrive
 import dev.superyojan.terra.core.actuatorFragment
+import dev.superyojan.terra.core.actuatorJsonLimit
 import dev.superyojan.terra.core.actuatorRouteProfiles
 import dev.superyojan.terra.core.actuatorRouteStick
 import org.json.JSONArray
@@ -85,7 +85,7 @@ class TerraBluetooth(context: Context) {
         private set
     var summary by mutableStateOf("Hold USR for three seconds, then scan for terra-XXXXXX.")
         private set
-    /** Drive profiles, or the full layout on a framed session, once ready; for the Rust actuator frame. */
+    /** Drive profiles, or the full layout when the rover has none, once ready; for the Rust actuator frame. */
     var driveLayout by mutableStateOf<String?>(null)
         private set
 
@@ -101,17 +101,14 @@ class TerraBluetooth(context: Context) {
     private var awaitingBond = false
     private var connectDeadline: Runnable? = null
 
-    private var statusAssembler = ActuatorAssembler(JSON_LIMIT.toUInt())
-    private var replyAssembler = ActuatorAssembler(JSON_LIMIT.toUInt())
+    private var statusAssembler = ActuatorAssembler(actuatorJsonLimit())
+    private var replyAssembler = ActuatorAssembler(actuatorJsonLimit())
     private var subscribeStep = SubscribeStep.Idle
     private var sync = Sync.Idle
     private var messageId = 0
     private var requestId = 999
-    private var sequence = 0L
-    private var sessionId: Long? = null
     private var revision: Long? = null
     private var controlMode = ""
-    private var linkFramed = false
     private var linkConnected = false
     private var layoutAvailable = false
     private var fault: String? = null
@@ -137,7 +134,6 @@ class TerraBluetooth(context: Context) {
 
     private var active: Outgoing? = null
     private val priority = ArrayDeque<Outgoing>()
-    private val handshake = ArrayDeque<Outgoing>()
     private val configuration = ArrayDeque<Outgoing>()
     private var pendingDrive: Outgoing? = null
     private var writeStartedAt: Long? = null
@@ -611,31 +607,12 @@ class TerraBluetooth(context: Context) {
 
     private fun applyStatus(json: JSONObject) {
         when (json.optString("type")) {
-            "command_acceptance" -> {
-                val accepted = json.optBoolean("accepted")
-                publish {
-                    summary = if (accepted) "Rover accepted the last command" else "Rover rejected the last command"
-                }
-                if (!accepted) {
-                    localArmed = false
-                    handler.removeCallbacks(driveLoop)
-                    publish { armed = false; errorText = "Command rejected. Arm again with a fresh safe output." }
-                }
-                return
-            }
             "status" -> Unit
-            else -> if (!json.has("control_mode") && !json.has("active_revision") && !json.has("session")) return
+            else -> if (!json.has("control_mode") && !json.has("active_revision")) return
         }
         connectDeadline?.let { handler.removeCallbacks(it) }
         connectDeadline = null
         controlMode = json.optString("control_mode")
-        if (json.has("session") && !json.isNull("session")) {
-            val incoming = json.getLong("session")
-            if (sessionId != incoming) {
-                sessionId = incoming
-                sequence = 0
-            }
-        }
         if (json.has("connected")) linkConnected = json.optBoolean("connected")
         if (json.has("active_revision") && !json.isNull("active_revision")) {
             val incoming = json.getLong("active_revision")
@@ -653,14 +630,6 @@ class TerraBluetooth(context: Context) {
         if (!layoutAvailable) {
             profilesJson = null
             profileRows.clear()
-        }
-        linkFramed = sessionId != null && controlMode != "streamed_relay" && layoutJson != null
-        if (json.optBoolean("armed", false) == false && linkFramed) {
-            // Rover disarmed itself. Stop streaming motion.
-            if (localArmed && (fault != null || json.optString("stop_reason") == "disconnected")) {
-                localArmed = false
-                handler.removeCallbacks(driveLoop)
-            }
         }
         if (subscribeStep == SubscribeStep.Idle) subscribeStatus()
         publishState()
@@ -693,7 +662,6 @@ class TerraBluetooth(context: Context) {
             }
             "read_layout" -> {
                 layoutJson = if (payload is JSONObject) payload.toString() else null
-                linkFramed = sessionId != null && controlMode != "streamed_relay" && layoutJson != null
                 if (paginationEnabled()) {
                     sync = Sync.Index
                     sendControl("layout_index", "{}")
@@ -843,17 +811,10 @@ class TerraBluetooth(context: Context) {
         effortTurn = 0f
         localArmed = false
         handler.removeCallbacks(driveLoop)
-        handshake.clear()
         pendingDrive = null
         try {
-            if (linkFramed) {
-                handshake.add(framedDrive(safeValues(), stamp = false, onComplete = null))
-                handshake.add(framedCommand("arm") { startDriveLoop() })
-                publish { statusText = "Sending safe output, then arm" }
-            } else {
-                queueSafe(priority = true)
-                startDriveLoop()
-            }
+            queueSafe(priority = true)
+            startDriveLoop()
         } catch (error: Exception) {
             report(error.message ?: "Arm failed")
             return
@@ -874,9 +835,8 @@ class TerraBluetooth(context: Context) {
         effortForward = 0f
         effortTurn = 0f
         handler.removeCallbacks(driveLoop)
-        handshake.clear()
         pendingDrive = null
-        if (active?.characteristic == DRIVE && !linkFramed) active?.chunks?.clear()
+        if (active?.characteristic == DRIVE) active?.chunks?.clear()
         try {
             if (gatt != null && (profilesJson != null || layoutJson != null)) queueSafe(priority = true)
         } catch (error: Exception) {
@@ -952,22 +912,13 @@ class TerraBluetooth(context: Context) {
 
     /** Drive values on the drive characteristic, never `disarm`, so the link stays armed. */
     private fun queueValues(values: String) {
-        if (linkFramed) {
-            pendingDrive = framedDrive(values, stamp = true, onComplete = null)
-        } else {
-            if (active?.characteristic == DRIVE) active?.chunks?.clear()
-            pendingDrive = relayPacket(values, stamp = true)
-        }
+        if (active?.characteristic == DRIVE) active?.chunks?.clear()
+        pendingDrive = relayPacket(values, stamp = true)
         pump()
     }
 
     private fun queueSafe(priority: Boolean) {
-        val values = safeValues()
-        val packet = if (linkFramed && sessionId != null) {
-            framedCommand("disarm", null)
-        } else {
-            relayPacket(values, stamp = false)
-        }
+        val packet = relayPacket(safeValues(), stamp = false)
         if (priority) {
             this.priority.clear()
             this.priority.add(packet)
@@ -979,10 +930,10 @@ class TerraBluetooth(context: Context) {
 
     private fun safeValues(): String = routedValues(0f, 0f)
 
-    /** Streamed-relay prefers compact drive profiles. Framed sessions, and a layout with no profiles, use the full layout. */
+    /** Prefer compact drive profiles; a layout with no profiles uses the full layout. */
     private fun routedValues(forward: Float, turn: Float): String {
         val profiles = profilesJson
-        return if (!linkFramed && profiles != null) {
+        return if (profiles != null) {
             actuatorRouteProfiles(profiles, forward, turn)
         } else {
             actuatorRouteStick(layoutJson ?: error("No layout"), forward, turn)
@@ -994,35 +945,9 @@ class TerraBluetooth(context: Context) {
         return getLong(key)
     }
 
-    private fun framedDrive(valuesJson: String, stamp: Boolean, onComplete: (() -> Unit)?): Outgoing {
-        val bytes = frameBytes("drive", JSONArray(valuesJson))
-        return Outgoing(fragment(bytes), DRIVE, if (stamp) SystemClock.elapsedRealtime() else null, null, onComplete)
-    }
-
-    private fun framedCommand(kind: String, onComplete: (() -> Unit)?): Outgoing {
-        val bytes = frameBytes(kind, JSONArray())
-        return Outgoing(fragment(bytes), CONTROL, null, null, onComplete)
-    }
-
-    private fun frameBytes(kind: String, values: JSONArray): ByteArray {
-        val session = sessionId ?: error("Waiting for a rover session")
-        val activeRevision = revision ?: error("Waiting for a layout revision")
-        val next = sequence + 1
-        if (next >= 0xFFFF_FFFE) error("Sequence exhausted. Reconnect.")
-        val frame = JSONObject()
-            .put("kind", kind)
-            .put("session", session)
-            .put("revision", activeRevision)
-            .put("sequence", next)
-            .put("values", values)
-        val bytes = actuatorEncodeFrame(frame.toString())
-        sequence = next
-        return bytes
-    }
-
     private fun relayPacket(valuesJson: String, stamp: Boolean): Outgoing {
         val bytes = actuatorEncodeRelayDrive(limitsDocument(), valuesJson)
-        return Outgoing(relayChunks(bytes), DRIVE, if (stamp) SystemClock.elapsedRealtime() else null, null, null)
+        return Outgoing(relayChunks(bytes), DRIVE, if (stamp) SystemClock.elapsedRealtime() else null, null)
     }
 
     private fun limitsDocument(): String = profilesJson ?: layoutJson ?: error("No actuator limits")
@@ -1041,13 +966,12 @@ class TerraBluetooth(context: Context) {
         val bytes = try {
             actuatorEncodeControl(envelope)
         } catch (error: Exception) {
-            if (operation == "layout_index" || operation == "read_drive_profile" || operation == "stage_layout") {
-                envelope.toByteArray(Charsets.UTF_8)
-            } else {
-                throw error
-            }
+            // Restaging the layout the rover sent back: Rust's ESC calibration
+            // shape differs from the rover's (arming_duration_ms), so that
+            // document may only parse on the rover.
+            if (operation == "stage_layout") envelope.toByteArray(Charsets.UTF_8) else throw error
         }
-        configuration.add(Outgoing(fragment(bytes), CONTROL, null, id, null))
+        configuration.add(Outgoing(fragment(bytes), CONTROL, null, id))
         waiting = Waiting(id.toLong(), operation, SystemClock.elapsedRealtime())
         pump()
     }
@@ -1079,15 +1003,10 @@ class TerraBluetooth(context: Context) {
 
     private fun pump() {
         if (writeStartedAt != null || gatt == null) return
-        if (active?.chunks?.isEmpty() == true) {
-            val done = active
-            active = null
-            done?.onComplete?.invoke()
-        }
+        if (active?.chunks?.isEmpty() == true) active = null
         if (active == null) {
             active = when {
                 priority.isNotEmpty() -> priority.removeFirst()
-                handshake.isNotEmpty() -> handshake.removeFirst()
                 configuration.isNotEmpty() -> configuration.removeFirst()
                 pendingDrive != null -> pendingDrive.also { pendingDrive = null }
                 else -> null
@@ -1137,11 +1056,7 @@ class TerraBluetooth(context: Context) {
             fail("Bluetooth write failed. Reconnect before driving.")
             return
         }
-        if (active?.chunks?.isEmpty() == true) {
-            val done = active
-            active = null
-            done?.onComplete?.invoke()
-        }
+        if (active?.chunks?.isEmpty() == true) active = null
         pump()
     }
 
@@ -1171,7 +1086,6 @@ class TerraBluetooth(context: Context) {
         val live = gatt != null
         val readyNow = live && (readyOnThread() && (layoutAvailable || profilesJson != null))
         val mode = when {
-            linkFramed -> "framed session"
             controlMode.isNotBlank() -> controlMode
             else -> "link"
         }
@@ -1273,7 +1187,7 @@ class TerraBluetooth(context: Context) {
 
     private fun maybeFinishShutdown() {
         if (shutdownLatch == null) return
-        if (active != null || priority.isNotEmpty() || handshake.isNotEmpty() || writeStartedAt != null) return
+        if (active != null || priority.isNotEmpty() || writeStartedAt != null) return
         finishShutdown("Disconnected")
     }
 
@@ -1289,11 +1203,8 @@ class TerraBluetooth(context: Context) {
         subscribeStep = SubscribeStep.Idle
         setupOnly = false
         awaitingBond = false
-        sessionId = null
         revision = null
-        sequence = 0
         controlMode = ""
-        linkFramed = false
         linkConnected = false
         layoutAvailable = false
         fault = null
@@ -1313,7 +1224,6 @@ class TerraBluetooth(context: Context) {
         waiting = null
         active = null
         priority.clear()
-        handshake.clear()
         configuration.clear()
         pendingDrive = null
         writeStartedAt = null
@@ -1326,8 +1236,8 @@ class TerraBluetooth(context: Context) {
             replyAssembler.close()
         } catch (_: Exception) {
         }
-        statusAssembler = ActuatorAssembler(JSON_LIMIT.toUInt())
-        replyAssembler = ActuatorAssembler(JSON_LIMIT.toUInt())
+        statusAssembler = ActuatorAssembler(actuatorJsonLimit())
+        replyAssembler = ActuatorAssembler(actuatorJsonLimit())
     }
 
     private fun requestBond(device: BluetoothDevice) {
@@ -1431,7 +1341,6 @@ class TerraBluetooth(context: Context) {
         val characteristic: UUID,
         val producedAt: Long?,
         val requestId: Int?,
-        val onComplete: (() -> Unit)?,
     )
 
     private data class Waiting(val id: Long, val operation: String, val startedAt: Long)
@@ -1446,7 +1355,6 @@ class TerraBluetooth(context: Context) {
         private val CONTROL: UUID = UUID.fromString("7e5a0013-4c2b-4f91-9e3a-1d8c6b2a0f10")
         private val REPLIES: UUID = UUID.fromString("7e5a0014-4c2b-4f91-9e3a-1d8c6b2a0f10")
         private val CCCD: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
-        private const val JSON_LIMIT = 16384
         private const val INSUFFICIENT_AUTHENTICATION = 5
         private const val INSUFFICIENT_ENCRYPTION = 15
     }

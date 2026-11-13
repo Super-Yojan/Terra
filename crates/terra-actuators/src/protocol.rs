@@ -1,70 +1,18 @@
 //! BLE application framing. Authentication and hardware arming belong to the service.
-use crate::{ActuatorError, ActuatorValue, Layout};
+use crate::{Actuator, ActuatorError, Layout, MAX_ACTUATORS};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
-/// Binary frame version byte; currently 1.
-pub const PROTOCOL_VERSION: u8 = 1;
 /// Maximum serialized JSON control/reply size in bytes (16 KiB).
 pub const JSON_LIMIT: usize = 16 * 1024;
+/// Maximum size of a paginated control request: 255 fragments at the
+/// conservative 20-byte ATT write capacity.
+pub const PAGINATED_LIMIT: usize = 4080;
+/// Maximum length of a layout edit token.
+const EDIT_TOKEN_LIMIT: usize = 128;
 /// Maximum assembly age in milliseconds; age equal to this limit expires.
 const ASSEMBLY_TIMEOUT_MS: u64 = 100;
 fn error(message: &str) -> ActuatorError {
     ActuatorError::InvalidInput(message.into())
-}
-/// Binary command discriminator. Only drive frames carry actuator records.
-/// JSON spells it in snake case: `drive`, `arm`, `disarm`, `emergency_stop`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-#[repr(u8)]
-pub enum CommandKind {
-    /// Request a complete set of normalized actuator commands.
-    Drive = 1,
-    /// Request arming; service authorization is still required.
-    Arm = 2,
-    /// Request removal of output authorization.
-    Disarm = 3,
-    /// Request the service emergency-stop policy.
-    EmergencyStop = 4,
-}
-/// Binary command with session, layout, and ordering metadata.
-///
-/// Encoding checks shape and normalized values. Session, revision, sequence and
-/// per-actuator limits are the receiving service's checks.
-#[derive(Clone, Debug, PartialEq)]
-pub struct CommandFrame {
-    pub kind: CommandKind,
-    /// Service-issued session identifier.
-    pub session: u32,
-    /// Active layout revision expected by the sender.
-    pub revision: u32,
-    /// Monotonically increasing session sequence.
-    pub sequence: u32,
-    /// Up to 16 unique-ID records for drive; empty for all other commands.
-    pub values: Vec<ActuatorValue>,
-}
-/// Encode a 16-byte `TA` header followed by five-byte actuator records.
-///
-/// Integers and `f32` values use little-endian encoding. Returns
-/// [`ActuatorError::InvalidInput`] for more than 16 records, non-drive records,
-/// duplicate IDs, or non-finite/out-of-range values outside `[-1, 1]`.
-pub fn encode_frame(frame: &CommandFrame) -> Result<Vec<u8>, ActuatorError> {
-    if frame.values.len() > 16 || (frame.kind != CommandKind::Drive && !frame.values.is_empty()) {
-        return Err(error("invalid record count"));
-    }
-    let mut ids = HashSet::new();
-    let mut out = vec![b'T', b'A', PROTOCOL_VERSION, frame.kind as u8];
-    for value in [frame.session, frame.revision, frame.sequence] {
-        out.extend(value.to_le_bytes());
-    }
-    for value in &frame.values {
-        if !ids.insert(value.id) || !value.value.is_finite() || !(-1.0..=1.0).contains(&value.value)
-        {
-            return Err(error("invalid actuator record"));
-        }
-        out.push(value.id);
-        out.extend(value.value.to_le_bytes());
-    }
-    Ok(out)
 }
 /// Bounded in-order reassembly of one logical message at a time.
 ///
@@ -184,7 +132,7 @@ fn normalized_percent(effort: i32) -> f32 {
 /// or oversized record list, duplicate IDs, or a value that cannot be quantized
 /// inside its limits.
 pub fn encode_relay_drive(samples: &[RelaySample]) -> Result<Vec<u8>, ActuatorError> {
-    if samples.is_empty() || samples.len() > 16 {
+    if samples.is_empty() || samples.len() > MAX_ACTUATORS {
         return Err(error("expected one to sixteen actuator pairs"));
     }
     let mut ids = HashSet::new();
@@ -293,6 +241,67 @@ pub struct CommitPayload {
     /// Request ID of the successful stage operation.
     pub staged_request_id: u32,
 }
+/// One actuator of the active layout, read page by page.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ActuatorPage {
+    /// Active layout revision the reader expects; the rover rejects another.
+    pub expected_revision: u32,
+    pub actuator_id: u8,
+}
+/// Whether a layout edit starts from the active layout or from empty.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EditMode {
+    Existing,
+    Replace,
+}
+/// Open a paginated layout edit against the active revision.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BeginEditPayload {
+    pub expected_revision: u32,
+    pub mode: EditMode,
+}
+/// Add or replace one actuator in an open edit.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StageActuatorPayload {
+    /// Token from `begin_layout_edit`, 1 to 128 characters.
+    pub edit_token: String,
+    /// Edit version the change applies to.
+    pub edit_version: u32,
+    pub actuator: Actuator,
+}
+/// Remove one actuator from an open edit.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RemoveActuatorPayload {
+    pub edit_token: String,
+    pub edit_version: u32,
+    pub actuator_id: u8,
+}
+/// Refer to an open edit at a version (validate).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EditVersionPayload {
+    pub edit_token: String,
+    pub edit_version: u32,
+}
+/// Commit an open edit over the revision it started from.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CommitEditPayload {
+    pub edit_token: String,
+    pub edit_version: u32,
+    pub base_revision: u32,
+}
+/// Abandon an open edit.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DiscardEditPayload {
+    pub edit_token: String,
+}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(
     tag = "operation",
@@ -312,8 +321,42 @@ pub enum ControlOperation {
     CommitLayout(CommitPayload),
     /// Request service fault reset.
     ResetFault(EmptyPayload),
-    /// Request release of the emergency-stop latch.
-    ResetEmergencyStop(EmptyPayload),
+    /// Read the active layout's actuator IDs.
+    LayoutIndex(EmptyPayload),
+    /// Read one actuator of the active layout.
+    ReadActuator(ActuatorPage),
+    /// Read one actuator's drive profile.
+    ReadDriveProfile(ActuatorPage),
+    BeginLayoutEdit(BeginEditPayload),
+    StageActuator(StageActuatorPayload),
+    RemoveActuator(RemoveActuatorPayload),
+    ValidateLayoutEdit(EditVersionPayload),
+    CommitLayoutEdit(CommitEditPayload),
+    DiscardLayoutEdit(DiscardEditPayload),
+}
+impl ControlOperation {
+    /// Whether the rover answers this operation one page at a time; such
+    /// requests are limited to [`PAGINATED_LIMIT`] bytes.
+    pub fn paginated(&self) -> bool {
+        !matches!(
+            self,
+            Self::Capabilities(_)
+                | Self::ReadLayout(_)
+                | Self::StageLayout(_)
+                | Self::CommitLayout(_)
+                | Self::ResetFault(_)
+        )
+    }
+    fn edit_token(&self) -> Option<&str> {
+        match self {
+            Self::StageActuator(p) => Some(&p.edit_token),
+            Self::RemoveActuator(p) => Some(&p.edit_token),
+            Self::ValidateLayoutEdit(p) => Some(&p.edit_token),
+            Self::CommitLayoutEdit(p) => Some(&p.edit_token),
+            Self::DiscardLayoutEdit(p) => Some(&p.edit_token),
+            _ => None,
+        }
+    }
 }
 /// Versioned JSON control request with a caller-supplied correlation ID.
 #[derive(Clone, Debug, Serialize)]
@@ -362,9 +405,26 @@ pub fn decode_control(data: &[u8]) -> Result<ControlEnvelope, ActuatorError> {
         "stage_layout" => parse!(StageLayout),
         "commit_layout" => parse!(CommitLayout),
         "reset_fault" => parse!(ResetFault),
-        "reset_emergency_stop" => parse!(ResetEmergencyStop),
+        "layout_index" => parse!(LayoutIndex),
+        "read_actuator" => parse!(ReadActuator),
+        "read_drive_profile" => parse!(ReadDriveProfile),
+        "begin_layout_edit" => parse!(BeginLayoutEdit),
+        "stage_actuator" => parse!(StageActuator),
+        "remove_actuator" => parse!(RemoveActuator),
+        "validate_layout_edit" => parse!(ValidateLayoutEdit),
+        "commit_layout_edit" => parse!(CommitLayoutEdit),
+        "discard_layout_edit" => parse!(DiscardLayoutEdit),
         _ => return Err(error("unknown operation")),
     };
+    if command
+        .edit_token()
+        .is_some_and(|t| t.is_empty() || t.chars().count() > EDIT_TOKEN_LIMIT)
+    {
+        return Err(error("invalid edit token"));
+    }
+    if command.paginated() && data.len() > PAGINATED_LIMIT {
+        return Err(error("paginated request too large"));
+    }
     Ok(ControlEnvelope {
         schema_version: wire.schema_version,
         request_id: wire.request_id,
@@ -383,13 +443,6 @@ pub fn encode_control(envelope: &ControlEnvelope) -> Result<Vec<u8>, ActuatorErr
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn command_kind_parses_its_wire_name() {
-        let kind: CommandKind = serde_json::from_str(r#""emergency_stop""#).unwrap();
-        assert_eq!(kind, CommandKind::EmergencyStop);
-        assert!(serde_json::from_str::<CommandKind>(r#""reboot""#).is_err());
-    }
 
     fn sample(id: u8, value: f32) -> RelaySample {
         RelaySample {
@@ -426,5 +479,35 @@ mod tests {
             max: 0.004,
         };
         assert!(encode_relay_drive(&[sample]).is_err());
+    }
+
+    #[test]
+    fn only_paginated_requests_are_held_to_the_page_limit() {
+        let token = "t".repeat(EDIT_TOKEN_LIMIT);
+        let name = "n".repeat(PAGINATED_LIMIT);
+        let actuator = serde_json::json!({"id": 0, "name": name, "port": "M0",
+            "kind": "dc_motor", "inverted": false, "limits": {"min": -1.0, "max": 1.0},
+            "calibration": {"type": "dc_motor", "max_power_fraction": 1.0},
+            "route": {"type": "left_effort"}, "safe": {"type": "zero"}});
+        let envelope = |operation: &str, payload: serde_json::Value| {
+            serde_json::json!({"schema_version": 1, "request_id": 1,
+                "operation": operation, "payload": payload})
+            .to_string()
+        };
+        let stage = envelope(
+            "stage_actuator",
+            serde_json::json!({"edit_token": token, "edit_version": 1, "actuator": actuator}),
+        );
+        assert!(decode_control(stage.as_bytes()).is_err());
+        let layout = envelope(
+            "stage_layout",
+            serde_json::json!({"layout": {"schema_version": 1, "revision": 1, "actuators": [actuator]}}),
+        );
+        assert!(decode_control(layout.as_bytes()).is_ok());
+        let long_token = envelope(
+            "discard_layout_edit",
+            serde_json::json!({"edit_token": "t".repeat(EDIT_TOKEN_LIMIT + 1)}),
+        );
+        assert!(decode_control(long_token.as_bytes()).is_err());
     }
 }

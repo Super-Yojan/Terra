@@ -4,6 +4,9 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
+/// Most actuators in one layout, and most records in one drive write.
+pub const MAX_ACTUATORS: usize = 16;
+
 /// Versioned hardware assignment document; validate before routing or installing.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -194,7 +197,7 @@ pub fn validate_structure(layout: &Layout) -> Result<(), Vec<LayoutError>> {
     if layout.schema_version != 1 {
         add(None, "schema_version", "schema version must be 1");
     }
-    if layout.actuators.len() > 16 {
+    if layout.actuators.len() > MAX_ACTUATORS {
         add(None, "actuator_count", "at most 16 actuators are supported");
     }
     let mut ids = BTreeSet::new();
