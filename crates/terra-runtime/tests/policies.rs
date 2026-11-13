@@ -36,7 +36,7 @@ fn sensors(r: &mut Runtime, t: f64) {
 }
 fn remote(r: &mut Runtime, kind: &str, mut v: serde_json::Value, t: f64) {
     v["run_id"] = json!(r.run_id());
-    v["authority_revision"] = json!(r.autonomy.authority_revision());
+    v["authority_revision"] = json!(r.autonomy().authority_revision());
     r.ingest(RuntimeEvent::Remote {
         kind: kind.into(),
         payload: serde_json::to_vec(&v).unwrap(),
@@ -105,7 +105,7 @@ fn stale_generation_in_a_batch_is_rejected_and_stop_dominates_reset() {
 fn link_loss_retires_operator_generation_without_replaying_on_reconnect() {
     let mut r = runtime(ActuationMode::DirectEffort);
     sensors(&mut r, 0.);
-    let old = r.autonomy.authority_revision();
+    let old = r.autonomy().authority_revision();
     remote(
         &mut r,
         "teleop",
@@ -118,7 +118,7 @@ fn link_loss_retires_operator_generation_without_replaying_on_reconnect() {
         received_at: 0.01,
     })
     .unwrap();
-    assert!(r.autonomy.authority_revision() > old);
+    assert!(r.autonomy().authority_revision() > old);
     assert_eq!(r.step(0.01).unwrap().motor.left, 0.);
     r.ingest(RuntimeEvent::Link {
         connected: true,
@@ -142,16 +142,18 @@ fn link_loss_retires_operator_generation_without_replaying_on_reconnect() {
 fn accepted_mission_survives_link_loss_with_fresh_onboard_evidence() {
     let mut r = runtime(ActuationMode::VelocityFeedback);
     sensors(&mut r, 0.);
-    r.autonomy.set_level(terra_autonomy::LevelRequest::new(
-        terra_autonomy::Level::WaypointDirect,
-        "mode",
-    ));
-    r.autonomy.accept_goal(&terra_waypoint::GoalCommand::Local {
-        x: 1.,
-        y: 0.,
-        yaw: None,
-        token: Some("goal".into()),
-    });
+    r.local_action(
+        "autonomy",
+        br#"{"level":"waypoint_direct","token":"mode"}"#,
+        0.,
+    )
+    .unwrap();
+    r.local_action(
+        "goal",
+        br#"{"frame":"local","x":1,"y":0,"token":"goal"}"#,
+        0.,
+    )
+    .unwrap();
     r.step(0.).unwrap();
     r.ingest(RuntimeEvent::Link {
         connected: false,
@@ -383,16 +385,18 @@ fn switching_actuation_mode_does_not_replay_local_input() {
 fn autonomous_guidance_uses_feedback_even_with_a_direct_manual_profile() {
     let mut r = runtime(ActuationMode::DirectEffort);
     sensors(&mut r, 0.);
-    r.autonomy.set_level(terra_autonomy::LevelRequest::new(
-        terra_autonomy::Level::WaypointDirect,
-        "mode",
-    ));
-    r.autonomy.accept_goal(&terra_waypoint::GoalCommand::Local {
-        x: 1.,
-        y: 0.,
-        yaw: None,
-        token: Some("goal".into()),
-    });
+    r.local_action(
+        "autonomy",
+        br#"{"level":"waypoint_direct","token":"mode"}"#,
+        0.,
+    )
+    .unwrap();
+    r.local_action(
+        "goal",
+        br#"{"frame":"local","x":1,"y":0,"token":"goal"}"#,
+        0.,
+    )
+    .unwrap();
     assert_eq!(
         r.step(0.).unwrap().status["runtime"]["mode"],
         "velocity_feedback"

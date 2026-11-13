@@ -4,7 +4,7 @@ fn delayed_remote_goal_and_reset_cannot_cross_loss_generation() {
     let c = MobileController::new(default_control_settings()).unwrap();
     let mut b = c.brain.lock().unwrap();
     let run = b.run_id().to_owned();
-    let rev = b.autonomy.authority_revision();
+    let rev = b.autonomy().authority_revision();
     let goal = serde_json::json!({"frame":"local","x":4,"y":0,"token":"never-seen","run_id":run,"authority_revision":rev});
     assert!(remote_action(&b, "goal", goal.to_string().as_bytes(), 0.1).is_ok());
     c.apply_dashboard_link_loss(&mut b, 1.);
@@ -22,7 +22,7 @@ fn delayed_remote_goal_and_reset_cannot_cross_loss_generation() {
     );
     assert!(remote_action(&b, "goal", br#"{"cancel":true}"#, 120.).is_ok());
     assert!(remote_action(&b, "safety", br#"{"action":"stop","token":"stop"}"#, 120.).is_ok());
-    let fresh = serde_json::json!({"level":"waypoint","token":"new","run_id":run,"authority_revision":b.autonomy.authority_revision()});
+    let fresh = serde_json::json!({"level":"waypoint","token":"new","run_id":run,"authority_revision":b.autonomy().authority_revision()});
     assert!(remote_action(&b, "autonomy", fresh.to_string().as_bytes(), 0.5).is_err());
     assert!(
         terra_autonomy::decode_level(

@@ -209,7 +209,7 @@ impl MobileController {
     /// Returns `None` when no status is available, locking fails, or conversion fails.
     pub fn target_search_snapshot(&self, timestamp: f64) -> Option<MobileSearchSnapshot> {
         let b = self.brain.lock().ok()?;
-        let s = b.autonomy.search_status(timestamp)?;
+        let s = b.autonomy().search_status(timestamp)?;
         Some(MobileSearchSnapshot {
             run_id: s.run_id,
             search_id: s.search_id,

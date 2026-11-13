@@ -56,14 +56,14 @@ fn dock_starts_only_on_a_confirmed_bucket() {
     sight(&mut r, 3, "orange", 0.3);
     let start = format!(r#"{{"action":"start","object_id":{id},"token":"d2"}}"#);
     r.local_action("dock", start.as_bytes(), 0.3).unwrap();
-    assert!(r.autonomy.dock_active());
-    let status = r.autonomy.dock_status(0.3).unwrap();
+    assert!(r.autonomy().dock_active());
+    let status = r.autonomy().dock_status(0.3).unwrap();
     assert_eq!(status.color.as_deref(), Some("orange"));
     assert!(
         r.local_action("dock", br#"{"action":"cancel","token":"d3"}"#, 0.4)
             .is_ok()
     );
-    assert!(!r.autonomy.dock_active());
+    assert!(!r.autonomy().dock_active());
 }
 
 #[test]
@@ -95,10 +95,10 @@ fn gate_servo_follows_the_profile() {
     r.apply_rover_profile(profile).unwrap();
     assert_eq!(r.gate_servo(true), Some((8, 0.6)));
     assert_eq!(r.gate_servo(false), Some((8, -0.4)));
-    assert_eq!(r.autonomy.dock_config().outlet_ahead, 0.7);
+    assert_eq!(r.autonomy().dock_config().outlet_ahead, 0.7);
     // A new run keeps the profile's dock geometry.
     r.begin_run("run-2".into()).unwrap();
-    assert_eq!(r.autonomy.dock_config().outlet_ahead, 0.7);
+    assert_eq!(r.autonomy().dock_config().outlet_ahead, 0.7);
 }
 
 #[test]
@@ -110,11 +110,11 @@ fn phone_gate_and_outlet_survive_profile_changes() {
     r.set_dock_gate(Some((3, 0.8, -0.2))).unwrap();
     r.set_dock_outlet(Some(0.42)).unwrap();
     assert_eq!(r.gate_servo(false), Some((3, -0.2)));
-    assert_eq!(r.autonomy.dock_config().outlet_ahead, 0.42);
+    assert_eq!(r.autonomy().dock_config().outlet_ahead, 0.42);
     r.apply_rover_profile(rover_profile::RoverProfile::terra())
         .unwrap();
     assert_eq!(r.gate_servo(true), Some((3, 0.8)));
-    assert_eq!(r.autonomy.dock_config().outlet_ahead, 0.42);
+    assert_eq!(r.autonomy().dock_config().outlet_ahead, 0.42);
     // A gate test holds the gate until it ends.
     r.test_dock_gate(Some(true)).unwrap();
     assert_eq!(r.gate_servo(false), Some((3, 0.8)));
@@ -122,7 +122,7 @@ fn phone_gate_and_outlet_survive_profile_changes() {
     assert_eq!(r.gate_servo(false), Some((3, -0.2)));
     r.set_dock_outlet(None).unwrap();
     assert_eq!(
-        r.autonomy.dock_config().outlet_ahead,
+        r.autonomy().dock_config().outlet_ahead,
         rover_profile::RoverProfile::terra()
             .dock_config()
             .outlet_ahead

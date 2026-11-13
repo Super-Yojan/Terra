@@ -27,6 +27,7 @@ pub mod rover_profile;
 mod search;
 mod sensor_hold;
 mod status;
+mod task;
 pub mod tilt;
 pub use hardware::{HARDWARE_FRESHNESS_SECONDS, HardwareStatus};
 pub use sensor_hold::SENSOR_HOLD_GOAL_TIMEOUT_SECONDS;
@@ -236,8 +237,9 @@ pub struct RuntimeOutput {
     pub events: Vec<Value>,
 }
 pub struct Runtime {
-    /// Authority, planning and mission state; hosts may call its request API.
-    pub autonomy: AutonomyArbiter,
+    /// Authority, planning and mission state; hosts read it through
+    /// [`Runtime::autonomy`] and change it through the runtime's intents.
+    autonomy: AutonomyArbiter,
     estimator: VelocityEstimator,
     controller: VelocityController,
     pose: Option<(Pose, f64)>,
@@ -383,6 +385,10 @@ impl Runtime {
     pub fn pose_ready(&self, now: f64) -> bool {
         pose_quality::ready(self, now)
     }
+    /// Authority, planning and mission state, read-only.
+    pub fn autonomy(&self) -> &AutonomyArbiter {
+        &self.autonomy
+    }
     pub fn navigation(&self) -> &navigation::State {
         &self.navigation
     }
@@ -480,6 +486,20 @@ impl Runtime {
     /// settings and outdoor requests reviewed against the old revision are refused.
     pub(crate) fn settings_changed(&mut self) {
         self.navigation.revision = self.navigation.revision.saturating_add(1);
+    }
+    /// The fleet link was dropped without the operator closing it: fleet
+    /// teleop intent ends, an accepted onboard mission stays.
+    pub fn detach_operator_link(&mut self) {
+        self.autonomy.clear_remote_intent();
+        self.rover_id = None;
+    }
+    /// Geographic origin for WGS84 goals.
+    pub fn set_geo_origin(&mut self, latitude: f64, longitude: f64) -> Result<(), RuntimeError> {
+        if self.autonomy.set_origin(latitude, longitude) {
+            Ok(())
+        } else {
+            Err(invalid("invalid geographic origin"))
+        }
     }
     /// The operator closed the fleet link: pause the outdoor mission, return
     /// authority to teleop and stop the velocity loop. A latched emergency

@@ -673,7 +673,7 @@ impl MobileController {
         let pose = brain.pose().unwrap_or_default();
         let map = brain.map().cloned();
         let clearance = map.as_ref().and_then(|m| {
-            terra_navigation::observed_clearance(&m.0, pose.0, &brain.autonomy.footprint())
+            terra_navigation::observed_clearance(&m.0, pose.0, &brain.autonomy().footprint())
         });
         if let Some(kind) = brain.near_miss.update(clearance) {
             output.events.push(terra_autonomy::DecisionEvent {

@@ -30,7 +30,7 @@ fn replay_is_deterministic_and_managed_spin_is_blocked() {
         let t = n as f64 * 0.01;
         for r in [&mut phone, &mut simulator] {
             samples(r, t);
-            let payload = serde_json::json!({"linear":0.0,"angular":0.5,"run_id":"run-1","authority_revision":r.autonomy.authority_revision(),"operator_session_id":"operator","sequence":n});
+            let payload = serde_json::json!({"linear":0.0,"angular":0.5,"run_id":"run-1","authority_revision":r.autonomy().authority_revision(),"operator_session_id":"operator","sequence":n});
             r.ingest(RuntimeEvent::Remote {
                 kind: "teleop".into(),
                 payload: serde_json::to_vec(&payload).unwrap(),
@@ -133,7 +133,7 @@ fn teleop_received_before_a_late_tick_still_drives() {
     // One second of driving outlasts the 0.5 s lease of any single command.
     for n in 1..=100 {
         let t = 1. + n as f64 * 0.01;
-        let payload = serde_json::json!({"linear":0.2,"angular":0.0,"run_id":"late","authority_revision":r.autonomy.authority_revision(),"operator_session_id":"operator","sequence":n});
+        let payload = serde_json::json!({"linear":0.2,"angular":0.0,"run_id":"late","authority_revision":r.autonomy().authority_revision(),"operator_session_id":"operator","sequence":n});
         // Each command waited 30 ms in the inbox, three 10 ms ticks.
         r.ingest(RuntimeEvent::Remote {
             kind: "teleop".into(),

@@ -41,7 +41,7 @@ fn drive(r: &mut Runtime, t: f64) -> RuntimeOutput {
 fn safety(r: &mut Runtime, action: &str, token: &str, t: f64) {
     let mut v = json!({"action": action, "token": token});
     v["run_id"] = json!(r.run_id());
-    v["authority_revision"] = json!(r.autonomy.authority_revision());
+    v["authority_revision"] = json!(r.autonomy().authority_revision());
     r.ingest(RuntimeEvent::Remote {
         kind: "safety".into(),
         payload: serde_json::to_vec(&v).unwrap(),

@@ -390,7 +390,7 @@ impl MobileController {
     /// Returns `Internal` for a poisoned mutex.
     pub fn detach_dashboard_link(&self) -> Result<(), ControllerError> {
         let mut b = self.brain.lock().map_err(|_| ControllerError::Internal)?;
-        b.runtime.autonomy.clear_remote_intent();
+        b.runtime.detach_operator_link();
         let service = b.dashboard.take();
         drop(b);
         // Network teardown must not stall the phone control/Bluetooth producer.
@@ -616,8 +616,7 @@ impl MobileController {
             .lock()
             .map_err(|_| ControllerError::Internal)?
             .runtime
-            .autonomy
-            .set_origin(latitude, longitude);
+            .set_geo_origin(latitude, longitude)?;
         Ok(())
     }
     /// Install a world-frame occupancy snapshot with source time and revision.
