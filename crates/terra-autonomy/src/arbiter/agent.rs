@@ -62,11 +62,12 @@ impl AutonomyArbiter {
             status.budget_seconds,
             pose,
             &footprint,
+            self.turning_config.allow_in_place,
             map_text,
             &task.history,
         );
         // The built-in prompt ends by asking for JSON; agents act through tools instead.
-        if let Some(cut) = text.rfind("\nReply with one JSON object only.") {
+        if let Some(cut) = text.rfind(crate::task::PROMPT_REPLY_FOOTER) {
             text.truncate(cut);
         }
         text.push_str(&format!(

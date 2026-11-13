@@ -689,6 +689,7 @@ impl AutonomyArbiter {
                     task.spec.budget(),
                     pose,
                     &footprint,
+                    self.turning_config.allow_in_place,
                     &summary.text,
                     &task.history,
                 );

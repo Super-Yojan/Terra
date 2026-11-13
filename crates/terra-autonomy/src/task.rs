@@ -1055,6 +1055,9 @@ pub(crate) fn resolve_plan(
     Ok((plan, None))
 }
 
+/// Last line of [`step_prompt`]; agents acting through tools drop it.
+pub(crate) const PROMPT_REPLY_FOOTER: &str = "\nReply with one JSON object only.";
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn step_prompt(
     instruction: &str,
@@ -1064,12 +1067,13 @@ pub(crate) fn step_prompt(
     budget: f64,
     pose: Pose,
     footprint: &Footprint,
+    allow_in_place: bool,
     map_text: &str,
     history: &VecDeque<TaskHistoryEntry>,
 ) -> String {
     let mut text = format!(
         "TASK from the operator: {}\n\nStep {step} of at most {max_steps}. Time used {elapsed:.0} s of {budget:.0} s.\n\
-ROVER: at ({:.1}, {:.1}), heading {:.0} deg, body {:.2} x {:.2} m with {:.2} m margin; it turns only along arcs, never in place.\n\n",
+ROVER: at ({:.1}, {:.1}), heading {:.0} deg, body {:.2} x {:.2} m with {:.2} m margin; {}.\n\n",
         instruction.trim(),
         pose.x,
         pose.y,
@@ -1077,6 +1081,11 @@ ROVER: at ({:.1}, {:.1}), heading {:.0} deg, body {:.2} x {:.2} m with {:.2} m m
         footprint.length,
         footprint.width,
         footprint.margin,
+        if allow_in_place {
+            "it can turn in place"
+        } else {
+            "it turns only along arcs, never in place"
+        },
     );
     text.push_str(map_text);
     text.push_str("\nHISTORY (oldest first):\n");
@@ -1090,7 +1099,7 @@ ROVER: at ({:.1}, {:.1}), heading {:.0} deg, body {:.2} x {:.2} m with {:.2} m m
             entry.step, entry.kind, entry.text
         ));
     }
-    text.push_str("\nReply with one JSON object only.");
+    text.push_str(PROMPT_REPLY_FOOTER);
     text
 }
 
@@ -1320,6 +1329,7 @@ mod tests {
             300.,
             pose,
             &body(),
+            false,
             &summary.text,
             &history,
         );
