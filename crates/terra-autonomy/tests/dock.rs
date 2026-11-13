@@ -27,7 +27,7 @@ fn start(a: &mut AutonomyArbiter, token: &str) -> bool {
     let r =
         decode_dock(format!(r#"{{"action":"start","object_id":1,"token":"{token}"}}"#).as_bytes())
             .unwrap();
-    a.apply_dock_request(r, Some(bucket()), Pose::default(), 0.)
+    a.apply_dock_request(r, Some(bucket()), Some(Pose::default()), 0.)
 }
 
 /// Drive a perfect unicycle under the arbiter until `until` holds or time runs out.
@@ -103,7 +103,7 @@ fn teleop_dock_waits_for_operator_then_dumps() {
     assert_eq!(out.status.active_source, terra_autonomy::Source::Dock);
     // A dump for another dock id is refused.
     let wrong = decode_dock(br#"{"action":"dump","dock_id":9,"token":"x1"}"#).unwrap();
-    assert!(!a.apply_dock_request(wrong, None, pose, t));
+    assert!(!a.apply_dock_request(wrong, None, Some(pose), t));
     let ok = decode_dock(
         format!(
             r#"{{"action":"dump","dock_id":{},"token":"x2"}}"#,
@@ -112,7 +112,7 @@ fn teleop_dock_waits_for_operator_then_dumps() {
         .as_bytes(),
     )
     .unwrap();
-    assert!(a.apply_dock_request(ok, None, pose, t));
+    assert!(a.apply_dock_request(ok, None, Some(pose), t));
     let (out, gate) = run(&mut a, &mut pose, &mut t, 5., |o| {
         phase(o) == Some(DockPhase::Done)
     });
@@ -173,6 +173,15 @@ fn emergency_stop_cancels_and_refuses_new_docks() {
 fn unknown_bucket_is_rejected() {
     let mut a = AutonomyArbiter::default();
     let r = decode_dock(br#"{"action":"start","object_id":7,"token":"d6"}"#).unwrap();
-    assert!(!a.apply_dock_request(r, None, Pose::default(), 0.));
+    assert!(!a.apply_dock_request(r, None, Some(Pose::default()), 0.));
     assert!(a.dock_status(0.).is_none());
+}
+
+#[test]
+fn dock_does_not_start_without_a_tracked_pose() {
+    let mut a = AutonomyArbiter::default();
+    let r = decode_dock(br#"{"action":"start","object_id":1,"token":"d7"}"#).unwrap();
+    assert!(!a.apply_dock_request(r, Some(bucket()), None, 0.));
+    assert_eq!(a.request_receipt(), Some(("d7", false)));
+    assert!(!a.dock_active());
 }

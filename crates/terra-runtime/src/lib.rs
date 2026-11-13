@@ -212,7 +212,10 @@ fn arbiter_input<'a>(
     now: f64,
     healthy: bool,
 ) -> ArbiterInput<'a> {
-    let pose = pose.unwrap_or_default();
+    // Without a tracked pose the arbiter still runs (local teleop needs none).
+    // It gets the origin stamped at -inf, which is never fresh, so nothing
+    // pose-gated acts on the placeholder.
+    let pose = pose.unwrap_or((Pose::default(), f64::NEG_INFINITY));
     let estimate = estimator.estimate(now);
     ArbiterInput {
         now,

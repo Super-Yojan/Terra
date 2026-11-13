@@ -35,7 +35,8 @@ impl AutonomyArbiter {
 
     /// An already accepted mission, independent of network presence. Tick-time local
     /// sensor, collision and safety checks still apply to every command.
-    pub fn accepted_onboard_mission(&self, pose: Pose) -> bool {
+    /// `pose` is the tracked pose, if any (see [`Self::has_active_goal`]).
+    pub fn accepted_onboard_mission(&self, pose: Option<Pose>) -> bool {
         if self.stopped || self.paused {
             return false;
         }
@@ -103,13 +104,19 @@ impl AutonomyArbiter {
             self.explorer.stop(EndReason::ObjectiveComplete);
         }
     }
-    pub fn has_active_goal(&self, pose: Pose) -> bool {
-        self.follower.step(pose.x, pose.y, pose.yaw).status.state == GoalState::Active
+    /// Whether a waypoint goal is latched and not yet reached at `pose`.
+    /// Without a tracked pose nothing can count as reached, so any latched
+    /// goal is active.
+    pub fn has_active_goal(&self, pose: Option<Pose>) -> bool {
+        match pose {
+            Some(p) => self.follower.step(p.x, p.y, p.yaw).status.state == GoalState::Active,
+            None => self.follower.has_goal(),
+        }
     }
     /// Drop an L2/L3 waypoint goal that a sensor hold has blocked for too
     /// long, naming why in `request_reason` and a `goal_dropped` event.
     /// Other levels keep their own timeouts. Return whether a goal was dropped.
-    pub fn drop_goal_for_sensor_hold(&mut self, pose: Pose) -> bool {
+    pub fn drop_goal_for_sensor_hold(&mut self, pose: Option<Pose>) -> bool {
         if !matches!(self.level, Level::Waypoint | Level::WaypointDirect)
             || !self.has_active_goal(pose)
         {
@@ -162,12 +169,12 @@ impl AutonomyArbiter {
         &self,
         run_id: &str,
         revision: u64,
-        pose: Pose,
+        pose: Option<Pose>,
     ) -> bool {
         self.run_id == run_id
             && self.revision == revision
             && !self.stopped
-            && self.follower.step(pose.x, pose.y, pose.yaw).status.state != GoalState::Active
+            && !self.has_active_goal(pose)
     }
     /// Apply a validated set of navigation settings. A changed planner retires
     /// cached plans, routes and operator intent and advances the authority

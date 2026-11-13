@@ -77,7 +77,7 @@ impl Runtime {
                 && now - since >= SENSOR_HOLD_GOAL_TIMEOUT_SECONDS
                 && self
                     .autonomy
-                    .drop_goal_for_sensor_hold(self.pose.unwrap_or_default().0)
+                    .drop_goal_for_sensor_hold(self.pose.map(|p| p.0))
             {
                 self.holds.goal_dropped = true;
                 if let Some((_, hold)) = self.holds.last.as_mut() {

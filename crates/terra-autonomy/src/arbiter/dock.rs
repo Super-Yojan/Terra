@@ -38,12 +38,13 @@ impl AutonomyArbiter {
 
     /// Apply a `dock` request. `start` names a bucket the host has already
     /// looked up in the object map (`target`); the host passes `None` when
-    /// the id is unknown, not confirmed, or not a bucket.
+    /// the id is unknown, not confirmed, or not a bucket. `pose` is the
+    /// tracked pose; a dock cannot start from an unknown one.
     pub fn apply_dock_request(
         &mut self,
         r: DockRequest,
         target: Option<DockTarget>,
-        pose: Pose,
+        pose: Option<Pose>,
         now: f64,
     ) -> bool {
         let fp = format!("dock:{:?}:{:?}:{:?}", r.action, r.object_id, r.dock_id);
@@ -70,7 +71,9 @@ impl AutonomyArbiter {
             DockActionKind::Start => {
                 if self.stopped {
                     Err("emergency_stop")
-                } else if let Some(target) = target {
+                } else if target.is_none() {
+                    Err("unknown_bucket")
+                } else if let Some((target, pose)) = target.zip(pose) {
                     self.next_dock += 1;
                     match Dock::start(
                         self.dock_config.clone(),
@@ -92,7 +95,7 @@ impl AutonomyArbiter {
                         Err(why) => Err(why),
                     }
                 } else {
-                    Err("unknown_bucket")
+                    Err("pose_unavailable")
                 }
             }
         };

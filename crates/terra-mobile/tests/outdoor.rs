@@ -5,11 +5,11 @@ use terra_mobile::outdoor::{
 use terra_navigation::Pose;
 fn evidence() -> Evidence {
     Evidence {
-        pose: Pose {
+        pose: Some(Pose {
             x: 12.,
             y: -9.,
             yaw: 0.7,
-        },
+        }),
         pose_ready: true,
         map_ready: true,
         hardware_ready: true,
@@ -17,7 +17,7 @@ fn evidence() -> Evidence {
     }
 }
 fn sensors(c: &mut OutdoorController, t: f64, lat: f64) {
-    sensors_at(c, t, lat, 0., evidence().pose);
+    sensors_at(c, t, lat, 0., evidence().pose.unwrap());
 }
 fn sensors_at(c: &mut OutdoorController, t: f64, lat: f64, heading: f64, pose: Pose) {
     c.observe_pose(pose, t);
@@ -53,7 +53,7 @@ fn cardinal_guidance_and_no_geographic_transform() {
         assert!((d - 111.195).abs() < 0.1);
         assert!((b - bearing).abs() < 0.001);
         let mut mission = OutdoorController::default();
-        sensors_at(&mut mission, 1.1, 0., 270., evidence().pose);
+        sensors_at(&mut mission, 1.1, 0., 270., evidence().pose.unwrap());
         mission
             .start(lat, lon, "cardinal".into(), 5., 1.1, evidence())
             .unwrap();
@@ -388,8 +388,8 @@ fn invalidation_does_not_erase_replay_watermark() {
 fn simulated_geographic_mission_confirms_only_after_stopping() {
     let mut c = OutdoorController::default();
     let mut e = evidence();
-    e.pose = Pose::default();
-    sensors_at(&mut c, 0., 0., 0., e.pose);
+    e.pose = Some(Pose::default());
+    sensors_at(&mut c, 0., 0., 0., e.pose.unwrap());
     c.start(0.000063, 0., "simulation".into(), 2., 0., e)
         .unwrap();
     let mut north = 0.;
@@ -397,12 +397,12 @@ fn simulated_geographic_mission_confirms_only_after_stopping() {
     for tick in 0..2000 {
         let t = tick as f64 * 0.05;
         if tick > 0 && tick % 20 == 0 {
-            sensors_at(&mut c, t, north / 111_195., 0., e.pose);
+            sensors_at(&mut c, t, north / 111_195., 0., e.pose.unwrap());
         }
         c.tick(t, e);
         if c.phase() == OutdoorPhase::Planning {
             north += 0.3 * 0.05;
-            e.pose.x = north;
+            e.pose.as_mut().unwrap().x = north;
         }
         if c.phase() == OutdoorPhase::ConfirmingArrival {
             saw_confirmation = true;
@@ -490,14 +490,14 @@ fn heading_status(c: &OutdoorController, t: f64) -> serde_json::Value {
 fn temporary_heading_limit_keeps_accuracy_and_freshness_gates() {
     let mut c = OutdoorController::default();
     gps_only(&mut c, 1.1);
-    c.observe_pose(evidence().pose, 1.1);
+    c.observe_pose(evidence().pose.unwrap(), 1.1);
     compass(&mut c, 1.1, 0., 35.);
     assert_eq!(c.readiness(1.1, evidence()), None);
     // Without fresh VIO the fused heading cannot be carried forward.
     assert_eq!(c.readiness(3.2, evidence()), Some("heading_uncertain"));
     let mut c = OutdoorController::default();
     gps_only(&mut c, 3.3);
-    c.observe_pose(evidence().pose, 3.3);
+    c.observe_pose(evidence().pose.unwrap(), 3.3);
     compass(&mut c, 3.3, 0., 35.1);
     assert_eq!(c.readiness(3.3, evidence()), Some("heading_uncertain"));
 }
@@ -507,7 +507,7 @@ fn compass_alone_never_claims_better_than_its_accuracy() {
     for i in 0..100 {
         let t = 1. + i as f64 * 0.1;
         gps_only(&mut c, t);
-        c.observe_pose(evidence().pose, t);
+        c.observe_pose(evidence().pose.unwrap(), t);
         compass(&mut c, t, 10., 48.);
     }
     let s = heading_status(&c, 10.9);

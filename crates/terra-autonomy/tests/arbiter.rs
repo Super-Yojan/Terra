@@ -511,7 +511,7 @@ fn supervised_approved_action_can_finish_offline_without_approving_the_next() {
         Some("accepted")
     );
     a.invalidate_remote_authority();
-    assert!(a.accepted_onboard_mission(Pose::default()));
+    assert!(a.accepted_onboard_mission(Some(Pose::default())));
     let active = a.step(ArbiterInput {
         map: Some(&m),
         map_time: Some(0.31),
@@ -529,7 +529,9 @@ fn supervised_approved_action_can_finish_offline_without_approving_the_next() {
         ..input(0.4)
     });
     assert_eq!(arrived.twist, Twist::default());
-    assert!(!a.accepted_onboard_mission(at));
+    assert!(!a.accepted_onboard_mission(Some(at)));
+    // Without a tracked pose nothing counts as reached.
+    assert!(a.accepted_onboard_mission(None));
     let next = a.step(ArbiterInput {
         pose: at,
         map: Some(&m),

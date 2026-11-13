@@ -306,6 +306,11 @@ impl WaypointController {
         &self.config
     }
 
+    /// Whether a goal is latched, reached or not.
+    pub fn has_goal(&self) -> bool {
+        self.goal.is_some()
+    }
+
     /// Set the geographic projection origin in degrees.
     ///
     /// Returns [`InputError::OutOfRange`] under [`GeoOrigin::new`] rules, preserving

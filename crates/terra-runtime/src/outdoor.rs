@@ -23,7 +23,7 @@ impl Admission {
 
 pub(crate) fn evidence(b: &Runtime, now: f64) -> Evidence {
     Evidence {
-        pose: b.pose.unwrap_or_default().0,
+        pose: b.pose.map(|p| p.0),
         pose_ready: pose_quality::ready(b, now),
         // L2 direct drives without the occupancy map, so a stale map never holds it.
         map_ready: !b.autonomy.needs_map()
@@ -135,7 +135,13 @@ fn goal(b: &mut Runtime, g: &terra_waypoint::GoalCommand, now: f64, radius: f64)
         b.autonomy.replan_task_for_destination();
         return true;
     }
-    let target = b.outdoor.tick(now, e).unwrap_or((e.pose.x, e.pose.y));
+    // Before the first guidance target, hold where the rover stands. `start`
+    // requires a ready pose, so a missing one only follows a racing frame reset.
+    let Some(target) = b.outdoor.tick(now, e).or(e.pose.map(|p| (p.x, p.y))) else {
+        b.outdoor.cancel();
+        b.autonomy.reject_goal(g, "pose_unavailable");
+        return false;
+    };
     let local = GoalCommand::Local {
         x: target.0,
         y: target.1,

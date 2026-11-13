@@ -135,7 +135,7 @@ impl Runtime {
                     && self.autonomy.outdoor_authority()
             } else {
                 self.autonomy
-                    .accepted_onboard_mission(self.pose.unwrap_or_default().0)
+                    .accepted_onboard_mission(self.pose.map(|p| p.0))
             }
     }
 }

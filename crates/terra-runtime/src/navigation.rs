@@ -159,7 +159,7 @@ pub(crate) fn apply(b: &mut super::Runtime, bytes: &[u8], now: f64) -> bool {
     b.navigation.token = Some(r.token);
     // The last published tick must already show this authority, safety and goal.
     let tick = b.brief.as_ref();
-    let pose = b.pose.map(|p| p.0).unwrap_or_default();
+    let pose = b.pose.map(|p| p.0);
     let reason = if !r.parameters.valid() {
         Some("invalid dimensions or avoidance limits")
     } else if r.run_id != b.run_id

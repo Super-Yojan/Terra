@@ -32,7 +32,7 @@ impl Runtime {
     }
     /// The agent's view of the map around the rover.
     pub fn agent_view(&mut self, now: f64) -> Result<String, &'static str> {
-        let pose = self.pose.map(|p| p.0).unwrap_or_default();
+        let (pose, _) = self.pose.ok_or("pose_unavailable")?;
         let map = self.map.as_ref().map(|(m, t, _)| (m, *t));
         self.autonomy.agent_view(map, pose, now)
     }
@@ -43,7 +43,9 @@ impl Runtime {
         rationale: Option<String>,
         now: f64,
     ) -> Result<AgentOutcome, String> {
-        let pose = self.pose.map(|p| p.0).unwrap_or_default();
+        let (pose, _) = self
+            .pose
+            .ok_or("pose_unavailable: no tracked pose yet; wait and call get_map")?;
         let map = self.map.as_ref().map(|(m, t, _)| (m, *t));
         self.autonomy.agent_go(waypoints, rationale, map, pose, now)
     }

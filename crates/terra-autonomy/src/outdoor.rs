@@ -98,7 +98,8 @@ pub struct HeadingFix {
 }
 #[derive(Clone, Copy)]
 pub struct Evidence {
-    pub pose: Pose,
+    /// Tracked local pose; `None` before tracking starts or after a frame reset.
+    pub pose: Option<Pose>,
     pub pose_ready: bool,
     pub map_ready: bool,
     pub hardware_ready: bool,
@@ -289,8 +290,9 @@ impl OutdoorController {
             .or(self.gps.map(|g| (g.latitude, g.longitude)))
     }
     /// The active destination in the local frame, re-anchored on every pose and fix.
-    /// `None` without a mission, a position or a heading.
-    pub fn destination_local(&self, pose: Pose) -> Option<(f64, f64)> {
+    /// `None` without a mission, a position, a heading or a tracked pose.
+    pub fn destination_local(&self, pose: Option<Pose>) -> Option<(f64, f64)> {
+        let pose = pose?;
         // Kept through arrival so L5 sees it is there; withdrawn while paused.
         let m = self.mission.as_ref().filter(|_| self.phase != OutdoorPhase::Paused)?;
         let (lat, lon) = self.guidance_position()?;
@@ -473,9 +475,10 @@ impl OutdoorController {
         // Local yaw is counter-clockwise; true bearing is clockwise.
         let yaw = self.heading.local_yaw(bearing)?;
         let lookahead = distance.min(LOOKAHEAD_M);
+        let pose = e.pose?;
         Some((
-            e.pose.x + lookahead * yaw.cos(),
-            e.pose.y + lookahead * yaw.sin(),
+            pose.x + lookahead * yaw.cos(),
+            pose.y + lookahead * yaw.sin(),
         ))
     }
     /// Status for the `outdoor` topic, without the request bookkeeping the

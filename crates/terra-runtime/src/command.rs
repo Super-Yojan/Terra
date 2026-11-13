@@ -151,7 +151,7 @@ impl Runtime {
                 .is_some_and(|a| self.autonomy.apply_task_action(a, now).is_ok()),
             requests::DOCK => terra_autonomy::decode_dock(bytes).is_some_and(|r| {
                 let target = r.object_id.and_then(|id| self.objects.dock_target(id));
-                let pose = self.pose.unwrap_or_default().0;
+                let pose = self.pose.map(|p| p.0);
                 let accepted = self.autonomy.apply_dock_request(r, target, pose, now);
                 if self.autonomy.dock_active() {
                     // A gate test ends when a dock takes the gate.
