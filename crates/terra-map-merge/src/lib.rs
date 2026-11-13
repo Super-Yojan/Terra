@@ -29,7 +29,6 @@
 
 /// A cell at or above this value is occupied. Matches ARGOS `OCCUPIED_THRESHOLD`.
 pub const OCCUPIED_THRESHOLD: i8 = 65;
-/// Unknown cell value.
 pub const UNKNOWN: i8 = -1;
 /// Largest fused grid accepted, cells (a 100 m × 100 m area at 0.1 m).
 pub const MAX_CELLS: u64 = 1_000_000;
@@ -135,12 +134,10 @@ pub struct Grid {
 }
 
 impl Grid {
-    /// All-unknown grid.
     pub fn unknown(width: u32, height: u32, resolution: f64, origin_x: f64, origin_y: f64) -> Self {
         Self::filled(width, height, resolution, origin_x, origin_y, UNKNOWN)
     }
 
-    /// Grid with every cell set to `value`.
     pub fn filled(
         width: u32,
         height: u32,
@@ -166,7 +163,6 @@ impl Grid {
         }
     }
 
-    /// Cell (col, row).
     pub fn get(&self, col: u32, row: u32) -> Option<i8> {
         (col < self.width && row < self.height)
             .then(|| self.cells[(row * self.width + col) as usize])
@@ -190,7 +186,6 @@ impl Grid {
         )
     }
 
-    /// Number of non-unknown cells.
     pub fn known_cells(&self) -> usize {
         self.cells.iter().filter(|&&c| c >= 0).count()
     }

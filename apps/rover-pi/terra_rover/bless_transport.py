@@ -70,7 +70,6 @@ class PeerCharacteristic(BlueZGattCharacteristic):
             raise DBusError('org.bluez.Error.NotPermitted', 'not writable')
         # The application callback also validates fragments and disarms malformed drive.
         if options.get('offset', Variant('q', 0)).value or options.get('prepare-authorize', Variant('b', False)).value:
-            # Call the authorization/safety callback before rejecting a prepared write.
             if self.invalid_write is not None:
                 result = self.invalid_write(options)
                 if inspect.isawaitable(result): await result
