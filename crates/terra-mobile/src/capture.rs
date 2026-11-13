@@ -72,8 +72,9 @@ pub(crate) fn advance(brain: &mut Brain, now: f64) {
             finish(brain, rover_id, CaptureState::Cancelled, "replaced");
         }
         grid.arm_capture();
-        // Only frames accepted after the request belong to this capture.
-        let _ = grid.take_capture();
+        // Only frames accepted after the request belong to this capture, so
+        // an older armed copy is discarded unseen.
+        drop(grid.take_capture());
         let total = request.frame_count();
         let interval = 1.0 / request.rate_hz;
         brain.capture = Some(Capture {
@@ -161,88 +162,17 @@ fn encode(
     rover_id: u64,
     capture: &Capture,
 ) -> Option<Vec<u8>> {
-    let decimated;
-    let depth = if capture.stride > 1 {
-        decimated = decimate(depth, capture.stride);
-        &decimated
-    } else {
-        depth
-    };
-    let points = depth.label().ok()?;
-    let q = depth.pose.orientation;
-    let p = depth.pose.position;
-    let k = depth.intrinsics;
-    CaptureFrame {
-        rover_id,
-        request_id: capture.request_id.clone(),
-        index: capture.sent,
-        count: capture.total,
-        timestamp: depth.timestamp,
-        width: k.width,
-        height: k.height,
-        camera_position: [p.x, p.y, p.z],
-        camera_orientation: [q.x, q.y, q.z, q.w],
-        intrinsics: [k.fx, k.fy, k.cx, k.cy],
-        classifier: match depth.classifier {
-            terra_mapping::DepthClassifier::GroundPlane(g) => CaptureClassifier::GroundPlane {
-                normal: [g.normal.x, g.normal.y, g.normal.z],
-                offset: g.offset,
-            },
-            terra_mapping::DepthClassifier::HorizonBand(b) => CaptureClassifier::HorizonBand {
-                half_angle: b.half_angle,
-                max_range: b.max_range,
-            },
-        },
-        min_obstacle_height: depth.config.min_obstacle_height,
-        max_obstacle_height: depth.config.max_obstacle_height,
-        max_range: depth.config.max_range,
-        points: points
-            .into_iter()
-            .map(|point| CapturePoint {
-                position: [
-                    point.position.x as f32,
-                    point.position.y as f32,
-                    point.position.z as f32,
-                ],
-                label: point.label,
-            })
-            .collect(),
-    }
-    .encode()
-    .ok()
-}
-
-/// Keep every `stride`-th pixel across and down. Pixel `(u, v)` of the result
-/// is pixel `(stride·u, stride·v)` of the source, so dividing the focal lengths
-/// and principal point by `stride` keeps every ray exactly where it was.
-pub(crate) fn decimate(
-    depth: &terra_mapping::DepthCapture,
-    stride: u32,
-) -> terra_mapping::DepthCapture {
-    let k = depth.intrinsics;
-    let width = k.width.div_ceil(stride);
-    let height = k.height.div_ceil(stride);
-    let scale = f64::from(stride);
-    terra_mapping::DepthCapture {
-        timestamp: depth.timestamp,
-        intrinsics: terra_mapping::CameraIntrinsics {
-            width,
-            height,
-            fx: k.fx / scale,
-            fy: k.fy / scale,
-            cx: k.cx / scale,
-            cy: k.cy / scale,
-        },
-        pose: depth.pose,
-        classifier: depth.classifier,
-        config: depth.config.clone(),
-        depth: (0..height)
-            .flat_map(|v| (0..width).map(move |u| (u, v)))
-            .map(|(u, v)| depth.depth[(v * stride * k.width + u * stride) as usize])
-            .collect(),
-        floor: depth.floor.clone(),
-        barrier: depth.barrier.clone(),
-    }
+    depth
+        .decimated(capture.stride)
+        .capture_frame(
+            rover_id,
+            capture.request_id.clone(),
+            capture.sent,
+            capture.total,
+        )
+        .ok()?
+        .encode()
+        .ok()
 }
 
 /// Whether the always-on thinned cloud should go out: only during a recorded

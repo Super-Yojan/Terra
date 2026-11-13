@@ -19,9 +19,11 @@
 //! ```
 
 mod barrier;
+mod capture;
 mod floor;
 mod square_grid;
 pub use barrier::BarrierSurface;
+pub use capture::{DepthCapture, LabelledReturns};
 pub use floor::FloorSurface;
 use std::sync::Arc;
 pub use terra_types::point_capture::PointLabel;
@@ -785,43 +787,6 @@ pub fn label_depth_with_mesh(
         }
     }
     Ok(points)
-}
-/// Copy of one accepted depth frame and the rules it was integrated with.
-#[derive(Clone, Debug)]
-pub struct DepthCapture {
-    /// Exposure time, seconds.
-    pub timestamp: f64,
-    /// Calibration of `depth`.
-    pub intrinsics: CameraIntrinsics,
-    /// Camera pose at exposure.
-    pub pose: CameraPose,
-    /// Classifier used for this frame.
-    pub classifier: DepthClassifier,
-    /// Mapper limits in force.
-    pub config: MapConfig,
-    /// Row-major axial depth in metres.
-    pub depth: Vec<f32>,
-    /// Mesh floor the map consulted for this frame, if any.
-    pub floor: Option<Arc<FloorSurface>>,
-    /// Mesh barrier the map consulted for this frame, if any.
-    pub barrier: Option<Arc<BarrierSurface>>,
-}
-impl DepthCapture {
-    /// Label every pixel; see [`label_depth_with_mesh`].
-    ///
-    /// # Errors
-    /// As [`label_depth_with_mesh`]; a frame the map accepted does not fail.
-    pub fn label(&self) -> Result<Vec<LabeledPoint>, MapError> {
-        label_depth_with_mesh(
-            &self.config,
-            self.intrinsics,
-            self.pose,
-            &self.depth,
-            self.classifier,
-            self.floor.as_deref(),
-            self.barrier.as_deref(),
-        )
-    }
 }
 #[cfg(test)]
 mod tests {

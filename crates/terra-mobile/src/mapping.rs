@@ -2,8 +2,8 @@
 use crate::{ControllerError, MobileController};
 use std::sync::{Arc, Mutex};
 use terra_mapping::{
-    BarrierSurface, CameraIntrinsics, CameraPose, DepthClassifier, FloorSurface, GroundPlane,
-    HorizonBand, MapConfig, MapError, PointLabel,
+    BarrierSurface, CameraIntrinsics, CameraPose, FloorSurface, GroundPlane, HorizonBand,
+    LabelledReturns, MapConfig, MapError,
 };
 use terra_types::{Quaternion, Vector3};
 #[derive(Clone, uniffi::Record)]
@@ -176,9 +176,9 @@ impl From<MapError> for ControllerError {
     }
 }
 #[derive(uniffi::Object)]
-/// Mutex-protected rolling occupancy mapper exposed through UniFFI.
+/// Rolling occupancy mapper exposed through UniFFI. The mapping state locks internally.
 pub struct MobileOccupancyMap {
-    map: Mutex<terra_runtime::mapping::MappingState>,
+    map: terra_runtime::mapping::MappingState,
 }
 #[uniffi::export]
 impl MobileOccupancyMap {
@@ -198,21 +198,15 @@ impl MobileOccupancyMap {
             max_range: settings.max_range,
             pixel_stride: settings.pixel_stride,
         })?;
-        Ok(Arc::new(Self {
-            map: Mutex::new(map),
-        }))
+        Ok(Arc::new(Self { map }))
     }
     /// Center the rolling window near finite world coordinates `x`, `y` in metres.
     /// Shifts by whole cells, preserves overlap, and initializes new cells as unknown.
     ///
     /// # Errors
-    /// Returns `InvalidInput` for invalid or excessive coordinates and `Internal`
-    /// for a poisoned mutex.
+    /// Returns `InvalidInput` for invalid or excessive coordinates or a poisoned map lock.
     pub fn recenter(&self, x: f64, y: f64) -> Result<(), ControllerError> {
-        self.map
-            .lock()
-            .map_err(|_| ControllerError::Internal)?
-            .recenter(x, y)?;
+        self.map.recenter(x, y)?;
         Ok(())
     }
     /// Integrate one exposure-aligned optical depth frame into the rolling map.
@@ -221,7 +215,7 @@ impl MobileOccupancyMap {
     ///
     /// # Errors
     /// Returns `InvalidInput` for invalid time, pose, dimensions, intrinsics, or
-    /// pixel count; returns `Internal` for a poisoned mutex.
+    /// pixel count, or a poisoned map lock.
     pub fn integrate_depth(&self, frame: MappingDepthFrame) -> Result<(), ControllerError> {
         self.integrate_depth_with_ground_plane(
             frame,
@@ -244,23 +238,20 @@ impl MobileOccupancyMap {
         frame: MappingDepthFrame,
         ground: MappingGroundPlane,
     ) -> Result<(), ControllerError> {
-        self.map
-            .lock()
-            .map_err(|_| ControllerError::Internal)?
-            .integrate_depth_with_ground_plane(
-                frame.timestamp,
-                frame_intrinsics(&frame),
-                frame_pose(&frame),
-                &frame.depth_metres,
-                GroundPlane {
-                    normal: Vector3 {
-                        x: ground.normal_x,
-                        y: ground.normal_y,
-                        z: ground.normal_z,
-                    },
-                    offset: ground.offset,
+        self.map.integrate_depth_with_ground_plane(
+            frame.timestamp,
+            frame_intrinsics(&frame),
+            frame_pose(&frame),
+            &frame.depth_metres,
+            GroundPlane {
+                normal: Vector3 {
+                    x: ground.normal_x,
+                    y: ground.normal_y,
+                    z: ground.normal_z,
                 },
-            )?;
+                offset: ground.offset,
+            },
+        )?;
         Ok(())
     }
     /// Integrate depth without a ground estimate: only rays within
@@ -276,31 +267,24 @@ impl MobileOccupancyMap {
         half_angle_degrees: f64,
         max_range: f64,
     ) -> Result<(), ControllerError> {
-        self.map
-            .lock()
-            .map_err(|_| ControllerError::Internal)?
-            .integrate_depth_in_horizon_band(
-                frame.timestamp,
-                frame_intrinsics(&frame),
-                frame_pose(&frame),
-                &frame.depth_metres,
-                HorizonBand {
-                    half_angle: half_angle_degrees.to_radians(),
-                    max_range,
-                },
-            )?;
+        self.map.integrate_depth_in_horizon_band(
+            frame.timestamp,
+            frame_intrinsics(&frame),
+            frame_pose(&frame),
+            &frame.depth_metres,
+            HorizonBand {
+                half_angle: half_angle_degrees.to_radians(),
+                max_range,
+            },
+        )?;
         Ok(())
     }
     /// Copy the current occupancy grid and world geometry.
     ///
     /// # Errors
-    /// Returns `Internal` for a poisoned mutex.
+    /// None today; the `Result` is part of the exported signature.
     pub fn snapshot(&self) -> Result<OccupancyGrid, ControllerError> {
-        let s = self
-            .map
-            .lock()
-            .map_err(|_| ControllerError::Internal)?
-            .snapshot();
+        let s = self.map.snapshot();
         Ok(OccupancyGrid {
             width: s.width,
             height: s.height,
@@ -313,12 +297,9 @@ impl MobileOccupancyMap {
     /// Clear all occupancy evidence and the previous integration timestamp.
     ///
     /// # Errors
-    /// Returns `Internal` for a poisoned mutex.
+    /// None today; the `Result` is part of the exported signature.
     pub fn clear(&self) -> Result<(), ControllerError> {
-        self.map
-            .lock()
-            .map_err(|_| ControllerError::Internal)?
-            .clear();
+        self.map.clear();
         Ok(())
     }
     /// Replace the mesh floor with world-metre `xyz` triples of faces ARKit
@@ -329,8 +310,7 @@ impl MobileOccupancyMap {
     ///
     /// # Errors
     /// `InvalidInput` for a length that is not a multiple of three, more than
-    /// 300,000 values, or a nonfinite camera position; `Internal` for a
-    /// poisoned mutex.
+    /// 300,000 values, or a nonfinite camera position.
     pub fn update_floor_surface(
         &self,
         camera_x: f64,
@@ -355,12 +335,7 @@ impl MobileOccupancyMap {
             })
             .collect();
         // Build outside the lock: the depth update shares it on the control queue.
-        let resolution = self
-            .map
-            .lock()
-            .map_err(|_| ControllerError::Internal)?
-            .config()
-            .resolution;
+        let resolution = self.map.config().resolution;
         let surface = FloorSurface::build(
             &samples,
             camera_x,
@@ -370,8 +345,7 @@ impl MobileOccupancyMap {
             resolution,
         );
         let cells = surface.as_ref().map_or(0, |s| s.trusted_cells() as u32);
-        let map = self.map.lock().map_err(|_| ControllerError::Internal)?;
-        map.set_floor_surface(surface.map(Arc::new));
+        self.map.set_floor_surface(surface.map(Arc::new));
         Ok(cells)
     }
     /// Replace the mesh barrier with world-metre `xyz` centres of faces ARKit
@@ -406,111 +380,61 @@ impl MobileOccupancyMap {
                 z: p[2] as f64,
             })
             .collect();
-        let resolution = self
-            .map
-            .lock()
-            .map_err(|_| ControllerError::Internal)?
-            .config()
-            .resolution;
+        let resolution = self.map.config().resolution;
         let surface =
             BarrierSurface::build(&samples, camera_x, camera_y, FLOOR_HALF_EXTENT, resolution);
         let cells = surface.as_ref().map_or(0, |s| s.cells() as u32);
-        let map = self.map.lock().map_err(|_| ControllerError::Internal)?;
-        map.set_barrier_surface(surface.map(Arc::new));
+        self.map.set_barrier_surface(surface.map(Arc::new));
         Ok(cells)
     }
     /// Keep (or stop keeping) a copy of each integrated depth frame for
     /// [`Self::take_classified_frame`]. Independent of dashboard captures.
     pub fn set_classification_debug(&self, enabled: bool) {
-        if let Ok(map) = self.map.lock() {
-            map.set_debug_capture(enabled);
-        }
+        self.map.set_debug_capture(enabled);
     }
     /// Label the newest integrated frame since the last call with exactly the
     /// rules the grid used, keeping every `stride`-th pixel (1..=8). `None`
     /// when debugging is off or no new frame arrived.
     pub fn take_classified_frame(&self, stride: u32) -> Option<ClassifiedFrame> {
-        let capture = self.map.lock().ok()?.take_debug_capture()?;
-        let capture = if stride > 1 {
-            crate::capture::decimate(&capture, stride.min(8))
-        } else {
-            capture
-        };
-        let labelled = capture.label().ok()?;
-        let mut counts = vec![0_u32; PointLabel::ALL.len()];
-        let mut points = Vec::new();
-        let mut labels = Vec::new();
-        for p in labelled {
-            counts[p.label as usize] += 1;
-            if p.label != PointLabel::NoReturn {
-                points.extend([
-                    p.position.x as f32,
-                    p.position.y as f32,
-                    p.position.z as f32,
-                ]);
-                labels.push(p.label as u8);
-            }
-        }
+        let capture = self.map.take_debug_capture()?.decimated(stride.min(8));
+        let returns = LabelledReturns::new(capture.label().ok()?);
         let c = capture.pose.position;
-        let ground_z = match capture.classifier {
-            DepthClassifier::GroundPlane(g) if g.normal.z.abs() > 1e-9 => {
-                Some((g.offset - g.normal.x * c.x - g.normal.y * c.y) / g.normal.z)
-            }
-            _ => None,
+        let flatten = |cells: Vec<Vector3>| {
+            cells
+                .into_iter()
+                .flat_map(|p| [p.x as f32, p.y as f32, p.z as f32])
+                .collect()
         };
-        let mut heights: Vec<f32> = points.chunks_exact(3).map(|p| p[2]).collect();
-        let low_return_z = (!heights.is_empty()).then(|| {
-            let at = heights.len() / 10;
-            *heights.select_nth_unstable_by(at, f32::total_cmp).1 as f64
-        });
-        let mesh_floor_z = capture
-            .floor
-            .as_ref()
-            .and_then(|f| f.estimate(c.x, c.y, 1.5))
-            .map(|(height, _)| height);
         Some(ClassifiedFrame {
             timestamp: capture.timestamp,
             camera: vec![c.x, c.y, c.z],
-            classifier: match capture.classifier {
-                DepthClassifier::GroundPlane(_) => "ground_plane",
-                DepthClassifier::HorizonBand(_) => "horizon_band",
-            }
-            .into(),
-            points,
-            labels,
-            counts,
+            classifier: capture.classifier.name().into(),
+            points: returns.points,
+            labels: returns.labels,
+            counts: returns.counts,
             floor_cells: capture
                 .floor
-                .map(|f| {
-                    f.trusted_centres()
-                        .into_iter()
-                        .flat_map(|p| [p.x as f32, p.y as f32, p.z as f32])
-                        .collect()
-                })
+                .as_ref()
+                .map(|f| flatten(f.trusted_centres()))
                 .unwrap_or_default(),
             barrier_cells: capture
                 .barrier
-                .map(|b| {
-                    b.cell_centres()
-                        .into_iter()
-                        .flat_map(|p| [p.x as f32, p.y as f32, p.z as f32])
-                        .collect()
-                })
+                .as_ref()
+                .map(|b| flatten(b.cell_centres()))
                 .unwrap_or_default(),
-            ground_z,
-            mesh_floor_z,
-            low_return_z,
+            ground_z: capture.ground_z(),
+            mesh_floor_z: capture
+                .floor
+                .as_ref()
+                .and_then(|f| f.estimate(c.x, c.y, 1.5))
+                .map(|(height, _)| height),
+            low_return_z: returns.low_return_z,
         })
     }
     /// Median mesh floor height within `radius` metres of world `(x, y)` and
     /// the area it covers, or `None` without trusted floor there.
     pub fn floor_estimate(&self, x: f64, y: f64, radius: f64) -> Option<FloorEstimate> {
-        let (height, area) = self
-            .map
-            .lock()
-            .ok()?
-            .floor_surface()?
-            .estimate(x, y, radius)?;
+        let (height, area) = self.map.floor_surface()?.estimate(x, y, radius)?;
         Some(FloorEstimate { height, area })
     }
 }
@@ -521,11 +445,7 @@ impl MobileController {
         &self,
         map: Arc<MobileOccupancyMap>,
     ) -> Result<(), ControllerError> {
-        let handle = map
-            .map
-            .lock()
-            .map_err(|_| ControllerError::Internal)?
-            .clone();
+        let handle = map.map.clone();
         self.brain
             .lock()
             .map_err(|_| ControllerError::Internal)?
@@ -540,6 +460,8 @@ pub struct MobileGroundPolicy {
 }
 #[uniffi::export]
 impl MobileGroundPolicy {
+    // These calls are infallible in Swift; a lock poisoned by an earlier panic
+    // reads as "no ground estimate" rather than aborting the app.
     #[uniffi::constructor]
     pub fn new() -> Arc<Self> {
         Arc::new(Self {
@@ -547,13 +469,15 @@ impl MobileGroundPolicy {
         })
     }
     pub fn reset(&self) {
-        self.state.lock().unwrap().reset();
+        if let Ok(mut state) = self.state.lock() {
+            state.reset();
+        }
     }
     pub fn offset(&self) -> Option<f64> {
-        self.state.lock().unwrap().offset
+        self.state.lock().ok()?.offset
     }
     pub fn clearance(&self) -> Option<f64> {
-        self.state.lock().unwrap().clearance
+        self.state.lock().ok()?.clearance
     }
     pub fn observe(
         &self,
@@ -565,11 +489,11 @@ impl MobileGroundPolicy {
     ) -> Option<f64> {
         self.state
             .lock()
-            .unwrap()
+            .ok()?
             .observe(height, camera_height, area, now, up_z)
     }
     pub fn mount(&self, clearance: f64, camera_height: f64) -> Option<f64> {
-        self.state.lock().unwrap().mount(clearance, camera_height)
+        self.state.lock().ok()?.mount(clearance, camera_height)
     }
     pub fn plane(
         &self,
@@ -582,7 +506,7 @@ impl MobileGroundPolicy {
     ) -> Option<MappingGroundPlane> {
         self.state
             .lock()
-            .unwrap()
+            .ok()?
             .plane(
                 Vector3 { x, y, z },
                 Vector3 {
