@@ -8,7 +8,7 @@
 //! portrait with the rear camera toward rover forward, and the calibration's
 //! roll, pitch and yaw rotate away from it (roll −90° is landscape with the top
 //! edge toward the rover's left).
-use crate::frames::{VelocityFilter, quaternion_from_matrix, yup_point_to_zup, yup_to_zup};
+use crate::frames::{VelocityFilter, yup_point_to_zup, yup_to_zup};
 use crate::{ControllerError, ImuReading, VioReading};
 use serde::{Deserialize, Serialize};
 use std::f64::consts::FRAC_PI_2;
@@ -127,10 +127,9 @@ impl HeadingEdge {
     }
 }
 
-#[uniffi::export]
 /// The phone edge that lies most horizontal on the rover, so a rolled
 /// (landscape) mount keeps a usable compass reference. Ties keep the right edge.
-pub fn mount_heading_edge(calibration: PhoneMountCalibration) -> HeadingEdge {
+fn mount_heading_edge(calibration: PhoneMountCalibration) -> HeadingEdge {
     let to_body = device_to_body(&calibration);
     let mut best = HeadingEdge::RightEdge;
     let mut best_horizontal = -1.0;
@@ -145,25 +144,10 @@ pub fn mount_heading_edge(calibration: PhoneMountCalibration) -> HeadingEdge {
     best
 }
 
-#[uniffi::export]
-/// Turn a compass heading of the reference edge into the rover's true heading,
-/// degrees in [0, 360). `None` for an invalid compass or yaw.
-pub fn rover_true_heading(compass_degrees: f64, rover_yaw: f64, reference_yaw: f64) -> Option<f64> {
-    if !compass_degrees.is_finite()
-        || !(0.0..360.0).contains(&compass_degrees)
-        || !rover_yaw.is_finite()
-        || !reference_yaw.is_finite()
-    {
-        return None;
-    }
-    let corrected = (compass_degrees - (rover_yaw - reference_yaw).to_degrees()) % 360.0;
-    Some((corrected + 360.0) % 360.0)
-}
-
 /// Upright portrait: phone +X right → rover right (−Y), +Y top → up, +Z out of
 /// the screen → rover backward. Same matrix as the Y-up → Z-up world change.
 fn nominal_device_to_body() -> Quaternion {
-    quaternion_from_matrix([[0.0, 0.0, -1.0], [-1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
+    yup_to_zup()
 }
 
 /// ARKit camera axes (landscape sensor: +X toward the phone bottom, +Y toward the
@@ -261,9 +245,9 @@ pub enum OffsetFitOutcome {
     },
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, uniffi::Record)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 /// One frame of a turn in place: camera position and rover heading in the world.
-pub struct TurnOffsetSample {
+struct TurnOffsetSample {
     /// Seconds, strictly increasing.
     pub timestamp: f64,
     /// Camera world X, metres.
@@ -274,9 +258,9 @@ pub struct TurnOffsetSample {
     pub rover_heading: f64,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, uniffi::Record)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 /// Camera offset from the turning pivot, in the rover frame.
-pub struct TurnOffsetFit {
+struct TurnOffsetFit {
     /// Camera ahead of the pivot, metres.
     pub forward: f64,
     /// Camera left of the pivot, metres.
@@ -291,11 +275,10 @@ pub struct TurnOffsetFit {
     pub turn_direction: i32,
 }
 
-#[uniffi::export]
 /// Least-squares camera offset from a turn about a fixed pivot. `None` unless
 /// there are ≥30 ordered finite samples over ≥2 s, the turn reaches 90°, the
 /// offset is within 2 m and the path RMS is ≤5 cm.
-pub fn fit_turn_offset(samples: Vec<TurnOffsetSample>) -> Option<TurnOffsetFit> {
+fn fit_turn_offset(samples: Vec<TurnOffsetSample>) -> Option<TurnOffsetFit> {
     if samples.len() < 30 {
         return None;
     }
@@ -552,12 +535,7 @@ impl PhonePosePipeline {
             Vector3::ZERO
         };
         let rover = camera.plus(body.rotate(offset).scaled(-1.0));
-        let forward = body.rotate(Vector3 {
-            x: 1.0,
-            y: 0.0,
-            z: 0.0,
-        });
-        let yaw = forward.y.atan2(forward.x);
+        let yaw = body.yaw();
         if let Some(samples) = state.fit.as_mut() {
             if !tracked {
                 state.cancel_fit(OffsetFitCancel::TrackingLost);
@@ -745,7 +723,12 @@ mod tests {
     }
     /// Rotation from matrix columns (images of the basis), as simd builds them.
     fn from_columns(c0: Vector3, c1: Vector3, c2: Vector3) -> Quaternion {
-        quaternion_from_matrix([[c0.x, c1.x, c2.x], [c0.y, c1.y, c2.y], [c0.z, c1.z, c2.z]])
+        Quaternion::from_rotation_matrix([
+            [c0.x, c1.x, c2.x],
+            [c0.y, c1.y, c2.y],
+            [c0.z, c1.z, c2.z],
+        ])
+        .unwrap()
     }
     /// The Swift `PhoneMountGeometry.cameraToBody` literal.
     fn swift_camera_to_body() -> Quaternion {
@@ -910,10 +893,6 @@ mod tests {
                             .abs()
                             < 1e-9
                     );
-                    let compass = (200.0 - top_edge_yaw.to_degrees() + 360.0) % 360.0;
-                    let rover = rover_true_heading(compass, yaw, actual).unwrap();
-                    let e = (rover - 200.0).to_radians();
-                    assert!(e.sin().atan2(e.cos()).abs() < 1e-6, "rover true heading");
                 }
             }
         }
@@ -929,15 +908,6 @@ mod tests {
             -FRAC_PI_2,
             "upright right edge",
         );
-        assert!(rover_true_heading(-1.0, 0.0, 0.0).is_none());
-        for offset in [0.0, 0.4, -FRAC_PI_2, PI] {
-            let actual = rover_true_heading(100.0, 1.2 + offset, 1.2).unwrap();
-            close(
-                actual,
-                (100.0 - offset.to_degrees() + 720.0) % 360.0,
-                "offset",
-            );
-        }
     }
 
     #[test]

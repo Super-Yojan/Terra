@@ -100,68 +100,6 @@ fn camera_quaternion(
     .ok_or_else(|| InputError::InvalidQuaternion.into())
 }
 
-/// Y-up camera pose (ARKit `camera.transform`, ARCore camera pose) into the
-/// robotics body pose: Z-up world, X-forward / Y-left body.
-///
-/// `quaternion_*` rotates camera vectors into the Y-up world. Translation is
-/// the camera origin in that world, metres.
-#[uniffi::export]
-/// Returns `InvalidInput` for nonfinite position or an invalid quaternion;
-/// normalizes valid orientations before conversion.
-pub fn y_up_camera_to_body_pose(
-    x: f64,
-    y: f64,
-    z: f64,
-    quaternion_x: f64,
-    quaternion_y: f64,
-    quaternion_z: f64,
-    quaternion_w: f64,
-) -> Result<BodyPose, ControllerError> {
-    let camera = camera_quaternion(
-        x,
-        y,
-        z,
-        quaternion_x,
-        quaternion_y,
-        quaternion_z,
-        quaternion_w,
-    )?;
-    let orientation = yup_to_zup()
-        .compose(camera)
-        .compose(phone_to_body().conjugate())
-        .normalized()
-        .ok_or(InputError::InvalidQuaternion)?;
-    Ok(pose_from(
-        yup_point_to_zup(Vector3 { x, y, z }),
-        orientation,
-    ))
-}
-
-/// Heading of a body quaternion from [`y_up_camera_to_body_pose`], radians from +X.
-#[uniffi::export]
-/// Normalizes the quaternion; returns `InvalidInput` if normalization fails.
-pub fn body_yaw(
-    quaternion_x: f64,
-    quaternion_y: f64,
-    quaternion_z: f64,
-    quaternion_w: f64,
-) -> Result<f64, ControllerError> {
-    let orientation = Quaternion {
-        x: quaternion_x,
-        y: quaternion_y,
-        z: quaternion_z,
-        w: quaternion_w,
-    }
-    .normalized()
-    .ok_or(InputError::InvalidQuaternion)?;
-    let forward = orientation.rotate(Vector3 {
-        x: 1.0,
-        y: 0.0,
-        z: 0.0,
-    });
-    Ok(forward.y.atan2(forward.x))
-}
-
 /// Same camera pose, expressed as an optical frame (X right, Y down, Z forward)
 /// for `MobileOccupancyMap`.
 #[uniffi::export]
@@ -221,11 +159,6 @@ pub fn latch_ground_offset(
 /// Low-pass on finite differences of a tracked pose. Matches the phone VIO
 /// smoother: samples closer than 200 ms, time constant 30 ms. Tracking loss
 /// clears the filter so the next sample does not invent a velocity.
-#[derive(uniffi::Object)]
-pub struct PoseVelocityFilter {
-    state: Mutex<VelocityFilter>,
-}
-
 pub(crate) struct VelocityFilter {
     previous: Option<(Vector3, f64)>,
     filtered: Vector3,
@@ -268,55 +201,6 @@ impl VelocityFilter {
         }
         self.previous = Some((position, timestamp));
         ready
-    }
-}
-
-#[uniffi::export]
-impl PoseVelocityFilter {
-    #[uniffi::constructor]
-    /// Construct an empty velocity filter; the first tracked sample establishes a baseline.
-    pub fn new() -> Arc<Self> {
-        Arc::new(Self {
-            state: Mutex::new(VelocityFilter::new()),
-        })
-    }
-
-    /// Discard pose history and filtered velocity. Returns `Internal` for a poisoned mutex.
-    pub fn reset(&self) -> Result<(), ControllerError> {
-        let mut state = self.state.lock().map_err(|_| ControllerError::Internal)?;
-        state.clear();
-        Ok(())
-    }
-
-    /// World-frame velocity in m/s. `None` until two tracked poses land inside
-    /// the 200 ms window.
-    /// Positions are world metres and timestamp is seconds. Untracked samples
-    /// clear history before validating coordinates. Tracked nonfinite inputs return
-    /// `InvalidInput`; a poisoned mutex returns `Internal`.
-    pub fn push(
-        &self,
-        x: f64,
-        y: f64,
-        z: f64,
-        timestamp: f64,
-        tracked: bool,
-    ) -> Result<Option<AxisSample>, ControllerError> {
-        let mut state = self.state.lock().map_err(|_| ControllerError::Internal)?;
-        if !tracked {
-            state.clear();
-            return Ok(None);
-        }
-        finite3(x, y, z)?;
-        if !timestamp.is_finite() {
-            return Err(InputError::NonFinite.into());
-        }
-        Ok(state
-            .push(Vector3 { x, y, z }, timestamp)
-            .map(|v| AxisSample {
-                x: v.x,
-                y: v.y,
-                z: v.z,
-            }))
     }
 }
 
@@ -557,7 +441,8 @@ fn phone_to_body() -> Quaternion {
 /// Columns of the matrix are the images of the Y-up basis.
 pub(crate) fn yup_to_zup() -> Quaternion {
     // m rows: [0, 0, -1], [-1, 0, 0], [0, 1, 0]
-    quaternion_from_matrix([[0.0, 0.0, -1.0], [-1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
+    Quaternion::from_rotation_matrix([[0.0, 0.0, -1.0], [-1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
+        .expect("rotation matrix")
 }
 
 pub(crate) fn yup_point_to_zup(point: Vector3) -> Vector3 {
@@ -586,48 +471,6 @@ const OPTICAL_TO_BODY: Quaternion = Quaternion {
     w: 0.5,
 };
 
-pub(crate) fn quaternion_from_matrix(m: [[f64; 3]; 3]) -> Quaternion {
-    let (m00, m01, m02) = (m[0][0], m[0][1], m[0][2]);
-    let (m10, m11, m12) = (m[1][0], m[1][1], m[1][2]);
-    let (m20, m21, m22) = (m[2][0], m[2][1], m[2][2]);
-    let trace = m00 + m11 + m22;
-    let q = if trace > 0.0 {
-        let s = (trace + 1.0).sqrt() * 2.0;
-        Quaternion {
-            w: 0.25 * s,
-            x: (m21 - m12) / s,
-            y: (m02 - m20) / s,
-            z: (m10 - m01) / s,
-        }
-    } else if m00 > m11 && m00 > m22 {
-        let s = (1.0 + m00 - m11 - m22).sqrt() * 2.0;
-        Quaternion {
-            w: (m21 - m12) / s,
-            x: 0.25 * s,
-            y: (m01 + m10) / s,
-            z: (m02 + m20) / s,
-        }
-    } else if m11 > m22 {
-        let s = (1.0 + m11 - m00 - m22).sqrt() * 2.0;
-        Quaternion {
-            w: (m02 - m20) / s,
-            x: (m01 + m10) / s,
-            y: 0.25 * s,
-            z: (m12 + m21) / s,
-        }
-    } else {
-        let s = (1.0 + m22 - m00 - m11).sqrt() * 2.0;
-        Quaternion {
-            w: (m10 - m01) / s,
-            x: (m02 + m20) / s,
-            y: (m12 + m21) / s,
-            z: 0.25 * s,
-        }
-    };
-    q.normalized().expect("rotation matrix")
-}
-
-/// Deterministic contract and regression scenarios for this module.
 /// Put an AR frame time on the sensor clock. ARCore leaves its frame time base
 /// open (in practice `System.nanoTime`), while Android sensor events use
 /// `elapsedRealtimeNanos`; the two differ by the time the phone has slept since
@@ -710,45 +553,16 @@ mod tests {
     }
 
     #[test]
-    /// Checks zero and quarter-turn heading extraction, then rejects a zero quaternion.
-    fn body_yaw_reads_the_forward_axis() {
-        approx(body_yaw(0.0, 0.0, 0.0, 1.0).unwrap(), 0.0);
-        let half = FRAC_PI_2 * 0.5;
-        approx(
-            body_yaw(0.0, 0.0, half.sin(), half.cos()).unwrap(),
-            FRAC_PI_2,
-        );
-        assert!(body_yaw(0.0, 0.0, 0.0, 0.0).is_err());
-    }
-
-    #[test]
-    /// Converts an identity camera pose, checks translated world axes and unit quaternion norm, and rejects an invalid quaternion.
-    fn identity_camera_pose_is_a_unit_body_rotation() {
-        let pose = y_up_camera_to_body_pose(1.0, 2.0, 3.0, 0.0, 0.0, 0.0, 1.0).unwrap();
-        approx(pose.x, -3.0);
-        approx(pose.y, -1.0);
-        approx(pose.z, 2.0);
-        let q = Quaternion {
-            x: pose.quaternion_x,
-            y: pose.quaternion_y,
-            z: pose.quaternion_z,
-            w: pose.quaternion_w,
-        };
-        let n = q.x.hypot(q.y).hypot(q.z).hypot(q.w);
-        approx(n, 1.0);
-        assert!(y_up_camera_to_body_pose(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0).is_err());
-    }
-
-    #[test]
     /// Checks first-sample suppression, the 30 ms low-pass response, and history clearing across tracking loss.
     fn velocity_filter_ramps_then_drops_on_tracking_loss() {
-        let filter = PoseVelocityFilter::new();
-        assert!(filter.push(0.0, 0.0, 0.0, 0.0, true).unwrap().is_none());
-        let first = filter.push(1.0, 0.0, 0.0, 0.1, true).unwrap().unwrap();
+        let mut filter = VelocityFilter::new();
+        let at = |x: f64| Vector3 { x, ..Vector3::ZERO };
+        assert!(filter.push(at(0.0), 0.0).is_none());
+        let first = filter.push(at(1.0), 0.1).unwrap();
         let alpha = 0.1 / 0.13;
         approx(first.x, 10.0 * alpha);
-        assert!(filter.push(1.0, 0.0, 0.0, 0.2, false).unwrap().is_none());
-        assert!(filter.push(2.0, 0.0, 0.0, 0.3, true).unwrap().is_none());
+        filter.clear();
+        assert!(filter.push(at(2.0), 0.3).is_none());
     }
 
     #[test]
