@@ -35,7 +35,7 @@ pub fn detector_version() -> String {
 #[uniffi::export]
 /// Class tokens the model reports, for `register_search_detector`.
 pub fn detector_classes() -> Vec<String> {
-    vec!["bucket".into(), "ball".into()]
+    vec![terra_autonomy::objects::BUCKET_CLASS.into(), "ball".into()]
 }
 
 /// One model class: the last word is the class token, earlier words the colour.
