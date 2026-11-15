@@ -319,21 +319,6 @@ impl PairingCandidates {
     }
 }
 
-#[uniffi::export]
-/// Radio availability and permission failures retry; protocol and
-/// authentication failures stop automatic connection.
-pub fn bluetooth_failure_retryable(reason: String) -> bool {
-    ![
-        "Malformed",
-        "Encrypted",
-        "Invalid",
-        "Terra service unavailable",
-        "Status unavailable",
-    ]
-    .iter()
-    .any(|marker| reason.contains(marker))
-}
-
 /// Validated router settings.
 #[derive(Clone, Debug, PartialEq, Eq, uniffi::Record)]
 pub struct RouterSettings {
@@ -346,7 +331,14 @@ pub struct RouterSettings {
 }
 
 #[uniffi::export]
-/// Trim and validate router settings; `None` when any part is invalid.
+/// Topic prefix a new install uses for the fleet router.
+pub fn default_router_prefix() -> String {
+    fpv_signaling::DEFAULT_PREFIX.into()
+}
+
+#[uniffi::export]
+/// Trim and validate router settings with the transport's own rules;
+/// `None` when any part is invalid.
 pub fn parse_router_settings(
     endpoint: String,
     prefix: String,
@@ -355,35 +347,7 @@ pub fn parse_router_settings(
     let endpoint = endpoint.trim();
     let prefix = prefix.trim();
     let id = rover_id.trim().parse::<u64>().ok()?;
-    let rest = endpoint
-        .strip_prefix("tcp/")
-        .or_else(|| endpoint.strip_prefix("tls/"))?;
-    if endpoint.chars().any(char::is_whitespace) {
-        return None;
-    }
-    let (host, port) = rest.rsplit_once(':')?;
-    if !port.chars().all(|c| c.is_ascii_digit()) || port.parse::<u16>().ok()? == 0 {
-        return None;
-    }
-    if prefix.is_empty()
-        || prefix.contains('*')
-        || prefix.contains('#')
-        || prefix.starts_with('/')
-        || prefix.ends_with('/')
-        || prefix.contains("//")
-    {
-        return None;
-    }
-    if host.is_empty() || host.contains('/') {
-        return None;
-    }
-    if host.contains(':') {
-        if !(host.starts_with('[') && host.ends_with(']') && host.len() > 2) {
-            return None;
-        }
-    } else if host.contains('[') || host.contains(']') {
-        return None;
-    }
+    terra_transport::validate(endpoint, prefix).ok()?;
     Some(RouterSettings {
         endpoint: endpoint.to_owned(),
         prefix: prefix.to_owned(),
@@ -474,18 +438,8 @@ mod tests {
     }
 
     #[test]
-    /// Failure classes and router settings, as in the Swift tests.
-    fn failures_and_router_settings() {
-        assert!(bluetooth_failure_retryable("Bluetooth unavailable".into()));
-        assert!(bluetooth_failure_retryable(
-            "Bluetooth permission required".into()
-        ));
-        assert!(!bluetooth_failure_retryable(
-            "Malformed Bluetooth message".into()
-        ));
-        assert!(!bluetooth_failure_retryable(
-            "Encrypted read/notification failed".into()
-        ));
+    /// Router settings, as in the Swift tests.
+    fn router_settings() {
         let parse =
             |e: &str, p: &str, id: &str| parse_router_settings(e.into(), p.into(), id.into());
         assert_eq!(

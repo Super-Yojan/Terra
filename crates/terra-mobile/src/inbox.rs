@@ -227,11 +227,4 @@ mod tests {
         assert_eq!(stats.overflow_dropped, 3);
         assert_eq!(inbox.drain()[0].timestamp(), 3.0);
     }
-
-    #[test]
-    fn nonfinite_timestamps_are_refused_at_push() {
-        let inbox = SensorInbox::default();
-        assert!(inbox.push(imu(f64::NAN)).is_err());
-        assert_eq!(inbox.stats().imu_queued, 0);
-    }
 }

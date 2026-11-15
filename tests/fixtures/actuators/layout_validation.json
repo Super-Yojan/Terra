@@ -1,0 +1,991 @@
+{
+ "description": "Layout validation cases shared by terra-actuators (validate_layout) and apps/rover-pi (layout.validate_layout). `errors` lists the expected error codes in any order. Change both implementations and this file together.",
+ "capabilities": {
+  "board": "test",
+  "library": "test",
+  "library_version": "1",
+  "supported_kinds": [
+   "dc_motor",
+   "positional_servo"
+  ],
+  "ports": {
+   "M0": {
+    "kinds": [
+     "dc_motor"
+    ],
+    "resources": [
+     "motor0"
+    ],
+    "timer": "t0",
+    "frequency_hz": 1000
+   },
+   "M1": {
+    "kinds": [
+     "dc_motor"
+    ],
+    "resources": [
+     "motor1"
+    ],
+    "timer": "t0",
+    "frequency_hz": 1000
+   },
+   "M2": {
+    "kinds": [
+     "dc_motor"
+    ],
+    "resources": [
+     "motor2"
+    ],
+    "timer": "t0",
+    "frequency_hz": 1000
+   },
+   "M3": {
+    "kinds": [
+     "dc_motor"
+    ],
+    "resources": [
+     "motor3"
+    ],
+    "timer": "t0",
+    "frequency_hz": 1000
+   },
+   "M4": {
+    "kinds": [
+     "dc_motor"
+    ],
+    "resources": [
+     "motor4"
+    ],
+    "timer": "t0",
+    "frequency_hz": 1000
+   },
+   "M5": {
+    "kinds": [
+     "dc_motor"
+    ],
+    "resources": [
+     "motor5"
+    ],
+    "timer": "t0",
+    "frequency_hz": 1000
+   },
+   "M6": {
+    "kinds": [
+     "dc_motor"
+    ],
+    "resources": [
+     "motor6"
+    ],
+    "timer": "t0",
+    "frequency_hz": 1000
+   },
+   "M7": {
+    "kinds": [
+     "dc_motor"
+    ],
+    "resources": [
+     "motor7"
+    ],
+    "timer": "t0",
+    "frequency_hz": 1000
+   },
+   "M8": {
+    "kinds": [
+     "dc_motor"
+    ],
+    "resources": [
+     "motor8"
+    ],
+    "timer": "t0",
+    "frequency_hz": 1000
+   },
+   "M9": {
+    "kinds": [
+     "dc_motor"
+    ],
+    "resources": [
+     "motor9"
+    ],
+    "timer": "t0",
+    "frequency_hz": 1000
+   },
+   "M10": {
+    "kinds": [
+     "dc_motor"
+    ],
+    "resources": [
+     "motor10"
+    ],
+    "timer": "t0",
+    "frequency_hz": 1000
+   },
+   "M11": {
+    "kinds": [
+     "dc_motor"
+    ],
+    "resources": [
+     "motor11"
+    ],
+    "timer": "t0",
+    "frequency_hz": 1000
+   },
+   "M12": {
+    "kinds": [
+     "dc_motor"
+    ],
+    "resources": [
+     "motor12"
+    ],
+    "timer": "t0",
+    "frequency_hz": 1000
+   },
+   "M13": {
+    "kinds": [
+     "dc_motor"
+    ],
+    "resources": [
+     "motor13"
+    ],
+    "timer": "t0",
+    "frequency_hz": 1000
+   },
+   "M14": {
+    "kinds": [
+     "dc_motor"
+    ],
+    "resources": [
+     "motor14"
+    ],
+    "timer": "t0",
+    "frequency_hz": 1000
+   },
+   "M15": {
+    "kinds": [
+     "dc_motor"
+    ],
+    "resources": [
+     "motor15"
+    ],
+    "timer": "t0",
+    "frequency_hz": 1000
+   },
+   "M16": {
+    "kinds": [
+     "dc_motor"
+    ],
+    "resources": [
+     "motor16"
+    ],
+    "timer": "t0",
+    "frequency_hz": 1000
+   },
+   "P0": {
+    "kinds": [
+     "positional_servo"
+    ],
+    "resources": [
+     "pwm2"
+    ],
+    "timer": null,
+    "frequency_hz": 50
+   }
+  },
+  "occupied_resources": []
+ },
+ "cases": [
+  {
+   "name": "valid drive and servo",
+   "layout": {
+    "schema_version": 1,
+    "revision": 1,
+    "actuators": [
+     {
+      "id": 0,
+      "name": "m0",
+      "port": "M0",
+      "kind": "dc_motor",
+      "inverted": false,
+      "limits": {
+       "min": -1.0,
+       "max": 1.0
+      },
+      "calibration": {
+       "type": "dc_motor",
+       "max_power_fraction": 1.0
+      },
+      "route": {
+       "type": "left_effort"
+      },
+      "safe": {
+       "type": "zero"
+      }
+     },
+     {
+      "id": 1,
+      "name": "m1",
+      "port": "M1",
+      "kind": "dc_motor",
+      "inverted": false,
+      "limits": {
+       "min": -1.0,
+       "max": 1.0
+      },
+      "calibration": {
+       "type": "dc_motor",
+       "max_power_fraction": 1.0
+      },
+      "route": {
+       "type": "right_effort"
+      },
+      "safe": {
+       "type": "zero"
+      }
+     },
+     {
+      "id": 2,
+      "name": "s2",
+      "port": "P0",
+      "kind": "positional_servo",
+      "inverted": false,
+      "limits": {
+       "min": -1.0,
+       "max": 1.0
+      },
+      "calibration": {
+       "type": "positional_servo",
+       "min_us": 1000,
+       "center_us": 1500,
+       "max_us": 2000
+      },
+      "route": {
+       "type": "servo"
+      },
+      "safe": {
+       "type": "position",
+       "value": 0.0
+      }
+     }
+    ]
+   },
+   "errors": []
+  },
+  {
+   "name": "duplicate id",
+   "layout": {
+    "schema_version": 1,
+    "revision": 1,
+    "actuators": [
+     {
+      "id": 0,
+      "name": "m0",
+      "port": "M0",
+      "kind": "dc_motor",
+      "inverted": false,
+      "limits": {
+       "min": -1.0,
+       "max": 1.0
+      },
+      "calibration": {
+       "type": "dc_motor",
+       "max_power_fraction": 1.0
+      },
+      "route": {
+       "type": "left_effort"
+      },
+      "safe": {
+       "type": "zero"
+      }
+     },
+     {
+      "id": 0,
+      "name": "m0",
+      "port": "M1",
+      "kind": "dc_motor",
+      "inverted": false,
+      "limits": {
+       "min": -1.0,
+       "max": 1.0
+      },
+      "calibration": {
+       "type": "dc_motor",
+       "max_power_fraction": 1.0
+      },
+      "route": {
+       "type": "left_effort"
+      },
+      "safe": {
+       "type": "zero"
+      }
+     }
+    ]
+   },
+   "errors": [
+    "duplicate_id"
+   ]
+  },
+  {
+   "name": "blank port",
+   "layout": {
+    "schema_version": 1,
+    "revision": 1,
+    "actuators": [
+     {
+      "id": 0,
+      "name": "m0",
+      "port": " ",
+      "kind": "dc_motor",
+      "inverted": false,
+      "limits": {
+       "min": -1.0,
+       "max": 1.0
+      },
+      "calibration": {
+       "type": "dc_motor",
+       "max_power_fraction": 1.0
+      },
+      "route": {
+       "type": "left_effort"
+      },
+      "safe": {
+       "type": "zero"
+      }
+     }
+    ]
+   },
+   "errors": [
+    "port",
+    "unsupported_port"
+   ]
+  },
+  {
+   "name": "unordered limits",
+   "layout": {
+    "schema_version": 1,
+    "revision": 1,
+    "actuators": [
+     {
+      "id": 0,
+      "name": "m0",
+      "port": "M0",
+      "kind": "dc_motor",
+      "inverted": false,
+      "limits": {
+       "min": 0.5,
+       "max": -0.5
+      },
+      "calibration": {
+       "type": "dc_motor",
+       "max_power_fraction": 1.0
+      },
+      "route": {
+       "type": "left_effort"
+      },
+      "safe": {
+       "type": "zero"
+      }
+     }
+    ]
+   },
+   "errors": [
+    "command_limits",
+    "safe_output"
+   ]
+  },
+  {
+   "name": "zero power fraction",
+   "layout": {
+    "schema_version": 1,
+    "revision": 1,
+    "actuators": [
+     {
+      "id": 0,
+      "name": "m0",
+      "port": "M0",
+      "kind": "dc_motor",
+      "inverted": false,
+      "limits": {
+       "min": -1.0,
+       "max": 1.0
+      },
+      "calibration": {
+       "type": "dc_motor",
+       "max_power_fraction": 0.0
+      },
+      "route": {
+       "type": "left_effort"
+      },
+      "safe": {
+       "type": "zero"
+      }
+     }
+    ]
+   },
+   "errors": [
+    "calibration"
+   ]
+  },
+  {
+   "name": "servo on a wheel route",
+   "layout": {
+    "schema_version": 1,
+    "revision": 1,
+    "actuators": [
+     {
+      "id": 0,
+      "name": "s0",
+      "port": "P0",
+      "kind": "positional_servo",
+      "inverted": false,
+      "limits": {
+       "min": -1.0,
+       "max": 1.0
+      },
+      "calibration": {
+       "type": "positional_servo",
+       "min_us": 1000,
+       "center_us": 1500,
+       "max_us": 2000
+      },
+      "route": {
+       "type": "left_effort"
+      },
+      "safe": {
+       "type": "position",
+       "value": 0.0
+      }
+     }
+    ]
+   },
+   "errors": [
+    "route_kind"
+   ]
+  },
+  {
+   "name": "manual coefficient out of range",
+   "layout": {
+    "schema_version": 1,
+    "revision": 1,
+    "actuators": [
+     {
+      "id": 0,
+      "name": "m0",
+      "port": "M0",
+      "kind": "dc_motor",
+      "inverted": false,
+      "limits": {
+       "min": -1.0,
+       "max": 1.0
+      },
+      "calibration": {
+       "type": "dc_motor",
+       "max_power_fraction": 1.0
+      },
+      "route": {
+       "type": "manual",
+       "forward_coefficient": 1.5,
+       "turn_coefficient": 0.0
+      },
+      "safe": {
+       "type": "zero"
+      }
+     }
+    ]
+   },
+   "errors": [
+    "route_coefficients"
+   ]
+  },
+  {
+   "name": "servo with zero safe output",
+   "layout": {
+    "schema_version": 1,
+    "revision": 1,
+    "actuators": [
+     {
+      "id": 0,
+      "name": "s0",
+      "port": "P0",
+      "kind": "positional_servo",
+      "inverted": false,
+      "limits": {
+       "min": -1.0,
+       "max": 1.0
+      },
+      "calibration": {
+       "type": "positional_servo",
+       "min_us": 1000,
+       "center_us": 1500,
+       "max_us": 2000
+      },
+      "route": {
+       "type": "servo"
+      },
+      "safe": {
+       "type": "zero"
+      }
+     }
+    ]
+   },
+   "errors": [
+    "safe_output"
+   ]
+  },
+  {
+   "name": "motor on a servo port",
+   "layout": {
+    "schema_version": 1,
+    "revision": 1,
+    "actuators": [
+     {
+      "id": 0,
+      "name": "m0",
+      "port": "P0",
+      "kind": "dc_motor",
+      "inverted": false,
+      "limits": {
+       "min": -1.0,
+       "max": 1.0
+      },
+      "calibration": {
+       "type": "dc_motor",
+       "max_power_fraction": 1.0
+      },
+      "route": {
+       "type": "left_effort"
+      },
+      "safe": {
+       "type": "zero"
+      }
+     }
+    ]
+   },
+   "errors": [
+    "unsupported_kind"
+   ]
+  },
+  {
+   "name": "one port twice",
+   "layout": {
+    "schema_version": 1,
+    "revision": 1,
+    "actuators": [
+     {
+      "id": 0,
+      "name": "m0",
+      "port": "M0",
+      "kind": "dc_motor",
+      "inverted": false,
+      "limits": {
+       "min": -1.0,
+       "max": 1.0
+      },
+      "calibration": {
+       "type": "dc_motor",
+       "max_power_fraction": 1.0
+      },
+      "route": {
+       "type": "left_effort"
+      },
+      "safe": {
+       "type": "zero"
+      }
+     },
+     {
+      "id": 1,
+      "name": "m1",
+      "port": "M0",
+      "kind": "dc_motor",
+      "inverted": false,
+      "limits": {
+       "min": -1.0,
+       "max": 1.0
+      },
+      "calibration": {
+       "type": "dc_motor",
+       "max_power_fraction": 1.0
+      },
+      "route": {
+       "type": "right_effort"
+      },
+      "safe": {
+       "type": "zero"
+      }
+     }
+    ]
+   },
+   "errors": [
+    "resource_conflict",
+    "resource_conflict"
+   ]
+  },
+  {
+   "name": "seventeen actuators",
+   "layout": {
+    "schema_version": 1,
+    "revision": 1,
+    "actuators": [
+     {
+      "id": 0,
+      "name": "m0",
+      "port": "M0",
+      "kind": "dc_motor",
+      "inverted": false,
+      "limits": {
+       "min": -1.0,
+       "max": 1.0
+      },
+      "calibration": {
+       "type": "dc_motor",
+       "max_power_fraction": 1.0
+      },
+      "route": {
+       "type": "left_effort"
+      },
+      "safe": {
+       "type": "zero"
+      }
+     },
+     {
+      "id": 1,
+      "name": "m1",
+      "port": "M1",
+      "kind": "dc_motor",
+      "inverted": false,
+      "limits": {
+       "min": -1.0,
+       "max": 1.0
+      },
+      "calibration": {
+       "type": "dc_motor",
+       "max_power_fraction": 1.0
+      },
+      "route": {
+       "type": "left_effort"
+      },
+      "safe": {
+       "type": "zero"
+      }
+     },
+     {
+      "id": 2,
+      "name": "m2",
+      "port": "M2",
+      "kind": "dc_motor",
+      "inverted": false,
+      "limits": {
+       "min": -1.0,
+       "max": 1.0
+      },
+      "calibration": {
+       "type": "dc_motor",
+       "max_power_fraction": 1.0
+      },
+      "route": {
+       "type": "left_effort"
+      },
+      "safe": {
+       "type": "zero"
+      }
+     },
+     {
+      "id": 3,
+      "name": "m3",
+      "port": "M3",
+      "kind": "dc_motor",
+      "inverted": false,
+      "limits": {
+       "min": -1.0,
+       "max": 1.0
+      },
+      "calibration": {
+       "type": "dc_motor",
+       "max_power_fraction": 1.0
+      },
+      "route": {
+       "type": "left_effort"
+      },
+      "safe": {
+       "type": "zero"
+      }
+     },
+     {
+      "id": 4,
+      "name": "m4",
+      "port": "M4",
+      "kind": "dc_motor",
+      "inverted": false,
+      "limits": {
+       "min": -1.0,
+       "max": 1.0
+      },
+      "calibration": {
+       "type": "dc_motor",
+       "max_power_fraction": 1.0
+      },
+      "route": {
+       "type": "left_effort"
+      },
+      "safe": {
+       "type": "zero"
+      }
+     },
+     {
+      "id": 5,
+      "name": "m5",
+      "port": "M5",
+      "kind": "dc_motor",
+      "inverted": false,
+      "limits": {
+       "min": -1.0,
+       "max": 1.0
+      },
+      "calibration": {
+       "type": "dc_motor",
+       "max_power_fraction": 1.0
+      },
+      "route": {
+       "type": "left_effort"
+      },
+      "safe": {
+       "type": "zero"
+      }
+     },
+     {
+      "id": 6,
+      "name": "m6",
+      "port": "M6",
+      "kind": "dc_motor",
+      "inverted": false,
+      "limits": {
+       "min": -1.0,
+       "max": 1.0
+      },
+      "calibration": {
+       "type": "dc_motor",
+       "max_power_fraction": 1.0
+      },
+      "route": {
+       "type": "left_effort"
+      },
+      "safe": {
+       "type": "zero"
+      }
+     },
+     {
+      "id": 7,
+      "name": "m7",
+      "port": "M7",
+      "kind": "dc_motor",
+      "inverted": false,
+      "limits": {
+       "min": -1.0,
+       "max": 1.0
+      },
+      "calibration": {
+       "type": "dc_motor",
+       "max_power_fraction": 1.0
+      },
+      "route": {
+       "type": "left_effort"
+      },
+      "safe": {
+       "type": "zero"
+      }
+     },
+     {
+      "id": 8,
+      "name": "m8",
+      "port": "M8",
+      "kind": "dc_motor",
+      "inverted": false,
+      "limits": {
+       "min": -1.0,
+       "max": 1.0
+      },
+      "calibration": {
+       "type": "dc_motor",
+       "max_power_fraction": 1.0
+      },
+      "route": {
+       "type": "left_effort"
+      },
+      "safe": {
+       "type": "zero"
+      }
+     },
+     {
+      "id": 9,
+      "name": "m9",
+      "port": "M9",
+      "kind": "dc_motor",
+      "inverted": false,
+      "limits": {
+       "min": -1.0,
+       "max": 1.0
+      },
+      "calibration": {
+       "type": "dc_motor",
+       "max_power_fraction": 1.0
+      },
+      "route": {
+       "type": "left_effort"
+      },
+      "safe": {
+       "type": "zero"
+      }
+     },
+     {
+      "id": 10,
+      "name": "m10",
+      "port": "M10",
+      "kind": "dc_motor",
+      "inverted": false,
+      "limits": {
+       "min": -1.0,
+       "max": 1.0
+      },
+      "calibration": {
+       "type": "dc_motor",
+       "max_power_fraction": 1.0
+      },
+      "route": {
+       "type": "left_effort"
+      },
+      "safe": {
+       "type": "zero"
+      }
+     },
+     {
+      "id": 11,
+      "name": "m11",
+      "port": "M11",
+      "kind": "dc_motor",
+      "inverted": false,
+      "limits": {
+       "min": -1.0,
+       "max": 1.0
+      },
+      "calibration": {
+       "type": "dc_motor",
+       "max_power_fraction": 1.0
+      },
+      "route": {
+       "type": "left_effort"
+      },
+      "safe": {
+       "type": "zero"
+      }
+     },
+     {
+      "id": 12,
+      "name": "m12",
+      "port": "M12",
+      "kind": "dc_motor",
+      "inverted": false,
+      "limits": {
+       "min": -1.0,
+       "max": 1.0
+      },
+      "calibration": {
+       "type": "dc_motor",
+       "max_power_fraction": 1.0
+      },
+      "route": {
+       "type": "left_effort"
+      },
+      "safe": {
+       "type": "zero"
+      }
+     },
+     {
+      "id": 13,
+      "name": "m13",
+      "port": "M13",
+      "kind": "dc_motor",
+      "inverted": false,
+      "limits": {
+       "min": -1.0,
+       "max": 1.0
+      },
+      "calibration": {
+       "type": "dc_motor",
+       "max_power_fraction": 1.0
+      },
+      "route": {
+       "type": "left_effort"
+      },
+      "safe": {
+       "type": "zero"
+      }
+     },
+     {
+      "id": 14,
+      "name": "m14",
+      "port": "M14",
+      "kind": "dc_motor",
+      "inverted": false,
+      "limits": {
+       "min": -1.0,
+       "max": 1.0
+      },
+      "calibration": {
+       "type": "dc_motor",
+       "max_power_fraction": 1.0
+      },
+      "route": {
+       "type": "left_effort"
+      },
+      "safe": {
+       "type": "zero"
+      }
+     },
+     {
+      "id": 15,
+      "name": "m15",
+      "port": "M15",
+      "kind": "dc_motor",
+      "inverted": false,
+      "limits": {
+       "min": -1.0,
+       "max": 1.0
+      },
+      "calibration": {
+       "type": "dc_motor",
+       "max_power_fraction": 1.0
+      },
+      "route": {
+       "type": "left_effort"
+      },
+      "safe": {
+       "type": "zero"
+      }
+     },
+     {
+      "id": 16,
+      "name": "m16",
+      "port": "M16",
+      "kind": "dc_motor",
+      "inverted": false,
+      "limits": {
+       "min": -1.0,
+       "max": 1.0
+      },
+      "calibration": {
+       "type": "dc_motor",
+       "max_power_fraction": 1.0
+      },
+      "route": {
+       "type": "left_effort"
+      },
+      "safe": {
+       "type": "zero"
+      }
+     }
+    ]
+   },
+   "errors": [
+    "actuator_count"
+   ]
+  }
+ ]
+}

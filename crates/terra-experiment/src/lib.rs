@@ -1,7 +1,8 @@
 //! Experiment records, search-mission observations, and offline metrics.
 //!
 //! `mission` defines the recorded mission data; `writer` moves file I/O onto a
-//! bounded background queue; `metrics` summarizes recorded outcomes. Recording
+//! bounded background queue; `record` is the recorded control-tick line and
+//! `metrics` summarizes recorded outcomes. Recording
 //! failure must remain visible and must not block the control loop.
 //!
 //! Mission coordinates and ranges use metres. Mission and recorded control-tick
@@ -31,3 +32,5 @@ pub use mission::*;
 pub use writer::*;
 mod metrics;
 pub use metrics::*;
+mod record;
+pub use record::*;

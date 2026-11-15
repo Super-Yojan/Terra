@@ -51,7 +51,7 @@ pub fn render_map(
             let value = map.occupancy[row as usize * map.width as usize + col as usize];
             let mut color = cell_color(value);
             let (x, y) = cell_center(map, col, row);
-            if value >= 0 && value < 65 && on_metre_line(map, col, row) {
+            if (0..terra_mapping::OCCUPIED).contains(&value) && on_metre_line(map, col, row) {
                 color = GRID;
             }
             let (px, py) = world_to_pixel(map, x, y);
@@ -73,7 +73,7 @@ pub fn render_map(
 pub fn cell_color(value: i8) -> Rgba<u8> {
     if value < 0 {
         UNKNOWN
-    } else if value >= 65 {
+    } else if value >= terra_mapping::OCCUPIED {
         OCCUPIED
     } else {
         FREE

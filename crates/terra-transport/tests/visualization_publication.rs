@@ -37,12 +37,7 @@ fn visualization_is_sent_once_but_control_state_still_replays() {
         );
     }
 
-    for kind in [
-        "map/occupancy",
-        "pointcloud",
-        "map/occupancy/heartbeat",
-        "pointcloud/heartbeat",
-    ] {
+    for kind in ["map/occupancy", "map/occupancy/heartbeat"] {
         let sub = client
             .declare_subscriber(format!("visualization/7/{kind}"))
             .wait()
@@ -66,7 +61,7 @@ fn visualization_is_sent_once_but_control_state_still_replays() {
 }
 
 #[test]
-/// Checks exact occupancy, pointcloud, and heartbeat byte caps and rejection
+/// Checks exact occupancy and heartbeat byte caps, the retired `pointcloud` topic, and rejection
 /// of non-visualization suffixes by the explicit visualization API.
 fn visualization_enqueue_reports_rejection_and_accepts_retry_with_topic_caps() {
     let socket = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -75,9 +70,8 @@ fn visualization_enqueue_reports_rejection_and_accepts_retry_with_topic_caps() {
     let service = ControlPlane::listen(&endpoint, "visualization-size", 7).unwrap();
     assert!(!service.publish_visualization("map/occupancy", "x".repeat(2_000_001)));
     assert!(service.publish_visualization("map/occupancy", "x".repeat(2_000_000)));
-    assert!(!service.publish_visualization("pointcloud", "x".repeat(262145)));
-    assert!(service.publish_visualization("pointcloud", "x".repeat(262144)));
-    assert!(!service.publish_visualization("pointcloud/heartbeat", "x".repeat(65537)));
-    assert!(service.publish_visualization("pointcloud/heartbeat", "x".repeat(65536)));
+    assert!(!service.publish_visualization("map/occupancy/heartbeat", "x".repeat(65537)));
+    assert!(service.publish_visualization("map/occupancy/heartbeat", "x".repeat(65536)));
+    assert!(!service.publish_visualization("pointcloud", "{}".into()));
     assert!(!service.publish_visualization("autonomy/status", "{}".into()));
 }

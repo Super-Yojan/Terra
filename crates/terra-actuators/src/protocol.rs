@@ -1,155 +1,23 @@
 //! BLE application framing. Authentication and hardware arming belong to the service.
-use crate::{ActuatorError, ActuatorValue, Layout, LayoutError};
+use crate::{Actuator, ActuatorError, Layout, MAX_ACTUATORS};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
-/// Binary frame version byte; currently 1.
-pub const PROTOCOL_VERSION: u8 = 1;
-/// Maximum binary command size in bytes, including its 16-byte header.
-pub const COMMAND_LIMIT: usize = 96;
 /// Maximum serialized JSON control/reply size in bytes (16 KiB).
 pub const JSON_LIMIT: usize = 16 * 1024;
+/// Maximum size of a paginated control request: 255 fragments at the
+/// conservative 20-byte ATT write capacity.
+pub const PAGINATED_LIMIT: usize = 4080;
+/// Maximum length of a layout edit token.
+const EDIT_TOKEN_LIMIT: usize = 128;
 /// Maximum assembly age in milliseconds; age equal to this limit expires.
-pub const ASSEMBLY_TIMEOUT_MS: u64 = 100;
+const ASSEMBLY_TIMEOUT_MS: u64 = 100;
 fn error(message: &str) -> ActuatorError {
     ActuatorError::InvalidInput(message.into())
-}
-/// Binary command discriminator. Only drive frames carry actuator records.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[repr(u8)]
-pub enum CommandKind {
-    /// Request a complete set of normalized actuator commands.
-    Drive = 1,
-    /// Request arming; service authorization is still required.
-    Arm = 2,
-    /// Request removal of output authorization.
-    Disarm = 3,
-    /// Request the service emergency-stop policy.
-    EmergencyStop = 4,
-}
-/// Decoded binary command with session, layout, and ordering metadata.
-///
-/// Encoding checks shape and normalized values. [`validate_command`] adds active
-/// session/revision, sequence, coverage, and per-actuator limit checks.
-#[derive(Clone, Debug, PartialEq)]
-pub struct CommandFrame {
-    /// Requested command action.
-    pub kind: CommandKind,
-    /// Service-issued session identifier.
-    pub session: u32,
-    /// Active layout revision expected by the sender.
-    pub revision: u32,
-    /// Monotonically increasing session sequence; `u32::MAX` is rejected on validation.
-    pub sequence: u32,
-    /// Up to 16 unique-ID records for drive; empty for all other commands.
-    pub values: Vec<ActuatorValue>,
-}
-/// Encode a 16-byte `TA` header followed by five-byte actuator records.
-///
-/// Integers and `f32` values use little-endian encoding. Returns
-/// [`ActuatorError::InvalidInput`] for more than 16 records, non-drive records,
-/// duplicate IDs, or non-finite/out-of-range values outside `[-1, 1]`.
-pub fn encode_frame(frame: &CommandFrame) -> Result<Vec<u8>, ActuatorError> {
-    if frame.values.len() > 16 || (frame.kind != CommandKind::Drive && !frame.values.is_empty()) {
-        return Err(error("invalid record count"));
-    }
-    let mut ids = HashSet::new();
-    let mut out = vec![b'T', b'A', PROTOCOL_VERSION, frame.kind as u8];
-    for value in [frame.session, frame.revision, frame.sequence] {
-        out.extend(value.to_le_bytes());
-    }
-    for value in &frame.values {
-        if !ids.insert(value.id) || !value.value.is_finite() || !(-1.0..=1.0).contains(&value.value)
-        {
-            return Err(error("invalid actuator record"));
-        }
-        out.push(value.id);
-        out.extend(value.value.to_le_bytes());
-    }
-    Ok(out)
-}
-/// Decode and validate a binary frame without authorizing it.
-///
-/// Returns [`ActuatorError::InvalidInput`] for invalid size, alignment, magic,
-/// version, command kind, or any record rejected by [`encode_frame`].
-pub fn decode_frame(bytes: &[u8]) -> Result<CommandFrame, ActuatorError> {
-    if bytes.len() < 16
-        || bytes.len() > COMMAND_LIMIT
-        || (bytes.len() - 16) % 5 != 0
-        || &bytes[..2] != b"TA"
-        || bytes[2] != PROTOCOL_VERSION
-    {
-        return Err(error("invalid frame header or length"));
-    }
-    let kind = match bytes[3] {
-        1 => CommandKind::Drive,
-        2 => CommandKind::Arm,
-        3 => CommandKind::Disarm,
-        4 => CommandKind::EmergencyStop,
-        _ => return Err(error("unknown command kind")),
-    };
-    let word = |offset| u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap());
-    let values = bytes[16..]
-        .chunks_exact(5)
-        .map(|record| ActuatorValue {
-            id: record[0],
-            value: f32::from_le_bytes(record[1..5].try_into().unwrap()),
-        })
-        .collect();
-    let frame = CommandFrame {
-        kind,
-        session: word(4),
-        revision: word(8),
-        sequence: word(12),
-        values,
-    };
-    encode_frame(&frame)?;
-    Ok(frame)
-}
-/// Validate a fully decoded command without advancing sequence state on rejection.
-/// The caller advances its last sequence only after safety acceptance.
-/// Return success only for the supplied session/layout revision and a sequence
-/// strictly above `last_sequence` and below `u32::MAX`. Drive frames must cover
-/// every layout actuator exactly once and respect its inclusive limits.
-///
-/// All rejection paths return [`ActuatorError::InvalidInput`]. The caller must
-/// separately validate the layout and authorize the requested hardware action.
-pub fn validate_command(
-    frame: &CommandFrame,
-    session: u32,
-    layout: &Layout,
-    last_sequence: Option<u32>,
-) -> Result<(), ActuatorError> {
-    encode_frame(frame)?;
-    if frame.session != session
-        || frame.revision != layout.revision
-        || frame.sequence == u32::MAX
-        || last_sequence.is_some_and(|last| frame.sequence <= last)
-    {
-        return Err(error("stale session, revision or sequence"));
-    }
-    if frame.kind == CommandKind::Drive {
-        if frame.values.len() != layout.actuators.len() {
-            return Err(error("incomplete actuator coverage"));
-        }
-        for value in &frame.values {
-            let actuator = layout
-                .actuators
-                .iter()
-                .find(|actuator| actuator.id == value.id)
-                .ok_or_else(|| error("unknown actuator"))?;
-            if value.value < actuator.limits.min || value.value > actuator.limits.max {
-                return Err(error("actuator value outside layout limits"));
-            }
-        }
-    }
-    Ok(())
 }
 /// Bounded in-order reassembly of one logical message at a time.
 ///
 /// Fragments have a four-byte header: little-endian `u16` message ID, zero-based
-/// index, and total count. Payloads must be nonempty. Default uses [`COMMAND_LIMIT`];
-/// [`Self::new`] selects an explicit limit. Authentication belongs to the service.
-#[derive(Default)]
+/// index, and total count. Payloads must be nonempty. Authentication belongs to the service.
 pub struct FragmentAssembler {
     limit: usize,
     active: Option<Assembly>,
@@ -181,7 +49,7 @@ impl FragmentAssembler {
     /// Accept one fragment at monotonic `now_ms` milliseconds.
     ///
     /// Returns `Ok(None)` while incomplete and `Ok(Some(bytes))` on completion.
-    /// A backwards clock or age at least [`ASSEMBLY_TIMEOUT_MS`] discards the old
+    /// A backwards clock or an age of at least 100 ms discards the old
     /// assembly before processing this fragment. Invalid headers, ordering, IDs,
     /// counts, or size return [`ActuatorError::InvalidInput`] and clear the assembly.
     pub fn push(&mut self, bytes: &[u8], now_ms: u64) -> Result<Option<Vec<u8>>, ActuatorError> {
@@ -224,12 +92,7 @@ impl FragmentAssembler {
         if id != a.id || count != a.count || index != a.next {
             return Err(error("duplicate, conflicting or out-of-order fragment"));
         }
-        let limit = if self.limit == 0 {
-            COMMAND_LIMIT
-        } else {
-            self.limit
-        };
-        if a.data.len() + bytes.len() - 4 > limit {
+        if a.data.len() + bytes.len() - 4 > self.limit {
             return Err(error("logical message too large"));
         }
         a.data.extend_from_slice(&bytes[4..]);
@@ -238,46 +101,6 @@ impl FragmentAssembler {
         }
         a.next += 1;
         Ok(None)
-    }
-}
-/// Separate characteristic paths: priority binary control never waits for drive.
-pub struct CommandAssemblers {
-    /// Independent assembly state for ordinary drive traffic.
-    pub drive: FragmentAssembler,
-    /// Independent assembly state for arm, disarm, and emergency-stop traffic.
-    pub priority: FragmentAssembler,
-}
-impl Default for CommandAssemblers {
-    fn default() -> Self {
-        Self {
-            drive: FragmentAssembler::default(),
-            priority: FragmentAssembler::default(),
-        }
-    }
-}
-impl CommandAssemblers {
-    /// Assemble and decode a priority fragment at `now_ms` monotonic milliseconds.
-    ///
-    /// Returns `None` until complete; drive frames on this path return an input error.
-    /// A decoded disarm/emergency-stop clears any partial drive message, even before
-    /// session acceptance. Assembly and binary decoding errors propagate unchanged.
-    pub fn push_priority(
-        &mut self,
-        bytes: &[u8],
-        now_ms: u64,
-    ) -> Result<Option<CommandFrame>, ActuatorError> {
-        let Some(data) = self.priority.push(bytes, now_ms)? else {
-            return Ok(None);
-        };
-        let frame = decode_frame(&data)?;
-        if frame.kind == CommandKind::Drive {
-            return Err(error("drive forbidden on priority path"));
-        }
-        // Clearing is fail-safe and does not imply command/session acceptance.
-        if matches!(frame.kind, CommandKind::Disarm | CommandKind::EmergencyStop) {
-            self.drive.clear();
-        }
-        Ok(Some(frame))
     }
 }
 /// One actuator command and the inclusive normalized limits used to quantize it.
@@ -309,7 +132,7 @@ fn normalized_percent(effort: i32) -> f32 {
 /// or oversized record list, duplicate IDs, or a value that cannot be quantized
 /// inside its limits.
 pub fn encode_relay_drive(samples: &[RelaySample]) -> Result<Vec<u8>, ActuatorError> {
-    if samples.is_empty() || samples.len() > 16 {
+    if samples.is_empty() || samples.len() > MAX_ACTUATORS {
         return Err(error("expected one to sixteen actuator pairs"));
     }
     let mut ids = HashSet::new();
@@ -418,6 +241,67 @@ pub struct CommitPayload {
     /// Request ID of the successful stage operation.
     pub staged_request_id: u32,
 }
+/// One actuator of the active layout, read page by page.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ActuatorPage {
+    /// Active layout revision the reader expects; the rover rejects another.
+    pub expected_revision: u32,
+    pub actuator_id: u8,
+}
+/// Whether a layout edit starts from the active layout or from empty.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EditMode {
+    Existing,
+    Replace,
+}
+/// Open a paginated layout edit against the active revision.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BeginEditPayload {
+    pub expected_revision: u32,
+    pub mode: EditMode,
+}
+/// Add or replace one actuator in an open edit.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StageActuatorPayload {
+    /// Token from `begin_layout_edit`, 1 to 128 characters.
+    pub edit_token: String,
+    /// Edit version the change applies to.
+    pub edit_version: u32,
+    pub actuator: Actuator,
+}
+/// Remove one actuator from an open edit.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RemoveActuatorPayload {
+    pub edit_token: String,
+    pub edit_version: u32,
+    pub actuator_id: u8,
+}
+/// Refer to an open edit at a version (validate).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EditVersionPayload {
+    pub edit_token: String,
+    pub edit_version: u32,
+}
+/// Commit an open edit over the revision it started from.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CommitEditPayload {
+    pub edit_token: String,
+    pub edit_version: u32,
+    pub base_revision: u32,
+}
+/// Abandon an open edit.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DiscardEditPayload {
+    pub edit_token: String,
+}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(
     tag = "operation",
@@ -437,8 +321,42 @@ pub enum ControlOperation {
     CommitLayout(CommitPayload),
     /// Request service fault reset.
     ResetFault(EmptyPayload),
-    /// Request release of the emergency-stop latch.
-    ResetEmergencyStop(EmptyPayload),
+    /// Read the active layout's actuator IDs.
+    LayoutIndex(EmptyPayload),
+    /// Read one actuator of the active layout.
+    ReadActuator(ActuatorPage),
+    /// Read one actuator's drive profile.
+    ReadDriveProfile(ActuatorPage),
+    BeginLayoutEdit(BeginEditPayload),
+    StageActuator(StageActuatorPayload),
+    RemoveActuator(RemoveActuatorPayload),
+    ValidateLayoutEdit(EditVersionPayload),
+    CommitLayoutEdit(CommitEditPayload),
+    DiscardLayoutEdit(DiscardEditPayload),
+}
+impl ControlOperation {
+    /// Whether the rover answers this operation one page at a time; such
+    /// requests are limited to [`PAGINATED_LIMIT`] bytes.
+    pub fn paginated(&self) -> bool {
+        !matches!(
+            self,
+            Self::Capabilities(_)
+                | Self::ReadLayout(_)
+                | Self::StageLayout(_)
+                | Self::CommitLayout(_)
+                | Self::ResetFault(_)
+        )
+    }
+    fn edit_token(&self) -> Option<&str> {
+        match self {
+            Self::StageActuator(p) => Some(&p.edit_token),
+            Self::RemoveActuator(p) => Some(&p.edit_token),
+            Self::ValidateLayoutEdit(p) => Some(&p.edit_token),
+            Self::CommitLayoutEdit(p) => Some(&p.edit_token),
+            Self::DiscardLayoutEdit(p) => Some(&p.edit_token),
+            _ => None,
+        }
+    }
 }
 /// Versioned JSON control request with a caller-supplied correlation ID.
 #[derive(Clone, Debug, Serialize)]
@@ -487,9 +405,26 @@ pub fn decode_control(data: &[u8]) -> Result<ControlEnvelope, ActuatorError> {
         "stage_layout" => parse!(StageLayout),
         "commit_layout" => parse!(CommitLayout),
         "reset_fault" => parse!(ResetFault),
-        "reset_emergency_stop" => parse!(ResetEmergencyStop),
+        "layout_index" => parse!(LayoutIndex),
+        "read_actuator" => parse!(ReadActuator),
+        "read_drive_profile" => parse!(ReadDriveProfile),
+        "begin_layout_edit" => parse!(BeginLayoutEdit),
+        "stage_actuator" => parse!(StageActuator),
+        "remove_actuator" => parse!(RemoveActuator),
+        "validate_layout_edit" => parse!(ValidateLayoutEdit),
+        "commit_layout_edit" => parse!(CommitLayoutEdit),
+        "discard_layout_edit" => parse!(DiscardLayoutEdit),
         _ => return Err(error("unknown operation")),
     };
+    if command
+        .edit_token()
+        .is_some_and(|t| t.is_empty() || t.chars().count() > EDIT_TOKEN_LIMIT)
+    {
+        return Err(error("invalid edit token"));
+    }
+    if command.paginated() && data.len() > PAGINATED_LIMIT {
+        return Err(error("paginated request too large"));
+    }
     Ok(ControlEnvelope {
         schema_version: wire.schema_version,
         request_id: wire.request_id,
@@ -505,47 +440,6 @@ pub fn encode_control(envelope: &ControlEnvelope) -> Result<Vec<u8>, ActuatorErr
     decode_control(&bytes)?;
     Ok(bytes)
 }
-/// Service result serialized as `ok` or `error`.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ControlResult {
-    /// Operation succeeded.
-    Ok,
-    /// Operation failed; inspect reply errors and payload.
-    Error,
-}
-/// Versioned service response correlated with a control request.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ControlReply {
-    /// Reply schema version; currently 1.
-    pub schema_version: u32,
-    /// Correlation identifier copied from the request.
-    pub request_id: u32,
-    /// Success or failure reported by the service.
-    pub result: ControlResult,
-    /// Layout revision active after processing the request.
-    pub active_revision: u32,
-    /// Collected layout validation errors, if applicable.
-    pub errors: Vec<LayoutError>,
-    /// Operation-specific response data.
-    pub payload: serde_json::Value,
-}
-/// Serialize a schema-1 reply no larger than [`JSON_LIMIT`] bytes.
-///
-/// Returns [`ActuatorError::InvalidInput`] for unsupported schema, serialization
-/// failure, or excessive encoded size. Payload semantics are service-defined.
-pub fn encode_reply(reply: &ControlReply) -> Result<Vec<u8>, ActuatorError> {
-    if reply.schema_version != 1 {
-        return Err(error("unsupported reply schema"));
-    }
-    let bytes = serde_json::to_vec(reply).map_err(|e| error(&e.to_string()))?;
-    if bytes.len() > JSON_LIMIT {
-        return Err(error("JSON reply too large"));
-    }
-    Ok(bytes)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -585,5 +479,35 @@ mod tests {
             max: 0.004,
         };
         assert!(encode_relay_drive(&[sample]).is_err());
+    }
+
+    #[test]
+    fn only_paginated_requests_are_held_to_the_page_limit() {
+        let token = "t".repeat(EDIT_TOKEN_LIMIT);
+        let name = "n".repeat(PAGINATED_LIMIT);
+        let actuator = serde_json::json!({"id": 0, "name": name, "port": "M0",
+            "kind": "dc_motor", "inverted": false, "limits": {"min": -1.0, "max": 1.0},
+            "calibration": {"type": "dc_motor", "max_power_fraction": 1.0},
+            "route": {"type": "left_effort"}, "safe": {"type": "zero"}});
+        let envelope = |operation: &str, payload: serde_json::Value| {
+            serde_json::json!({"schema_version": 1, "request_id": 1,
+                "operation": operation, "payload": payload})
+            .to_string()
+        };
+        let stage = envelope(
+            "stage_actuator",
+            serde_json::json!({"edit_token": token, "edit_version": 1, "actuator": actuator}),
+        );
+        assert!(decode_control(stage.as_bytes()).is_err());
+        let layout = envelope(
+            "stage_layout",
+            serde_json::json!({"layout": {"schema_version": 1, "revision": 1, "actuators": [actuator]}}),
+        );
+        assert!(decode_control(layout.as_bytes()).is_ok());
+        let long_token = envelope(
+            "discard_layout_edit",
+            serde_json::json!({"edit_token": "t".repeat(EDIT_TOKEN_LIMIT + 1)}),
+        );
+        assert!(decode_control(long_token.as_bytes()).is_err());
     }
 }

@@ -124,19 +124,35 @@ pub struct MobileAgentPrompt {
 }
 
 fn tools() -> Value {
+    use terra_autonomy::{
+        TASK_DRIVE_COMMAND_SECONDS, TASK_DRIVE_MAX_ANGULAR, TASK_DRIVE_MAX_GRANT_SECONDS,
+        TASK_DRIVE_MAX_LINEAR, TASK_MAX_WAYPOINTS,
+    };
     let empty = json!({"type":"object","properties":{},"additionalProperties":false});
+    let go_to = format!(
+        "Drive to 1 to {TASK_MAX_WAYPOINTS} waypoints in order. Each is {{\"target\":\"F1\"}} from get_map or {{\"x\":1.5,\"y\":-2.0}} in metres. The rover checks each against seen free space and an A* route; a refused plan changes nothing."
+    );
+    let wait = format!(
+        "Wait up to {WAIT_MAX_SECONDS} s for the plan to finish, be blocked or abandoned, or for the operator to answer."
+    );
+    let request_drive = format!(
+        "Ask the operator for raw drive for up to {TASK_DRIVE_MAX_GRANT_SECONDS} s. Only after they approve does drive work."
+    );
+    let drive = format!(
+        "During an approved grant, drive at linear m/s (at most {TASK_DRIVE_MAX_LINEAR:.1}) and angular rad/s (at most {TASK_DRIVE_MAX_ANGULAR:.1}) for up to {TASK_DRIVE_COMMAND_SECONDS} s. The obstacle planner still checks every command."
+    );
     json!([
         {"name":"get_state","description":"Rover pose, autonomy level, safety state and task phase.","inputSchema":empty},
         {"name":"get_task","description":"The operator's task: instruction, phase, time and steps left, current plan, the operator's last answer and history.","inputSchema":empty},
         {"name":"get_map","description":"The task, a 1 m text map around the rover and the ids go_to accepts: frontiers F#, obstacles O#, landmarks L# (detected objects) and the GPS goal G1. Call it before go_to.","inputSchema":empty},
         {"name":"get_detections","description":"Objects the detector has mapped, with class, colour, local x/y, confidence and whether they are confirmed.","inputSchema":empty},
         {"name":"look","description":"The latest camera frame as a JPEG.","inputSchema":{"type":"object","properties":{},"additionalProperties":false}},
-        {"name":"go_to","description":"Drive to 1 to 5 waypoints in order. Each is {\"target\":\"F1\"} from get_map or {\"x\":1.5,\"y\":-2.0} in metres. The rover checks each against seen free space and an A* route; a refused plan changes nothing.","inputSchema":{"type":"object","properties":{"waypoints":{"type":"array","minItems":1,"maxItems":5,"items":{"type":"object","properties":{"target":{"type":"string"},"x":{"type":"number"},"y":{"type":"number"}}}},"rationale":{"type":"string"}},"required":["waypoints"],"additionalProperties":false}},
-        {"name":"wait","description":"Wait up to 30 s for the plan to finish, be blocked or abandoned, or for the operator to answer.","inputSchema":{"type":"object","properties":{"seconds":{"type":"number","minimum":0,"maximum":30}},"additionalProperties":false}},
+        {"name":"go_to","description":go_to,"inputSchema":{"type":"object","properties":{"waypoints":{"type":"array","minItems":1,"maxItems":TASK_MAX_WAYPOINTS,"items":{"type":"object","properties":{"target":{"type":"string"},"x":{"type":"number"},"y":{"type":"number"}}}},"rationale":{"type":"string"}},"required":["waypoints"],"additionalProperties":false}},
+        {"name":"wait","description":wait,"inputSchema":{"type":"object","properties":{"seconds":{"type":"number","minimum":0,"maximum":WAIT_MAX_SECONDS}},"additionalProperties":false}},
         {"name":"ask_operator","description":"Ask the operator a short question. The rover holds until they answer.","inputSchema":{"type":"object","properties":{"question":{"type":"string"}},"required":["question"],"additionalProperties":false}},
         {"name":"finish","description":"End the task: status done when it is accomplished, fail when it cannot be done.","inputSchema":{"type":"object","properties":{"status":{"type":"string","enum":["done","fail"]},"rationale":{"type":"string"}},"required":["status","rationale"],"additionalProperties":false}},
-        {"name":"request_drive","description":"Ask the operator for raw drive for up to 60 s. Only after they approve does drive work.","inputSchema":{"type":"object","properties":{"reason":{"type":"string"},"seconds":{"type":"number","exclusiveMinimum":0,"maximum":60}},"required":["reason","seconds"],"additionalProperties":false}},
-        {"name":"drive","description":"During an approved grant, drive at linear m/s (at most 0.5) and angular rad/s (at most 1.0) for up to 1 s. The obstacle planner still checks every command.","inputSchema":{"type":"object","properties":{"linear":{"type":"number"},"angular":{"type":"number"},"seconds":{"type":"number","exclusiveMinimum":0,"maximum":1}},"required":["linear","angular"],"additionalProperties":false}},
+        {"name":"request_drive","description":request_drive,"inputSchema":{"type":"object","properties":{"reason":{"type":"string"},"seconds":{"type":"number","exclusiveMinimum":0,"maximum":TASK_DRIVE_MAX_GRANT_SECONDS}},"required":["reason","seconds"],"additionalProperties":false}},
+        {"name":"drive","description":drive,"inputSchema":{"type":"object","properties":{"linear":{"type":"number"},"angular":{"type":"number"},"seconds":{"type":"number","exclusiveMinimum":0,"maximum":TASK_DRIVE_COMMAND_SECONDS}},"required":["linear","angular"],"additionalProperties":false}},
         {"name":"stop","description":"Emergency stop. Only the operator can reset it.","inputSchema":empty}
     ])
 }
@@ -218,7 +234,7 @@ impl MobileController {
                 last: None,
             };
         };
-        let status = b.autonomy.task_status(b.last_tick);
+        let status = b.runtime.autonomy().task_status(b.last_tick);
         Snapshot {
             phase: status.as_ref().map(|s| s.phase),
             drive_request: status.as_ref().is_some_and(|s| s.drive_request.is_some()),
@@ -285,7 +301,7 @@ impl MobileController {
         };
         let now = b.last_tick;
         if WRITE_TOOLS.contains(&name) {
-            let Some(task_id) = b.autonomy.agent_task_id().map(str::to_owned) else {
+            let Some(task_id) = b.runtime.autonomy().agent_task_id().map(str::to_owned) else {
                 return error(
                     "not_in_control: ARGOS has not started a task for an MCP agent (level task, agent mcp)",
                 );
@@ -301,57 +317,46 @@ impl MobileController {
                 _ => m.controller = Some((task_id, session.to_owned())),
             }
         }
-        let pose = b.pose.map(|p| p.0).unwrap_or_default();
-        let map = b.map.as_ref().map(|(m, t, _)| (m.clone(), *t));
-        let map = map.as_ref().map(|(m, t)| (m, *t));
+        let pose = b.pose().map(|p| p.0).unwrap_or_default();
         let result = match name {
             "get_state" => {
-                let brief: Value = serde_json::from_str(&b.autonomy_brief).unwrap_or_default();
-                let task = b.autonomy.task_status(now);
+                let brief = b.brief();
+                let task = b.runtime.autonomy().task_status(now);
                 Ok(text(
                     json!({
                         "pose": {"x": pose.x, "y": pose.y, "yaw_deg": pose.yaw.to_degrees()},
-                        "requested_level": brief["status"]["requested_level"],
-                        "effective_level": brief["status"]["effective_level"],
-                        "safety": brief["status"]["safety"],
-                        "reason": brief["status"]["reason"],
+                        "requested_level": brief.map(|t| t.requested_level),
+                        "effective_level": brief.and_then(|t| t.effective_level),
+                        "safety": brief.map(|t| t.safety),
+                        "reason": brief.map(|t| &t.reason),
                         "task_phase": task.as_ref().map(|t| t.phase),
                         "task_agent": task.as_ref().map(|t| t.agent),
                     })
                     .to_string(),
                 ))
             }
-            "get_task" => Ok(match b.autonomy.task_status(now) {
+            "get_task" => Ok(match b.runtime.autonomy().task_status(now) {
                 Some(status) => text(serde_json::to_string(&status).unwrap_or_default()),
                 None => error("no_task: ARGOS has not started a task"),
             }),
-            "get_map" => b
-                .autonomy
-                .agent_view(map, pose, now)
-                .map(text)
-                .map_err(str::to_owned),
+            "get_map" => b.runtime.agent_view(now).map(text).map_err(str::to_owned),
             "get_detections" => {
-                let objects = b.objects.objects().to_vec();
+                let objects = b.objects().objects().to_vec();
                 Ok(text(json!({"objects": objects}).to_string()))
             }
             "go_to" => waypoints(args)
                 .and_then(|w| {
-                    b.autonomy.agent_go(
-                        &w,
-                        args["rationale"].as_str().map(str::to_owned),
-                        map,
-                        pose,
-                        now,
-                    )
+                    b.runtime
+                        .agent_go(&w, args["rationale"].as_str().map(str::to_owned), now)
                 })
                 .map(|o| self.outcome(o)),
             "ask_operator" => b
-                .autonomy
+                .runtime
                 .agent_ask(args["question"].as_str().unwrap_or_default())
                 .map(|o| self.outcome(o)),
             "finish" => match args["status"].as_str() {
                 Some(s @ ("done" | "fail")) => b
-                    .autonomy
+                    .runtime
                     .agent_finish(
                         s == "done",
                         args["rationale"].as_str().unwrap_or_default(),
@@ -361,7 +366,7 @@ impl MobileController {
                 _ => Err("status must be done or fail".into()),
             },
             "request_drive" => b
-                .autonomy
+                .runtime
                 .agent_request_drive(
                     args["reason"].as_str().unwrap_or_default(),
                     args["seconds"].as_f64().unwrap_or(f64::NAN),
@@ -369,7 +374,7 @@ impl MobileController {
                 )
                 .map(|o| self.outcome(o)),
             "drive" => b
-                .autonomy
+                .runtime
                 .agent_drive(
                     args["linear"].as_f64().unwrap_or(f64::NAN),
                     args["angular"].as_f64().unwrap_or(f64::NAN),
@@ -388,27 +393,39 @@ impl MobileController {
                         format!("agent-stop-{}", m.next_stop)
                     })
                     .unwrap_or_else(|_| "agent-stop".into());
-                b.autonomy.set_safety(
-                    terra_autonomy::SafetyRequest {
-                        action: terra_autonomy::SafetyAction::Stop,
-                        token,
-                    },
-                    true,
-                );
-                Ok(text("stopped; only the operator can reset it"))
+                let request = json!({"action": "stop", "token": token});
+                match b.runtime.local_action(
+                    terra_types::requests::SAFETY,
+                    request.to_string().as_bytes(),
+                    now,
+                ) {
+                    Ok(()) => {
+                        self.observation.event(
+                            "agent",
+                            "command.dispatched",
+                            json!({"topic": terra_types::requests::SAFETY, "payload": request}),
+                            b.run_id(),
+                            now,
+                        );
+                        Ok(text("stopped; only the operator can reset it"))
+                    }
+                    Err(e) => Err(format!("stop refused: {e}")),
+                }
             }
             other => Err(format!("unknown tool {other}")),
         };
         let result = result.unwrap_or_else(error);
         if let Some(recorder) = b.recorder.as_ref() {
+            // A rejected record already marks the run incomplete and counts the
+            // drop; the tool call itself must not fail because logging did.
             let _ = recorder.record(json!({
                 "kind": "task.agent_call",
                 "session": session,
                 "tool": name,
                 "arguments": args,
                 "error": result["isError"],
-                "time": now - b.run_start.unwrap_or(now),
-                "run_id": b.run_id,
+                "time": now - b.run_start().unwrap_or(now),
+                "run_id": b.run_id(),
             }));
         }
         result
@@ -522,7 +539,7 @@ impl MobileController {
         self.brain
             .lock()
             .map_err(|_| ControllerError::Internal)?
-            .autonomy
+            .runtime
             .set_task_agent(name);
         self.mcp
             .lock()
@@ -546,14 +563,9 @@ impl MobileController {
         let snapshot = self.snapshot();
         let (task_id, view) = {
             let mut b = self.brain.lock().ok()?;
-            let task_id = b.autonomy.agent_task_id()?.to_owned();
+            let task_id = b.runtime.autonomy().agent_task_id()?.to_owned();
             let now = b.last_tick;
-            let pose = b.pose.map(|p| p.0).unwrap_or_default();
-            let map = b.map.as_ref().map(|(m, t, _)| (m.clone(), *t));
-            let view = b
-                .autonomy
-                .agent_view(map.as_ref().map(|(m, t)| (m, *t)), pose, now)
-                .ok()?;
+            let view = b.runtime.agent_view(now).ok()?;
             (task_id, view)
         };
         let mut m = self.mcp.lock().ok()?;
@@ -643,6 +655,7 @@ impl MobileController {
                     })
                     .unwrap_or(true);
                 if give_up {
+                    // call_tool logs its own result; nothing here can act on it.
                     let _ = self.call_tool(
                         IN_PROCESS_SESSION,
                         "finish",
@@ -761,8 +774,8 @@ impl MobileController {
         let snapshot = self.snapshot();
         let (agent_name, task) = match self.brain.lock() {
             Ok(b) => (
-                b.autonomy.task_agent().map(str::to_owned),
-                b.autonomy.task_status(b.last_tick),
+                b.runtime.autonomy().task_agent().map(str::to_owned),
+                b.runtime.autonomy().task_status(b.last_tick),
             ),
             Err(_) => (None, None),
         };

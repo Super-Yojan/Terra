@@ -8,15 +8,15 @@
 //! A* to the far goal and returns where that path leaves the local window.
 //! The fine Hybrid A* route then drives to that point instead of to the
 //! straight-line clamp.
-use crate::OCCUPIED;
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 use terra_mapping::MapSnapshot;
+use terra_mapping::OCCUPIED;
 
 /// Coarse cell side, metres.
-pub const MEMORY_RESOLUTION: f64 = 0.5;
+const MEMORY_RESOLUTION: f64 = 0.5;
 /// Coarse cells per side (100 m at 0.5 m).
-pub const MEMORY_CELLS: usize = 200;
+const MEMORY_CELLS: usize = 200;
 /// Share of a coarse cell's fine cells that must be occupied to block it.
 const BLOCKED_SHARE: f64 = 0.15;
 /// Share of a coarse cell's fine cells that must be observed to update it.
@@ -54,7 +54,7 @@ impl Default for LongRangeMemory {
 
 impl LongRangeMemory {
     /// Forget everything.
-    pub fn clear(&mut self) {
+    fn clear(&mut self) {
         *self = Self::default();
     }
 
@@ -103,12 +103,7 @@ impl LongRangeMemory {
     /// by what it shows now; the rest keep their memory.
     pub fn absorb(&mut self, map: &MapSnapshot) {
         let (w, h) = (map.width as usize, map.height as usize);
-        if w == 0
-            || h == 0
-            || map.occupancy.len() != w * h
-            || !map.resolution.is_finite()
-            || map.resolution <= 0.
-        {
+        if !map.valid() {
             return;
         }
         let cx = map.origin_x + w as f64 * map.resolution / 2.;
@@ -130,9 +125,8 @@ impl LongRangeMemory {
         let mut seen = vec![0u32; n * n];
         let mut hit = vec![0u32; n * n];
         for row in 0..h {
-            let y = map.origin_y + (row as f64 + 0.5) * map.resolution;
             for col in 0..w {
-                let x = map.origin_x + (col as f64 + 0.5) * map.resolution;
+                let (x, y) = map.centre(col, row);
                 let (c, r) = self.cell_of(x, y);
                 let Some(i) = self.index(c, r) else { continue };
                 total[i] += 1;
@@ -159,8 +153,9 @@ impl LongRangeMemory {
         }
     }
 
+    #[cfg(test)]
     /// Whether the remembered cell at world `(x, y)` is blocked.
-    pub fn blocked_at(&self, x: f64, y: f64) -> bool {
+    fn blocked_at(&self, x: f64, y: f64) -> bool {
         let (c, r) = self.cell_of(x, y);
         self.index(c, r).is_some_and(|i| self.cells[i] == BLOCKED)
     }
@@ -284,7 +279,6 @@ impl LongRangeMemory {
         loop {
             let (c, r) = ((i % MEMORY_CELLS) as i64, (i / MEMORY_CELLS) as i64);
             let (x, y) = self.centre_of(c, r);
-            // Skip points the window itself shows as an obstacle.
             if inside(x, y) && !window_occupied(window, x, y) {
                 return Some((x, y));
             }

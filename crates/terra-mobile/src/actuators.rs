@@ -3,8 +3,8 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use serde::Deserialize;
-use terra_actuators::protocol::{self, CommandFrame, CommandKind, RelaySample};
-use terra_actuators::{ActuatorValue, Capabilities, DriveProfile, Layout, RoutingInput};
+use terra_actuators::protocol::{self, RelaySample};
+use terra_actuators::{ActuatorValue, DriveProfile, DriveProfileSet, Layout, RoutingInput};
 #[derive(Debug, thiserror::Error, uniffi::Error)]
 /// Validation, JSON decoding, routing, or binary-protocol encoding failure.
 pub enum MobileActuatorError {
@@ -27,75 +27,10 @@ fn parse<T: serde::de::DeserializeOwned>(json: &str) -> Result<T, MobileActuator
     serde_json::from_str(json).map_err(invalid)
 }
 #[uniffi::export]
-/// Decode bounded layout and capabilities JSON and return validation errors as a JSON array.
-/// An empty array means the layout passed validation.
-///
-/// # Errors
-/// Returns `InvalidInput` for oversized or malformed JSON, incompatible schemas,
-/// or serialization failure. Layout validation findings are returned in the array.
-pub fn actuator_validate_layout(
-    layout_json: String,
-    capabilities_json: String,
-) -> Result<String, MobileActuatorError> {
-    let layout: Layout = parse(&layout_json)?;
-    let capabilities: Capabilities = parse(&capabilities_json)?;
-    let errors = terra_actuators::validate_layout(&layout, &capabilities)
-        .err()
-        .unwrap_or_default();
-    serde_json::to_string(&errors).map_err(invalid)
-}
-#[uniffi::export]
-/// Route a layout and routing-input JSON document into command-values JSON.
-///
-/// # Errors
-/// Returns `InvalidInput` for oversized or malformed documents, routing rejection,
-/// or serialization failure. This function does not send commands to hardware.
-pub fn actuator_route(
-    layout_json: String,
-    input_json: String,
-) -> Result<String, MobileActuatorError> {
-    let layout: Layout = parse(&layout_json)?;
-    let input: RoutingInput = parse(&input_json)?;
-    serde_json::to_string(&terra_actuators::route_commands(&layout, &input).map_err(invalid)?)
-        .map_err(invalid)
-}
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct FrameWire {
-    kind: String,
-    session: u32,
-    revision: u32,
-    sequence: u32,
-    values: Vec<ActuatorValue>,
-}
-#[uniffi::export]
-/// Encode strict command-frame JSON as the portable actuator binary frame.
-/// Fields are `kind`, `session`, `revision`, `sequence`, and `values`; kind is
-/// `drive`, `arm`, `disarm`, or `emergency_stop`.
-///
-/// # Errors
-/// Returns `InvalidInput` for unknown fields or kinds, exhausted sequence
-/// (`u32::MAX`), oversized JSON, or binary-frame validation failure.
-pub fn actuator_encode_frame(frame_json: String) -> Result<Vec<u8>, MobileActuatorError> {
-    let wire: FrameWire = parse(&frame_json)?;
-    if wire.sequence == u32::MAX {
-        return Err(invalid("sequence exhausted"));
-    }
-    let kind = match wire.kind.as_str() {
-        "drive" => CommandKind::Drive,
-        "arm" => CommandKind::Arm,
-        "disarm" => CommandKind::Disarm,
-        "emergency_stop" => CommandKind::EmergencyStop,
-        _ => return Err(invalid("unknown command kind")),
-    };
-    protocol::encode_frame(&CommandFrame {
-        kind,
-        session: wire.session,
-        revision: wire.revision,
-        sequence: wire.sequence,
-        values: wire.values,
-    })
-    .map_err(invalid)
+/// Largest control or reply JSON document in bytes; the limit for an
+/// [`ActuatorAssembler`] that reads whole replies or status documents.
+pub fn actuator_json_limit() -> u32 {
+    protocol::JSON_LIMIT as u32
 }
 #[uniffi::export]
 /// Split payload bytes into protocol fragments for a maximum write size in bytes.
@@ -119,34 +54,6 @@ pub fn actuator_fragment(
 }
 
 #[uniffi::export]
-/// Return whether a decoded layout supports closed-loop feedback.
-///
-/// # Errors
-/// Returns `InvalidInput` for oversized JSON or layout decoding failure.
-pub fn actuator_supports_feedback(layout_json: String) -> Result<bool, MobileActuatorError> {
-    let layout: Layout = parse(&layout_json)?;
-    Ok(terra_actuators::supports_feedback(&layout))
-}
-
-fn stick_input(forward: f32, turn: f32) -> Result<RoutingInput, MobileActuatorError> {
-    if !forward.is_finite()
-        || !turn.is_finite()
-        || !(-1.0..=1.0).contains(&forward)
-        || !(-1.0..=1.0).contains(&turn)
-    {
-        return Err(invalid("stick inputs must be finite and in [-1, 1]"));
-    }
-    // Positive turn is a left turn: left effort falls, right effort rises.
-    Ok(RoutingInput {
-        left_effort: (forward - turn).clamp(-1.0, 1.0),
-        right_effort: (forward + turn).clamp(-1.0, 1.0),
-        forward,
-        turn,
-        servo_positions: BTreeMap::new(),
-    })
-}
-
-#[uniffi::export]
 /// Route a stick through a full layout.
 ///
 /// `forward` and `turn` are normalized. Positive `turn` is a left turn, so
@@ -163,24 +70,12 @@ pub fn actuator_route_stick(
     turn: f32,
 ) -> Result<String, MobileActuatorError> {
     let layout: Layout = parse(&layout_json)?;
-    let values =
-        terra_actuators::route_commands(&layout, &stick_input(forward, turn)?).map_err(invalid)?;
+    let values = terra_actuators::route_commands(
+        &layout,
+        &RoutingInput::stick(forward, turn).map_err(invalid)?,
+    )
+    .map_err(invalid)?;
     serde_json::to_string(&values).map_err(invalid)
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct DriveProfileSet {
-    #[serde(default = "default_schema")]
-    schema_version: u8,
-    #[allow(dead_code)]
-    #[serde(default)]
-    revision: u32,
-    actuators: Vec<DriveProfile>,
-}
-
-fn default_schema() -> u8 {
-    1
 }
 
 #[uniffi::export]
@@ -199,22 +94,13 @@ pub fn actuator_route_profiles(
     turn: f32,
 ) -> Result<String, MobileActuatorError> {
     let set: DriveProfileSet = parse(&profiles_json)?;
-    if set.schema_version != 1 {
-        return Err(invalid("unsupported drive profile schema"));
-    }
-    let values =
-        terra_actuators::route_drive_profiles(&set.actuators, &stick_input(forward, turn)?)
-            .map_err(invalid)?;
+    set.validate().map_err(invalid)?;
+    let values = terra_actuators::route_drive_profiles(
+        &set.actuators,
+        &RoutingInput::stick(forward, turn).map_err(invalid)?,
+    )
+    .map_err(invalid)?;
     serde_json::to_string(&values).map_err(invalid)
-}
-
-#[uniffi::export]
-/// Return whether drive profiles can carry closed-loop left/right wheel efforts.
-///
-/// # Errors
-/// Returns `InvalidInput` for oversized, malformed, or unsupported profile JSON.
-pub fn actuator_supports_vio_control(profiles_json: String) -> Result<bool, MobileActuatorError> {
-    Ok(ActiveLayout::parse(&profiles_json)?.supports_vio_control())
 }
 
 /// The rover's synchronized drive profiles plus any servo targets set since.
@@ -224,37 +110,18 @@ pub(crate) struct ActiveLayout {
 }
 
 impl ActiveLayout {
-    /// Accepts drive profiles, or a full layout (as framed sessions read it),
+    /// Accepts drive profiles, or a full layout (a rover without paginated reads),
     /// whose port and calibration are dropped.
     pub(crate) fn parse(profiles_json: &str) -> Result<Self, MobileActuatorError> {
-        let (schema_version, profiles) = match parse::<DriveProfileSet>(profiles_json) {
-            Ok(set) => (set.schema_version, set.actuators),
-            Err(profile_error) => match parse::<Layout>(profiles_json) {
-                Ok(layout) => (
-                    layout.schema_version,
-                    layout
-                        .actuators
-                        .into_iter()
-                        .map(|a| DriveProfile {
-                            id: a.id,
-                            kind: a.kind,
-                            limits: a.limits,
-                            route: a.route,
-                            safe: a.safe,
-                        })
-                        .collect(),
-                ),
-                Err(_) => return Err(profile_error),
-            },
+        let set = match parse::<DriveProfileSet>(profiles_json) {
+            Ok(set) => set,
+            Err(profile_error) => parse::<Layout>(profiles_json)
+                .map(DriveProfileSet::from)
+                .map_err(|_| profile_error)?,
         };
-        if schema_version != 1 {
-            return Err(invalid("unsupported drive profile schema"));
-        }
-        // Validate once here so routing a tick can only fail on its inputs.
-        terra_actuators::route_drive_profiles(&profiles, &RoutingInput::default())
-            .map_err(invalid)?;
+        set.validate().map_err(invalid)?;
         Ok(Self {
-            profiles,
+            profiles: set.actuators,
             servos: BTreeMap::new(),
         })
     }
@@ -280,17 +147,9 @@ impl ActiveLayout {
         Ok(())
     }
 
-    /// Route wheel efforts the way the phone does: manual mixes see
-    /// `forward = (l + r) / 2` and `turn = (r - l) / 2`.
+    /// Route wheel efforts the way the phone does; see [`RoutingInput::wheels`].
     pub(crate) fn frame(&self, left: f64, right: f64) -> Result<String, MobileActuatorError> {
-        let (left, right) = (left as f32, right as f32);
-        let input = RoutingInput {
-            left_effort: left,
-            right_effort: right,
-            forward: (left + right) / 2.,
-            turn: (right - left) / 2.,
-            servo_positions: self.servos.clone(),
-        };
+        let input = RoutingInput::wheels(left as f32, right as f32, self.servos.clone());
         let values =
             terra_actuators::route_drive_profiles(&self.profiles, &input).map_err(invalid)?;
         serde_json::to_string(&values).map_err(invalid)
@@ -355,9 +214,8 @@ pub fn actuator_encode_relay_drive(
 #[uniffi::export]
 /// Validate and re-encode a schema-1 control envelope.
 ///
-/// Accepted operations are `capabilities`, `read_layout`, `stage_layout`,
-/// `commit_layout`, `reset_fault`, and `reset_emergency_stop`. Paginated rover
-/// operations are not part of this encoder.
+/// Accepts every operation in [`protocol::ControlOperation`]: the five layout
+/// operations plus the rover's paginated reads and layout edits.
 ///
 /// # Errors
 /// Returns `InvalidInput` for oversized JSON, unknown operations, or a payload
@@ -442,13 +300,7 @@ mod tests {
     }
 
     #[test]
-    fn framed_disarm_and_fragment_round_trip() {
-        let frame = actuator_encode_frame(
-            r#"{"kind":"disarm","session":7,"revision":1,"sequence":1,"values":[]}"#.into(),
-        )
-        .unwrap();
-        assert_eq!(&frame[..4], b"TA\x01\x03");
-        assert_eq!(frame.len(), 16);
+    fn fragment_and_control_round_trip() {
         let parts = actuator_fragment(7, b"hello".to_vec(), 7).unwrap();
         let assembler = ActuatorAssembler::new(96).unwrap();
         assert_eq!(assembler.push(parts[0].clone(), 0).unwrap(), None);
@@ -514,10 +366,11 @@ mod tests {
         );
         assert!(ActiveLayout::parse(&servo_on_motor).is_err());
         assert!(
-            !actuator_supports_vio_control(
-                PROFILES.replace(r#""turn_coefficient":-1.0"#, r#""turn_coefficient":-0.5"#)
+            !ActiveLayout::parse(
+                &PROFILES.replace(r#""turn_coefficient":-1.0"#, r#""turn_coefficient":-0.5"#)
             )
             .unwrap()
+            .supports_vio_control()
         );
     }
 }

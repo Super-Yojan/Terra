@@ -27,15 +27,12 @@ fn l3_follows_corner_route_and_preserves_original_destination() {
         budget_seconds: None,
         budget_minutes: None,
     });
-    assert!(arbiter.accept_goal(
-        &GoalCommand::Local {
-            x: 7.,
-            y: 2.,
-            yaw: None,
-            token: Some("astar-goal".into())
-        },
-        20.
-    ));
+    assert!(arbiter.accept_goal(&GoalCommand::Local {
+        x: 7.,
+        y: 2.,
+        yaw: None,
+        token: Some("astar-goal".into())
+    }));
     let map = map();
     let mut pose = Pose {
         x: 2.,
@@ -85,15 +82,12 @@ fn l3_holds_when_route_is_sealed() {
         budget_seconds: None,
         budget_minutes: None,
     });
-    arbiter.accept_goal(
-        &GoalCommand::Local {
-            x: 7.,
-            y: 2.,
-            yaw: None,
-            token: None,
-        },
-        20.,
-    );
+    arbiter.accept_goal(&GoalCommand::Local {
+        x: 7.,
+        y: 2.,
+        yaw: None,
+        token: None,
+    });
     let mut map = map();
     for row in 0..40 {
         map.occupancy[row * 40 + 16] = 100;
@@ -114,15 +108,12 @@ fn changed_map_invalidates_route_without_losing_the_goal() {
         budget_seconds: None,
         budget_minutes: None,
     });
-    arbiter.accept_goal(
-        &GoalCommand::Local {
-            x: 7.,
-            y: 2.,
-            yaw: None,
-            token: Some("keep-goal".into()),
-        },
-        20.,
-    );
+    arbiter.accept_goal(&GoalCommand::Local {
+        x: 7.,
+        y: 2.,
+        yaw: None,
+        token: Some("keep-goal".into()),
+    });
     let mut map = map();
     assert!(
         !settle(&mut arbiter, |dt| input(&map, 0.1 + dt, 1))
@@ -198,15 +189,12 @@ fn localization_jump_replans_without_a_map_revision_change() {
         budget_seconds: None,
         budget_minutes: None,
     });
-    arbiter.accept_goal(
-        &GoalCommand::Local {
-            x: 7.,
-            y: 2.,
-            yaw: None,
-            token: None,
-        },
-        20.,
-    );
+    arbiter.accept_goal(&GoalCommand::Local {
+        x: 7.,
+        y: 2.,
+        yaw: None,
+        token: None,
+    });
     assert!(
         !settle(&mut arbiter, |dt| input(&map, 0.1 + dt, 1))
             .status
@@ -239,26 +227,25 @@ fn cached_waypoint_command_must_stay_admissible() {
         occupancy: vec![0; 120 * 80],
     };
     let mut arbiter = AutonomyArbiter::default();
-    arbiter.planner.config.footprint = terra_navigation::Footprint {
+    let mut settings = arbiter.settings();
+    settings.planner.footprint = terra_navigation::Footprint {
         length: 0.28,
         width: 0.28,
         margin: 0.,
     };
+    arbiter.configure(&settings).unwrap();
     arbiter.set_level(LevelRequest {
         level: Level::Waypoint,
         token: "cache".into(),
         budget_seconds: None,
         budget_minutes: None,
     });
-    assert!(arbiter.accept_goal(
-        &GoalCommand::Local {
-            x: 8.,
-            y: 4.,
-            yaw: None,
-            token: Some("goal".into()),
-        },
-        20.,
-    ));
+    assert!(arbiter.accept_goal(&GoalCommand::Local {
+        x: 8.,
+        y: 4.,
+        yaw: None,
+        token: Some("goal".into()),
+    }));
     let pose = Pose {
         x: 2.,
         y: 4.,
@@ -279,7 +266,7 @@ fn cached_waypoint_command_must_stay_admissible() {
     });
     assert!(first.twist.linear > 0.5, "{:?}", first.twist);
     let planner = LocalPlanner {
-        config: arbiter.planner.config.clone(),
+        config: arbiter.planner_config().clone(),
     };
     let mut blocking = None;
     for index in 0..map.occupancy.len() {
@@ -294,7 +281,7 @@ fn cached_waypoint_command_must_stay_admissible() {
             (point[0] - pose.x).hypot(point[1] - pose.y) > 0.3
                 && terra_navigation::footprint_fits_some_heading(
                     &blocked,
-                    &arbiter.planner.config.footprint,
+                    &arbiter.footprint(),
                     point[0],
                     point[1],
                     Some(pose),
@@ -333,10 +320,6 @@ fn cached_waypoint_command_must_stay_admissible() {
 #[test]
 fn l3_crosses_an_18_by_12_pitch_on_the_rolling_map() {
     let config = MapConfig::default();
-    assert_eq!(
-        (config.width, config.height, config.resolution),
-        (300, 300, 0.1)
-    );
     let mut arbiter = AutonomyArbiter::default();
     arbiter.set_level(LevelRequest {
         level: Level::Waypoint,
@@ -345,15 +328,12 @@ fn l3_crosses_an_18_by_12_pitch_on_the_rolling_map() {
         budget_minutes: None,
     });
     let goal = (17., 6.);
-    assert!(arbiter.accept_goal(
-        &GoalCommand::Local {
-            x: goal.0,
-            y: goal.1,
-            yaw: None,
-            token: Some("far-goal".into()),
-        },
-        30.,
-    ));
+    assert!(arbiter.accept_goal(&GoalCommand::Local {
+        x: goal.0,
+        y: goal.1,
+        yaw: None,
+        token: Some("far-goal".into()),
+    }));
     let mut pose = Pose {
         x: 1.,
         y: 6.,
@@ -444,26 +424,25 @@ fn stalled_measured_speed_does_not_pin_waypoint_speed() {
         occupancy: vec![0; 120 * 80],
     };
     let mut arbiter = AutonomyArbiter::default();
-    arbiter.planner.config.footprint = terra_navigation::Footprint {
+    let mut settings = arbiter.settings();
+    settings.planner.footprint = terra_navigation::Footprint {
         length: 0.28,
         width: 0.28,
         margin: 0.,
     };
+    arbiter.configure(&settings).unwrap();
     arbiter.set_level(LevelRequest {
         level: Level::Waypoint,
         token: "stall".into(),
         budget_seconds: None,
         budget_minutes: None,
     });
-    assert!(arbiter.accept_goal(
-        &GoalCommand::Local {
-            x: 10.,
-            y: 4.,
-            yaw: None,
-            token: Some("goal".into()),
-        },
-        20.,
-    ));
+    assert!(arbiter.accept_goal(&GoalCommand::Local {
+        x: 10.,
+        y: 4.,
+        yaw: None,
+        token: Some("goal".into()),
+    }));
     let pose = Pose {
         x: 2.,
         y: 4.,
@@ -548,15 +527,12 @@ fn drive_behind_box(goal: [f64; 2]) -> (bool, Pose, Vec<String>) {
         budget_seconds: None,
         budget_minutes: None,
     });
-    assert!(arbiter.accept_goal(
-        &GoalCommand::Local {
-            x: goal[0],
-            y: goal[1],
-            yaw: None,
-            token: None,
-        },
-        20.
-    ));
+    assert!(arbiter.accept_goal(&GoalCommand::Local {
+        x: goal[0],
+        y: goal[1],
+        yaw: None,
+        token: None,
+    }));
     let mut pose = Pose::default();
     let mut measured = Twist::default();
     let mut reasons = Vec::new();

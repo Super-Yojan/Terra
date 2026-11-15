@@ -58,7 +58,7 @@ World, cameras, physics, and the Zenoh bridge live in
 cargo run -p zorvane
 ```
 
-The Zenoh prefix stays `terra/rover` (`cmd_vel`, `goal`, cameras, fleet). The
+The Zenoh prefix stays `terra/rover` (`teleop`, `goal`, cameras, fleet). The
 `TERRA_*` variables still select the fleet, tiles, mission, and listen address.
 `TERRA_ZENOH_LISTEN` defaults to `tcp/127.0.0.1:7447`. Tile worlds and the
 go-to-waypoint contract are documented in Zorvane:

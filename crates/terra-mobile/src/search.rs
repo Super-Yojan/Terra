@@ -82,21 +82,6 @@ pub struct MobileSearchSnapshot {
     /// Serialized completion report when available.
     pub report_json: Option<String>,
 }
-fn search_error(message: &str) -> ControllerError {
-    ControllerError::InvalidInput {
-        message: message.into(),
-    }
-}
-pub(crate) fn dispatch_search(
-    b: &mut Brain,
-    kind: &str,
-    bytes: &[u8],
-    timestamp: f64,
-) -> Result<(), ControllerError> {
-    b.runtime.recording_healthy = b.recorder.as_ref().is_none_or(|r| !r.failed());
-    terra_runtime::search::dispatch_search(&mut b.runtime, kind, bytes, timestamp)
-        .map_err(Into::into)
-}
 #[uniffi::export]
 impl MobileController {
     /// Call on each detector heartbeat, including frames with no detections. Empty classes withdraw capability.
@@ -111,9 +96,13 @@ impl MobileController {
         self.brain
             .lock()
             .map_err(|_| ControllerError::Internal)?
-            .autonomy
-            .set_detector_capability(classes, version, timestamp)
-            .map_err(search_error)
+            .runtime
+            .ingest(terra_runtime::RuntimeEvent::Detector {
+                classes,
+                version,
+                received_at: timestamp,
+            })?;
+        Ok(())
     }
     /// Validate and submit a search using current pose, map, detector, and authority.
     /// `timestamp` is monotonic seconds. Returns `InvalidInput` for malformed or
@@ -138,12 +127,7 @@ impl MobileController {
             time_budget_s: r.time_budget_s,
         };
         let mut b = self.brain.lock().map_err(|_| ControllerError::Internal)?;
-        dispatch_search(
-            &mut b,
-            "search",
-            &serde_json::to_vec(&request).map_err(|_| ControllerError::Internal)?,
-            timestamp,
-        )
+        Ok(b.runtime.start_search(request, timestamp)?)
     }
     /// Submit one detector observation for arbiter validation and confirmation.
     /// `timestamp` is current monotonic seconds. Returns `InvalidInput` for rejected
@@ -156,9 +140,9 @@ impl MobileController {
         self.brain
             .lock()
             .map_err(|_| ControllerError::Internal)?
-            .autonomy
-            .accept_target_observation(
-                terra_autonomy::TargetObservation {
+            .runtime
+            .ingest(terra_runtime::RuntimeEvent::Target {
+                sample: terra_autonomy::TargetObservation {
                     run_id: o.run_id,
                     search_id: o.search_id,
                     frame_id: o.frame_id,
@@ -169,9 +153,9 @@ impl MobileController {
                     received_at: o.received_at,
                     evidence_id: o.evidence_id,
                 },
-                timestamp,
-            )
-            .map_err(search_error)
+                received_at: timestamp,
+            })?;
+        Ok(())
     }
     /// Add one object detection to the run's object map, which the dashboard
     /// shows on the `objects` topic. Latitude and longitude are added here when
@@ -185,6 +169,7 @@ impl MobileController {
         self.brain
             .lock()
             .map_err(|_| ControllerError::Internal)?
+            .runtime
             .observe_object(
                 terra_autonomy::objects::ObjectSighting {
                     class: d.class_name,
@@ -205,8 +190,8 @@ impl MobileController {
         self.brain
             .lock()
             .map(|b| {
-                b.objects
-                    .telemetry(b.dashboard.as_ref().map_or(0, |d| d.rover_id), &b.run_id)
+                b.objects()
+                    .telemetry(b.dashboard.as_ref().map_or(0, |d| d.rover_id()), b.run_id())
                     .to_string()
             })
             .unwrap_or_default()
@@ -216,15 +201,15 @@ impl MobileController {
         self.brain
             .lock()
             .map_err(|_| ControllerError::Internal)?
-            .objects
-            .clear();
+            .runtime
+            .clear_objects();
         Ok(())
     }
     /// Read search status at monotonic `timestamp` seconds without stepping motors.
     /// Returns `None` when no status is available, locking fails, or conversion fails.
     pub fn target_search_snapshot(&self, timestamp: f64) -> Option<MobileSearchSnapshot> {
         let b = self.brain.lock().ok()?;
-        let s = b.autonomy.search_status(timestamp)?;
+        let s = b.autonomy().search_status(timestamp)?;
         Some(MobileSearchSnapshot {
             run_id: s.run_id,
             search_id: s.search_id,

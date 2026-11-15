@@ -196,7 +196,7 @@ pub fn route(
     pose: terra_navigation::Pose,
     x: f64,
     y: f64,
-) -> Result<Vec<[f64; 2]>, &'static str> {
+) -> Result<Vec<[f64; 2]>, terra_navigation::RouteError> {
     let config = terra_navigation::HybridConfig {
         footprint: FOOTPRINT,
         ..Default::default()

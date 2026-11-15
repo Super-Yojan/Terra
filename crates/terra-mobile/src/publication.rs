@@ -1,32 +1,14 @@
 //! Content caching for visualization only. Never use this gate for safety or authority.
 use std::time::{Duration, Instant};
 
+/// Oldest map sample, seconds, worth drawing: dashboard telemetry expires
+/// after 500 ms, so an older map would be shown as current after it lapsed.
+const MAP_VISUALIZATION_FRESHNESS_SECONDS: f64 = 0.5;
+
 /// Source and control timestamps share the phone monotonic clock. Do not turn
 /// an old cached map into fresh visualization evidence after gate reset.
 pub(crate) fn fresh_map_sample(now: f64, sample: f64) -> bool {
-    now.is_finite()
-        && sample.is_finite()
-        && now >= 0.
-        && sample >= 0.
-        && now >= sample
-        && now - sample < 0.5
-}
-
-/// Dashboard limits are intentionally narrower than onboard mapping.
-pub(crate) fn map_visualization_valid(map: &terra_mapping::MapSnapshot, run: &str) -> bool {
-    !run.is_empty()
-        && run.len() <= 256
-        && (1..=512).contains(&map.width)
-        && (1..=512).contains(&map.height)
-        && map.width as usize * map.height as usize <= 250_000
-        && map.occupancy.len() == map.width as usize * map.height as usize
-        && map.resolution.is_finite()
-        && (0.01..=2.).contains(&map.resolution)
-        && map.origin_x.is_finite()
-        && map.origin_y.is_finite()
-        && (map.origin_x + f64::from(map.width) * map.resolution).is_finite()
-        && (map.origin_y + f64::from(map.height) * map.resolution).is_finite()
-        && map.occupancy.iter().all(|cell| (-1..=100).contains(cell))
+    terra_types::timing::fresh(now, Some(sample), MAP_VISUALIZATION_FRESHNESS_SECONDS)
 }
 
 #[derive(Debug, PartialEq)]
@@ -141,53 +123,11 @@ impl<C: PartialEq, S: PartialEq> Gate<C, S> {
 
 /// Cache all occupancy cells and geometry under the run identity.
 pub(crate) type MapGate = Gate<(String, u32, u32, f64, f64, f64, Vec<i8>), String>;
-/// Cache exact parsed cloud content under its frame identity.
-pub(crate) type CloudGate = Gate<serde_json::Value, String>;
 
 /// Deterministic contract and regression scenarios for this module.
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    /// Exercises accepted dashboard dimensions and rejects excessive dimensions/cell count,
-    /// invalid resolution/cells/origin, and empty or oversized run identities.
-    fn visualization_envelope_matches_dashboard_without_narrowing_local_maps() {
-        // Build unknown-free test geometry with the requested dimensions and valid 0.1 m cells.
-        let map = |width, height| terra_mapping::MapSnapshot {
-            width,
-            height,
-            resolution: 0.1,
-            origin_x: 0.,
-            origin_y: 0.,
-            occupancy: vec![0; width as usize * height as usize],
-        };
-        for (width, height) in [(400, 400), (500, 500), (512, 1)] {
-            assert!(map_visualization_valid(&map(width, height), "run"));
-        }
-        for (width, height) in [(600, 500), (512, 500), (513, 1), (1, 513)] {
-            let unsupported = map(width, height);
-            // All examples fit the wire cap; byte acceptance alone is insufficient.
-            assert!(serde_json::to_vec(&unsupported.occupancy).unwrap().len() < 2_000_000);
-            assert!(!map_visualization_valid(&unsupported, "run"));
-        }
-        for resolution in [0.009, 2.001, f64::NAN, f64::INFINITY] {
-            let mut unsupported = map(2, 2);
-            unsupported.resolution = resolution;
-            assert!(!map_visualization_valid(&unsupported, "run"));
-        }
-        for cell in [-2, 101] {
-            let mut unsupported = map(2, 2);
-            unsupported.occupancy[0] = cell;
-            assert!(!map_visualization_valid(&unsupported, "run"));
-        }
-        let mut unsupported = map(2, 2);
-        unsupported.origin_x = f64::INFINITY;
-        assert!(!map_visualization_valid(&unsupported, "run"));
-        assert!(!map_visualization_valid(&map(2, 2), ""));
-        assert!(!map_visualization_valid(&map(2, 2), &"x".repeat(257)));
-        assert!(map_visualization_valid(&map(2, 2), &"x".repeat(256)));
-    }
 
     #[test]
     /// Rejects a newer source sample, verifies it cannot be retried at the same sequence,
@@ -371,66 +311,6 @@ mod tests {
                 Publication::Full
             );
         }
-    }
-
-    #[test]
-    /// Checks unchanged clouds obey the 500 ms heartbeat interval, duplicates remain suppressed,
-    /// new source samples recover a full baseline after two seconds, and content/frame changes force full payloads.
-    fn exact_cloud_content_frame_and_rate_limit() {
-        let now = Instant::now();
-        let interval = Duration::from_millis(500);
-        let mut gate = CloudGate::default();
-        let content = serde_json::json!({"version":1,"frameID":"a","points":[[1.,2.,3.]]});
-        assert_eq!(
-            gate.observe(content.clone(), "a".into(), 1, now, interval),
-            Publication::Full
-        );
-        assert_eq!(
-            gate.observe(content.clone(), "a".into(), 2, now + interval / 2, interval),
-            Publication::Skip
-        );
-        assert_eq!(
-            gate.observe(content.clone(), "a".into(), 3, now + interval, interval),
-            Publication::Heartbeat(1)
-        );
-        assert_eq!(
-            gate.observe(
-                content.clone(),
-                "a".into(),
-                3,
-                now + Duration::from_secs(3),
-                interval
-            ),
-            Publication::Skip
-        );
-        assert_eq!(
-            gate.observe(
-                content.clone(),
-                "a".into(),
-                4,
-                now + Duration::from_secs(3),
-                interval
-            ),
-            Publication::Full
-        );
-        let mut moved = content.clone();
-        moved["points"][0][0] = serde_json::json!(1.00001);
-        assert_eq!(
-            gate.observe(moved, "a".into(), 5, now + Duration::from_secs(3), interval),
-            Publication::Full
-        );
-        let mut reframed = content;
-        reframed["frameID"] = serde_json::json!("b");
-        assert_eq!(
-            gate.observe(
-                reframed,
-                "b".into(),
-                1,
-                now + Duration::from_secs(3),
-                interval
-            ),
-            Publication::Full
-        );
     }
 
     #[test]

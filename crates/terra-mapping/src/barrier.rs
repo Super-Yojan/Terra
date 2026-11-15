@@ -2,15 +2,14 @@
 //! passes through clear glass, so a ray to whatever stands behind a pane
 //! would otherwise clear the pane's cells. The mesh often still holds faces
 //! on the glass, its frame or its reflections, and ARKit labels them.
+use crate::square_grid::SquareGrid;
 use terra_types::Vector3;
 
 /// Faces a cell needs before it counts as a barrier, so a stray face does
 /// not wall off open floor.
-pub const BARRIER_MIN_FACES: u32 = 3;
+const BARRIER_MIN_FACES: u32 = 3;
 /// Height slack around a cell's face heights when testing a ray, in metres.
-pub const BARRIER_HEIGHT_MARGIN: f64 = 0.05;
-/// Largest accepted surface side, in cells.
-const MAX_SIDE: u32 = 400;
+const BARRIER_HEIGHT_MARGIN: f64 = 0.05;
 
 /// Barrier height span per cell of a square world-aligned grid.
 ///
@@ -18,12 +17,9 @@ const MAX_SIDE: u32 = 400;
 /// that produced it by more than one update.
 #[derive(Clone, Debug, PartialEq)]
 pub struct BarrierSurface {
-    origin_x: f64,
-    origin_y: f64,
-    resolution: f64,
-    side: u32,
+    grid: SquareGrid,
     /// Row-major lowest and highest face height in world metres; NaN where
-    /// the cell holds fewer than [`BARRIER_MIN_FACES`] faces.
+    /// the cell holds fewer than three faces.
     spans: Vec<[f32; 2]>,
 }
 impl BarrierSurface {
@@ -31,8 +27,7 @@ impl BarrierSurface {
     /// `resolution` cells within `half_extent` of `(centre_x, centre_y)`.
     /// Nonfinite samples and samples outside the square are ignored.
     ///
-    /// Returns `None` for invalid geometry or when no cell holds
-    /// [`BARRIER_MIN_FACES`] faces.
+    /// Returns `None` for invalid geometry or when no cell holds three faces.
     pub fn build(
         samples: &[Vector3],
         centre_x: f64,
@@ -40,33 +35,16 @@ impl BarrierSurface {
         half_extent: f64,
         resolution: f64,
     ) -> Option<Self> {
-        if ![centre_x, centre_y, half_extent, resolution]
-            .iter()
-            .all(|v| v.is_finite())
-            || !(0.01..=10.0).contains(&resolution)
-            || half_extent <= 0.0
-        {
-            return None;
-        }
-        let side = (2.0 * half_extent / resolution).ceil();
-        if side > MAX_SIDE as f64 {
-            return None;
-        }
-        let side = side as u32;
-        let origin_x = centre_x - side as f64 * resolution / 2.0;
-        let origin_y = centre_y - side as f64 * resolution / 2.0;
-        let mut counts = vec![0_u32; (side * side) as usize];
+        let grid = SquareGrid::around(centre_x, centre_y, half_extent, resolution)?;
+        let mut counts = vec![0_u32; grid.len()];
         let mut spans = vec![[f32::INFINITY, f32::NEG_INFINITY]; counts.len()];
         for p in samples {
             if !p.finite() {
                 continue;
             }
-            let col = ((p.x - origin_x) / resolution).floor();
-            let row = ((p.y - origin_y) / resolution).floor();
-            if col < 0.0 || row < 0.0 || col >= side as f64 || row >= side as f64 {
+            let Some(i) = grid.index(p.x, p.y) else {
                 continue;
-            }
-            let i = row as usize * side as usize + col as usize;
+            };
             counts[i] += 1;
             spans[i][0] = spans[i][0].min(p.z as f32);
             spans[i][1] = spans[i][1].max(p.z as f32);
@@ -79,38 +57,24 @@ impl BarrierSurface {
                 any = true;
             }
         }
-        any.then_some(Self {
-            origin_x,
-            origin_y,
-            resolution,
-            side,
-            spans,
-        })
-    }
-    fn span_at(&self, x: f64, y: f64) -> Option<(i64, i64, [f32; 2])> {
-        let col = ((x - self.origin_x) / self.resolution).floor();
-        let row = ((y - self.origin_y) / self.resolution).floor();
-        if !(col >= 0.0 && row >= 0.0 && col < self.side as f64 && row < self.side as f64) {
-            return None;
-        }
-        let span = self.spans[row as usize * self.side as usize + col as usize];
-        Some((col as i64, row as i64, span))
+        any.then_some(Self { grid, spans })
     }
     /// First point where the segment `from`→`to` passes through a barrier
-    /// cell at a height within that cell's faces (plus
-    /// [`BARRIER_HEIGHT_MARGIN`]), or `None` when it passes none.
+    /// cell at a height within that cell's faces (plus 5 cm), or `None` when
+    /// it passes none.
     ///
     /// The cell holding `from` is skipped, so a camera beside a wall still
     /// sees past it, and so are the last `resolution` metres before `to`, so
     /// a return off the barrier itself keeps its own label.
     pub fn crossing(&self, from: Vector3, to: Vector3) -> Option<Vector3> {
+        let resolution = self.grid.resolution;
         let length = (to.x - from.x).hypot(to.y - from.y);
-        let stop = length - self.resolution;
+        let stop = length - resolution;
         if !stop.is_finite() || stop <= 0.0 {
             return None;
         }
-        let start = self.span_at(from.x, from.y).map(|(c, r, _)| (c, r));
-        let step = self.resolution / 4.0;
+        let start = self.grid.index(from.x, from.y);
+        let step = resolution / 4.0;
         let mut s = step;
         while s < stop {
             let t = s / length;
@@ -119,10 +83,10 @@ impl BarrierSurface {
                 y: from.y + t * (to.y - from.y),
                 z: from.z + t * (to.z - from.z),
             };
-            if let Some((col, row, [low, high])) = self.span_at(p.x, p.y)
-                && Some((col, row)) != start
-                && p.z >= low as f64 - BARRIER_HEIGHT_MARGIN
-                && p.z <= high as f64 + BARRIER_HEIGHT_MARGIN
+            if let Some(i) = self.grid.index(p.x, p.y)
+                && Some(i) != start
+                && p.z >= self.spans[i][0] as f64 - BARRIER_HEIGHT_MARGIN
+                && p.z <= self.spans[i][1] as f64 + BARRIER_HEIGHT_MARGIN
             {
                 return Some(p);
             }
@@ -132,15 +96,17 @@ impl BarrierSurface {
     }
     /// World centres of the barrier cells, at the middle of their height span.
     pub fn cell_centres(&self) -> Vec<Vector3> {
-        let side = self.side as usize;
-        (0..side * side)
-            .filter_map(|i| {
-                let [low, high] = self.spans[i];
-                low.is_finite().then(|| Vector3 {
-                    x: self.origin_x + ((i % side) as f64 + 0.5) * self.resolution,
-                    y: self.origin_y + ((i / side) as f64 + 0.5) * self.resolution,
-                    z: (low as f64 + high as f64) / 2.0,
-                })
+        self.spans
+            .iter()
+            .enumerate()
+            .filter(|(_, [low, _])| low.is_finite())
+            .map(|(i, [low, high])| {
+                let (x, y) = self.grid.centre(i);
+                Vector3 {
+                    x,
+                    y,
+                    z: (*low as f64 + *high as f64) / 2.0,
+                }
             })
             .collect()
     }

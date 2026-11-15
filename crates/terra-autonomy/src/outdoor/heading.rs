@@ -64,7 +64,7 @@ pub struct HeadingFusion {
     rejects: u32,
 }
 
-/// Signed smallest difference `a - b` in degrees.
+/// An angle difference in degrees wrapped to [-180, 180).
 fn wrap(d: f64) -> f64 {
     (d + 180.).rem_euclid(360.) - 180.
 }
@@ -86,7 +86,7 @@ impl HeadingFusion {
                 return;
             }
             let dt = t - last_t;
-            let turn = wrap((pose.yaw - last.yaw).to_degrees()).abs().to_radians();
+            let turn = terra_types::wrap_angle(pose.yaw - last.yaw).abs();
             if dt > POSE_GAP_S || turn > MAX_YAW_RATE * dt + 0.2 {
                 self.reset();
             } else if self
@@ -179,7 +179,7 @@ impl HeadingFusion {
         };
         let dt = t1 - t0;
         let (dx, dy) = (p1.x - p0.x, p1.y - p0.y);
-        let turn = wrap((p1.yaw - p0.yaw).to_degrees()).abs();
+        let turn = terra_types::wrap_angle(p1.yaw - p0.yaw).abs().to_degrees();
         if dt < 0.5 * COURSE_WINDOW_S
             || dx.hypot(dy) < 0.6 * COURSE_MIN_SPEED * dt
             || turn > COURSE_MAX_TURN_DEG

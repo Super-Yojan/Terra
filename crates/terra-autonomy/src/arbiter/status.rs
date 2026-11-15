@@ -10,7 +10,7 @@ impl AutonomyArbiter {
     ) -> AutonomyStatus {
         AutonomyStatus {
             sensor_hold: None,
-            global_route: if self.routed_level()
+            global_route: if self.level.routed()
                 && decision.route_failure.is_none()
                 && valid_time
                 && !self.stopped
@@ -32,10 +32,11 @@ impl AutonomyArbiter {
                 Vec::new()
             },
             planner_trace: self
-                .planner_trace
+                .plan
+                .trace
                 .as_ref()
                 .filter(|(at, _)| {
-                    input.now - at >= 0. && input.now - at < timing::PLANNER_TRACE_FRESHNESS_SECONDS
+                    timing::fresh(input.now, Some(*at), timing::PLANNER_TRACE_FRESHNESS_SECONDS)
                 })
                 .map(|(at, trace)| {
                     let mut trace = trace.clone();
@@ -50,9 +51,9 @@ impl AutonomyArbiter {
             } else {
                 Some(self.level)
             },
-            active_source: decision.source.into(),
-            safety: decision.safety.into(),
-            reason: decision.reason.into(),
+            active_source: decision.source,
+            safety: decision.safety,
+            reason: decision.reason.as_str().into(),
             revision: self.revision,
             token: self.receipt.as_ref().map(|r| r.0.clone()),
             result: self
@@ -60,29 +61,14 @@ impl AutonomyArbiter {
                 .as_ref()
                 .map(|r| if r.1 { "accepted" } else { "rejected" }.into()),
             request_reason: self.request_reason.clone(),
-            supported_levels: {
-                let mut levels = vec![
-                    Level::Teleop,
-                    Level::AssistedTeleop,
-                    Level::Waypoint,
-                    Level::WaypointDirect,
-                    Level::Supervised,
-                    Level::Explore,
-                ];
-                if !self.detector_classes.is_empty()
-                    && fresh(
-                        input.now,
-                        self.detector_time,
-                        timing::DETECTOR_FRESHNESS_SECONDS,
-                    )
-                {
-                    levels.push(Level::TargetSearch);
-                }
-                if self.task_model.is_some() || self.task_agent.is_some() {
-                    levels.push(Level::Task);
-                }
-                levels
-            },
+            supported_levels: Level::BASE
+                .into_iter()
+                .chain(
+                    [Level::TargetSearch, Level::Task]
+                        .into_iter()
+                        .filter(|&l| self.level_unavailable(l, input.now).is_none()),
+                )
+                .collect(),
             task_agents: [
                 (self.task_model.is_some(), crate::TaskAgent::Builtin),
                 (self.task_agent.is_some(), crate::TaskAgent::Mcp),

@@ -25,6 +25,93 @@ pub enum Level {
     Task,
 }
 impl Level {
+    /// Every level, in rung order (L0 to L5).
+    pub const ALL: [Level; 8] = [
+        Level::Teleop,
+        Level::AssistedTeleop,
+        Level::WaypointDirect,
+        Level::Waypoint,
+        Level::Supervised,
+        Level::Explore,
+        Level::TargetSearch,
+        Level::Task,
+    ];
+    /// Levels every arbiter offers, in the order the phone pickers list them. `target_search` is added while a detector is
+    /// fresh and `task` while a language model or MCP agent is attached.
+    pub const BASE: [Level; 6] = [
+        Level::Teleop,
+        Level::AssistedTeleop,
+        Level::Waypoint,
+        Level::WaypointDirect,
+        Level::Explore,
+        Level::Supervised,
+    ];
+    /// Wire name, identical to the serde form.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Level::Teleop => "teleop",
+            Level::AssistedTeleop => "assisted_teleop",
+            Level::Waypoint => "waypoint",
+            Level::WaypointDirect => "waypoint_direct",
+            Level::Supervised => "supervised",
+            Level::TargetSearch => "target_search",
+            Level::Explore => "explore",
+            Level::Task => "task",
+        }
+    }
+    /// The level with this wire name.
+    pub fn parse(name: &str) -> Option<Level> {
+        Level::ALL.into_iter().find(|level| level.as_str() == name)
+    }
+    /// L0: direct operator effort without sensor-based navigation.
+    pub fn is_manual(self) -> bool {
+        self == Level::Teleop
+    }
+    /// The operator drives (L0, L1); every other level drives on its own targets.
+    pub fn operator_driven(self) -> bool {
+        matches!(self, Level::Teleop | Level::AssistedTeleop)
+    }
+    /// Holds without a fresh occupancy map. L0 and L2 direct do not read it.
+    pub fn needs_map(self) -> bool {
+        !matches!(self, Level::Teleop | Level::WaypointDirect)
+    }
+    /// Goals are driven along a Hybrid A* route. L2 direct deliberately follows
+    /// its goal without map planning.
+    pub fn routed(self) -> bool {
+        matches!(
+            self,
+            Level::Waypoint
+                | Level::Task
+                | Level::Supervised
+                | Level::Explore
+                | Level::TargetSearch
+        )
+    }
+    /// Takes an operator waypoint goal directly.
+    pub fn accepts_goal(self) -> bool {
+        matches!(
+            self,
+            Level::Waypoint | Level::WaypointDirect | Level::Supervised
+        )
+    }
+    /// May hold a GPS destination: L2 and L3 follow it directly, L4 explore and
+    /// L5 task plan toward it on the local map. Target search keeps its own
+    /// operator-drawn bounds.
+    pub fn accepts_outdoor_goal(self) -> bool {
+        matches!(
+            self,
+            Level::WaypointDirect | Level::Waypoint | Level::Explore | Level::Task
+        )
+    }
+    /// Plans toward the GPS destination itself (L4 explore, L5 task) instead of
+    /// being driven to it as a waypoint.
+    pub fn reads_outdoor_destination(self) -> bool {
+        matches!(self, Level::Explore | Level::Task)
+    }
+    /// Motion is estimated from phone VIO (the L3 route, and L5 on that route).
+    pub fn uses_vio(self) -> bool {
+        matches!(self, Level::Waypoint | Level::Task)
+    }
     /// The name operators and study participants see, identical in ARGOS
     /// (`OPERATOR_LEVELS`), both phone pickers and the thesis tables
     /// (Super-Yojan/ARGOS#112). `target_search` is part of L4, so it shares
@@ -39,6 +126,316 @@ impl Level {
             Level::Task => "L5 Task",
             Level::Supervised => "Supervised",
         }
+    }
+}
+/// Who supplied this tick's motion. Serialized as `active_source`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Source {
+    /// Nothing is driving, including every hold.
+    #[default]
+    None,
+    /// L0 operator velocity.
+    Operator,
+    /// L1 operator intent through the local planner.
+    AssistedOperator,
+    /// L2/L3 waypoint follower.
+    Waypoint,
+    /// Approved supervised frontier.
+    Frontier,
+    /// L4 exploration frontier or look-around.
+    Explore,
+    /// Target-search route.
+    TargetSearch,
+    /// L5 task waypoint.
+    Task,
+    /// L5 MCP agent drive grant.
+    TaskAgentDrive,
+    /// Getting unstuck on a routed level.
+    Recovery,
+    /// Bucket dock.
+    Dock,
+}
+impl Source {
+    /// Wire name, identical to the serde form.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Source::None => "none",
+            Source::Operator => "operator",
+            Source::AssistedOperator => "assisted_operator",
+            Source::Waypoint => "waypoint",
+            Source::Frontier => "frontier",
+            Source::Explore => "explore",
+            Source::TargetSearch => "target_search",
+            Source::Task => "task",
+            Source::TaskAgentDrive => "task_agent_drive",
+            Source::Recovery => "recovery",
+            Source::Dock => "dock",
+        }
+    }
+}
+/// Kind of a [`crate::DecisionEvent`]: the arbiter's own decisions and the
+/// clearance episodes hosts add to its log are variants; kinds forwarded from
+/// the exploration, dock and task state machines are carried in [`EventKind::Other`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EventKind {
+    AuthorityGenerationChanged,
+    CandidateObserved,
+    CandidateRejected,
+    /// A simulator body touched the rover (see `terra_experiment::summarize`).
+    ContactStart,
+    DockAligned,
+    DockBackoff,
+    DockCancelled,
+    DockDone,
+    DockFailed,
+    DockGateClosed,
+    DockGateOpened,
+    DockStarted,
+    GoalAccepted,
+    GoalCancel,
+    GoalDropped,
+    GoalRejected,
+    LocalFrameReset,
+    MissionPaused,
+    /// Observed clearance fell below the near-miss threshold; see `terra_runtime::near_miss`.
+    NearMissStart,
+    /// Observed clearance recovered above the near-miss exit threshold.
+    NearMissEnd,
+    OperatorReceived,
+    ProposalCreated,
+    RemoteRequestRejected,
+    ReportAcknowledged,
+    ReportQueued,
+    RequestAccepted,
+    RequestRejected,
+    RouteFailed,
+    RouteSelected,
+    SearchAccepted,
+    SearchPaused,
+    SearchResumed,
+    SearchCancelled,
+    Takeover,
+    TargetConfirmed,
+    TaskAction,
+    TaskDriveRequested,
+    TaskEnded,
+    TaskPlan,
+    TaskQuestion,
+    TaskStarted,
+    TaskWaypointAbandoned,
+    TiltStop,
+    /// A kind named by a forwarded state machine.
+    Other(&'static str),
+}
+impl EventKind {
+    /// Wire name, as published in `DecisionEvent::kind`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            EventKind::AuthorityGenerationChanged => "authority_generation_changed",
+            EventKind::CandidateObserved => "candidate_observed",
+            EventKind::CandidateRejected => "candidate_rejected",
+            EventKind::ContactStart => "contact_start",
+            EventKind::DockAligned => "dock_aligned",
+            EventKind::DockBackoff => "dock_backoff",
+            EventKind::DockCancelled => "dock_cancelled",
+            EventKind::DockDone => "dock_done",
+            EventKind::DockFailed => "dock_failed",
+            EventKind::DockGateClosed => "dock_gate_closed",
+            EventKind::DockGateOpened => "dock_gate_opened",
+            EventKind::DockStarted => "dock_started",
+            EventKind::GoalAccepted => "goal_accepted",
+            EventKind::GoalCancel => "goal_cancel",
+            EventKind::GoalDropped => "goal_dropped",
+            EventKind::GoalRejected => "goal_rejected",
+            EventKind::LocalFrameReset => "local_frame_reset",
+            EventKind::MissionPaused => "mission_paused",
+            EventKind::NearMissStart => "near_miss_start",
+            EventKind::NearMissEnd => "near_miss_end",
+            EventKind::OperatorReceived => "operator_received",
+            EventKind::ProposalCreated => "proposal_created",
+            EventKind::RemoteRequestRejected => "remote_request_rejected",
+            EventKind::ReportAcknowledged => "report_acknowledged",
+            EventKind::ReportQueued => "report_queued",
+            EventKind::RequestAccepted => "request_accepted",
+            EventKind::RequestRejected => "request_rejected",
+            EventKind::RouteFailed => "route_failed",
+            EventKind::RouteSelected => "route_selected",
+            EventKind::SearchAccepted => "search_accepted",
+            EventKind::SearchPaused => "search_paused",
+            EventKind::SearchResumed => "search_resumed",
+            EventKind::SearchCancelled => "search_cancelled",
+            EventKind::Takeover => "takeover",
+            EventKind::TargetConfirmed => "target_confirmed",
+            EventKind::TaskAction => "task_action",
+            EventKind::TaskDriveRequested => "task_drive_requested",
+            EventKind::TaskEnded => "task_ended",
+            EventKind::TaskPlan => "task_plan",
+            EventKind::TaskQuestion => "task_question",
+            EventKind::TaskStarted => "task_started",
+            EventKind::TaskWaypointAbandoned => "task_waypoint_abandoned",
+            EventKind::TiltStop => "tilt_stop",
+            EventKind::Other(name) => name,
+        }
+    }
+}
+/// Reasons on [`EventKind::RequestAccepted`] events that offline metrics
+/// (`terra_experiment::summarize`) count as operator interventions.
+pub mod accepted_reason {
+    /// The operator changed the requested level.
+    pub const OPERATOR_SELECTION: &str = "operator_selection";
+    /// The operator approved a supervised proposal.
+    pub const PROPOSAL_APPROVE: &str = "proposal_approve";
+    /// The operator rejected a supervised proposal.
+    pub const PROPOSAL_REJECT: &str = "proposal_reject";
+}
+/// Dashboard safety state. Serialized as `safety`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Safety {
+    /// Motion is allowed.
+    #[default]
+    Clear,
+    /// An ordinary hold: zero motion until the condition clears.
+    Hold,
+    /// A latched operator, keyboard or tilt stop; only a safety reset clears it.
+    EmergencyStop,
+}
+impl Safety {
+    /// Wire name, identical to the serde form.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Safety::Clear => "clear",
+            Safety::Hold => "hold",
+            Safety::EmergencyStop => "emergency_stop",
+        }
+    }
+}
+/// Why a tick moves or holds, published as `AutonomyStatus::reason`.
+///
+/// The reasons the arbiter and its hosts branch on are variants. Every other
+/// reason (dock, task, search, pause and route-failure details) is carried as
+/// its wire string in [`Reason::Other`]; build reasons with `Reason::from(&str)`
+/// so a known string always becomes its variant.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Reason {
+    #[default]
+    Idle,
+    /// Moving as intended (see [`terra_navigation::PlanReason::Active`]).
+    Active,
+    /// Moving, but the local planner changed the intent.
+    Assisted,
+    /// The local planner found no admissible motion.
+    ObstacleBlocked,
+    /// The local planner was given invalid input; not evidence of an obstacle.
+    PlannerInvalidInput,
+    InvalidTime,
+    OperatorStop,
+    TiltStop,
+    SensorUnhealthy,
+    MapStale,
+    RoutePlanning,
+    RouteNoPath,
+    RouteGoalBlocked,
+    HeadingRequiresSpinOrReplan,
+    InvalidTurnTiming,
+    /// Recovery could not free the rover; a route failure retried after a wait.
+    BoxedIn,
+    ExplorationScan,
+    SearchHold,
+    /// Dock creeping forward at zero twist between pulses, which is not a hold.
+    DockCreep,
+    /// Any other reason, by wire name.
+    Other(&'static str),
+}
+impl Reason {
+    const KNOWN: [Reason; 19] = [
+        Reason::Idle,
+        Reason::Active,
+        Reason::Assisted,
+        Reason::ObstacleBlocked,
+        Reason::PlannerInvalidInput,
+        Reason::InvalidTime,
+        Reason::OperatorStop,
+        Reason::TiltStop,
+        Reason::SensorUnhealthy,
+        Reason::MapStale,
+        Reason::RoutePlanning,
+        Reason::RouteNoPath,
+        Reason::RouteGoalBlocked,
+        Reason::HeadingRequiresSpinOrReplan,
+        Reason::InvalidTurnTiming,
+        Reason::BoxedIn,
+        Reason::ExplorationScan,
+        Reason::SearchHold,
+        Reason::DockCreep,
+    ];
+    /// Wire name.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Reason::Idle => "idle",
+            Reason::Active => "active",
+            Reason::Assisted => "assisted",
+            Reason::ObstacleBlocked => "obstacle_blocked",
+            Reason::PlannerInvalidInput => "planner_invalid_input",
+            Reason::InvalidTime => "invalid_time",
+            Reason::OperatorStop => "operator_stop",
+            Reason::TiltStop => "tilt_stop",
+            Reason::SensorUnhealthy => "sensor_unhealthy",
+            Reason::MapStale => "map_stale",
+            Reason::RoutePlanning => "route_planning",
+            Reason::RouteNoPath => "route_no_path",
+            Reason::RouteGoalBlocked => "route_goal_blocked",
+            Reason::HeadingRequiresSpinOrReplan => "heading_requires_spin_or_replan",
+            Reason::InvalidTurnTiming => "invalid_turn_timing",
+            Reason::BoxedIn => "boxed_in",
+            Reason::ExplorationScan => "exploration_scan",
+            Reason::SearchHold => "search_hold",
+            Reason::DockCreep => "dock_creep",
+            Reason::Other(name) => name,
+        }
+    }
+    /// The variant with this wire name, or `None` for a reason carried in [`Reason::Other`].
+    pub fn known(name: &str) -> Option<Reason> {
+        Reason::KNOWN.into_iter().find(|r| r.as_str() == name)
+    }
+    /// The route to the current goal cannot be driven right now: the planner
+    /// is blocked, no route exists, the goal is blocked, or the heading needs a
+    /// turn the vehicle may not make. L5 abandons a waypoint that stays like
+    /// this; the outdoor mission reports it as `route_blocked`.
+    pub fn is_route_blocked(self) -> bool {
+        matches!(
+            self,
+            Reason::ObstacleBlocked
+                | Reason::RouteNoPath
+                | Reason::RouteGoalBlocked
+                | Reason::HeadingRequiresSpinOrReplan
+        )
+    }
+}
+impl From<&'static str> for Reason {
+    fn from(name: &'static str) -> Self {
+        Reason::known(name).unwrap_or(Reason::Other(name))
+    }
+}
+impl From<terra_navigation::RouteError> for Reason {
+    fn from(error: terra_navigation::RouteError) -> Self {
+        Reason::from(error.as_str())
+    }
+}
+impl From<terra_navigation::PlanReason> for Reason {
+    fn from(reason: terra_navigation::PlanReason) -> Self {
+        match reason {
+            terra_navigation::PlanReason::Active => Reason::Active,
+            terra_navigation::PlanReason::Assisted => Reason::Assisted,
+            terra_navigation::PlanReason::ObstacleBlocked => Reason::ObstacleBlocked,
+            terra_navigation::PlanReason::InvalidInput => Reason::PlannerInvalidInput,
+        }
+    }
+}
+impl Serialize for Reason {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
     }
 }
 /// Token-correlated authority selection with an optional exploration budget.
@@ -88,12 +485,8 @@ impl LevelRequest {
     /// Resolve exactly one positive finite budget of at most 86400 seconds; return `None` for absent or invalid budgets.
     pub fn resolved_budget_seconds(&self) -> Option<f64> {
         match (self.budget_seconds, self.budget_minutes) {
-            (Some(seconds), None) if seconds.is_finite() && seconds > 0. && seconds <= 86_400. => {
-                Some(seconds)
-            }
-            (None, Some(minutes))
-                if minutes.is_finite() && minutes > 0. && minutes * 60. <= 86_400. =>
-            {
+            (Some(seconds), None) if terra_exploration::valid_budget(seconds) => Some(seconds),
+            (None, Some(minutes)) if terra_exploration::valid_budget(minutes * 60.) => {
                 Some(minutes * 60.)
             }
             _ => None,
@@ -162,7 +555,6 @@ pub struct ProposalDecision {
     pub run_id: String,
     /// Identifier of the proposal being decided; absent for resume.
     pub proposal_id: Option<u64>,
-    /// Operator decision to apply.
     pub decision: Decision,
     /// Request correlation token; command tokens use 1–64 ASCII letters, digits, or `._:-`.
     pub token: String,
@@ -203,11 +595,12 @@ pub struct AutonomyStatus {
     pub requested_level: Level,
     /// Authority currently allowed to act, or none during a hold.
     pub effective_level: Option<Level>,
-    /// Machine-readable source of the selected motion command.
-    pub active_source: String,
-    /// Machine-readable safety state.
-    pub safety: String,
-    /// Machine-readable explanation of the current decision or transition.
+    /// Source of the selected motion command.
+    pub active_source: Source,
+    /// Dashboard safety state.
+    pub safety: Safety,
+    /// Machine-readable explanation of the current decision, normally
+    /// [`Reason::as_str`]; hosts may replace it with an outdoor-mission hold reason.
     pub reason: String,
     /// Monotonically advancing state or authority revision.
     pub revision: u64,
@@ -263,14 +656,11 @@ pub struct SensorHold {
     #[serde(default)]
     pub goal_dropped: bool,
 }
-/// Return whether `s` is 1–64 ASCII letters, digits, or characters from `._:-`.
-pub fn valid_token(s: &str) -> bool {
-    (1..=64).contains(&s.len())
-        && s.bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b"._:-".contains(&b))
-}
-fn decode<T: serde::de::DeserializeOwned>(b: &[u8]) -> Option<T> {
-    if b.is_empty() || b.len() > 2048 {
+use terra_types::requests::MAX_REQUEST_BYTES;
+pub use terra_waypoint::valid_token;
+/// Decode one strict JSON request of 1 to [`MAX_REQUEST_BYTES`] bytes.
+pub(crate) fn decode<T: serde::de::DeserializeOwned>(b: &[u8]) -> Option<T> {
+    if b.is_empty() || b.len() > MAX_REQUEST_BYTES {
         return None;
     }
     serde_json::from_slice(b).ok()
@@ -290,10 +680,7 @@ pub fn decode_level(b: &[u8]) -> Option<LevelRequest> {
 /// Decode a level request that may carry an inline `task` object, so one message
 /// selects L5 and gives the task. A `task` is accepted only with `"level":"task"`.
 pub fn decode_level_with_task(b: &[u8]) -> Option<(LevelRequest, Option<crate::TaskSpec>)> {
-    if b.is_empty() || b.len() > 2048 {
-        return None;
-    }
-    let mut value: serde_json::Value = serde_json::from_slice(b).ok()?;
+    let mut value: serde_json::Value = decode(b)?;
     let task = match value.as_object_mut()?.remove("task") {
         None => None,
         Some(task) => Some(serde_json::from_value::<crate::TaskSpec>(task).ok()?),

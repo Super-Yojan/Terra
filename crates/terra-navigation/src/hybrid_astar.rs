@@ -14,20 +14,58 @@
 //! obstacle-aware 2D distance, both scaled so they never overestimate. Near the
 //! goal, a direct curve to it is tried as a shortcut: a Dubins curve with a goal
 //! heading, otherwise one turn and a straight line.
-use crate::footprint::{OCCUPIED, distance_field, for_each_overlapping_cell};
-use crate::{Footprint, Pose, cell, valid_map};
+use crate::footprint::{distance_field, for_each_overlapping_cell};
+use crate::{Footprint, Pose};
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::f64::consts::{PI, SQRT_2, TAU};
 use terra_mapping::MapSnapshot;
+use terra_mapping::OCCUPIED;
 
 /// Longest 8-connected grid distance relative to the straight-line distance.
 const OCTILE_OVER_EUCLID: f64 = 1.082_392_2;
 /// Half a cell diagonal, in cells.
 const HALF_DIAGONAL: f64 = std::f64::consts::FRAC_1_SQRT_2;
-/// Largest map the search accepts.
-const MAX_CELLS: usize = 250_000;
+
+/// Why no route was found. [`RouteError::as_str`] is the wire name the
+/// arbiter reports as its hold reason.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RouteError {
+    /// Invalid map or configuration, nonfinite coordinates, or a map larger
+    /// than the search accepts.
+    InvalidMap,
+    StartOutsideMap,
+    GoalOutsideMap,
+    /// The body at the start touches an obstacle.
+    StartBlocked,
+    /// The body cannot fit at the goal.
+    GoalBlocked,
+    /// No drivable route exists.
+    NoPath,
+    /// The expansion limit was reached first.
+    SearchLimit,
+}
+impl RouteError {
+    /// Wire name, such as `route_no_path`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RouteError::InvalidMap => "route_invalid_map",
+            RouteError::StartOutsideMap => "route_start_outside_map",
+            RouteError::GoalOutsideMap => "route_goal_outside_map",
+            RouteError::StartBlocked => "route_start_blocked",
+            RouteError::GoalBlocked => "route_goal_blocked",
+            RouteError::NoPath => "route_no_path",
+            RouteError::SearchLimit => "route_search_limit",
+        }
+    }
+}
+impl std::fmt::Display for RouteError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+impl std::error::Error for RouteError {}
 
 /// Rover shape, turning limit and search costs for [`hybrid_astar_route`].
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -95,7 +133,7 @@ impl Default for HybridConfig {
 
 impl HybridConfig {
     /// The planner's footprint and the turn radius from the turning policy.
-    pub fn for_body(footprint: Footprint, turning: &terra_control::TurningConfig) -> Self {
+    pub fn for_body(footprint: Footprint, turning: &terra_types::turning::TurningConfig) -> Self {
         Self {
             footprint,
             min_turn_radius: turning.min_turn_radius,
@@ -160,22 +198,18 @@ pub struct HybridWaypoint {
 /// one map cell apart. It ends within `goal_tolerance` of the goal position and,
 /// when `goal.yaw` is set, within `goal_heading_tolerance` of that heading.
 /// Unknown cells are blocked except under the starting body. This runs the whole
-/// search at once; use [`HybridSearch`] to spread it over control ticks.
+/// search at once; use [`crate::RouteJob`] to spread it over control ticks.
 ///
 /// # Errors
-/// - `route_invalid_map`: invalid map or configuration, nonfinite start, or more
-///   than 250,000 cells.
-/// - `route_start_outside_map` / `route_goal_outside_map`.
-/// - `route_start_blocked`: the body at `start` touches an obstacle.
-/// - `route_goal_blocked`: the body cannot fit at the goal.
-/// - `route_no_path`: no drivable route exists.
-/// - `route_search_limit`: `max_expansions` was reached first.
+/// Any [`RouteError`]; `InvalidMap` includes maps over
+/// [`terra_mapping::MAX_PLANNING_CELLS`] cells, and `SearchLimit` means
+/// `max_expansions` was reached first.
 pub fn hybrid_astar_route(
     map: &MapSnapshot,
     start: Pose,
     goal: HybridGoal,
     config: &HybridConfig,
-) -> Result<Vec<HybridWaypoint>, &'static str> {
+) -> Result<Vec<HybridWaypoint>, RouteError> {
     let mut search = HybridSearch::new(map, start, goal, config, None)?;
     loop {
         if let Some(result) = search.advance(u32::MAX) {
@@ -247,9 +281,9 @@ impl HybridSearch {
         goal: HybridGoal,
         config: &HybridConfig,
         unknown_cost: Option<f64>,
-    ) -> Result<Self, &'static str> {
-        if !valid_map(map)
-            || map.occupancy.len() > MAX_CELLS
+    ) -> Result<Self, RouteError> {
+        if !map.valid()
+            || map.occupancy.len() > terra_mapping::MAX_PLANNING_CELLS
             || !config.valid()
             || !start.finite()
             || !goal.x.is_finite()
@@ -257,10 +291,12 @@ impl HybridSearch {
             || goal.yaw.is_some_and(|yaw| !yaw.is_finite())
             || unknown_cost.is_some_and(|k| !k.is_finite() || k < 1.)
         {
-            return Err("route_invalid_map");
+            return Err(RouteError::InvalidMap);
         }
-        let start_cell = cell(map, start.x, start.y).ok_or("route_start_outside_map")?;
-        let goal_cell = cell(map, goal.x, goal.y).ok_or("route_goal_outside_map")?;
+        let start_cell = map
+            .cell(start.x, start.y)
+            .ok_or(RouteError::StartOutsideMap)?;
+        let goal_cell = map.cell(goal.x, goal.y).ok_or(RouteError::GoalOutsideMap)?;
         let mut search = Self {
             map: map.clone(),
             config: config.clone(),
@@ -296,7 +332,7 @@ impl HybridSearch {
         });
         // The camera's blind zone around the start (see Footprint::blind_zone_radius).
         let reach = (config.footprint.blind_zone_radius() / map.resolution).ceil() as i64 + 1;
-        if let Some((c0, r0)) = cell(map, start.x, start.y) {
+        if let Some((c0, r0)) = map.cell(start.x, start.y) {
             for r in (r0 as i64 - reach).max(0)..=(r0 as i64 + reach).min(map.height as i64 - 1) {
                 for c in (c0 as i64 - reach).max(0)..=(c0 as i64 + reach).min(map.width as i64 - 1)
                 {
@@ -310,12 +346,12 @@ impl HybridSearch {
             }
         }
         if search.body(start.x, start.y, start.yaw, 0.).is_none() {
-            return Err("route_start_blocked");
+            return Err(RouteError::StartBlocked);
         }
         if let Some(yaw) = goal.yaw
             && search.body(goal.x, goal.y, yaw, 0.).is_none()
         {
-            return Err("route_goal_blocked");
+            return Err(RouteError::GoalBlocked);
         }
         search.passable = search.passable_cells();
         if search.unknown_cost.is_some() {
@@ -333,7 +369,7 @@ impl HybridSearch {
         }
         let goal_index = index(map, goal_cell);
         if !search.passable[goal_index] {
-            return Err("route_goal_blocked");
+            return Err(RouteError::GoalBlocked);
         }
         search.heuristic[goal_index] = 0.;
         search.heuristic_open.push(Open(0., goal_index));
@@ -350,16 +386,12 @@ impl HybridSearch {
         Ok(search)
     }
 
-    /// Expansions so far.
-    pub fn expansions(&self) -> u32 {
-        self.expansions
-    }
-
     /// Run up to `budget` expansions. Returns `None` while still searching, then
-    /// the route or the reason there is none (`route_no_path`, `route_search_limit`).
-    pub fn advance(&mut self, budget: u32) -> Option<Result<Vec<HybridWaypoint>, &'static str>> {
+    /// the route or the reason there is none ([`RouteError::NoPath`] or
+    /// [`RouteError::SearchLimit`]).
+    pub fn advance(&mut self, budget: u32) -> Option<Result<Vec<HybridWaypoint>, RouteError>> {
         if self.finished {
-            return Some(Err("route_no_path"));
+            return Some(Err(RouteError::NoPath));
         }
         if !self.heuristic_open.is_empty() || self.open.is_empty() && self.nodes.len() == 1 {
             // Building the heuristic: a cell costs a few hundredths of an
@@ -369,7 +401,7 @@ impl HybridSearch {
             }
             if !self.heuristic[self.start_cell].is_finite() {
                 self.finished = true;
-                return Some(Err("route_no_path"));
+                return Some(Err(RouteError::NoPath));
             }
             let h = self.h(self.start_x(), self.start_y());
             self.open.push(Open(self.config.heuristic_weight * h, 0));
@@ -397,7 +429,7 @@ impl HybridSearch {
             self.expansions += 1;
             if self.expansions > self.config.max_expansions {
                 self.finished = true;
-                return Some(Err("route_search_limit"));
+                return Some(Err(RouteError::SearchLimit));
             }
             if let Some(shortcut) = self.dubins_shortcut(&node) {
                 self.finished = true;
@@ -462,7 +494,7 @@ impl HybridSearch {
             }
         }
         self.finished = true;
-        Some(Err("route_no_path"))
+        Some(Err(RouteError::NoPath))
     }
 
     fn half_extents(&self, pad: f64) -> (f64, f64) {
@@ -473,7 +505,7 @@ impl HybridSearch {
     /// whether it overlaps unknown cells the search was told it may cross.
     fn body(&self, x: f64, y: f64, yaw: f64, pad: f64) -> Option<bool> {
         let (a, b) = self.half_extents(pad);
-        let c = cell(&self.map, x, y)?;
+        let c = self.map.cell(x, y)?;
         // Far from everything blocked or unknown: no need to look at cells.
         let lower_bound = (self.blocked_distance[index(&self.map, c)] / OCTILE_OVER_EUCLID
             - 2. * HALF_DIAGONAL)
@@ -568,7 +600,7 @@ impl HybridSearch {
     }
 
     fn h(&self, x: f64, y: f64) -> f64 {
-        let Some(c) = cell(&self.map, x, y) else {
+        let Some(c) = self.map.cell(x, y) else {
             return f64::INFINITY;
         };
         let straight = (self.goal.x - x).hypot(self.goal.y - y);
@@ -579,7 +611,7 @@ impl HybridSearch {
     /// State bin: map cell, heading, and whether the state was reached in
     /// reverse (a reversed state may not reverse further, so the two differ).
     fn bin(&self, x: f64, y: f64, yaw: f64, reverse: bool) -> Option<usize> {
-        let c = cell(&self.map, x, y)?;
+        let c = self.map.cell(x, y)?;
         let bins = self.config.heading_bins as usize;
         let heading = ((yaw.rem_euclid(TAU) / TAU) * bins as f64) as usize % bins;
         Some((index(&self.map, c) * bins + heading) * 2 + usize::from(reverse))
@@ -587,10 +619,9 @@ impl HybridSearch {
 
     fn arrived(&self, x: f64, y: f64, yaw: f64) -> bool {
         (self.goal.x - x).hypot(self.goal.y - y) <= self.config.goal_tolerance
-            && self
-                .goal
-                .yaw
-                .is_none_or(|g| wrap(yaw - g).abs() <= self.config.goal_heading_tolerance)
+            && self.goal.yaw.is_none_or(|g| {
+                terra_types::wrap_angle(yaw - g).abs() <= self.config.goal_heading_tolerance
+            })
     }
 
     fn cost(&self, parent: &Node, curvature: f64, length: f64) -> f64 {
@@ -619,7 +650,7 @@ impl HybridSearch {
         if c.clearance_penalty == 0. || c.preferred_clearance == 0. {
             return 0.;
         }
-        let Some(cell_xy) = cell(&self.map, x, y) else {
+        let Some(cell_xy) = self.map.cell(x, y) else {
             return 0.;
         };
         let centre = self.obstacle_distance[index(&self.map, cell_xy)] / OCTILE_OVER_EUCLID
@@ -701,7 +732,7 @@ impl HybridSearch {
                 out.push(HybridWaypoint {
                     x,
                     y,
-                    yaw: wrap(yaw),
+                    yaw: terra_types::wrap_angle(yaw),
                     reverse: length < 0.,
                     curvature,
                 });
@@ -723,10 +754,6 @@ fn drive((x, y, yaw): (f64, f64, f64), curvature: f64, length: f64) -> (f64, f64
         y - (end.cos() - yaw.cos()) / curvature,
         end,
     )
-}
-
-fn wrap(angle: f64) -> f64 {
-    (angle + PI).rem_euclid(TAU) - PI
 }
 
 fn index(map: &MapSnapshot, (column, row): (usize, usize)) -> usize {
@@ -867,7 +894,8 @@ fn dubins(from: (f64, f64, f64), to: (f64, f64, f64), radius: f64) -> Option<Vec
         .map(|word| word.map(|(curvature, units)| (curvature, units * radius)))
         .filter(|word| {
             let end = word.iter().fold(from, |at, &(c, len)| drive(at, c, len));
-            (end.0 - to.0).hypot(end.1 - to.1) < 1e-6 && wrap(end.2 - to.2).abs() < 1e-6
+            (end.0 - to.0).hypot(end.1 - to.1) < 1e-6
+                && terra_types::wrap_angle(end.2 - to.2).abs() < 1e-6
         })
         .min_by(|x, y| {
             let total = |w: &[(f64, f64); 3]| w.iter().map(|(_, len)| len).sum::<f64>();

@@ -40,14 +40,41 @@ class UsbQueueTests(unittest.TestCase):
         import subprocess
         from unittest.mock import patch
         remote = SshJournal('pi@raspberrypi.local', '/tmp/key', '/tmp/known_hosts')
+        batch = json.dumps({'events': [{'id': 'e1', 'kind': 'k'}]})
+        with patch('subprocess.run', return_value=subprocess.CompletedProcess('ssh', 0, batch, '')) as run, \
+                patch('urllib.request.OpenerDirector.open', side_effect=OSError('offline')):
+            uploader = _uploader(remote)
+            with self.assertRaises(OSError):
+                uploader.once()
+        actions = [json.loads(call.kwargs['input'])['action'] for call in run.call_args_list]
+        self.assertEqual(actions, ['batch'])
         with patch('subprocess.run', side_effect=subprocess.TimeoutExpired('ssh', 20)):
             with self.assertRaises(subprocess.TimeoutExpired):
                 remote.pending()
 
+
+def _uploader(journal):
+    """An uploader whose background worker has already stopped, so the test drives `once`."""
+    from terra_rover.observability import ObservationUploader
+
+    class Gate:
+        open = False
+        def pending(self, limit):
+            return journal.pending(limit) if self.open else []
+        def acknowledge(self, ids):
+            journal.acknowledge(ids)
+
+    gate = Gate()
+    uploader = ObservationUploader(gate, 'https://collector.example', 'test-only')
+    uploader.stop.set()
+    uploader.worker.join(timeout=5)
+    gate.open = True
+    return uploader
+
+
 class RelayDeliveryTests(unittest.TestCase):
     def test_cloud_failure_keeps_backlog_then_reconnect_acknowledges(self):
         from unittest.mock import patch
-        from terra_rover.observability import ObservationUploader
         with tempfile.TemporaryDirectory() as folder:
             path = pathlib.Path(folder) / 'events.db'
             journal = ObservationJournal(path, 'pi-rover0', '0')
@@ -60,10 +87,7 @@ class RelayDeliveryTests(unittest.TestCase):
                         return access_queue(path, {'action': 'batch', 'limit': limit})['events']
                     def acknowledge(self, ids):
                         access_queue(path, {'action': 'ack', 'ids': ids})
-                uploader = object.__new__(ObservationUploader)
-                uploader.journal = Remote()
-                uploader.endpoint = 'https://collector.example'
-                uploader.token = 'test-only'
+                uploader = _uploader(Remote())
                 with patch('urllib.request.OpenerDirector.open', side_effect=OSError('offline')):
                     with self.assertRaises(OSError): uploader.once()
                 self.assertEqual(journal.pending(), original)

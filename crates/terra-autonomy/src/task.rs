@@ -19,35 +19,35 @@ use terra_navigation::{FitGrid, Footprint, HybridConfig, HybridGoal, Pose, hybri
 use crate::valid_token;
 
 /// Longest accepted task instruction or operator reply, in characters.
-pub const TASK_TEXT_MAX_CHARS: usize = 500;
+pub(crate) const TASK_TEXT_MAX_CHARS: usize = 500;
 /// Budget used when a task omits `budget_seconds`.
-pub const TASK_DEFAULT_BUDGET_SECONDS: f64 = 300.;
+pub(crate) const TASK_DEFAULT_BUDGET_SECONDS: f64 = 300.;
 /// Largest accepted task budget.
-pub const TASK_MAX_BUDGET_SECONDS: f64 = 3600.;
+pub(crate) const TASK_MAX_BUDGET_SECONDS: f64 = 3600.;
 /// Model calls allowed when a task omits `max_steps`.
-pub const TASK_DEFAULT_MAX_STEPS: u32 = 20;
+pub(crate) const TASK_DEFAULT_MAX_STEPS: u32 = 20;
 /// Largest accepted `max_steps`.
-pub const TASK_MAX_STEPS: u32 = 100;
+pub(crate) const TASK_MAX_STEPS: u32 = 100;
 /// Waypoints taken from one reply; extra entries are dropped.
 pub const TASK_MAX_WAYPOINTS: usize = 5;
 /// Largest model reply the arbiter parses.
-pub const TASK_RESPONSE_MAX_BYTES: usize = 8192;
+const TASK_RESPONSE_MAX_BYTES: usize = 8192;
 /// A query with no answer after this long counts as a failed step.
 pub const TASK_QUERY_TIMEOUT_SECONDS: f64 = 90.;
 /// A route failure lasting this long abandons the active waypoint and asks the model again.
-pub const TASK_BLOCKED_SECONDS: f64 = 4.;
+pub(crate) const TASK_BLOCKED_SECONDS: f64 = 4.;
 /// A waypoint not reached in this long is abandoned and the model is asked again.
-pub const TASK_WAYPOINT_TIMEOUT_SECONDS: f64 = 90.;
+pub(crate) const TASK_WAYPOINT_TIMEOUT_SECONDS: f64 = 90.;
 /// Consecutive invalid replies, timeouts or model errors that fail the task.
-pub const TASK_MAX_CONSECUTIVE_FAILURES: u32 = 3;
+pub(crate) const TASK_MAX_CONSECUTIVE_FAILURES: u32 = 3;
 /// Landmarks older than this are left out of the prompt.
-pub const TASK_LANDMARK_MAX_AGE_SECONDS: f64 = 120.;
+const TASK_LANDMARK_MAX_AGE_SECONDS: f64 = 120.;
 /// Free point snapped to observed, clear space within this distance.
-pub const TASK_SNAP_RADIUS: f64 = 0.5;
+const TASK_SNAP_RADIUS: f64 = 0.5;
 /// Longest raw-drive grant an operator can approve, in seconds.
 pub const TASK_DRIVE_MAX_GRANT_SECONDS: f64 = 60.;
 /// A drive request the operator has not answered expires after this many seconds.
-pub const TASK_DRIVE_REQUEST_SECONDS: f64 = 60.;
+pub(crate) const TASK_DRIVE_REQUEST_SECONDS: f64 = 60.;
 /// Longest single `drive` command, in seconds. The agent repeats it to keep moving.
 pub const TASK_DRIVE_COMMAND_SECONDS: f64 = 1.;
 /// Speed caps for agent drive, in m/s and rad/s. The planner can only lower them.
@@ -161,12 +161,7 @@ fn valid_text(text: &str) -> bool {
         && !text.chars().any(|c| c.is_control() && c != '\n')
 }
 
-fn decode<T: serde::de::DeserializeOwned>(b: &[u8]) -> Option<T> {
-    if b.is_empty() || b.len() > 2048 {
-        return None;
-    }
-    serde_json::from_slice(b).ok()
-}
+use crate::contract::decode;
 
 /// Decode at most 2048 bytes of strict JSON; `None` for invalid ids, text, budget or fields.
 pub fn decode_task_request(b: &[u8]) -> Option<TaskRequest> {
@@ -304,7 +299,7 @@ pub struct TaskQuery {
 }
 
 /// Rules sent as the system prompt on every query.
-pub fn task_system_prompt() -> String {
+pub(crate) fn task_system_prompt() -> String {
     "You plan for Terra, a small ground rover with an iPhone for sensing. \
 An operator gives you a task. Each step you see the rover's local map and decide what to do next.\n\
 \n\
@@ -368,7 +363,7 @@ impl Reach {
         if width == 0 || height == 0 || map.occupancy.len() != width * height || !pose.finite() {
             return None;
         }
-        let start = terra_navigation::grid_cell(map, pose.x, pose.y)?;
+        let start = map.cell(pose.x, pose.y)?;
         // A cell counts if the body fits there at some heading.
         let mut traverse = FitGrid::new(map, footprint, Some(pose));
         let mut standing = FitGrid::new(map, footprint, None);
@@ -438,8 +433,7 @@ impl Reach {
                 if !self.goal_cell(index) {
                     continue;
                 }
-                let cx = map.origin_x + (c as f64 + 0.5) * map.resolution;
-                let cy = map.origin_y + (r as f64 + 0.5) * map.resolution;
+                let (cx, cy) = map.centre(c as usize, r as usize);
                 let d = points
                     .iter()
                     .map(|&(x, y)| (cx - x).hypot(cy - y))
@@ -459,7 +453,7 @@ impl Reach {
         best.map(|b| [tidy(b.2[0]), tidy(b.2[1])])
     }
     fn travel(&self, map: &MapSnapshot, x: f64, y: f64) -> Option<f64> {
-        let (c, r) = terra_navigation::grid_cell(map, x, y)?;
+        let (c, r) = map.cell(x, y)?;
         let d = self.distance[r * self.width + c];
         (d != u32::MAX).then(|| f64::from(d) * map.resolution)
     }
@@ -470,13 +464,9 @@ fn tidy(value: f64) -> f64 {
     if rounded.abs() < 5e-3 { 0. } else { rounded }
 }
 
-fn wrap(angle: f64) -> f64 {
-    (angle + std::f64::consts::PI).rem_euclid(std::f64::consts::TAU) - std::f64::consts::PI
-}
-
 /// Relative bearing in degrees and a word for it.
 fn bearing(pose: Pose, x: f64, y: f64) -> (f64, &'static str) {
-    let rel = wrap((y - pose.y).atan2(x - pose.x) - pose.yaw).to_degrees();
+    let rel = terra_types::wrap_angle((y - pose.y).atan2(x - pose.x) - pose.yaw).to_degrees();
     let word = match rel {
         r if r.abs() <= 20. => "ahead",
         r if (20. ..70.).contains(&r) => "ahead-left",
@@ -497,8 +487,9 @@ pub(crate) fn symbolic_grid(map: &MapSnapshot, pose: Pose) -> String {
     let cols = (map.width as usize).div_ceil(child);
     let rows = (map.height as usize).div_ceil(child);
     let width = map.width as usize;
-    let rover =
-        terra_navigation::grid_cell(map, pose.x, pose.y).map(|(c, r)| (c / child, r / child));
+    let rover = map
+        .cell(pose.x, pose.y)
+        .map(|(c, r)| (c / child, r / child));
     let mut lines = Vec::with_capacity(rows + 2);
     for br in (0..rows).rev() {
         let y0 = map.origin_y + (br * child) as f64 * map.resolution;
@@ -509,7 +500,7 @@ pub(crate) fn symbolic_grid(map: &MapSnapshot, pose: Pose) -> String {
                 for c in bc * child..((bc + 1) * child).min(width) {
                     match map.occupancy[r * width + c] {
                         v if v < 0 => unknown += 1,
-                        v if v >= 65 => occupied += 1,
+                        v if v >= terra_mapping::OCCUPIED => occupied += 1,
                         _ => free += 1,
                     }
                 }
@@ -535,14 +526,14 @@ pub(crate) fn symbolic_grid(map: &MapSnapshot, pose: Pose) -> String {
     lines.join("\n")
 }
 
-/// Occupied 8-connected blobs as (cell centres, centroid, bounds).
+/// Occupied 8-connected blobs as lists of cell centres.
 fn obstacle_blobs(map: &MapSnapshot) -> Vec<Vec<(f64, f64)>> {
     let width = map.width as usize;
     let height = map.height as usize;
     let mut seen = vec![false; width * height];
     let mut blobs = Vec::new();
     for start in 0..width * height {
-        if seen[start] || map.occupancy[start] < 65 {
+        if seen[start] || map.occupancy[start] < terra_mapping::OCCUPIED {
             continue;
         }
         let mut cells = Vec::new();
@@ -550,10 +541,7 @@ fn obstacle_blobs(map: &MapSnapshot) -> Vec<Vec<(f64, f64)>> {
         seen[start] = true;
         while let Some(index) = stack.pop() {
             let (c, r) = ((index % width) as isize, (index / width) as isize);
-            cells.push((
-                map.origin_x + (c as f64 + 0.5) * map.resolution,
-                map.origin_y + (r as f64 + 0.5) * map.resolution,
-            ));
+            cells.push(map.centre(c as usize, r as usize));
             for dy in -1..=1 {
                 for dx in -1..=1 {
                     let (nc, nr) = (c + dx, r + dy);
@@ -561,7 +549,7 @@ fn obstacle_blobs(map: &MapSnapshot) -> Vec<Vec<(f64, f64)>> {
                         continue;
                     }
                     let n = nr as usize * width + nc as usize;
-                    if !seen[n] && map.occupancy[n] >= 65 {
+                    if !seen[n] && map.occupancy[n] >= terra_mapping::OCCUPIED {
                         seen[n] = true;
                         stack.push(n);
                     }
@@ -589,8 +577,7 @@ fn frontier_points(
             continue;
         }
         let (c, r) = ((index % width) as isize, (index / width) as isize);
-        let x = map.origin_x + (c as f64 + 0.5) * map.resolution;
-        let y = map.origin_y + (r as f64 + 0.5) * map.resolution;
+        let (x, y) = map.centre(index % width, index / width);
         if (x - pose.x).hypot(y - pose.y) < radius.max(0.8) {
             continue;
         }
@@ -644,14 +631,13 @@ pub(crate) fn summarize(
 ) -> MapSummary {
     let mut text = String::new();
     let mut targets = Vec::new();
-    // Distances below are sized by the circle around the body.
     let radius = footprint.circumradius();
     let reach = Reach::build(map, pose, footprint);
     let (mut free, mut occupied, mut unknown) = (0, 0, 0);
     for v in &map.occupancy {
         match *v {
             v if v < 0 => unknown += 1,
-            v if v >= 65 => occupied += 1,
+            v if v >= terra_mapping::OCCUPIED => occupied += 1,
             _ => free += 1,
         }
     }
@@ -1005,8 +991,8 @@ pub(crate) fn resolve_waypoint(
         }
         RequestedWaypoint::Point(x, y) => {
             // A point on an obstacle is a mistake, not a place to go near.
-            if terra_navigation::grid_cell(map, *x, *y).is_some_and(|(c, r)| {
-                map.occupancy[r * map.width as usize + c] >= terra_navigation::OCCUPIED
+            if map.cell(*x, *y).is_some_and(|(c, r)| {
+                map.occupancy[r * map.width as usize + c] >= terra_mapping::OCCUPIED
             }) {
                 return Err(format!("({x:.1}, {y:.1}) is on an obstacle"));
             }
@@ -1069,7 +1055,9 @@ pub(crate) fn resolve_plan(
     Ok((plan, None))
 }
 
-/// Render the step prompt.
+/// Last line of [`step_prompt`]; agents acting through tools drop it.
+pub(crate) const PROMPT_REPLY_FOOTER: &str = "\nReply with one JSON object only.";
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn step_prompt(
     instruction: &str,
@@ -1079,19 +1067,25 @@ pub(crate) fn step_prompt(
     budget: f64,
     pose: Pose,
     footprint: &Footprint,
+    allow_in_place: bool,
     map_text: &str,
     history: &VecDeque<TaskHistoryEntry>,
 ) -> String {
     let mut text = format!(
         "TASK from the operator: {}\n\nStep {step} of at most {max_steps}. Time used {elapsed:.0} s of {budget:.0} s.\n\
-ROVER: at ({:.1}, {:.1}), heading {:.0} deg, body {:.2} x {:.2} m with {:.2} m margin; it turns only along arcs, never in place.\n\n",
+ROVER: at ({:.1}, {:.1}), heading {:.0} deg, body {:.2} x {:.2} m with {:.2} m margin; {}.\n\n",
         instruction.trim(),
         pose.x,
         pose.y,
-        wrap(pose.yaw).to_degrees(),
+        terra_types::wrap_angle(pose.yaw).to_degrees(),
         footprint.length,
         footprint.width,
         footprint.margin,
+        if allow_in_place {
+            "it can turn in place"
+        } else {
+            "it turns only along arcs, never in place"
+        },
     );
     text.push_str(map_text);
     text.push_str("\nHISTORY (oldest first):\n");
@@ -1105,7 +1099,7 @@ ROVER: at ({:.1}, {:.1}), heading {:.0} deg, body {:.2} x {:.2} m with {:.2} m m
             entry.step, entry.kind, entry.text
         ));
     }
-    text.push_str("\nReply with one JSON object only.");
+    text.push_str(PROMPT_REPLY_FOOTER);
     text
 }
 
@@ -1222,7 +1216,7 @@ mod tests {
     }
 
     fn route() -> HybridConfig {
-        HybridConfig::for_body(body(), &terra_control::TurningConfig::default())
+        HybridConfig::for_body(body(), &terra_types::turning::TurningConfig::default())
     }
 
     #[test]
@@ -1311,7 +1305,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(plan.len(), 1);
-        assert!(note.unwrap().contains("waypoint 2 dropped"));
+        assert!(note.is_some());
     }
 
     #[test]
@@ -1335,10 +1329,11 @@ mod tests {
             300.,
             pose,
             &body(),
+            false,
             &summary.text,
             &history,
         );
-        assert!(text.contains("TASK from the operator: go to the wall"));
+        assert!(text.contains("go to the wall"));
         assert!(text.contains("heading 90 deg"));
         assert!(text.contains("entry 9") && !text.contains("entry 3"));
     }

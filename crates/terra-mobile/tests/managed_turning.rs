@@ -64,12 +64,21 @@ fn active_goal_stops_at_central_pose_freshness_threshold() {
     )
     .unwrap();
     c.step(0.).unwrap();
-    for i in 1..=8 {
-        let t = i as f64 * 0.05;
+    let limit = terra_types::timing::POSE_FRESHNESS_SECONDS;
+    let status = || -> serde_json::Value { serde_json::from_str(&c.autonomy_status()).unwrap() };
+    let mut t = 0.;
+    while t + 0.05 < limit {
+        t += 0.05;
         c.push_imu(imu(t)).unwrap();
         c.step(t).unwrap();
     }
-    let state: serde_json::Value = serde_json::from_str(&c.autonomy_status()).unwrap();
+    assert_eq!(status()["pose_quality"]["degraded"], false);
+    for _ in 0..2 {
+        t += 0.05;
+        c.push_imu(imu(t)).unwrap();
+        c.step(t).unwrap();
+    }
+    let state = status();
     assert_eq!(state["pose_quality"]["degraded"], true);
     assert_eq!(state["twist"]["linear"], 0.);
     assert_eq!(state["status"]["safety"], "hold");

@@ -7,6 +7,7 @@ from terra_rover.backend import FusionHatBackend, MOTOR_PINS
 from terra_rover.drive_relay import OutputBatch, OutputCommand
 
 ENABLED = {}
+DUTY = {}
 
 class FakePWM:
     """Mirrors fusion_hat.pwm.PWM against the driver: duty writes to a disabled channel fail with EINVAL."""
@@ -20,7 +21,7 @@ class FakePWM:
     def pulse_width(self, value=None): self.pulse_width_percent(value)
     def pulse_width_percent(self, value=None):
         if not ENABLED[self.channel]: raise OSError(errno.EINVAL, 'Invalid argument')
-        self.duty = value
+        self.duty = DUTY[self.channel] = value
     def close(self): self.enable(False)
     def __del__(self): self.close()
 
@@ -41,6 +42,9 @@ def four_motor_layout():
         route=dict(type='left_effort' if index % 2 == 0 else 'right_effort'), safe=dict(type='zero'))
         for index, port in enumerate(MOTOR_PINS)])
 
+def pin_channel(pin):
+    return int(str(pin).lstrip('P'))
+
 def batch(value):
     return OutputBatch(tuple(OutputCommand(index, value) for index in range(len(MOTOR_PINS))))
 
@@ -50,7 +54,7 @@ class FusionHatChannelTests(unittest.TestCase):
         backend.configure(four_motor_layout())
         return backend
 
-    def setUp(self): ENABLED.clear()
+    def setUp(self): ENABLED.clear(); DUTY.clear()
 
     def test_every_channel_is_available_without_port_configuration(self):
         ports = FusionHatBackend().capabilities()['ports']
@@ -61,14 +65,14 @@ class FusionHatChannelTests(unittest.TestCase):
         for channel in ENABLED: ENABLED[channel] = False
         backend.apply(batch(.5))
         self.assertTrue(all(ENABLED.values()))
-        self.assertEqual(backend._outputs['M0'].pwm_a.duty, 50)
+        self.assertEqual(DUTY[pin_channel(MOTOR_PINS['M0'][0])], 50)
 
     def test_dropped_backend_does_not_disable_replacement_channels(self):
         old = self.backend()
         new = self.backend()
         del old; gc.collect()
         new.apply(batch(-.25))
-        self.assertEqual(new._outputs['M3'].pwm_b.duty, 25)
+        self.assertEqual(DUTY[pin_channel(MOTOR_PINS['M3'][1])], 25)
         self.assertTrue(all(ENABLED.values()))
 
 if __name__ == '__main__': unittest.main()

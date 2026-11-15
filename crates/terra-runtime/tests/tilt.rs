@@ -40,8 +40,8 @@ fn drive(r: &mut Runtime, t: f64) -> RuntimeOutput {
 
 fn safety(r: &mut Runtime, action: &str, token: &str, t: f64) {
     let mut v = json!({"action": action, "token": token});
-    v["run_id"] = json!(r.run_id);
-    v["authority_revision"] = json!(r.autonomy.authority_revision());
+    v["run_id"] = json!(r.run_id());
+    v["authority_revision"] = json!(r.autonomy().authority_revision());
     r.ingest(RuntimeEvent::Remote {
         kind: "safety".into(),
         payload: serde_json::to_vec(&v).unwrap(),
@@ -71,10 +71,13 @@ fn manual_drive_stops_when_the_rover_tips_over_and_waits_for_reset() {
     let out = drive(&mut r, 1.3);
     assert_eq!(out.motor.left, 0.);
     assert_eq!(out.motor.right, 0.);
-    assert_eq!(out.autonomy.status.safety, "emergency_stop");
+    assert_eq!(
+        out.autonomy.status.safety,
+        terra_autonomy::Safety::EmergencyStop
+    );
     assert_eq!(out.autonomy.status.reason, "tilt_stop");
     assert!(out.events.iter().any(|e| e["kind"] == "safety.tilt_stop"));
-    assert_eq!(out.snapshot.value["runtime"]["tilt"]["latched"], true);
+    assert_eq!(out.status["runtime"]["tilt"]["latched"], true);
 
     // Upside down: a reset is refused while it is still tilted.
     vio(&mut r, 2.0, 180.);
@@ -87,18 +90,18 @@ fn manual_drive_stops_when_the_rover_tips_over_and_waits_for_reset() {
         out.autonomy.status.request_reason.as_deref(),
         Some("still_tilted")
     );
-    assert_eq!(out.snapshot.value["runtime"]["tilt"]["still_tilted"], true);
+    assert_eq!(out.status["runtime"]["tilt"]["still_tilted"], true);
 
     // Set back on its wheels: still held until the operator resets.
     vio(&mut r, 5.0, 1.);
     assert_eq!(drive(&mut r, 5.0).motor.left, 0.);
     safety(&mut r, "reset", "reset-upright", 5.1);
     let out = drive(&mut r, 5.1);
-    assert_eq!(out.autonomy.status.safety, "clear");
+    assert_eq!(out.autonomy.status.safety, terra_autonomy::Safety::Clear);
     // The reset drops the intent it arrived with, like an operator-stop reset.
     let out = drive(&mut r, 5.2);
     assert!(out.motor.left > 0., "drives again after the reset");
-    assert_eq!(out.snapshot.value["runtime"]["tilt"]["latched"], false);
+    assert_eq!(out.status["runtime"]["tilt"]["latched"], false);
 }
 
 #[test]

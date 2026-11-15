@@ -1,6 +1,4 @@
 import Foundation
-// This test exercises session state only; wire encoding is covered by actuator tests.
-func actuatorEncodeFrame(frameJson: String) throws -> Data { Data(frameJson.utf8) }
 @main struct BluetoothPauseTests {
     static func main() throws {
         let session = BluetoothSession()

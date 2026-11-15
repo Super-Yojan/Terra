@@ -7,7 +7,7 @@ fn frame() -> CaptureFrame {
         index: 2,
         count: 10,
         timestamp: 12.5,
-        width: 7,
+        width: PointLabel::ALL.len() as u32,
         height: 1,
         camera_position: [1.0, 2.0, 0.4],
         camera_orientation: [0.0, 0.0, 0.0, 1.0],
@@ -41,7 +41,7 @@ fn frame_round_trips() {
     let original = frame();
     let bytes = original.encode().unwrap();
     assert_eq!(&bytes[..4], b"TPC1");
-    assert_eq!(bytes.len(), 4 + 8 + 1 + 5 + 4 + 8 + 8 + 8 * 18 + 1 + 7 * 13);
+    assert_eq!(bytes.len(), 4 + 8 + 1 + 5 + 4 + 8 + 8 + 8 * 18 + 1 + PointLabel::ALL.len() * 13);
     let decoded = CaptureFrame::decode(&bytes).unwrap();
     assert_eq!(decoded.points[5].label, PointLabel::NoReturn);
     assert_eq!(decoded.points[6].label, PointLabel::FloorVeto);
@@ -93,7 +93,7 @@ fn malformed_frames_are_rejected() {
     foreign[3] = b'2';
     assert_eq!(CaptureFrame::decode(&foreign), Err(FrameError::Magic));
     let mut label = bytes.clone();
-    *label.last_mut().unwrap() = 9;
+    *label.last_mut().unwrap() = PointLabel::ALL.len() as u8;
     assert_eq!(CaptureFrame::decode(&label), Err(FrameError::Field));
     let mut short = frame();
     short.points.pop();

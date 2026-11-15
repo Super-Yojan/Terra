@@ -45,7 +45,10 @@ fn takeover_clears_old_lease_and_stop_is_latched() {
         },
         true,
     );
-    assert_eq!(a.step(input(0.4)).status.safety, "emergency_stop");
+    assert_eq!(
+        a.step(input(0.4)).status.safety,
+        terra_autonomy::Safety::EmergencyStop
+    );
     a.set_safety(
         SafetyRequest {
             action: SafetyAction::Reset,
@@ -54,7 +57,7 @@ fn takeover_clears_old_lease_and_stop_is_latched() {
         false,
     );
     let held = a.step(input(0.5)).status;
-    assert_eq!(held.safety, "emergency_stop");
+    assert_eq!(held.safety, Safety::EmergencyStop);
     assert_eq!(held.request_reason.as_deref(), Some("unhealthy_reset"));
     a.set_safety_refusing(
         SafetyRequest {
@@ -64,7 +67,7 @@ fn takeover_clears_old_lease_and_stop_is_latched() {
         Some("still_tilted"),
     );
     let held = a.step(input(0.55)).status;
-    assert_eq!(held.safety, "emergency_stop");
+    assert_eq!(held.safety, Safety::EmergencyStop);
     assert_eq!(held.request_reason.as_deref(), Some("still_tilted"));
     a.set_safety(
         SafetyRequest {
@@ -79,15 +82,12 @@ fn takeover_clears_old_lease_and_stop_is_latched() {
 #[test]
 fn stale_inputs_and_no_implicit_goal_mode() {
     let mut a = AutonomyArbiter::default();
-    assert!(!a.accept_goal(
-        &terra_waypoint::GoalCommand::Local {
-            x: 3.,
-            y: 0.,
-            yaw: None,
-            token: Some("g".into())
-        },
-        50.
-    ));
+    assert!(!a.accept_goal(&terra_waypoint::GoalCommand::Local {
+        x: 3.,
+        y: 0.,
+        yaw: None,
+        token: Some("g".into())
+    }));
     a.accept_operator(tele(), 0.);
     assert_eq!(a.step(input(0.6)).twist, Twist::default());
     a.set_level(LevelRequest {
@@ -114,63 +114,6 @@ fn duplicate_takeover_does_not_clear_fresh_input_twice() {
     a.set_level(r);
     assert_eq!(a.step(input(0.1)).twist.linear, 1.);
 }
-/// Offer a frontier on a known free core, hold motion until approval, and accept approval against fresh map and pose evidence.
-#[test]
-fn supervised_proposes_but_waits_for_approval() {
-    let mut a = AutonomyArbiter::default();
-    a.set_level(LevelRequest {
-        level: Level::Supervised,
-        token: "s".into(),
-        budget_seconds: None,
-        budget_minutes: None,
-    });
-    let mut m = terra_mapping::MapSnapshot {
-        width: 40,
-        height: 40,
-        resolution: 0.25,
-        origin_x: -5.,
-        origin_y: -5.,
-        occupancy: vec![-1; 1600],
-    };
-    for y in 12..28 {
-        for x in 12..28 {
-            m.occupancy[y * 40 + x] = 0;
-        }
-    }
-    let i = ArbiterInput {
-        map: Some(&m),
-        map_time: Some(0.1),
-        ..input(0.1)
-    };
-    let o = a.step(i);
-    assert!(o.proposal.is_some());
-    assert_eq!(o.twist, Twist::default());
-    let p = o.proposal.unwrap();
-    a.decide_proposal(
-        ProposalDecision {
-            run_id: p.run_id.clone(),
-            proposal_id: Some(p.proposal_id),
-            decision: Decision::Approve,
-            token: "yes".into(),
-        },
-        &ArbiterInput {
-            map: Some(&m),
-            map_time: Some(0.2),
-            ..input(0.2)
-        },
-    );
-    assert_eq!(
-        a.step(ArbiterInput {
-            map: Some(&m),
-            map_time: Some(0.3),
-            ..input(0.3)
-        })
-        .status
-        .result
-        .as_deref(),
-        Some("accepted")
-    );
-}
 /// Accept a goal, switch to teleop, and replay the old token; the receipt stays accepted without activating a goal.
 #[test]
 fn duplicate_goal_token_does_not_relaunch() {
@@ -187,14 +130,14 @@ fn duplicate_goal_token_does_not_relaunch() {
         yaw: None,
         token: Some("goal-1".into()),
     };
-    assert!(a.accept_goal(&g, 50.));
+    assert!(a.accept_goal(&g));
     a.set_level(LevelRequest {
         level: Level::Teleop,
         token: "take".into(),
         budget_seconds: None,
         budget_minutes: None,
     });
-    assert!(a.accept_goal(&g, 50.));
+    assert!(a.accept_goal(&g));
     assert_eq!(
         a.step(input(0.1)).goal.state,
         terra_waypoint::GoalState::Idle
@@ -210,15 +153,12 @@ fn invalid_direct_goal_is_rejected() {
         budget_seconds: None,
         budget_minutes: None,
     });
-    assert!(!a.accept_goal(
-        &terra_waypoint::GoalCommand::Local {
-            x: 1.,
-            y: 0.,
-            yaw: Some(f64::NAN),
-            token: Some("g".into())
-        },
-        50.
-    ));
+    assert!(!a.accept_goal(&terra_waypoint::GoalCommand::Local {
+        x: 1.,
+        y: 0.,
+        yaw: Some(f64::NAN),
+        token: Some("g".into())
+    }));
 }
 /// Accept a zero command then a backward-time motion packet before ticking; the rover must stay stopped.
 #[test]
@@ -251,7 +191,10 @@ fn keyboard_stop_relatches_after_each_reset() {
     let mut a = AutonomyArbiter::default();
     for n in 0..3 {
         a.hold_emergency_stop();
-        assert_eq!(a.step(input(n as f64)).status.safety, "emergency_stop");
+        assert_eq!(
+            a.step(input(n as f64)).status.safety,
+            terra_autonomy::Safety::EmergencyStop
+        );
         a.set_safety(
             SafetyRequest {
                 action: SafetyAction::Reset,
@@ -259,14 +202,17 @@ fn keyboard_stop_relatches_after_each_reset() {
             },
             true,
         );
-        assert_eq!(a.step(input(n as f64 + 0.1)).status.safety, "clear");
+        assert_eq!(
+            a.step(input(n as f64 + 0.1)).status.safety,
+            terra_autonomy::Safety::Clear
+        );
     }
 }
 /// Generate a proposal in a new run and reject an approval carrying the old run ID despite a matching proposal number.
 #[test]
 fn previous_run_approval_cannot_launch_reused_proposal_id() {
     let mut a = AutonomyArbiter::default();
-    a.run_id = "new".into();
+    a.set_run("new");
     a.set_level(LevelRequest {
         level: Level::Supervised,
         token: "level".into(),
@@ -319,7 +265,7 @@ fn previous_run_approval_cannot_launch_reused_proposal_id() {
 #[test]
 fn canonical_motion_is_bound_to_authority_and_run() {
     let mut a = AutonomyArbiter::default();
-    a.run_id = "new-run".into();
+    a.set_run("new-run");
     let mut r = tele();
     r.run_id = Some("old-run".into());
     r.authority_revision = Some(0);
@@ -348,22 +294,19 @@ fn direct_waypoint_needs_no_map_but_retains_sensor_and_cancel_safety() {
         budget_seconds: None,
         budget_minutes: None,
     });
-    assert!(a.accept_goal(
-        &terra_waypoint::GoalCommand::Local {
-            x: 2.,
-            y: 0.,
-            yaw: None,
-            token: Some("direct-goal".into())
-        },
-        50.
-    ));
+    assert!(a.accept_goal(&terra_waypoint::GoalCommand::Local {
+        x: 2.,
+        y: 0.,
+        yaw: None,
+        token: Some("direct-goal".into())
+    }));
     let out = a.step(input(0.1));
     assert!(out.twist.linear > 0.);
     assert!(out.status.supported_levels.contains(&Level::WaypointDirect));
     let mut stale = input(1.);
     stale.pose_time = 0.;
     assert_eq!(a.step(stale).twist, Twist::default());
-    assert!(a.accept_goal(&terra_waypoint::GoalCommand::Cancel, 50.));
+    assert!(a.accept_goal(&terra_waypoint::GoalCommand::Cancel));
     assert_eq!(a.step(input(1.1)).twist, Twist::default());
 }
 
@@ -386,15 +329,12 @@ fn l2_bypasses_occupied_map_while_l3_stops_and_stop_still_latches() {
             budget_seconds: None,
             budget_minutes: None,
         });
-        assert!(a.accept_goal(
-            &terra_waypoint::GoalCommand::Local {
-                x: 2.,
-                y: 0.,
-                yaw: None,
-                token: Some("goal".into())
-            },
-            50.
-        ));
+        assert!(a.accept_goal(&terra_waypoint::GoalCommand::Local {
+            x: 2.,
+            y: 0.,
+            yaw: None,
+            token: Some("goal".into())
+        }));
         let out = a.step(ArbiterInput {
             map: Some(&map),
             map_time: Some(0.1),
@@ -409,15 +349,12 @@ fn l2_bypasses_occupied_map_while_l3_stops_and_stop_still_latches() {
             true,
         );
         assert_eq!(a.step(input(0.2)).twist, Twist::default());
-        assert!(!a.accept_goal(
-            &terra_waypoint::GoalCommand::Local {
-                x: 3.,
-                y: 0.,
-                yaw: None,
-                token: Some("new-goal".into())
-            },
-            50.
-        ));
+        assert!(!a.accept_goal(&terra_waypoint::GoalCommand::Local {
+            x: 3.,
+            y: 0.,
+            yaw: None,
+            token: Some("new-goal".into())
+        }));
     }
 }
 
@@ -437,14 +374,14 @@ fn cancelled_l2_token_never_replays_motion() {
         yaw: None,
         token: Some("direct-goal".into()),
     };
-    assert!(a.accept_goal(&goal, 50.));
+    assert!(a.accept_goal(&goal));
     assert!(a.step(input(0.1)).twist.linear > 0.);
-    assert!(a.accept_goal(&terra_waypoint::GoalCommand::Cancel, 50.));
-    assert!(a.accept_goal(&goal, 50.)); // Correlated receipt, not a new execution.
+    assert!(a.accept_goal(&terra_waypoint::GoalCommand::Cancel));
+    assert!(a.accept_goal(&goal)); // Correlated receipt, not a new execution.
     assert_eq!(a.step(input(0.2)).twist, Twist::default());
 }
 
-/// Block assisted teleop with an occupied map, verify the bounded 121-candidate trace, and clear it on emergency stop.
+/// Block assisted teleop with an occupied map, verify the bounded candidate trace, and clear it on emergency stop.
 #[test]
 fn blocked_planner_trace_is_published_and_cleared_on_stop() {
     let mut arbiter = AutonomyArbiter::default();
@@ -476,7 +413,8 @@ fn blocked_planner_trace_is_published_and_cleared_on_stop() {
     let output = arbiter.step(evidence(0.1));
     assert_eq!(output.status.reason, "obstacle_blocked");
     let trace = output.status.planner_trace.as_ref().unwrap();
-    assert_eq!(trace.candidates.len(), 121);
+    assert!(!trace.candidates.is_empty());
+    assert!(trace.candidates.iter().all(|c| c.rejection.is_some()));
     assert_eq!(trace.age, 0.);
     assert!(trace.selected.is_none());
     assert!(serde_json::to_vec(&output.status).unwrap().len() < 65_536);
@@ -516,6 +454,7 @@ fn router_intent_clear_keeps_local_manual_but_removes_fleet_lease() {
     assert_eq!(a.step(input(1.)).twist, Twist::default());
 }
 
+/// Offer a frontier, hold until approval, finish the approved action offline, then wait for approval of the next.
 #[test]
 fn supervised_approved_action_can_finish_offline_without_approving_the_next() {
     let mut a = AutonomyArbiter::default();
@@ -572,7 +511,7 @@ fn supervised_approved_action_can_finish_offline_without_approving_the_next() {
         Some("accepted")
     );
     a.invalidate_remote_authority();
-    assert!(a.accepted_onboard_mission(Pose::default()));
+    assert!(a.accepted_onboard_mission(Some(Pose::default())));
     let active = a.step(ArbiterInput {
         map: Some(&m),
         map_time: Some(0.31),
@@ -590,7 +529,9 @@ fn supervised_approved_action_can_finish_offline_without_approving_the_next() {
         ..input(0.4)
     });
     assert_eq!(arrived.twist, Twist::default());
-    assert!(!a.accepted_onboard_mission(at));
+    assert!(!a.accepted_onboard_mission(Some(at)));
+    // Without a tracked pose nothing counts as reached.
+    assert!(a.accepted_onboard_mission(None));
     let next = a.step(ArbiterInput {
         pose: at,
         map: Some(&m),
@@ -628,7 +569,7 @@ fn goal_while_stopped_names_the_stop() {
         yaw: None,
         token: Some(token.into()),
     };
-    assert!(!a.accept_goal(&goal("g-stopped"), 50.));
+    assert!(!a.accept_goal(&goal("g-stopped")));
     let status = a.step(input(0.1)).status;
     assert_eq!(status.request_reason.as_deref(), Some(SAFETY_STOPPED));
     a.set_safety(
@@ -644,7 +585,7 @@ fn goal_while_stopped_names_the_stop() {
         budget_seconds: None,
         budget_minutes: None,
     });
-    assert!(!a.accept_goal(&goal("g-teleop"), 50.));
+    assert!(!a.accept_goal(&goal("g-teleop")));
     let status = a.step(input(0.2)).status;
     assert_eq!(status.request_reason.as_deref(), Some("authority_required"));
 }

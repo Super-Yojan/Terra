@@ -25,6 +25,8 @@ flowchart LR
 
 Obstacle band: 0.15 m to 2.0 m. Range cap: 15 m. `pixel_stride` is 4.
 
+`MapSnapshot::telemetry` is the `map/occupancy` body. It holds observed cells only, so hidden mission targets stay out of the packet.
+
 Phone simulated mode invents room depth. ARKit mode uses the mount calibration's camera height, or the ARKit floor when none is saved; the level band before either assumes 0.5 m. Zenoh mode uses the published camera height instead.
 
 ```sh

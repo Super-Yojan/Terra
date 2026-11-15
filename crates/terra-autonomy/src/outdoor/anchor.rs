@@ -9,8 +9,8 @@
 //! are rejected, and three in a row re-anchor the estimate on the newest fix,
 //! so a real frame jump is followed within a few seconds.
 use terra_navigation::Pose;
+use terra_waypoint::GeoOrigin;
 
-const EARTH_RADIUS_M: f64 = 6_371_000.;
 /// VIO scale error per metre travelled, as a fraction.
 const VIO_SCALE_ERROR: f64 = 0.08;
 /// Smallest GPS sigma trusted, in metres.
@@ -27,8 +27,8 @@ const MAX_PLANE_M: f64 = 2_000.;
 
 #[derive(Default)]
 pub struct GeoAnchor {
-    /// Reference latitude and longitude of the east/north plane, in degrees.
-    origin: Option<(f64, f64)>,
+    /// Reference point of the east/north plane.
+    origin: Option<GeoOrigin>,
     /// Rover east and north in metres, and its variance in square metres.
     rover: Option<(f64, f64, f64)>,
     last_pose: Option<(f64, Pose)>,
@@ -49,18 +49,14 @@ impl GeoAnchor {
         self.last_innovation = None;
     }
 
+    /// The waypoint projection gives (north, west); this plane is (east, north).
     fn geo_to_plane(&self, lat: f64, lon: f64) -> Option<(f64, f64)> {
-        let (lat0, lon0) = self.origin?;
-        let east = (lon - lon0).to_radians() * lat0.to_radians().cos() * EARTH_RADIUS_M;
-        let north = (lat - lat0).to_radians() * EARTH_RADIUS_M;
-        Some((east, north))
+        let (north, west) = self.origin?.to_local(lat, lon);
+        Some((-west, north))
     }
 
     fn plane_to_geo(&self, east: f64, north: f64) -> Option<(f64, f64)> {
-        let (lat0, lon0) = self.origin?;
-        let lat = lat0 + (north / EARTH_RADIUS_M).to_degrees();
-        let lon = lon0 + (east / (EARTH_RADIUS_M * lat0.to_radians().cos())).to_degrees();
-        Some((lat, lon))
+        Some(self.origin?.from_local(north, -east))
     }
 
     /// Carry the estimate by VIO travel. `east_yaw` is the local yaw of true east,
@@ -111,7 +107,7 @@ impl GeoAnchor {
             .geo_to_plane(lat, lon)
             .is_none_or(|(e, n)| e.hypot(n) > MAX_PLANE_M)
         {
-            self.origin = Some((lat, lon));
+            self.origin = GeoOrigin::new(lat, lon).ok();
             if self.rover.take().is_some() {
                 self.reanchors += 1;
             }
@@ -155,6 +151,7 @@ impl GeoAnchor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use terra_waypoint::EARTH_RADIUS_M;
 
     const LAT: f64 = 42.;
     fn north_of(m: f64) -> f64 {

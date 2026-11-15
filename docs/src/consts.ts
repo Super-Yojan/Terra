@@ -57,6 +57,7 @@ export const sections: NavSection[] = [
             { path: "/crates/terra-navigation", label: "terra-navigation" },
             { path: "/crates/terra-exploration", label: "terra-exploration" },
             { path: "/crates/terra-autonomy", label: "terra-autonomy" },
+            { path: "/crates/terra-runtime", label: "terra-runtime" },
             { path: "/crates/terra-experiment", label: "terra-experiment" },
             { path: "/crates/terra-motors", label: "terra-motors" },
             { path: "/crates/terra-actuators", label: "terra-actuators" },

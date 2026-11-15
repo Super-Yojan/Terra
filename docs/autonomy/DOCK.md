@@ -31,7 +31,7 @@ stateDiagram-v2
 
 | Part | Where |
 |---|---|
-| Detections (box centre at median depth) | Swift / Kotlin model, `terra-mobile/src/detector.rs`; Zorvane `object_detection.rs` |
+| Detections (box centre at median depth) | Swift / Kotlin model; Zorvane `object_detection.rs` |
 | Object map and per-frame fixes | `Runtime::observe_object` feeds both the map and the dock |
 | Dock state machine, control law, corridor check | `terra-autonomy/src/dock.rs` |
 | Approval policy and motion override | `terra-autonomy/src/arbiter/dock.rs` |

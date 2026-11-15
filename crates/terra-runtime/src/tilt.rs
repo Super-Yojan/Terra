@@ -3,8 +3,8 @@
 //! A rover that climbs something steep or flips over must stop driving at
 //! every level, L0 included. This monitor tracks world up as seen from the
 //! rover body (the gravity direction the phone sees) and latches when it leans
-//! more than [`TiltConfig::limit_degrees`] away from its reference for longer
-//! than [`TiltConfig::debounce_seconds`]. The latch holds until the operator
+//! more than [`LIMIT_DEGREES`] away from its reference for longer
+//! than [`DEBOUNCE_SECONDS`]. The latch holds until the operator
 //! resets the stop, and a reset is refused while the rover is still tilted.
 //!
 //! World up in the body frame does not change when the rover turns, so
@@ -20,7 +20,7 @@
 //! absorbs a few degrees of mount or floor slope. An estimate already past the
 //! limit from body +Z is never taken as the reference: the nominal mount (body
 //! +Z) is used instead, so a controller restarted on a rover lying on its side
-//! stays held. Past [`TiltConfig::flipped_degrees`] from body +Z the hold
+//! stays held. Past [`FLIPPED_DEGREES`] from body +Z the hold
 //! latches whatever the reference.
 use serde_json::{Value, json};
 use terra_types::{Quaternion, Vector3};
@@ -36,32 +36,17 @@ const BODY_UP: Vector3 = Vector3 {
     z: 1.,
 };
 
-/// Limits for the tilt hold.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct TiltConfig {
-    /// Lean from the reference that counts as tilted, degrees.
-    pub limit_degrees: f64,
-    /// How long the lean must last before the hold latches, seconds.
-    pub debounce_seconds: f64,
-    /// Angle between world up and body +Z that counts as upside down
-    /// whatever the reference, degrees.
-    pub flipped_degrees: f64,
-}
-
-impl Default for TiltConfig {
-    fn default() -> Self {
-        // Placeholders until the hand-tilt test on hardware sets them (#112).
-        Self {
-            limit_degrees: 30.,
-            debounce_seconds: 0.25,
-            flipped_degrees: 120.,
-        }
-    }
-}
+// Placeholders until the hand-tilt test on hardware sets them (#112).
+/// Lean from the reference that counts as tilted, degrees.
+pub const LIMIT_DEGREES: f64 = 30.;
+/// How long the lean must last before the hold latches, seconds.
+pub const DEBOUNCE_SECONDS: f64 = 0.25;
+/// Angle between world up and body +Z that counts as upside down whatever
+/// the reference, degrees.
+pub const FLIPPED_DEGREES: f64 = 120.;
 
 #[derive(Clone, Debug, Default)]
 pub struct TiltMonitor {
-    pub config: TiltConfig,
     /// World up in the body frame, and when it was last set or propagated.
     up: Option<(Vector3, f64)>,
     last_tracked: Option<f64>,
@@ -132,17 +117,14 @@ impl TiltMonitor {
     fn set(&mut self, up: Vector3, timestamp: f64) {
         self.up = Some((up, timestamp));
         let absolute = angle_degrees(up, BODY_UP);
-        let (reference, _) =
-            *self
-                .reference
-                .get_or_insert(if absolute <= self.config.limit_degrees {
-                    (up, false)
-                } else {
-                    (BODY_UP, true)
-                });
+        let (reference, _) = *self.reference.get_or_insert(if absolute <= LIMIT_DEGREES {
+            (up, false)
+        } else {
+            (BODY_UP, true)
+        });
         let lean = angle_degrees(up, reference);
         self.latest = Some((lean, absolute, timestamp));
-        if lean > self.config.limit_degrees || absolute > self.config.flipped_degrees {
+        if lean > LIMIT_DEGREES || absolute > FLIPPED_DEGREES {
             self.over_since.get_or_insert(timestamp);
         } else {
             self.over_since = None;
@@ -159,7 +141,7 @@ impl TiltMonitor {
     pub fn update(&mut self, now: f64) -> bool {
         if self.latched_at.is_none()
             && let Some(since) = self.over_since
-            && now - since >= self.config.debounce_seconds
+            && now - since >= DEBOUNCE_SECONDS
         {
             self.latched_at = Some(now);
             self.peak_degrees = self.latest.map_or(0., |l| l.0.max(l.1));
@@ -191,10 +173,7 @@ impl TiltMonitor {
     /// that is still tilted re-latches from its first estimate (see the
     /// module notes on the reference).
     pub fn reset(&mut self) {
-        *self = Self {
-            config: self.config,
-            ..Self::default()
-        };
+        *self = Self::default();
     }
 
     /// Status for `autonomy/status` → `runtime.tilt`.
@@ -207,9 +186,9 @@ impl TiltMonitor {
             "sample_age_s": self.latest.map(|l| now - l.2),
             "tracked_age_s": self.last_tracked.map(|t| now - t),
             "peak_deg": self.latched().then(|| round1(self.peak_degrees)),
-            "limit_deg": self.config.limit_degrees,
-            "debounce_s": self.config.debounce_seconds,
-            "flipped_deg": self.config.flipped_degrees,
+            "limit_deg": LIMIT_DEGREES,
+            "debounce_s": DEBOUNCE_SECONDS,
+            "flipped_deg": FLIPPED_DEGREES,
             "reference": self.reference.map(|(_, nominal)| if nominal { "nominal_mount" } else { "first_pose" }),
         })
     }

@@ -1,11 +1,10 @@
 use crate::{
-    Detection, EndReason, FrontierCandidate, GoalScorer, InformationGainScorer, MissionObjective,
-    ObjectiveContext, TimeBudgetObjective, frontier::unknown_cells_around, map_coverage,
-    select_frontier, select_frontier_through_unknown,
+    EndReason, FrontierCandidate, GoalScorer, InformationGainScorer,
+    frontier::unknown_cells_around, map_coverage, select_frontier, select_frontier_through_unknown,
 };
 use serde::{Deserialize, Serialize};
 use terra_mapping::MapSnapshot;
-use terra_navigation::{Footprint, Pose, footprint_clear, grid_cell, reachable};
+use terra_navigation::{Footprint, Pose, footprint_fits_some_heading, reachable};
 /// Lifecycle phase of a frontier exploration run.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -77,7 +76,7 @@ impl Default for ExplorationStatus {
 /// Knobs for one explorer. The time budget is per run, not part of this struct.
 #[derive(Clone, Debug)]
 pub struct ExplorationConfig {
-    /// Rover body for the shared clearance checks. The arbiter overwrites this from the planner.
+    /// Rover body for the shared clearance checks. The arbiter sets it from the planner.
     pub footprint: Footprint,
     /// Seconds a goal may stay blocked (planner hold or no route) before it is blacklisted.
     pub stuck_timeout: f64,
@@ -91,18 +90,8 @@ pub struct ExplorationConfig {
     pub exclude_radius: f64,
     /// Metres of progress that resets the stuck timer.
     pub progress_epsilon: f64,
-    /// Cap on the local planner horizon while exploring.
-    ///
-    /// Frontier goals sit on the boundary of unknown space, and the shared planner treats
-    /// unknown cells as occupied. A multi-second rollout therefore stops short of every
-    /// frontier. The obstacle check still runs; only the lookahead is shortened.
-    pub approach_horizon: f64,
     /// Seconds between `exploration_progress` log events.
     pub progress_period: f64,
-    /// Continuous seconds of map staleness before the run ends. `0` ends on the first stale tick.
-    pub map_stale_timeout: f64,
-    /// Continuous seconds of an unhealthy sensor hold before the run ends. Emergency stop is immediate.
-    pub safety_hold_timeout: f64,
     /// Look-around turn rate in rad/s. Zero or less disables the look-around.
     ///
     /// A front depth camera cannot see beside or behind the chassis. When no
@@ -133,10 +122,7 @@ impl Default for ExplorationConfig {
             max_attempts: 3,
             exclude_radius: 1.,
             progress_epsilon: 0.2,
-            approach_horizon: terra_types::timing::EXPLORATION_APPROACH_HORIZON_SECONDS,
             progress_period: terra_types::timing::EXPLORATION_PROGRESS_PERIOD_SECONDS,
-            map_stale_timeout: terra_types::timing::EXPLORATION_MAP_STALE_GRACE_SECONDS,
-            safety_hold_timeout: terra_types::timing::EXPLORATION_SAFETY_HOLD_GRACE_SECONDS,
             scan_yaw_rate: 0.35,
             scan_radius: 1.,
             scan_timeout: terra_types::timing::EXPLORATION_SCAN_TIMEOUT_SECONDS,
@@ -209,10 +195,13 @@ pub struct ExploreTick<'a> {
     /// Follower distance to its goal, in metres.
     pub goal_distance: f64,
 }
+/// Whether `seconds` is a run budget [`Explorer::start`] accepts: finite and in `(0, 86400]`.
+pub fn valid_budget(seconds: f64) -> bool {
+    seconds.is_finite() && seconds > 0. && seconds <= 86_400.
+}
 /// Frontier selection and the run state machine. Platform code stays outside.
 pub struct Explorer {
     config: ExplorationConfig,
-    objective: Box<dyn MissionObjective>,
     scorer: Box<dyn GoalScorer>,
     phase: ExplorePhase,
     end_reason: Option<EndReason>,
@@ -230,7 +219,6 @@ pub struct Explorer {
     last_progress_emit: f64,
     coverage_m2: f64,
     explored_ratio: f64,
-    detection_count: usize,
     scan: Option<Scan>,
     /// A look-around finished since the last frontier assignment.
     scan_done: bool,
@@ -242,7 +230,6 @@ impl Default for Explorer {
     fn default() -> Self {
         Self {
             config: ExplorationConfig::default(),
-            objective: Box::new(TimeBudgetObjective::default()),
             scorer: Box::new(InformationGainScorer),
             phase: ExplorePhase::Idle,
             end_reason: None,
@@ -260,7 +247,6 @@ impl Default for Explorer {
             last_progress_emit: 0.,
             coverage_m2: 0.,
             explored_ratio: 0.,
-            detection_count: 0,
             scan: None,
             scan_done: false,
             holding: false,
@@ -276,10 +262,6 @@ impl Explorer {
     /// Mutably borrow configuration; callers are responsible for supplying meaningful finite distances and durations.
     pub fn config_mut(&mut self) -> &mut ExplorationConfig {
         &mut self.config
-    }
-    /// Replace the stop policy. A subsequent run start resets it and supplies the run budget.
-    pub fn set_objective(&mut self, objective: Box<dyn MissionObjective>) {
-        self.objective = objective;
     }
     /// Replace frontier ranking; larger finite scores win and nonfinite scores are skipped.
     pub fn set_scorer(&mut self, scorer: Box<dyn GoalScorer>) {
@@ -310,10 +292,10 @@ impl Explorer {
     /// Begin a run. The budget clock starts on the first valid [`Self::step`] call.
     ///
     /// Returns `false` without changing state unless the seconds budget is finite
-    /// and in `(0, 86400]`. A valid start clears targets, blacklist, counters, and
-    /// objective state, and queues a start event; the run identifier is copied.
+    /// and in `(0, 86400]`. A valid start clears targets, blacklist and counters,
+    /// and queues a start event; the run identifier is copied.
     pub fn start(&mut self, budget_seconds: f64, run_id: &str) -> bool {
-        if !budget_seconds.is_finite() || budget_seconds <= 0. || budget_seconds > 86_400. {
+        if !valid_budget(budget_seconds) {
             return false;
         }
         self.budget_seconds = budget_seconds;
@@ -329,42 +311,14 @@ impl Explorer {
         self.progress_since = None;
         self.frontiers_attempted = 0;
         self.last_progress_emit = 0.;
-        self.detection_count = 0;
         self.scan = None;
         self.scan_done = false;
         self.holding = false;
-        self.objective.reset();
-        self.objective.set_budget(budget_seconds);
         self.events.push(ExploreEvent {
             kind: "exploration_started",
             reason: format!("budget_seconds={budget_seconds}"),
         });
         true
-    }
-    /// Record an external detection. The next [`Self::step`] applies `should_stop`.
-    ///
-    /// Ignore detections outside a running session, empty/over-64-byte labels, or
-    /// nonfinite position, confidence, or timestamp values. This hook does not
-    /// enforce confidence bounds, freshness, or sensor provenance.
-    pub fn notify_detection(&mut self, detection: Detection) {
-        if self.phase != ExplorePhase::Running {
-            return;
-        }
-        if !detection.x.is_finite()
-            || !detection.y.is_finite()
-            || !detection.confidence.is_finite()
-            || !detection.observed_at.is_finite()
-            || detection.label.is_empty()
-            || detection.label.len() > 64
-        {
-            return;
-        }
-        self.detection_count = self.detection_count.saturating_add(1);
-        self.objective.on_detection(&detection);
-        self.events.push(ExploreEvent {
-            kind: "detection_reported",
-            reason: format!("label={}", detection.label),
-        });
     }
     /// Drop the current frontier so the next tick chooses again, for example after
     /// the scorer changed. The frontier is not blacklisted.
@@ -436,18 +390,9 @@ impl Explorer {
                 ),
             });
         }
-        let ctx = ObjectiveContext {
-            now: tick.now,
-            elapsed_seconds: elapsed,
-            remaining_seconds: (self.budget_seconds - elapsed).max(0.),
-            pose_x: tick.pose.x,
-            pose_y: tick.pose.y,
-            coverage_m2: self.coverage_m2,
-            detection_count: self.detection_count,
-        };
-        if let Some(reason) = self.objective.should_stop(&ctx) {
-            self.finish(reason);
-            return ExploreAction::Finished(reason);
+        if elapsed >= self.budget_seconds {
+            self.finish(EndReason::BudgetExpired);
+            return ExploreAction::Finished(EndReason::BudgetExpired);
         }
         if let Some(target) = self.target {
             let tracking = (tick.goal_active || tick.goal_arrived)
@@ -575,7 +520,7 @@ impl Explorer {
         });
         let clearance = passable.as_ref().or(tick.map);
         if let Some(map) = tick.map
-            && let Some((cx, cy)) = grid_cell(map, target.x, target.y)
+            && let Some((cx, cy)) = map.cell(target.x, target.y)
             && unknown_cells_around(map, cx, cy, self.config.footprint.circumradius()) == 0
         {
             self.target = None;
@@ -592,7 +537,7 @@ impl Explorer {
             return;
         }
         if clearance.is_some_and(|map| {
-            !footprint_clear(map, &self.config.footprint, target.x, target.y, None)
+            !footprint_fits_some_heading(map, &self.config.footprint, target.x, target.y, None)
         }) {
             self.block_target(tick.now, "target_occupied");
             return;
@@ -637,9 +582,7 @@ impl Explorer {
         }
         let scan = match self.scan.as_mut() {
             Some(scan) => {
-                let step = (pose.yaw - scan.last_yaw + std::f64::consts::PI)
-                    .rem_euclid(std::f64::consts::TAU)
-                    - std::f64::consts::PI;
+                let step = terra_types::wrap_angle(pose.yaw - scan.last_yaw);
                 scan.turned += step.abs();
                 scan.last_yaw = pose.yaw;
                 *scan
@@ -798,7 +741,7 @@ impl Explorer {
 }
 /// Whether any unknown cell centre lies within `distance` metres of `pose`.
 fn unknown_within(map: &MapSnapshot, pose: Pose, distance: f64) -> bool {
-    let Some((cx, cy)) = terra_navigation::grid_cell(map, pose.x, pose.y) else {
+    let Some((cx, cy)) = map.cell(pose.x, pose.y) else {
         return false;
     };
     let reach = (distance / map.resolution).ceil() as isize + 1;
@@ -809,8 +752,7 @@ fn unknown_within(map: &MapSnapshot, pose: Pose, distance: f64) -> bool {
             if a < 0 || b < 0 || a >= map.width as isize || b >= map.height as isize {
                 continue;
             }
-            let x = map.origin_x + (a as f64 + 0.5) * map.resolution;
-            let y = map.origin_y + (b as f64 + 0.5) * map.resolution;
+            let (x, y) = map.centre(a as usize, b as usize);
             if (x - pose.x).hypot(y - pose.y) <= distance
                 && map.occupancy[b as usize * map.width as usize + a as usize] < 0
             {

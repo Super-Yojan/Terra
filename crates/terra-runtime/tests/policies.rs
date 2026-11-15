@@ -1,5 +1,4 @@
 use serde_json::json;
-use terra_navigation::Pose;
 use terra_runtime::*;
 use terra_types::*;
 fn runtime(mode: ActuationMode) -> Runtime {
@@ -35,8 +34,8 @@ fn sensors(r: &mut Runtime, t: f64) {
     .unwrap();
 }
 fn remote(r: &mut Runtime, kind: &str, mut v: serde_json::Value, t: f64) {
-    v["run_id"] = json!(r.run_id);
-    v["authority_revision"] = json!(r.autonomy.authority_revision());
+    v["run_id"] = json!(r.run_id());
+    v["authority_revision"] = json!(r.autonomy().authority_revision());
     r.ingest(RuntimeEvent::Remote {
         kind: kind.into(),
         payload: serde_json::to_vec(&v).unwrap(),
@@ -98,14 +97,14 @@ fn stale_generation_in_a_batch_is_rejected_and_stop_dominates_reset() {
     );
     assert_eq!(
         r.step(0.01).unwrap().autonomy.status.safety,
-        "emergency_stop"
+        terra_autonomy::Safety::EmergencyStop
     );
 }
 #[test]
 fn link_loss_retires_operator_generation_without_replaying_on_reconnect() {
     let mut r = runtime(ActuationMode::DirectEffort);
     sensors(&mut r, 0.);
-    let old = r.autonomy.authority_revision();
+    let old = r.autonomy().authority_revision();
     remote(
         &mut r,
         "teleop",
@@ -118,7 +117,7 @@ fn link_loss_retires_operator_generation_without_replaying_on_reconnect() {
         received_at: 0.01,
     })
     .unwrap();
-    assert!(r.autonomy.authority_revision() > old);
+    assert!(r.autonomy().authority_revision() > old);
     assert_eq!(r.step(0.01).unwrap().motor.left, 0.);
     r.ingest(RuntimeEvent::Link {
         connected: true,
@@ -142,19 +141,18 @@ fn link_loss_retires_operator_generation_without_replaying_on_reconnect() {
 fn accepted_mission_survives_link_loss_with_fresh_onboard_evidence() {
     let mut r = runtime(ActuationMode::VelocityFeedback);
     sensors(&mut r, 0.);
-    r.autonomy.set_level(terra_autonomy::LevelRequest::new(
-        terra_autonomy::Level::WaypointDirect,
-        "mode",
-    ));
-    r.autonomy.accept_goal(
-        &terra_waypoint::GoalCommand::Local {
-            x: 1.,
-            y: 0.,
-            yaw: None,
-            token: Some("goal".into()),
-        },
-        20000.,
-    );
+    r.local_action(
+        "autonomy",
+        br#"{"level":"waypoint_direct","token":"mode"}"#,
+        0.,
+    )
+    .unwrap();
+    r.local_action(
+        "goal",
+        br#"{"frame":"local","x":1,"y":0,"token":"goal"}"#,
+        0.,
+    )
+    .unwrap();
     r.step(0.).unwrap();
     r.ingest(RuntimeEvent::Link {
         connected: false,
@@ -164,14 +162,14 @@ fn accepted_mission_survives_link_loss_with_fresh_onboard_evidence() {
     sensors(&mut r, 0.01);
     let out = r.step(0.01).unwrap();
     assert_eq!(out.autonomy.goal.state, terra_waypoint::GoalState::Active);
-    assert_eq!(out.autonomy.status.safety, "clear");
+    assert_eq!(out.autonomy.status.safety, terra_autonomy::Safety::Clear);
     assert!(out.autonomy.twist.linear > 0.);
 }
 #[test]
 fn future_and_reordered_samples_cannot_replace_measured_pose() {
     let mut r = runtime(ActuationMode::VelocityFeedback);
     sensors(&mut r, 1.);
-    let before = r.pose.unwrap().0;
+    let before = r.pose().unwrap().0;
     assert!(
         r.ingest(RuntimeEvent::Vio {
             sample: VioSample {
@@ -188,7 +186,7 @@ fn future_and_reordered_samples_cannot_replace_measured_pose() {
         })
         .is_err()
     );
-    assert_eq!(r.pose.unwrap().0.x, before.x);
+    assert_eq!(r.pose().unwrap().0.x, before.x);
     assert!(
         r.ingest(RuntimeEvent::Imu {
             sample: ImuSample {
@@ -211,11 +209,7 @@ fn recording_health_is_distinct_from_link_health() {
     })
     .unwrap();
     assert!(r.step(0.).unwrap().motor.left > 0.);
-    r.ingest(RuntimeEvent::Recording {
-        healthy: false,
-        received_at: 0.01,
-    })
-    .unwrap();
+    r.set_recording_healthy(false);
     let out = r.step(0.01).unwrap();
     assert_eq!(out.motor.left, 0.);
     assert!(out.events.iter().any(|e| e["kind"] == "recording.health"));
@@ -237,28 +231,26 @@ fn identical_depth_and_ground_planes_produce_identical_maps() {
                 z: 0.,
             }),
         };
-        r.ingest(RuntimeEvent::Depth {
-            timestamp: 0.,
-            received_at: 0.,
-            intrinsics: terra_mapping::CameraIntrinsics {
-                width: 1,
-                height: 1,
-                fx: 1.,
-                fy: 1.,
-                cx: 0.,
-                cy: 0.,
-            },
-            camera,
-            depth: vec![2.],
-            ground: Some(terra_mapping::GroundPlane::default()),
-        })
-        .unwrap();
+        r.mapping_handle()
+            .integrate_depth_with_ground_plane(
+                0.,
+                terra_mapping::CameraIntrinsics {
+                    width: 1,
+                    height: 1,
+                    fx: 1.,
+                    fy: 1.,
+                    cx: 0.,
+                    cy: 0.,
+                },
+                camera,
+                &[2.],
+                terra_mapping::GroundPlane::default(),
+            )
+            .unwrap();
+        r.step(0.).unwrap();
     }
-    assert_eq!(
-        a.map.as_ref().unwrap().0.occupancy,
-        b.map.as_ref().unwrap().0.occupancy
-    );
-    assert!(a.map.as_ref().unwrap().0.occupancy.iter().any(|v| *v >= 0));
+    assert_eq!(a.map().unwrap().0.occupancy, b.map().unwrap().0.occupancy);
+    assert!(a.map().unwrap().0.occupancy.iter().any(|v| *v >= 0));
 }
 #[test]
 fn ground_calibration_retains_existing_stability_and_mount_rules() {
@@ -364,8 +356,7 @@ fn configuration_identity_tracks_profile_changes() {
     })
     .unwrap();
     assert_ne!(before, r.configuration_identity());
-    assert_eq!(r.pose.map(|p| p.0.x), None);
-    let _ = Pose::default();
+    assert_eq!(r.pose().map(|p| p.0.x), None);
 }
 #[test]
 fn switching_actuation_mode_does_not_replay_local_input() {
@@ -392,21 +383,20 @@ fn switching_actuation_mode_does_not_replay_local_input() {
 fn autonomous_guidance_uses_feedback_even_with_a_direct_manual_profile() {
     let mut r = runtime(ActuationMode::DirectEffort);
     sensors(&mut r, 0.);
-    r.autonomy.set_level(terra_autonomy::LevelRequest::new(
-        terra_autonomy::Level::WaypointDirect,
-        "mode",
-    ));
-    r.autonomy.accept_goal(
-        &terra_waypoint::GoalCommand::Local {
-            x: 1.,
-            y: 0.,
-            yaw: None,
-            token: Some("goal".into()),
-        },
-        20000.,
-    );
+    r.local_action(
+        "autonomy",
+        br#"{"level":"waypoint_direct","token":"mode"}"#,
+        0.,
+    )
+    .unwrap();
+    r.local_action(
+        "goal",
+        br#"{"frame":"local","x":1,"y":0,"token":"goal"}"#,
+        0.,
+    )
+    .unwrap();
     assert_eq!(
-        r.step(0.).unwrap().snapshot.value["runtime"]["mode"],
+        r.step(0.).unwrap().status["runtime"]["mode"],
         "velocity_feedback"
     );
 }
@@ -414,12 +404,16 @@ fn autonomous_guidance_uses_feedback_even_with_a_direct_manual_profile() {
 #[test]
 fn changing_connectivity_policy_during_loss_pauses_the_accepted_mission() {
     let mut r = runtime(ActuationMode::DirectEffort);
-    r.link(false);
-    let revision = r.connectivity_revision;
-    let mut policy = r.connectivity.clone();
-    policy.autonomous_router_loss = terra_types::connectivity_policy::RouterLossPolicy::Pause;
+    r.ingest(RuntimeEvent::Link {
+        connected: false,
+        received_at: 0.,
+    })
+    .unwrap();
+    let revision = r.connectivity_revision();
+    let mut policy = r.connectivity().clone();
+    policy.autonomous_router_loss = terra_runtime::connectivity::RouterLossPolicy::Pause;
     r.set_connectivity_policy(policy).unwrap();
-    assert_eq!(r.connectivity_revision, revision + 1);
+    assert_eq!(r.connectivity_revision(), revision + 1);
     assert!(
         r.step(0.0)
             .unwrap()
@@ -456,7 +450,6 @@ fn rejected_domain_requests_do_not_emit_successful_admission() {
         )
         .is_err()
     );
-    r.navigation.result = Some("accepted".into());
     remote(
         &mut r,
         "navigation/settings",

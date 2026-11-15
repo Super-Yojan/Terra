@@ -3,7 +3,7 @@
 //! the phone builds from one view (as in astar_hidden_goals.rs).
 use std::f64::consts::PI;
 use terra_mapping::MapSnapshot;
-use terra_navigation::{HybridConfig, HybridRoute, Pose, RouteJob, footprint_rejection_at};
+use terra_navigation::{HybridConfig, HybridRoute, Pose, RouteError, RouteJob, footprint_rejection_at};
 
 /// L3 arrival radius minus a margin, as the arbiter passes it.
 const SNAP: f64 = 0.65;
@@ -61,7 +61,7 @@ fn plan(
     start: Pose,
     x: f64,
     y: f64,
-) -> (Result<HybridRoute, &'static str>, usize) {
+) -> (Result<HybridRoute, RouteError>, usize) {
     let mut job = match RouteJob::new(map, start, x, y, &HybridConfig::default(), SNAP) {
         Ok(job) => job,
         Err(why) => return (Err(why), 0),
@@ -129,7 +129,7 @@ fn rover_at_the_box_face_still_routes_round() {
 #[test]
 fn goal_on_the_box_is_refused() {
     let map = view_with_box(2.0, 0.6);
-    assert_eq!(plan(&map, rover(), 2.1, 0.).0, Err("route_goal_blocked"));
+    assert_eq!(plan(&map, rover(), 2.1, 0.).0, Err(RouteError::GoalBlocked));
 }
 
 #[test]
@@ -166,7 +166,7 @@ fn an_enclosed_goal_is_refused() {
             map.occupancy[i] = 0;
         }
     }
-    assert_eq!(plan(&map, rover(), 5.5, 0.).0, Err("route_no_path"));
+    assert_eq!(plan(&map, rover(), 5.5, 0.).0, Err(RouteError::NoPath));
 }
 
 #[test]
@@ -212,80 +212,6 @@ fn a_known_route_completes_and_reaches_the_goal() {
     assert_drivable(&map, rover(), &route);
     assert!(route.reaches_goal);
     assert!(ticks < 20, "an open-map route takes {ticks} ticks");
-}
-
-/// Timing on the saved phone maps: `cargo test --release -p terra-navigation
-/// --test route_job per_tick_cost -- --ignored --nocapture` from the repo root.
-#[test]
-#[ignore]
-fn per_tick_cost_on_saved_maps() {
-    use std::time::Instant;
-    for (path, start, goals) in [
-        (
-            "../../maps/run2.json",
-            (-1.05, 1.65),
-            vec![(2.35, 4.85), (-10.05, -1.15), (1.75, -0.95), (-1.25, 6.0)],
-        ),
-        (
-            "../../maps/run1.json",
-            (11.55, -3.75),
-            vec![(13.75, -1.15), (9.15, -4.35), (6.75, 5.65)],
-        ),
-    ] {
-        let Ok(text) = std::fs::read_to_string(path) else {
-            println!("skipping {path}: not found");
-            continue;
-        };
-        let v: serde_json::Value = serde_json::from_str(&text).unwrap();
-        let map = MapSnapshot {
-            width: v["width"].as_u64().unwrap() as u32,
-            height: v["height"].as_u64().unwrap() as u32,
-            resolution: v["resolution"].as_f64().unwrap(),
-            origin_x: v["origin_x"].as_f64().unwrap(),
-            origin_y: v["origin_y"].as_f64().unwrap(),
-            occupancy: v["occupancy"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|c| c.as_i64().unwrap() as i8)
-                .collect(),
-        };
-        let start = Pose {
-            x: start.0,
-            y: start.1,
-            yaw: 0.,
-        };
-        for (gx, gy) in goals {
-            let began = Instant::now();
-            let job = RouteJob::new(&map, start, gx, gy, &HybridConfig::default(), SNAP);
-            let setup = began.elapsed().as_secs_f64() * 1e3;
-            let Ok(mut job) = job else {
-                println!("{path} -> ({gx}, {gy}): {:?} in {setup:.1} ms", job.err());
-                continue;
-            };
-            let (mut worst, mut ticks) = (0f64, 0);
-            let result = loop {
-                let t = Instant::now();
-                let step = job.advance(BUDGET);
-                worst = worst.max(t.elapsed().as_secs_f64() * 1e3);
-                ticks += 1;
-                if let Some(result) = step {
-                    break result;
-                }
-            };
-            println!(
-                "{path} -> ({gx}, {gy}): {} setup {setup:.1} ms, {ticks} ticks, worst tick {worst:.2} ms",
-                match &result {
-                    Ok(r) => format!(
-                        "ok ({} samples, reaches {})",
-                        r.waypoints.len(),
-                        r.reaches_goal
-                    ),
-                    Err(e) => e.to_string(),
-                }
-            );
-        }
-    }
 }
 
 /// What the phone sees when a goal is set: only the camera's wedge ahead is

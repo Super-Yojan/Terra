@@ -9,6 +9,7 @@ use std::{
     thread::{self, JoinHandle},
     time::{Duration, Instant},
 };
+use terra_types::telemetry::{Delivery, SEARCH_REPORT_MAX_RECORDS, TelemetryTopic};
 use zenoh::Wait;
 type Inbox = Arc<Mutex<VecDeque<(String, Vec<u8>, Instant)>>>;
 type SignalingInbox = Arc<Mutex<VecDeque<(String, Vec<u8>)>>>;
@@ -19,15 +20,62 @@ const CAPTURE_INBOX_LEN: usize = 4;
 const BULK_QUEUE_LEN: usize = 2;
 type States = Arc<Mutex<BTreeMap<String, (Option<String>, Instant)>>>;
 const TELEMETRY_TTL: Duration = Duration::from_millis(500);
+
+/// Why a control-plane session latched failed. The first failure wins.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+enum FailureReason {
+    RouterUnavailable = 1,
+    FleetPublishFailed = 2,
+    TelemetryPublishFailed = 3,
+    BatchPublishFailed = 4,
+}
+impl FailureReason {
+    const ALL: [Self; 4] = [
+        Self::RouterUnavailable,
+        Self::FleetPublishFailed,
+        Self::TelemetryPublishFailed,
+        Self::BatchPublishFailed,
+    ];
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::RouterUnavailable => "router_unavailable",
+            Self::FleetPublishFailed => "fleet_publish_failed",
+            Self::TelemetryPublishFailed => "telemetry_publish_failed",
+            Self::BatchPublishFailed => "batch_publish_failed",
+        }
+    }
+}
+
+/// Latched failure flag plus the first reason. Atomic so diagnostics never wait on the worker.
+#[derive(Default)]
+struct Failure {
+    failed: AtomicBool,
+    reason: AtomicU8,
+}
+impl Failure {
+    fn latch(&self, reason: FailureReason) {
+        self.reason
+            .compare_exchange(0, reason as u8, Ordering::Release, Ordering::Relaxed)
+            .ok();
+        self.failed.store(true, Ordering::Release);
+    }
+    fn failed(&self) -> bool {
+        self.failed.load(Ordering::Acquire)
+    }
+    fn reason(&self) -> Option<FailureReason> {
+        let code = self.reason.load(Ordering::Acquire);
+        FailureReason::ALL
+            .into_iter()
+            .find(|reason| *reason as u8 == code)
+    }
+}
 #[cfg(test)]
 #[path = "../tests/internal/control_plane_diagnostics.rs"]
 mod diagnostic_tests;
 
-fn visualization_topic(kind: &str) -> bool {
-    matches!(
-        kind,
-        "map/occupancy" | "map/occupancy/heartbeat" | "pointcloud" | "pointcloud/heartbeat"
-    )
+fn delivered_as(kind: &str, delivery: Delivery) -> Option<&'static TelemetryTopic> {
+    TelemetryTopic::find(kind).filter(|t| t.delivery == delivery)
 }
 
 // Visualization is sample-driven, unlike replayable control state. Retain the
@@ -42,7 +90,7 @@ fn telemetry_snapshot(
             continue;
         }
         active = true;
-        let payload = if visualization_topic(kind) {
+        let payload = if delivered_as(kind, Delivery::Visualization).is_some() {
             value.take()
         } else {
             value.clone()
@@ -73,13 +121,15 @@ pub struct ControlPlane {
     base: String,
     batches: Arc<Mutex<BTreeMap<String, (Vec<String>, Instant)>>>,
     stop: Arc<AtomicBool>,
-    failed: Arc<AtomicBool>,
-    failure_reason: Arc<AtomicU8>,
+    failure: Arc<Failure>,
     worker: Option<JoinHandle<()>>,
-    /// Rover identity used in topic paths and fleet advertisements.
-    pub rover_id: u64,
+    rover_id: u64,
 }
 impl ControlPlane {
+    /// Rover identity used in topic paths and fleet advertisements.
+    pub fn rover_id(&self) -> u64 {
+        self.rover_id
+    }
     /// Open an explicit loopback TCP dashboard endpoint. Requires the literal
     /// `tcp/127.0.0.1:` address form and a valid non-wildcard key prefix.
     /// Returns `InvalidSettings` for rejected configuration or `Network` on open failure.
@@ -88,7 +138,7 @@ impl ControlPlane {
         if !endpoint.starts_with("tcp/127.0.0.1:") {
             return Err(TransportError::InvalidSettings);
         }
-        Self::open(endpoint, prefix, id, false, None)
+        Self::open(endpoint, prefix, id, false, ("", ""))
     }
     /// Outbound TCP session, suitable for an explicitly configured Tailscale router.
     /// No listeners, multicast discovery, or automatic application command retries.
@@ -96,8 +146,7 @@ impl ControlPlane {
     /// has a three-second timeout. Returns `InvalidSettings` for rejected settings
     /// or `Network` for configuration, connection, or subscriber failure.
     pub fn connect(endpoint: &str, prefix: &str, id: u64) -> Result<Self, TransportError> {
-        crate::validate(endpoint, prefix)?;
-        Self::open(endpoint, prefix, id, true, None)
+        Self::connect_authenticated(endpoint, prefix, id, "", "")
     }
     /// Open the same outbound session as [`Self::connect`] with Zenoh user/password
     /// authentication. An empty `user` omits credentials. No application intent is retried.
@@ -110,14 +159,14 @@ impl ControlPlane {
         password: &str,
     ) -> Result<Self, TransportError> {
         crate::validate(endpoint, prefix)?;
-        Self::open(endpoint, prefix, id, true, Some((user, password)))
+        Self::open(endpoint, prefix, id, true, (user, password))
     }
     fn open(
         endpoint: &str,
         prefix: &str,
         id: u64,
         outbound: bool,
-        credentials: Option<(&str, &str)>,
+        (user, password): (&str, &str),
     ) -> Result<Self, TransportError> {
         let mut config = zenoh::Config::default();
         if outbound {
@@ -145,7 +194,7 @@ impl ControlPlane {
         config
             .insert_json5("scouting/multicast/enabled", "false")
             .map_err(|e| TransportError::Network(e.to_string()))?;
-        if let Some((user, password)) = credentials.filter(|(u, _)| !u.is_empty()) {
+        if !user.is_empty() {
             for (key, value) in [
                 ("transport/auth/usrpwd/user", user),
                 ("transport/auth/usrpwd/password", password),
@@ -163,8 +212,7 @@ impl ControlPlane {
         let captures: CaptureInbox = Arc::new(Mutex::new(VecDeque::new()));
         let states: States = Arc::new(Mutex::new(BTreeMap::new()));
         let stop = Arc::new(AtomicBool::new(false));
-        let failed = Arc::new(AtomicBool::new(false));
-        let failure_reason = Arc::new(AtomicU8::new(0));
+        let failure = Arc::new(Failure::default());
         let base = format!("{prefix}/{id}");
         let queue = inbox.clone();
         let signaling_queue = signaling.clone();
@@ -183,7 +231,7 @@ impl ControlPlane {
                 let bytes = sample.payload().to_bytes();
                 // Video signaling never enters the control inbox. A large SDP
                 // cannot evict a stop, and a webrtc payload cannot be decoded
-                // as teleop, hardware, or safety.
+                // as teleop or safety.
                 if crate::signaling::webrtc_inbound(kind) {
                     if bytes.is_empty()
                         || bytes.len() > crate::signaling::WEBRTC_SIGNALING_MAX_BYTES
@@ -208,14 +256,11 @@ impl ControlPlane {
                     }
                     return;
                 }
-                if !crate::is_control_topic(kind) {
-                    return;
-                }
-                if bytes.len() > 2048 {
+                if !crate::inbox::admits(kind, &bytes) {
                     return;
                 }
                 let mut queue = queue.lock().unwrap();
-                crate::enqueue_control_action(
+                crate::inbox::enqueue_control_action(
                     &mut queue,
                     kind.into(),
                     bytes.to_vec(),
@@ -228,8 +273,7 @@ impl ControlPlane {
         let batch_state = batches.clone();
         let state = states.clone();
         let stopped = stop.clone();
-        let fault = failed.clone();
-        let reason = failure_reason.clone();
+        let fault = failure.clone();
         let fleet = format!("{prefix}/fleet/state");
         let publication = session.clone();
         let key_base = base.clone();
@@ -252,10 +296,7 @@ impl ControlPlane {
             let mut last_batch = Instant::now() - Duration::from_secs(1);
             while !stopped.load(Ordering::Acquire) {
                 if outbound && session.info().routers_zid().wait().next().is_none() {
-                    reason
-                        .compare_exchange(0, 1, Ordering::Release, Ordering::Relaxed)
-                        .ok();
-                    fault.store(true, Ordering::Release);
+                    fault.latch(FailureReason::RouterUnavailable);
                     break;
                 }
                 let (active, snapshots) = telemetry_snapshot(&mut state.lock().unwrap());
@@ -272,18 +313,12 @@ impl ControlPlane {
                     .wait()
                     .is_err()
                 {
-                    reason
-                        .compare_exchange(0, 2, Ordering::Release, Ordering::Relaxed)
-                        .ok();
-                    fault.store(true, Ordering::Release);
+                    fault.latch(FailureReason::FleetPublishFailed);
                     break;
                 }
                 for (kind, value) in snapshots {
                     if session.put(format!("{base}/{kind}"), value).wait().is_err() {
-                        reason
-                            .compare_exchange(0, 3, Ordering::Release, Ordering::Relaxed)
-                            .ok();
-                        fault.store(true, Ordering::Release);
+                        fault.latch(FailureReason::TelemetryPublishFailed);
                     }
                 }
                 if last_batch.elapsed() >= Duration::from_secs(1) {
@@ -293,15 +328,7 @@ impl ControlPlane {
                         if at.elapsed() < TELEMETRY_TTL {
                             for value in values {
                                 if session.put(format!("{base}/{kind}"), value).wait().is_err() {
-                                    reason
-                                        .compare_exchange(
-                                            0,
-                                            4,
-                                            Ordering::Release,
-                                            Ordering::Relaxed,
-                                        )
-                                        .ok();
-                                    fault.store(true, Ordering::Release);
+                                    fault.latch(FailureReason::BatchPublishFailed);
                                 }
                             }
                         }
@@ -323,8 +350,7 @@ impl ControlPlane {
             base: key_base,
             batches,
             stop,
-            failed,
-            failure_reason,
+            failure,
             worker: Some(worker),
             rover_id: id,
         })
@@ -337,17 +363,17 @@ impl ControlPlane {
             self.inbox.lock().unwrap().clear();
             return vec![];
         }
-        crate::drain_control_actions(&mut self.inbox.lock().unwrap())
+        crate::inbox::drain_control_actions(&mut self.inbox.lock().unwrap())
             .into_iter()
             .map(|(kind, payload, received)| (kind, payload, received.elapsed().as_secs_f64()))
             .collect()
     }
     /// Replace the latest telemetry slot and refresh its 500 ms TTL.
-    /// Drops oversized values silently: occupancy is capped at 2,000,000 bytes,
-    /// point clouds at 262144 bytes, and other suffixes at 65536 bytes.
+    /// Silently drops a topic that is not state or visualization in
+    /// [`terra_types::telemetry::ALL`] (WebRTC signaling included, so an offer
+    /// is never replayed as latched telemetry), or a value over its byte cap.
     /// Ordinary state can replay at 10 Hz; visualization is taken once per update.
-    /// Does not parse JSON or acknowledge delivery. WebRTC signaling suffixes are
-    /// refused here so an offer is not replayed as latched telemetry.
+    /// Does not parse JSON or acknowledge delivery.
     pub fn publish(&self, kind: &str, value: String) {
         let _ = self.enqueue_state(kind, value);
     }
@@ -380,24 +406,17 @@ impl ControlPlane {
     }
     /// Enqueue sample-driven visualization, reporting size/failure rejection.
     /// Acceptance is into the bounded latest-state slot, not network delivery.
-    /// Only occupancy, pointcloud, and their heartbeat suffixes are accepted.
-    /// Uses [`Self::publish`] byte caps and returns false for an unsupported topic,
-    /// failed link, or oversized value. JSON/schema validation belongs to the caller.
+    /// Returns false for a topic that is not visualization, a failed link, or
+    /// an oversized value. JSON/schema validation belongs to the caller.
     pub fn publish_visualization(&self, kind: &str, value: String) -> bool {
-        visualization_topic(kind) && !self.failed() && self.enqueue_state(kind, value)
+        delivered_as(kind, Delivery::Visualization).is_some()
+            && !self.failed()
+            && self.enqueue_state(kind, value)
     }
     fn enqueue_state(&self, kind: &str, value: String) -> bool {
-        if crate::signaling::is_webrtc_topic(kind) {
-            return false;
-        }
-        // Dense visualization snapshots exceed the ordinary state-message budget.
-        // Keep action/small telemetry limits unchanged and bound only these two topics higher.
-        let limit = match kind {
-            "map/occupancy" => 2_000_000,
-            "pointcloud" => 262144,
-            _ => 65536,
-        };
-        if value.len() <= limit {
+        let topic = delivered_as(kind, Delivery::State)
+            .or_else(|| delivered_as(kind, Delivery::Visualization));
+        if topic.is_some_and(|t| t.fits(value.len())) {
             self.states
                 .lock()
                 .unwrap()
@@ -418,14 +437,12 @@ impl ControlPlane {
         }
         queue.drain(..).collect()
     }
-    /// Queue one large payload on `pointcloud/full` for the bulk thread.
-    /// Accepts at most [`terra_types::point_capture::MAX_FRAME_BYTES`] and two
-    /// frames in flight. Returns false for another topic, an oversized frame, a
-    /// failed link or a full queue. Delivery is best effort at background priority.
+    /// Queue one large payload on a bulk topic (`pointcloud/full`) for the bulk
+    /// thread, with at most two frames in flight. Returns false for another
+    /// topic, an oversized frame, a failed link or a full queue. Delivery is
+    /// best effort at background priority.
     pub fn publish_bulk(&self, kind: &str, value: Vec<u8>) -> bool {
-        if kind != terra_types::point_capture::FRAME_TOPIC
-            || value.len() > terra_types::point_capture::MAX_FRAME_BYTES
-            || self.failed()
+        if delivered_as(kind, Delivery::Bulk).is_none_or(|t| !t.fits(value.len())) || self.failed()
         {
             return false;
         }
@@ -434,12 +451,15 @@ impl ControlPlane {
             .is_some_and(|bulk| bulk.try_send((kind.into(), value)).is_ok())
     }
     /// Fair replay of bounded outstanding records on one contractual topic.
-    /// Only `search/report` is accepted: at most 128 records, each at most 65536
-    /// bytes. Invalid batches are ignored. The latest batch has a 500 ms TTL and
+    /// Only a batch topic (`search/report`) is accepted: at most
+    /// [`SEARCH_REPORT_MAX_RECORDS`] records, each within the topic's byte cap.
+    /// Invalid batches are ignored. The latest batch has a 500 ms TTL and
     /// can replay once per second while ordinary producer telemetry keeps the
     /// worker active. Callers refresh unacknowledged reports explicitly.
     pub fn publish_batch(&self, kind: &str, values: Vec<String>) {
-        if kind == "search/report" && values.len() <= 128 && values.iter().all(|v| v.len() <= 65536)
+        if let Some(topic) = delivered_as(kind, Delivery::Batch)
+            && values.len() <= SEARCH_REPORT_MAX_RECORDS
+            && values.iter().all(|v| topic.fits(v.len()))
         {
             self.batches
                 .lock()
@@ -450,12 +470,11 @@ impl ControlPlane {
     /// Return the latched router-loss or publication-failure flag.
     /// Once set, intent draining discards queued commands; this service does not reconnect.
     pub fn failed(&self) -> bool {
-        self.failed.load(Ordering::Acquire)
+        self.failure.failed()
     }
     /// Safe diagnostic metadata only; contains no topic payloads, credentials or endpoints.
     /// A stale producer can stop fleet advertisements without a transport failure.
     pub fn diagnostics(&self) -> serde_json::Value {
-        let failure = self.failure_reason.load(Ordering::Acquire);
         let states = self.states.try_lock().ok();
         let age = states
             .as_ref()
@@ -463,9 +482,7 @@ impl ControlPlane {
         let fresh = states
             .as_ref()
             .map(|_| age.is_some_and(|age| age < TELEMETRY_TTL));
-        serde_json::json!({"state":if self.failed(){"failed"}else{"connected"},"failure_reason":match failure {
-            1=>Some("router_unavailable"),2=>Some("fleet_publish_failed"),3=>Some("telemetry_publish_failed"),4=>Some("batch_publish_failed"),_=>None
-        },"freshest_telemetry_age_ms":age.map(|age|age.as_millis() as u64),"telemetry_fresh":fresh,"telemetry_sample_available":states.is_some(),"telemetry_ttl_ms":TELEMETRY_TTL.as_millis() as u64})
+        serde_json::json!({"state":if self.failed(){"failed"}else{"connected"},"failure_reason":self.failure.reason().map(FailureReason::as_str),"freshest_telemetry_age_ms":age.map(|age|age.as_millis() as u64),"telemetry_fresh":fresh,"telemetry_sample_available":states.is_some(),"telemetry_ttl_ms":TELEMETRY_TTL.as_millis() as u64})
     }
 }
 impl Drop for ControlPlane {

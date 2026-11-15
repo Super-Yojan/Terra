@@ -8,9 +8,23 @@
 use serde::Serialize;
 use terra_types::InputError;
 
-/// Maximum accepted goal JSON size in bytes, including whitespace.
-pub const MAX_GOAL_BYTES: usize = 2048;
-const METRES_PER_DEGREE: f64 = 40_075_016.686 / 360.0;
+/// Largest local goal coordinate magnitude, metres: [`decode_goal`] refuses a
+/// local goal beyond it, and hosts pass it as the follower's `half_extent`
+/// when every decoded goal should fit.
+pub const MAX_LOCAL_GOAL_M: f64 = 20_000.;
+/// Mean Earth radius, metres: the sphere every geographic conversion in Terra uses
+/// (this local projection, the outdoor GPS anchor, and great-circle distances).
+pub const EARTH_RADIUS_M: f64 = 6_371_000.;
+const METRES_PER_DEGREE: f64 = EARTH_RADIUS_M * std::f64::consts::PI / 180.;
+
+/// Whether `latitude` and `longitude` are finite degrees inside the range local
+/// projection accepts: latitude within `[-85, 85]`, longitude within `[-180, 180]`.
+pub fn valid_coordinates(latitude: f64, longitude: f64) -> bool {
+    latitude.is_finite()
+        && longitude.is_finite()
+        && (-85.0..=85.0).contains(&latitude)
+        && (-180.0..=180.0).contains(&longitude)
+}
 
 /// Map origin. Goals in WGS84 are projected into robotics metres: +x north, +y west.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -24,14 +38,9 @@ pub struct GeoOrigin {
 impl GeoOrigin {
     /// Construct a projection origin from finite geographic degrees.
     ///
-    /// Returns [`InputError::OutOfRange`] for non-finite values or latitude outside
-    /// `[-85, 85]` / longitude outside `[-180, 180]`.
+    /// Returns [`InputError::OutOfRange`] unless [`valid_coordinates`] holds.
     pub fn new(latitude: f64, longitude: f64) -> Result<Self, InputError> {
-        if !latitude.is_finite()
-            || !longitude.is_finite()
-            || !(-85.0..=85.0).contains(&latitude)
-            || !(-180.0..=180.0).contains(&longitude)
-        {
+        if !valid_coordinates(latitude, longitude) {
             return Err(InputError::OutOfRange);
         }
         Ok(Self {
@@ -42,8 +51,8 @@ impl GeoOrigin {
 
     /// Project geographic degrees into `(north, west)` metres relative to this origin.
     ///
-    /// Uses a constant metres-per-degree scale and the origin latitude cosine;
-    /// intended for local distances. Inputs are not validated or longitude-wrapped.
+    /// Equirectangular on a sphere of [`EARTH_RADIUS_M`], scaled by the origin
+    /// latitude cosine; intended for local distances. Inputs are not validated or longitude-wrapped.
     pub fn to_local(self, latitude: f64, longitude: f64) -> (f64, f64) {
         let north = (latitude - self.latitude) * METRES_PER_DEGREE;
         let east =
@@ -138,7 +147,8 @@ impl WaypointConfig {
 /// Decoded destination or cancellation request.
 ///
 /// Prefer [`decode_goal`] for untrusted inputs. Direct construction bypasses its
-/// geographic, yaw, and token checks; [`WaypointController::accept`] does not repeat all of them.
+/// checks; [`GoalCommand::valid`] repeats them (except the local extent, which
+/// [`WaypointController::accept`] applies).
 #[derive(Clone, Debug, PartialEq)]
 pub enum GoalCommand {
     /// Clear the active goal and reset its ID to zero.
@@ -281,9 +291,24 @@ impl WaypointController {
         })
     }
 
+    /// Replace the pursuit configuration and clear the goal, keeping the
+    /// geographic origin. Returns [`InputError::InvalidConfiguration`] and
+    /// changes nothing when `config` fails validation.
+    pub fn reconfigure(&mut self, config: WaypointConfig) -> Result<(), InputError> {
+        config.validate()?;
+        self.config = config;
+        self.cancel();
+        Ok(())
+    }
+
     /// Pursuit configuration this follower was built with.
     pub fn config(&self) -> &WaypointConfig {
         &self.config
+    }
+
+    /// Whether a goal is latched, reached or not.
+    pub fn has_goal(&self) -> bool {
+        self.goal.is_some()
     }
 
     /// Set the geographic projection origin in degrees.
@@ -370,28 +395,6 @@ impl WaypointController {
         self.goal_id = 0;
     }
 
-    /// Follow an intermediate route point without replacing the original goal or its status.
-    /// Return `(forward m/s, yaw rad/s)` toward an intermediate local point.
-    ///
-    /// Pose and target coordinates are metres; yaw is radians. Arrival tolerance is
-    /// reduced to at most 0.05 m and no final-heading alignment is requested. Invalid
-    /// pose/distance yields zero intent. This does not require a latched goal.
-    pub fn route_intent(
-        &self,
-        x: f64,
-        y: f64,
-        yaw: f64,
-        target_x: f64,
-        target_y: f64,
-    ) -> (f64, f64) {
-        // Intermediate corners need a tighter tolerance than final-goal arrival.
-        // Otherwise the rover can stop short of the corner before the next leg is visible.
-        let mut config = self.config.clone();
-        config.arrive_radius = config.arrive_radius.min(0.05);
-        let output = pursuit(x, y, yaw, target_x, target_y, None, &config);
-        (output.linear, output.angular)
-    }
-
     /// `x` and `y` are the rover pose in the origin frame, metres. `yaw` is radians, 0 facing +x.
     /// Compute local goal-following intent; downstream planning checks obstacles.
     /// Return zero intent and idle status without a goal. Otherwise turn toward the
@@ -467,7 +470,7 @@ fn pursuit(
                 arrived: true,
             };
         };
-        let error = wrap(target - yaw);
+        let error = terra_types::wrap_angle(target - yaw);
         if error.abs() <= config.align_yaw {
             return Pursuit {
                 linear: 0.0,
@@ -483,7 +486,7 @@ fn pursuit(
             arrived: false,
         };
     }
-    let error = wrap(dy.atan2(dx) - yaw);
+    let error = terra_types::wrap_angle(dy.atan2(dx) - yaw);
     let angular = (error * config.yaw_gain).clamp(-config.max_yaw_rate, config.max_yaw_rate);
     let linear = if error.abs() >= config.heading_gate {
         0.0
@@ -513,7 +516,7 @@ fn pursuit(
 /// characters or `.`, `_`, `:`, `-`. Optional nulls mean absent. Empty, oversized,
 /// malformed, unknown-field, and otherwise invalid messages return `None`.
 pub fn decode_goal(bytes: &[u8]) -> Option<GoalCommand> {
-    if bytes.is_empty() || bytes.len() > MAX_GOAL_BYTES {
+    if bytes.is_empty() || bytes.len() > terra_types::requests::MAX_REQUEST_BYTES {
         return None;
     }
     let value: serde_json::Value = serde_json::from_slice(bytes).ok()?;
@@ -534,7 +537,7 @@ pub fn decode_goal(bytes: &[u8]) -> Option<GoalCommand> {
             }
             let x = finite(object.get("x")?)?;
             let y = finite(object.get("y")?)?;
-            if x.abs() > 20_000.0 || y.abs() > 20_000.0 {
+            if x.abs() > MAX_LOCAL_GOAL_M || y.abs() > MAX_LOCAL_GOAL_M {
                 return None;
             }
             Some(GoalCommand::Local { x, y, yaw, token })
@@ -549,7 +552,7 @@ pub fn decode_goal(bytes: &[u8]) -> Option<GoalCommand> {
             }
             let latitude = finite(object.get("latitude")?)?;
             let longitude = finite(object.get("longitude")?)?;
-            if !(-85.0..=85.0).contains(&latitude) || !(-180.0..=180.0).contains(&longitude) {
+            if !valid_coordinates(latitude, longitude) {
                 return None;
             }
             Some(GoalCommand::Wgs84 {
@@ -563,23 +566,31 @@ pub fn decode_goal(bytes: &[u8]) -> Option<GoalCommand> {
     }
 }
 
-/// Serialize a status snapshot to JSON bytes, omitting absent optional fields.
-///
-/// Returns `None` on serialization failure or size above 65,536 bytes. This function
-/// does not validate status semantics or numeric finiteness before serialization.
-pub fn encode_status(status: &WaypointStatus) -> Option<Vec<u8>> {
-    let bytes = serde_json::to_vec(status).ok()?;
-    (bytes.len() <= 65_536).then_some(bytes)
+impl GoalCommand {
+    /// Well formed: finite coordinates (geographic ones inside
+    /// [`valid_coordinates`]), a finite yaw of at most one turn, and a token
+    /// that passes [`valid_token`]. Does not bound the local extent.
+    pub fn valid(&self) -> bool {
+        let (point, yaw, token) = match self {
+            GoalCommand::Cancel => return true,
+            GoalCommand::Local { x, y, yaw, token } => (x.is_finite() && y.is_finite(), yaw, token),
+            GoalCommand::Wgs84 {
+                latitude,
+                longitude,
+                yaw,
+                token,
+            } => (valid_coordinates(*latitude, *longitude), yaw, token),
+        };
+        point
+            && yaw.is_none_or(|v| v.is_finite() && v.abs() <= std::f64::consts::TAU)
+            && token.as_deref().is_none_or(valid_token)
+    }
 }
 
 fn inside_square(x: f64, y: f64, half_extent: f64) -> bool {
     let bevy_x = -y;
     let bevy_z = -x;
     bevy_x.abs() <= half_extent && bevy_z.abs() <= half_extent
-}
-
-fn wrap(angle: f64) -> f64 {
-    (angle + std::f64::consts::PI).rem_euclid(std::f64::consts::TAU) - std::f64::consts::PI
 }
 
 fn finite(value: &serde_json::Value) -> Option<f64> {
@@ -595,7 +606,7 @@ fn optional_yaw(object: &serde_json::Map<String, serde_json::Value>) -> Option<O
             if yaw.abs() > std::f64::consts::TAU {
                 return None;
             }
-            Some(Some(wrap(yaw)))
+            Some(Some(terra_types::wrap_angle(yaw)))
         }
     }
 }
@@ -608,7 +619,9 @@ fn optional_token(object: &serde_json::Map<String, serde_json::Value>) -> Option
     }
 }
 
-fn valid_token(token: &str) -> bool {
+/// Whether `token` is a request correlation token: 1–64 ASCII letters,
+/// digits, or `._:-`.
+pub fn valid_token(token: &str) -> bool {
     let bytes = token.as_bytes();
     (1..=64).contains(&bytes.len())
         && bytes
@@ -754,7 +767,7 @@ mod tests {
                 break;
             }
             let dt = 0.05;
-            yaw = wrap(yaw + output.angular * dt);
+            yaw = terra_types::wrap_angle(yaw + output.angular * dt);
             x += output.linear * dt * yaw.cos();
             y += output.linear * dt * yaw.sin();
         }
@@ -776,7 +789,7 @@ mod tests {
                 49.0,
             )
             .unwrap();
-        let bytes = encode_status(&follower.step(0.0, 0.0, 0.0).status).unwrap();
+        let bytes = serde_json::to_vec(&follower.step(0.0, 0.0, 0.0).status).unwrap();
         let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(value["state"], "active");
         assert_eq!(value["goal_id"], 1);
@@ -786,7 +799,7 @@ mod tests {
         assert!(value["x"].as_f64().unwrap() > 10.0);
         assert!(value.get("yaw").is_none());
         let idle: serde_json::Value =
-            serde_json::from_slice(&encode_status(&WaypointStatus::idle()).unwrap()).unwrap();
+            serde_json::from_slice(&serde_json::to_vec(&WaypointStatus::idle()).unwrap()).unwrap();
         assert_eq!(idle["state"], "idle");
         assert_eq!(idle["goal_id"], 0);
         assert!(idle.get("latitude").is_none());

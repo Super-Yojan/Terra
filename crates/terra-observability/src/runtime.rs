@@ -1,4 +1,4 @@
-use crate::{EventInput, Journal, JournalConfig, JournalError};
+use crate::{EventInput, Journal, JournalConfig, JournalError, PRODUCER_ROVER};
 use serde_json::Value;
 use std::{
     path::Path,
@@ -40,8 +40,7 @@ impl RuntimeObserver {
             path: path.into(),
         })
     }
-    pub fn record(&self, rover: &str, component: &str, kind: &str, mut attributes: Value) {
-        redact(&mut attributes);
+    pub fn record(&self, rover: &str, component: &str, kind: &str, attributes: Value) {
         let mut e = EventInput::new(rover, component, kind, attributes);
         e.session_id = Some(self.session.clone());
         e.monotonic_ns = self.start.elapsed().as_nanos().min(u64::MAX as u128) as u64;
@@ -49,36 +48,6 @@ impl RuntimeObserver {
     }
     pub fn flush(&self) -> Result<(), JournalError> {
         self.journal.flush(Duration::from_secs(5))
-    }
-}
-/// Sanitize structured credential fields before local persistence as well as upload.
-pub fn redact(value: &mut Value) {
-    match value {
-        Value::Object(m) => {
-            m.retain(|k, _| {
-                let key = k.to_lowercase();
-                ![
-                    "password",
-                    "authorization",
-                    "credential",
-                    "private_key",
-                    "secret",
-                    "access_token",
-                    "refresh_token",
-                ]
-                .iter()
-                .any(|s| key.contains(s))
-            });
-            for v in m.values_mut() {
-                redact(v);
-            }
-        }
-        Value::Array(a) => {
-            for v in a {
-                redact(v)
-            }
-        }
-        _ => {}
     }
 }
 static OBSERVER: OnceLock<Option<RuntimeObserver>> = OnceLock::new();
@@ -104,8 +73,21 @@ pub fn initialize_runtime(role: &str) {
                 let _ = std::fs::write(&identity_path, &id);
                 id
             });
-        let settings = crate::ObservationSettings::from_environment().ok()?;
+        // Bad settings must not silently turn observation off; run on the
+        // defaults and record why.
+        let (settings, rejected) = match crate::ObservationSettings::from_environment() {
+            Ok(settings) => (settings, None),
+            Err(error) => (Default::default(), Some(error.to_string())),
+        };
         let mut observer = RuntimeObserver::open_with_settings(&path, &producer, settings).ok()?;
+        if let Some(reason) = rejected {
+            observer.record(
+                PRODUCER_ROVER,
+                role,
+                "observability.settings_rejected",
+                serde_json::json!({"reason": reason}),
+            );
+        }
         let upload = match (
             std::env::var("TERRA_OBSERVABILITY_ENDPOINT"),
             std::env::var("TERRA_OBSERVABILITY_UPLOAD_TOKEN_FILE"),
@@ -130,7 +112,7 @@ pub fn initialize_runtime(role: &str) {
                 crate::UploadConfig {
                     endpoint: config.endpoint,
                     token: token.trim().into(),
-                    evidence_directory: Some(path.with_extension("evidence")),
+                    evidence_directory: Some(crate::evidence_directory(&path)),
                     clock_journal: Some(observer.journal.clone()),
                 },
             )
@@ -139,7 +121,7 @@ pub fn initialize_runtime(role: &str) {
         Some(observer)
     });
     record_runtime(
-        "_producer",
+        PRODUCER_ROVER,
         role,
         "lifecycle.start",
         serde_json::json!({"version":env!("CARGO_PKG_VERSION")}),
@@ -187,7 +169,7 @@ fn default_state_path(role: &str) -> std::path::PathBuf {
 pub fn runtime_evidence_directory() -> Option<std::path::PathBuf> {
     OBSERVER
         .get()
-        .and_then(|o| o.as_ref().map(|o| o.path.with_extension("evidence")))
+        .and_then(|o| o.as_ref().map(|o| crate::evidence_directory(&o.path)))
 }
 
 /// Private per-application upload settings, used when explicit environment

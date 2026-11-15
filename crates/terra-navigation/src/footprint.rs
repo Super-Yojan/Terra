@@ -4,13 +4,10 @@
 //! occupied cells (occupancy at least [`OCCUPIED`]) and off-map cells always,
 //! unknown cells (occupancy below 0) unless they also lie under the body at the
 //! starting pose, so the rover can drive off its own unobserved underbody.
-use crate::{Pose, valid_map};
+use crate::Pose;
 use serde::{Deserialize, Serialize};
 use std::f64::consts::SQRT_2;
-use terra_mapping::MapSnapshot;
-
-/// Occupancy at or above this value is an obstacle.
-pub const OCCUPIED: i8 = 65;
+use terra_mapping::{MapSnapshot, OCCUPIED};
 
 /// Rover body size and the safety margin kept around it.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -80,8 +77,7 @@ pub(crate) fn in_blind_zone(
     start: Pose,
 ) -> bool {
     let width = map.width as usize;
-    let cx = map.origin_x + ((i % width) as f64 + 0.5) * map.resolution;
-    let cy = map.origin_y + ((i / width) as f64 + 0.5) * map.resolution;
+    let (cx, cy) = map.centre(i % width, i / width);
     (cx - start.x).hypot(cy - start.y) <= footprint.blind_zone_radius()
 }
 
@@ -123,7 +119,7 @@ pub(crate) fn rejection(
     pad: f64,
     unknown: Unknown,
 ) -> Option<&'static str> {
-    if !valid_map(map) || !pose.finite() {
+    if !map.valid() || !pose.finite() {
         return Some("outside_map");
     }
     let (a, b) = footprint.half_extents(pad);
@@ -147,8 +143,7 @@ pub(crate) fn rejection(
             }
             Unknown::SpinDisc(s) => {
                 let width = map.width as usize;
-                let cx = map.origin_x + ((i % width) as f64 + 0.5) * map.resolution;
-                let cy = map.origin_y + ((i / width) as f64 + 0.5) * map.resolution;
+                let (cx, cy) = map.centre(i % width, i / width);
                 (cx - s.x).hypot(cy - s.y)
                     <= footprint.circumradius()
                         + pad
@@ -177,8 +172,7 @@ pub fn footprint_fits(
 /// Whether map cell `i` overlaps the rectangle with half extents `(a, b)` at `pose`.
 fn cell_overlaps(map: &MapSnapshot, i: usize, pose: Pose, (a, b): (f64, f64)) -> bool {
     let width = map.width as usize;
-    let cx = map.origin_x + ((i % width) as f64 + 0.5) * map.resolution;
-    let cy = map.origin_y + ((i / width) as f64 + 0.5) * map.resolution;
+    let (cx, cy) = map.centre(i % width, i / width);
     overlaps(
         cx - pose.x,
         cy - pose.y,
@@ -259,7 +253,7 @@ pub fn pull_forward_clear(
 fn straight_clear(map: &MapSnapshot, footprint: &Footprint, pose: Pose, travel: f64) -> bool {
     let distance = travel.abs();
     let sign = if travel < 0. { -1. } else { 1. };
-    if !valid_map(map)
+    if !map.valid()
         || !pose.finite()
         || !footprint.valid()
         || !distance.is_finite()
@@ -273,8 +267,7 @@ fn straight_clear(map: &MapSnapshot, footprint: &Footprint, pose: Pose, travel: 
     let mut touching = std::collections::HashSet::new();
     for_each_overlapping_cell(map, pose.x, pose.y, pose.yaw, a, b, |i| {
         if let Some(i) = i {
-            let cx = map.origin_x + ((i % width) as f64 + 0.5) * map.resolution;
-            let cy = map.origin_y + ((i / width) as f64 + 0.5) * map.resolution;
+            let (cx, cy) = map.centre(i % width, i / width);
             // Only cells on the side being left: ahead of the centre when
             // reversing, behind it when pulling forward.
             if sign * ((cx - pose.x) * cos + (cy - pose.y) * sin) < 0. {
@@ -321,7 +314,7 @@ impl<'a> FitGrid<'a> {
     pub fn new(map: &'a MapSnapshot, footprint: &Footprint, start: Option<Pose>) -> Self {
         let n = map.occupancy.len();
         let mut tolerated = vec![false; n];
-        if let Some(s) = start.filter(|_| valid_map(map)) {
+        if let Some(s) = start.filter(|_| map.valid()) {
             let (a, b) = footprint.half_extents(0.);
             for_each_overlapping_cell(map, s.x, s.y, s.yaw, a, b, |i| {
                 if let Some(i) = i {
@@ -333,7 +326,7 @@ impl<'a> FitGrid<'a> {
                 *t |= in_blind_zone(map, footprint, i, s);
             }
         }
-        let distance = if valid_map(map) {
+        let distance = if map.valid() {
             distance_field(map, |i, v| v >= OCCUPIED || v < 0 && !tolerated[i])
         } else {
             Vec::new()
@@ -366,8 +359,7 @@ impl<'a> FitGrid<'a> {
         } else if (d + half_diagonal) * res < self.footprint.inradius() {
             false
         } else {
-            let x = self.map.origin_x + (column as f64 + 0.5) * res;
-            let y = self.map.origin_y + (row as f64 + 0.5) * res;
+            let (x, y) = self.map.centre(column, row);
             footprint_fits_some_heading(self.map, &self.footprint, x, y, self.start)
         };
         self.cache[i] = if fits { 1 } else { 2 };
@@ -455,13 +447,13 @@ pub(crate) fn for_each_overlapping_cell(
 /// or `None` when no occupied cell is within `reach` metres. Zero when touching.
 /// Each cell is treated as the disc around its square, so the result can read up
 /// to half a cell diagonal low: it never overstates clearance.
-pub fn rectangle_clearance(
+pub(crate) fn rectangle_clearance(
     map: &MapSnapshot,
     footprint: &Footprint,
     pose: Pose,
     reach: f64,
 ) -> Option<f64> {
-    if !valid_map(map) || !pose.finite() || !footprint.valid() {
+    if !map.valid() || !pose.finite() || !footprint.valid() {
         return None;
     }
     let (a, b) = footprint.half_extents(0.);
@@ -478,8 +470,8 @@ pub fn rectangle_clearance(
             if map.occupancy[r as usize * map.width as usize + c as usize] < OCCUPIED {
                 continue;
             }
-            let dx = map.origin_x + (c as f64 + 0.5) * res - pose.x;
-            let dy = map.origin_y + (r as f64 + 0.5) * res - pose.y;
+            let (x, y) = map.centre(c as usize, r as usize);
+            let (dx, dy) = (x - pose.x, y - pose.y);
             let along = (dx * cos + dy * sin).abs() - a;
             let across = (-dx * sin + dy * cos).abs() - b;
             let outside = along.max(0.).hypot(across.max(0.));

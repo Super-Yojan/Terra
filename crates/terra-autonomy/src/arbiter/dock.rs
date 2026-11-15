@@ -38,16 +38,17 @@ impl AutonomyArbiter {
 
     /// Apply a `dock` request. `start` names a bucket the host has already
     /// looked up in the object map (`target`); the host passes `None` when
-    /// the id is unknown, not confirmed, or not a bucket.
+    /// the id is unknown, not confirmed, or not a bucket. `pose` is the
+    /// tracked pose; a dock cannot start from an unknown one.
     pub fn apply_dock_request(
         &mut self,
         r: DockRequest,
         target: Option<DockTarget>,
-        pose: Pose,
+        pose: Option<Pose>,
         now: f64,
     ) -> bool {
         let fp = format!("dock:{:?}:{:?}:{:?}", r.action, r.object_id, r.dock_id);
-        if !valid_token(&r.token) || self.duplicate(&r.token, &fp) {
+        if !valid_token(&r.token) || self.repeat(&r.token, &fp).is_some() {
             return false;
         }
         if r.run_id.as_ref().is_some_and(|run| run != &self.run_id) {
@@ -70,7 +71,9 @@ impl AutonomyArbiter {
             DockActionKind::Start => {
                 if self.stopped {
                     Err("emergency_stop")
-                } else if let Some(target) = target {
+                } else if target.is_none() {
+                    Err("unknown_bucket")
+                } else if let Some((target, pose)) = target.zip(pose) {
                     self.next_dock += 1;
                     match Dock::start(
                         self.dock_config.clone(),
@@ -92,7 +95,7 @@ impl AutonomyArbiter {
                         Err(why) => Err(why),
                     }
                 } else {
-                    Err("unknown_bucket")
+                    Err("pose_unavailable")
                 }
             }
         };
@@ -138,7 +141,7 @@ impl AutonomyArbiter {
             self.gate_open = false;
             return false;
         };
-        let held = decision.held.then_some(decision.reason);
+        let held = decision.held.then_some(decision.reason.as_str());
         let tick = dock.step(
             input.now,
             input.pose,
@@ -153,11 +156,11 @@ impl AutonomyArbiter {
         if decision.held {
             return true;
         }
-        decision.source = "dock";
-        decision.reason = tick.reason;
+        decision.source = Source::Dock;
+        decision.reason = tick.reason.into();
         decision.intent_command = tick.twist;
         decision.twist = tick.twist;
-        if tick.twist == Twist::default() && tick.reason != "dock_creep" {
+        if tick.twist == Twist::default() && decision.reason != Reason::DockCreep {
             // Zero motion is the dock's intent, not a safety hold.
             self.turning.reset();
         }
@@ -170,7 +173,7 @@ impl AutonomyArbiter {
         };
         let token = dock.token.clone();
         for (kind, reason) in dock.take_events() {
-            self.event(kind, Some(token.clone()), &reason);
+            self.event(EventKind::Other(kind), Some(token.clone()), &reason);
         }
     }
 }

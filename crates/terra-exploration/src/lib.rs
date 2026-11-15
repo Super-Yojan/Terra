@@ -4,9 +4,9 @@
 //! The autonomy arbiter executes each selected goal through the waypoint follower
 //! and the local planner.
 //!
-//! Phase 1 stops on a time budget. Phase 2 can replace [`MissionObjective`] so a
-//! detection ends the run or changes which frontier wins. This crate does not
-//! detect anything itself.
+//! A run stops on its time budget, when no frontier is left, or when the
+//! integrating arbiter stops it. A [`GoalScorer`] changes which frontier wins.
+//! This crate does not detect anything itself.
 //!
 //! Poses, frontier coordinates, and footprint radii use world metres; time values
 //! use seconds on a consistent control clock. [`Explorer::start`] validates a
@@ -39,6 +39,8 @@
 mod explorer;
 mod frontier;
 mod objective;
+mod search;
 pub use explorer::*;
 pub use frontier::*;
 pub use objective::*;
+pub use search::*;

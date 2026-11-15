@@ -83,7 +83,6 @@ pub struct MissionStatus {
     pub objective: String,
     /// Seed determining the reproducible survivor layout.
     pub seed: u64,
-    /// Current lifecycle phase.
     pub phase: String,
     /// Number of survivors confirmed by their observing rovers.
     pub confirmed: usize,
@@ -93,7 +92,7 @@ pub struct MissionStatus {
     pub remaining_seconds: f64,
     /// Half-width of the square mission region, in metres from the origin.
     pub half_extent: f64,
-    /// Whether the recording or mission completed successfully, according to this record.
+    /// Whether the mission completed successfully.
     pub complete: bool,
     /// Whether the budget expired before mission completion.
     pub failed: bool,

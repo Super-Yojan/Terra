@@ -77,7 +77,7 @@ impl AutonomyArbiter {
             None
         };
         if let Some(why) = explore_hold {
-            decision.reason = why;
+            decision.reason = why.into();
             decision.held = true;
             self.explore_blocked = false;
         } else if let Some(yaw_rate) = self.explore_scan.filter(|_| self.level == Level::Explore) {
@@ -123,13 +123,12 @@ impl AutonomyArbiter {
             if let Some(why) = decision.route_failure {
                 decision.held = true;
                 decision.reason = why;
-                decision.source = "none";
-                self.last_plan = None;
-                self.planner_trace = None;
+                decision.source = Source::None;
+                self.plan.forget();
             } else if decision.route_pending && intent == Twist::default() {
                 decision.held = true;
-                decision.reason = "route_planning";
-                decision.source = "none";
+                decision.reason = Reason::RoutePlanning;
+                decision.source = Source::None;
             }
             self.check_motion(
                 input,
@@ -142,11 +141,12 @@ impl AutonomyArbiter {
 
             self.note_blocked(input, decision);
             self.update_frontier_proposal(input, decision);
-            if self.level == Level::Explore {
+            if self.level == Level::Explore && decision.reason != Reason::PlannerInvalidInput {
                 // A missing route holds the rover just like an obstacle does, so
                 // it counts toward the short blocked window, not the no-progress one.
+                // A planner input error sampled nothing and leaves the flag as it was.
                 self.explore_blocked =
-                    decision.reason == "obstacle_blocked" || decision.route_failure.is_some();
+                    decision.reason == Reason::ObstacleBlocked || decision.route_failure.is_some();
             }
         }
     }
@@ -157,20 +157,20 @@ impl AutonomyArbiter {
         decision: &mut TickDecision,
     ) {
         let managed = command_origin != CommandOrigin::LocalManual;
-        if decision.reason == "exploration_scan" && !decision.held {
+        if decision.reason == Reason::ExplorationScan && !decision.held {
             // The look-around has its own limiter in `scan_motion`.
             self.turning.reset();
             return;
         }
         if managed && !decision.held {
-            if decision.source == "none" || decision.twist == Twist::default() {
+            if decision.source == Source::None || decision.twist == Twist::default() {
                 self.turning.reset();
                 if command_origin == CommandOrigin::Autonomous
                     && decision.intent_command.angular != 0.
                     && !self.turning_config.allow_in_place
                 {
                     decision.held = true;
-                    decision.reason = "heading_requires_spin_or_replan";
+                    decision.reason = Reason::HeadingRequiresSpinOrReplan;
                 }
             } else {
                 match self.turning.step(terra_types::VelocityTarget {
@@ -188,12 +188,12 @@ impl AutonomyArbiter {
                             && decision.intent_command.angular != 0.
                         {
                             decision.held = true;
-                            decision.reason = "heading_requires_spin_or_replan";
+                            decision.reason = Reason::HeadingRequiresSpinOrReplan;
                         }
                     }
                     Err(_) => {
                         decision.held = true;
-                        decision.reason = "invalid_turn_timing";
+                        decision.reason = Reason::InvalidTurnTiming;
                     }
                 }
             }
@@ -211,6 +211,9 @@ impl AutonomyArbiter {
                 if !detector {
                     search.hold("detector_unavailable");
                 } else {
+                    // The map is present: a missing one already held this tick
+                    // as `map_stale`. A search error is recorded on the search
+                    // itself and leaves no goal, which holds below.
                     search_goal = search
                         .tick(
                             input.map.unwrap(),
@@ -226,18 +229,9 @@ impl AutonomyArbiter {
                     || (decision.goal.y - y).abs() > 1e-8
                     || decision.goal.state != GoalState::Active
                 {
-                    let _ = self.follower.accept(
-                        &GoalCommand::Local {
-                            x,
-                            y,
-                            yaw: None,
-                            token: None,
-                        },
-                        20_000.,
-                    );
-                    self.last_plan = None;
-                    self.planner_trace = None;
-                    self.event("route_selected", None, "search_route");
+                    self.follow_local(x, y, None);
+                    self.plan.forget();
+                    self.event(EventKind::RouteSelected, None, "search_route");
                 }
                 decision.goal = self
                     .follower
@@ -245,10 +239,9 @@ impl AutonomyArbiter {
                     .status;
             } else {
                 self.follower.cancel();
-                self.last_plan = None;
-                self.planner_trace = None;
+                self.plan.forget();
                 decision.held = true;
-                decision.reason = "search_hold";
+                decision.reason = Reason::SearchHold;
             }
         }
     }
@@ -266,10 +259,8 @@ impl AutonomyArbiter {
             // An approved MCP agent drives like assisted teleop: the planner checks every
             // forward command; reverse runs unchecked.
             Level::Task if agent_twist.is_some() => {
-                decision.source = "task_agent_drive";
-                self.clear_route();
-                self.route_goal = None;
-                self.route_reaches_goal = false;
+                decision.source = Source::TaskAgentDrive;
+                self.reset_route();
                 agent_twist.unwrap_or_default()
             }
             Level::Teleop | Level::AssistedTeleop => self
@@ -284,9 +275,9 @@ impl AutonomyArbiter {
                 })
                 .map(|(r, _)| {
                     decision.source = if self.level == Level::Teleop {
-                        "operator"
+                        Source::Operator
                     } else {
-                        "assisted_operator"
+                        Source::AssistedOperator
                     };
                     Twist {
                         linear: r.linear.clamp(-2., 2.),
@@ -299,20 +290,16 @@ impl AutonomyArbiter {
                     .follower
                     .step(input.pose.x, input.pose.y, input.pose.yaw);
                 if out.status.state == GoalState::Active {
-                    decision.source = if self.level == Level::Supervised {
-                        "frontier"
-                    } else if self.level == Level::Explore {
-                        "explore"
-                    } else if self.level == Level::TargetSearch {
-                        "target_search"
-                    } else if self.level == Level::Task {
-                        "task"
-                    } else {
-                        "waypoint"
+                    decision.source = match self.level {
+                        Level::Supervised => Source::Frontier,
+                        Level::Explore => Source::Explore,
+                        Level::TargetSearch => Source::TargetSearch,
+                        Level::Task => Source::Task,
+                        _ => Source::Waypoint,
                     };
                 }
                 // L5 task waypoints use the same A* route as L3.
-                if self.routed_level() && out.status.state == GoalState::Active {
+                if self.level.routed() && out.status.state == GoalState::Active {
                     self.waypoint_route_intent(
                         input,
                         planning_map.unwrap(),
@@ -321,10 +308,8 @@ impl AutonomyArbiter {
                         decision,
                     )
                 } else {
-                    if self.routed_level() {
-                        self.clear_route();
-                        self.route_goal = None;
-                        self.route_reaches_goal = false;
+                    if self.level.routed() {
+                        self.reset_route();
                     }
                     Twist {
                         linear: out.linear,
@@ -361,7 +346,7 @@ impl AutonomyArbiter {
             while self
                 .maneuver
                 .front()
-                .is_some_and(|s| wrap_heading(s.end.yaw - input.pose.yaw).abs() < 0.08)
+                .is_some_and(|s| terra_types::wrap_angle(s.end.yaw - input.pose.yaw).abs() < 0.08)
             {
                 self.maneuver.pop_front();
             }
@@ -391,12 +376,12 @@ impl AutonomyArbiter {
                     maneuver_active = true;
                 } else {
                     decision.held = true;
-                    decision.reason = "map_stale";
+                    decision.reason = Reason::MapStale;
                     self.maneuver.clear();
                 }
             } else if needs_turn {
                 decision.held = true;
-                decision.reason = "heading_requires_spin_or_replan";
+                decision.reason = Reason::HeadingRequiresSpinOrReplan;
             }
         }
 
@@ -425,45 +410,48 @@ impl AutonomyArbiter {
             );
             trace.maneuver_segments = self.maneuver.iter().cloned().collect();
             decision.twist = planned.twist;
-            decision.reason = planned.reason;
-            self.planner_trace = Some((input.now, trace));
-            if decision.twist == Twist::default() || decision.reason == "obstacle_blocked" {
+            decision.reason = planned.reason.into();
+            self.plan.trace = Some((input.now, trace));
+            if planned.reason == terra_navigation::PlanReason::InvalidInput {
                 decision.held = true;
-                decision.reason = "heading_requires_spin_or_replan";
+                self.maneuver.clear();
+            } else if decision.twist == Twist::default() || planned.reason.holds() {
+                decision.held = true;
+                decision.reason = Reason::HeadingRequiresSpinOrReplan;
                 self.maneuver.clear();
             }
         } else if !decision.held
             && (reversing || matches!(self.level, Level::Teleop | Level::WaypointDirect))
         {
             if reversing {
-                self.last_plan = None;
-                self.planner_trace = None;
+                self.plan.forget();
             }
             decision.twist = intent;
-            if decision.source != "none" {
-                decision.reason = "active";
+            if decision.source != Source::None {
+                decision.reason = Reason::Active;
             }
-        } else if !decision.held && decision.source != "none" {
+        } else if !decision.held && decision.source != Source::None {
             if intent == Twist::default() {
                 decision.twist = intent;
-                decision.reason = "active";
-                self.last_plan = None;
-                self.planner_trace = None;
-            } else if let Some((at, output, why)) = self.last_plan.filter(|p| {
+                decision.reason = Reason::Active;
+                self.plan.forget();
+            } else if let Some((_, output, why)) = self.plan.command.filter(|p| {
                 !managed
                     && input.now - p.0 < timing::LOCAL_PLAN_CACHE_SECONDS
                     && planning_map.is_some_and(|m| self.planner.admissible(m, input.pose, p.1))
             }) {
-                let _ = at;
                 decision.twist = output;
                 decision.reason = why;
             } else {
                 let mut planner = self.planner.clone();
                 if self.level == Level::Explore {
-                    let cap = self.explorer.config().approach_horizon;
-                    if cap.is_finite() && cap > 0. {
-                        planner.config.horizon = planner.config.horizon.min(cap);
-                    }
+                    // Frontier goals sit on the edge of unknown space, which the
+                    // planner treats as occupied: a multi-second rollout stops
+                    // short of every frontier. Only the lookahead shortens.
+                    planner.config.horizon = planner
+                        .config
+                        .horizon
+                        .min(timing::EXPLORATION_APPROACH_HORIZON_SECONDS);
                 }
                 let (planned, trace) = if managed {
                     planner.plan_with_turning(
@@ -484,14 +472,17 @@ impl AutonomyArbiter {
                         timing::PLANNER_STEP_SECONDS,
                     )
                 };
-                self.planner_trace = (!trace.candidates.is_empty()).then_some((input.now, trace));
+                self.plan.trace = (!trace.candidates.is_empty()).then_some((input.now, trace));
                 decision.twist = planned.twist;
-                decision.reason = planned.reason;
-                self.last_plan = Some((input.now, decision.twist, decision.reason));
+                decision.reason = planned.reason.into();
+                self.plan.command = Some((input.now, decision.twist, decision.reason));
             }
-            if decision.reason == "obstacle_blocked" {
+            if matches!(
+                decision.reason,
+                Reason::ObstacleBlocked | Reason::PlannerInvalidInput
+            ) {
                 decision.held = true;
-                decision.source = "none";
+                decision.source = Source::None;
             }
         }
     }
@@ -511,12 +502,16 @@ impl AutonomyArbiter {
             {
                 self.last_frontier = input.now;
                 let excluded: Vec<_> = self.rejected.iter().map(|&(x, y, _)| (x, y)).collect();
-                if let Some((x, y)) = frontier(
-                    input.map.unwrap(),
-                    input.pose,
-                    &self.planner.config.footprint,
-                    &excluded,
-                ) {
+                if let Some(terra_exploration::FrontierCandidate { x, y, .. }) =
+                    terra_exploration::select_frontier(
+                        input.map.unwrap(),
+                        input.pose,
+                        &self.planner.config.footprint,
+                        &excluded,
+                        1.,
+                        &terra_exploration::InformationGainScorer,
+                    )
+                {
                     self.next_proposal += 1;
                     self.proposal = Some(GoalProposal {
                         proposal_id: self.next_proposal,
@@ -527,14 +522,14 @@ impl AutonomyArbiter {
                         expires_at: input.now + timing::PROPOSAL_LIFETIME_SECONDS,
                         reason: "search_unobserved_sector".into(),
                     });
-                    self.event("proposal_created", None, "frontier");
+                    self.event(EventKind::ProposalCreated, None, "frontier");
                 }
             }
-            decision.reason = if self.proposal.is_some() {
+            decision.reason = Reason::Other(if self.proposal.is_some() {
                 "awaiting_approval"
             } else {
                 "no_reachable_frontier"
-            };
+            });
         }
     }
 
@@ -551,7 +546,6 @@ impl AutonomyArbiter {
         let changed_goal = self.route_goal != Some(destination);
         if changed_goal {
             self.clear_route();
-            self.route_reaches_goal = false;
             self.route_last_failure = None;
             self.reset_recovery();
         } else if let Some(twist) = self.recovery_step(input, map, decision) {
@@ -570,7 +564,6 @@ impl AutonomyArbiter {
             // Never keep driving a route that no longer fits or that the rover
             // has left: hold until the replacement is ready.
             self.clear_route();
-            self.route_reaches_goal = false;
         }
         // Approach routes stop at the edge of known space. Replan on the same
         // interval so a rolling map can extend them toward the goal.
@@ -598,20 +591,13 @@ impl AutonomyArbiter {
                 gx,
                 gy,
                 &self.hybrid_config(),
-                // A goal against an obstacle moves to where the rover fits,
-                // still inside the arrival radius so reaching it arrives.
-                (self.follower.config().arrive_radius - 0.1).max(0.),
+                self.route_goal_tolerance(),
             ) {
                 Ok(job) => self.route_job = Some(job),
-                Err("route_start_blocked") if self.recover_from_start_blocked(input) => {
+                Err(terra_navigation::RouteError::StartBlocked) if self.recover_from_start_blocked(input) => {
                     return Twist::default();
                 }
-                Err(why) => {
-                    self.clear_route();
-                    self.route_reaches_goal = false;
-                    self.route_last_failure = Some(why);
-                    decision.route_failure = Some(why);
-                }
+                Err(why) => self.route_failed(why.into(), decision),
             }
         }
         if due || changed_goal {
@@ -622,8 +608,7 @@ impl AutonomyArbiter {
             && let Some(result) = job.advance(ROUTE_EXPANSIONS_PER_TICK)
         {
             self.route_job = None;
-            self.last_plan = None;
-            self.planner_trace = None;
+            self.plan.forget();
             match result {
                 Ok(route) => {
                     self.global_route = route.waypoints;
@@ -631,15 +616,10 @@ impl AutonomyArbiter {
                     self.route_reaches_goal = route.reaches_goal;
                     self.route_last_failure = None;
                 }
-                Err("route_start_blocked") if self.recover_from_start_blocked(input) => {
+                Err(terra_navigation::RouteError::StartBlocked) if self.recover_from_start_blocked(input) => {
                     return Twist::default();
                 }
-                Err(why) => {
-                    self.clear_route();
-                    self.route_reaches_goal = false;
-                    self.route_last_failure = Some(why);
-                    decision.route_failure = Some(why);
-                }
+                Err(why) => self.route_failed(why.into(), decision),
             }
         }
         if self.global_route.len() < 2 {
@@ -654,7 +634,6 @@ impl AutonomyArbiter {
             // Driving the next leg from this heading leaves the planned path,
             // often straight into what the switch was meant to clear.
             self.clear_route();
-            self.route_reaches_goal = false;
             self.route_checked_at = f64::NEG_INFINITY;
             decision.route_pending = true;
             return Twist::default();
@@ -679,31 +658,39 @@ impl AutonomyArbiter {
             {
                 return false;
             }
-            if wrap_heading(route[end].yaw - pose.yaw).abs() > ROUTE_SWITCH_HEADING {
+            if terra_types::wrap_angle(route[end].yaw - pose.yaw).abs() > ROUTE_SWITCH_HEADING {
                 return true;
             }
             at = end;
         }
     }
 
-    /// Levels whose goals are driven along a Hybrid A* route. Waypoint Direct
-    /// deliberately follows its goal without map planning.
-    pub(super) fn routed_level(&self) -> bool {
-        matches!(
-            self.level,
-            Level::Waypoint
-                | Level::Task
-                | Level::Supervised
-                | Level::Explore
-                | Level::TargetSearch
-        )
-    }
-
-    /// Forget the route and any search in progress.
+    /// Forget the route and any search in progress, keeping the goal it was for.
     pub(super) fn clear_route(&mut self) {
         self.global_route.clear();
         self.route_progress = 0;
         self.route_job = None;
+        self.route_reaches_goal = false;
+    }
+
+    /// Forget the route and its goal, so the next routed goal plans from scratch.
+    pub(super) fn reset_route(&mut self) {
+        self.clear_route();
+        self.route_goal = None;
+    }
+
+    /// A route search failed: hold, and keep reporting `why` while a retry runs.
+    fn route_failed(&mut self, why: Reason, decision: &mut TickDecision) {
+        self.clear_route();
+        self.route_last_failure = Some(why);
+        decision.route_failure = Some(why);
+    }
+
+    /// How far a route may end from its goal: a goal against an obstacle
+    /// moves to where the rover fits, still 0.1 m inside the follower's
+    /// arrival radius so that reaching it counts as arriving.
+    fn route_goal_tolerance(&self) -> f64 {
+        (self.follower.config().arrive_radius - 0.1).max(0.)
     }
 
     /// Hybrid A* settings for a one-off synchronous check (approval, task
@@ -713,7 +700,7 @@ impl AutonomyArbiter {
         let base = self.hybrid_config();
         terra_navigation::HybridConfig {
             max_expansions: BOUNDED_ROUTE_EXPANSIONS,
-            goal_tolerance: (self.follower.config().arrive_radius - 0.1).max(base.goal_tolerance),
+            goal_tolerance: self.route_goal_tolerance().max(base.goal_tolerance),
             ..base
         }
     }
@@ -795,7 +782,6 @@ impl AutonomyArbiter {
                 .map(|w| (w[1].x - w[0].x).hypot(w[1].y - w[0].y))
                 .sum()
         };
-        // Lookahead target along this section.
         let mut target = at + 1;
         while target < end && length(at, target) < ROUTE_LOOKAHEAD {
             target += 1;
@@ -872,9 +858,9 @@ fn window_centre(commanded: Twist, measured: Twist) -> Twist {
 }
 
 /// Operator or agent reverse runs without the map or the local planner.
-fn reverse_drive(source: &str, intent: Twist) -> bool {
+fn reverse_drive(source: Source, intent: Twist) -> bool {
     // Recovery checks its own back-off, either way (it may start touching an
     // obstacle, which the local planner would refuse).
-    source == "recovery" && intent.linear != 0.
-        || intent.linear < 0. && matches!(source, "assisted_operator" | "task_agent_drive")
+    source == Source::Recovery && intent.linear != 0.
+        || intent.linear < 0. && matches!(source, Source::AssistedOperator | Source::TaskAgentDrive)
 }

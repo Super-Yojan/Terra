@@ -42,9 +42,13 @@ pub fn router(app: App) -> Router {
             "/v1/attachments/{hash}",
             put(put_attachment)
                 .get(get_attachment)
-                .layer(DefaultBodyLimit::max(32 * 1024 * 1024)),
+                .layer(DefaultBodyLimit::max(
+                    terra_observability::MAX_ATTACHMENT_BYTES,
+                )),
         )
-        .layer(DefaultBodyLimit::max(1024 * 1024))
+        .layer(DefaultBodyLimit::max(
+            terra_observability::MAX_INGEST_BODY_BYTES,
+        ))
         .with_state(app)
 }
 pub(crate) fn scope(app: &App, headers: &HeaderMap, read: bool) -> Result<Scope, StatusCode> {

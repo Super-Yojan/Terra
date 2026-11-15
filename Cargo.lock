@@ -2880,7 +2880,6 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
- "terra-control",
  "terra-exploration",
  "terra-mapping",
  "terra-navigation",
@@ -2903,7 +2902,9 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+ "terra-autonomy",
  "terra-mapping",
+ "terra-runtime",
 ]
 
 [[package]]
@@ -2924,6 +2925,7 @@ version = "0.1.0"
 name = "terra-mapping"
 version = "0.1.0"
 dependencies = [
+ "serde_json",
  "terra-types",
 ]
 
@@ -2966,7 +2968,6 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
- "terra-control",
  "terra-mapping",
  "terra-types",
 ]
@@ -3051,6 +3052,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "terra-autonomy",
+ "terra-exploration",
  "terra-mapping",
  "terra-navigation",
  "ureq",

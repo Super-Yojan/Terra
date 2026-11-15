@@ -6,13 +6,13 @@ use serde::{Deserialize, Serialize};
 pub struct Parameters {
     /// Managed turn constraints; omitted by older clients.
     #[serde(default)]
-    pub turning: terra_control::TurningConfig,
+    pub turning: terra_types::turning::TurningConfig,
     /// Planner reverse cap and penalty; defaults support older clients.
     #[serde(default = "default_reverse")]
     pub max_reverse: f64,
     #[serde(default = "default_reverse_penalty")]
     pub reverse_penalty: f64,
-    /// Assumed body length, metres, validated in 0.1..=3.
+    /// Assumed body length, metres, validated in 0.1..=3 like a rover profile.
     pub length: f64,
     /// Assumed body width, metres, validated in 0.1..=3.
     pub width: f64,
@@ -35,18 +35,24 @@ fn default_reverse_penalty() -> f64 {
     0.05
 }
 impl Default for Parameters {
+    /// Terra's body, turning and speed limits from
+    /// [`RoverProfile::terra`](crate::rover_profile::RoverProfile::terra).
+    /// Operators must enter the actual vehicle dimensions for other rovers.
     fn default() -> Self {
-        // Terra's measured 0.61 m square body with 5 cm on every side. Operators
-        // must enter the actual vehicle dimensions for other rovers.
+        let terra = crate::rover_profile::RoverProfile::terra();
         Self {
-            turning: Default::default(),
+            turning: terra_types::turning::TurningConfig {
+                min_turn_radius: terra.min_turn_radius,
+                allow_in_place: terra.allow_in_place,
+                ..Default::default()
+            },
             max_reverse: default_reverse(),
             reverse_penalty: default_reverse_penalty(),
-            length: 0.61,
-            width: 0.61,
-            clearance: 0.05,
-            max_linear: 2.,
-            max_angular: 2.,
+            length: terra.length,
+            width: terra.width,
+            clearance: terra.clearance,
+            max_linear: terra.max_linear,
+            max_angular: terra.max_angular,
             horizon: 2.,
             explore_through_unknown: false,
         }
@@ -55,6 +61,9 @@ impl Default for Parameters {
 impl Parameters {
     /// Return whether every geometry and avoidance parameter is finite and within its supported range.
     pub fn valid(&self) -> bool {
+        use crate::rover_profile::{
+            BODY_SIZE_M, CLEARANCE_M, MAX_ANGULAR_RADPS, MAX_LINEAR_MPS, within,
+        };
         self.turning.validate().is_ok()
             && self.max_reverse.is_finite()
             && self.max_reverse > 0.
@@ -62,15 +71,15 @@ impl Parameters {
             && self.reverse_penalty.is_finite()
             && (0.0..=10.).contains(&self.reverse_penalty)
             && [
-                (self.length, 0.1, 3.),
-                (self.width, 0.1, 3.),
-                (self.clearance, 0., 1.),
-                (self.max_linear, 0.05, 2.),
-                (self.max_angular, 0.1, 2.),
-                (self.horizon, 0.5, 5.),
+                (self.length, BODY_SIZE_M),
+                (self.width, BODY_SIZE_M),
+                (self.clearance, CLEARANCE_M),
+                (self.max_linear, MAX_LINEAR_MPS),
+                (self.max_angular, MAX_ANGULAR_RADPS),
+                (self.horizon, 0.5..=5.),
             ]
             .iter()
-            .all(|&(v, min, max)| v.is_finite() && (min..=max).contains(&v))
+            .all(|(v, range)| within(*v, range))
     }
     /// The body rectangle the planners check, with `clearance` as the margin on every side.
     pub fn footprint(&self) -> terra_navigation::Footprint {
@@ -80,8 +89,16 @@ impl Parameters {
             margin: self.clearance,
         }
     }
-    /// Build planner settings around the body rectangle.
-    /// Other planner parameters retain portable defaults; this conversion assumes prior validation.
+    /// Everything the autonomy arbiter takes from these parameters.
+    pub fn arbiter_settings(&self) -> terra_autonomy::ArbiterSettings {
+        terra_autonomy::ArbiterSettings {
+            planner: self.planner(),
+            turning: self.turning,
+            explore_through_unknown: self.explore_through_unknown,
+        }
+    }
+    /// Planner settings around the body rectangle. Other planner parameters
+    /// keep portable defaults; this conversion assumes prior validation.
     pub fn planner(&self) -> terra_navigation::PlannerConfig {
         terra_navigation::PlannerConfig {
             footprint: self.footprint(),
@@ -99,7 +116,9 @@ impl Parameters {
 pub struct State {
     /// Currently applied geometry and planner limits.
     pub parameters: Parameters,
-    /// Monotonic accepted-settings revision within this controller session.
+    /// Settings revision within this controller session, bumped by
+    /// [`Runtime::settings_changed`](crate::Runtime): settings and outdoor
+    /// requests must name it.
     pub revision: u64,
     /// Most recently processed unique settings token, including rejected requests.
     pub token: Option<String>,
@@ -107,7 +126,7 @@ pub struct State {
     pub result: Option<String>,
     /// Rover profile that last set these parameters, if any.
     pub profile: Option<String>,
-    seen: std::collections::VecDeque<String>,
+    seen: crate::replay::ReplayGuard<64>,
 }
 impl State {
     /// Return versioned navigation configuration status JSON, including the footprint, revision, and latest result.
@@ -126,37 +145,25 @@ struct Request {
     settings_revision: u64,
     parameters: Parameters,
 }
-/// Apply one bounded, fresh, run/revision-bound settings request only while live
-/// authority, goal, and hardware state permit reconfiguration. `age` is receipt
-/// age in seconds. Invalid envelopes are ignored; unique valid tokens record
+/// Apply one run/revision-bound settings request, already admitted for size
+/// and age, only while live authority, goal, and hardware state permit
+/// reconfiguration. Invalid envelopes are ignored; unique valid tokens record
 /// an acceptance or rejection result and cannot be replayed.
-pub fn apply(b: &mut super::Runtime, bytes: &[u8], age: f64, now: f64) -> bool {
-    if bytes.len() > 2048 {
-        return false;
-    }
+pub(crate) fn apply(b: &mut super::Runtime, bytes: &[u8], now: f64) -> bool {
     let Ok(r) = serde_json::from_slice::<Request>(bytes) else {
         return false;
     };
-    if !terra_autonomy::valid_token(&r.token) || b.navigation.seen.contains(&r.token) {
+    if !terra_autonomy::valid_token(&r.token) || !b.navigation.seen.admit(&r.token) {
         return false;
     }
-    if b.navigation.seen.len() >= 64 {
-        b.navigation.seen.pop_front();
-    }
-    b.navigation.seen.push_back(r.token.clone());
     b.navigation.token = Some(r.token);
-    let status: serde_json::Value = serde_json::from_str(&b.autonomy_json).unwrap_or_default();
-    let a = &status["status"];
-    let pose = b.pose.map(|p| p.0).unwrap_or_default();
+    // The last published tick must already show this authority, safety and goal.
+    let tick = b.brief.as_ref();
+    let pose = b.pose.map(|p| p.0);
     let reason = if !r.parameters.valid() {
         Some("invalid dimensions or avoidance limits")
-    } else if !age.is_finite()
-        || !(0.0..terra_types::timing::CONTROL_REQUEST_FRESHNESS_SECONDS).contains(&age)
-    {
-        Some("settings request expired")
     } else if r.run_id != b.run_id
-        || a["run_id"] != r.run_id
-        || a["revision"] != r.authority_revision
+        || tick.is_none_or(|t| t.run_id != r.run_id || t.revision != r.authority_revision)
         || r.settings_revision != b.navigation.revision
     {
         Some("vehicle run or configuration revision changed")
@@ -165,18 +172,16 @@ pub fn apply(b: &mut super::Runtime, bytes: &[u8], age: f64, now: f64) -> bool {
         .navigation_configuration_allowed(&r.run_id, r.authority_revision, pose)
     {
         Some("live vehicle authority changed or a goal is active")
-    } else if !matches!(a["safety"].as_str(), Some("clear" | "hold")) {
-        Some("vehicle safety state does not permit configuration")
-    } else if !b.hardware_observation.as_ref().is_some_and(|(h, at)| {
-        (0.0..terra_types::timing::HARDWARE_FRESHNESS_SECONDS).contains(&(now - *at))
-            && h["ready"] == true
-            && h["output_active"] == false
+    } else if !tick.is_some_and(|t| {
+        matches!(
+            t.safety,
+            terra_autonomy::Safety::Clear | terra_autonomy::Safety::Hold
+        )
     }) {
+        Some("vehicle safety state does not permit configuration")
+    } else if !b.hardware.is_some_and(|h| h.fresh_and_idle(now)) {
         Some("fresh ready hardware with neutral output required")
-    } else if !matches!(
-        status["goal"]["state"].as_str(),
-        Some("idle" | "arrived" | "cancelled")
-    ) {
+    } else if tick.is_some_and(|t| t.goal.state == terra_waypoint::GoalState::Active) {
         Some("cancel the active goal before changing settings")
     } else if b.navigation.revision == u64::MAX {
         Some("configuration revision exhausted")
@@ -187,15 +192,134 @@ pub fn apply(b: &mut super::Runtime, bytes: &[u8], age: f64, now: f64) -> bool {
         b.navigation.result = Some(format!("rejected: {reason}"));
         return false;
     }
-    b.autonomy.configure_planner(r.parameters.planner());
     b.autonomy
-        .configure_turning(r.parameters.turning)
+        .configure(&r.parameters.arbiter_settings())
         .expect("validated turning settings");
-    b.autonomy.explorer.config_mut().through_unknown = r.parameters.explore_through_unknown;
     b.controller.reset();
     b.navigation.parameters = r.parameters;
-    b.navigation.revision += 1;
-    b.outdoor.revision = b.outdoor.revision.saturating_add(1);
+    b.settings_changed();
     b.navigation.result = Some("accepted".into());
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{HardwareStatus, Runtime, RuntimeEvent};
+    fn runtime() -> Runtime {
+        Runtime::new(Default::default(), "settings".into()).unwrap()
+    }
+    fn hardware(r: &mut Runtime, output_active: bool) {
+        r.ingest(RuntimeEvent::Hardware {
+            status: HardwareStatus::from_json(
+                &serde_json::json!({"ready":true,"output_active":output_active}),
+            ),
+            received_at: 0.0,
+        })
+        .unwrap();
+    }
+    fn send(r: &mut Runtime, request: &serde_json::Value) {
+        apply(r, &serde_json::to_vec(request).unwrap(), 0.0);
+    }
+    #[test]
+    /// Checks the dimensions become the planner's body rectangle (clearance as the
+    /// margin on every side) and rejects negative clearance or nonfinite dimensions.
+    fn navigation_dimensions_validate_and_derive_a_conservative_footprint() {
+        let mut p = Parameters::default();
+        p.length = 0.8;
+        p.width = 0.6;
+        p.clearance = 0.1;
+        let footprint = p.planner().footprint;
+        assert_eq!(
+            (footprint.length, footprint.width, footprint.margin),
+            (0.8, 0.6, 0.1)
+        );
+        assert!((footprint.circumradius() - 0.6).abs() < 1e-10);
+        assert!(p.valid());
+        p.clearance = -0.1;
+        assert!(!p.valid());
+        p.clearance = 0.1;
+        p.length = f64::NAN;
+        assert!(!p.valid());
+    }
+    #[test]
+    /// Exercises absent hardware, replayed tokens, a successful geometry update,
+    /// stale authority in a batch, and active-output rejection.
+    fn navigation_update_requires_fresh_neutral_idle_hardware_and_current_revisions() {
+        let mut r = runtime();
+        r.step(0.0).unwrap();
+        let payload = serde_json::json!({"token":"settings-one","run_id":r.run_id(),"authority_revision":0,"settings_revision":0,"parameters":Parameters::default()});
+        send(&mut r, &payload);
+        assert_eq!(r.navigation().revision, 0);
+        hardware(&mut r, false);
+        send(&mut r, &payload); // rejected tokens cannot be replayed
+        assert_eq!(r.navigation().revision, 0);
+        let mut p = payload.clone();
+        p["token"] = "settings-two".into();
+        p["parameters"]["length"] = 0.8.into();
+        send(&mut r, &p);
+        assert_eq!(r.navigation().revision, 1);
+        assert_eq!(r.navigation().parameters.length, 0.8);
+        assert_eq!(
+            r.autonomy.footprint(),
+            r.navigation().parameters.planner().footprint
+        );
+        let mut stale = payload.clone();
+        stale["token"] = "second-in-batch".into();
+        stale["settings_revision"] = 1.into();
+        send(&mut r, &stale);
+        assert_eq!(
+            r.navigation().revision,
+            1,
+            "old authority cannot configure twice in one batch"
+        );
+        send(&mut r, &p);
+        assert_eq!(r.navigation().revision, 1);
+        let mut p = payload;
+        p["token"] = "settings-three".into();
+        p["settings_revision"] = 1.into();
+        p["authority_revision"] = 1.into();
+        hardware(&mut r, true);
+        send(&mut r, &p);
+        assert_eq!(r.navigation().revision, 1);
+        assert!(
+            r.navigation()
+                .result
+                .as_deref()
+                .unwrap()
+                .starts_with("rejected")
+        );
+    }
+    #[test]
+    /// Applies either a new goal or mode change before settings in the same tick
+    /// and verifies live authority prevents configuration based on stale cached status.
+    fn preceding_goal_or_mode_change_cannot_use_an_old_status_snapshot() {
+        for change in ["goal", "mode"] {
+            let mut r = runtime();
+            let run = r.run_id().to_owned();
+            r.autonomy.set_level(
+                terra_autonomy::decode_level(br#"{"level":"waypoint_direct","token":"setup"}"#)
+                    .unwrap(),
+            );
+            r.step(0.0).unwrap();
+            hardware(&mut r, false);
+            if change == "goal" {
+                assert!(r.autonomy.accept_goal(
+                    &terra_waypoint::decode_goal(br#"{"frame":"local","x":5,"y":0}"#).unwrap()
+                ));
+            } else {
+                r.autonomy.set_level(
+                    terra_autonomy::decode_level(br#"{"level":"teleop","token":"new-level"}"#)
+                        .unwrap(),
+                );
+            }
+            let request = serde_json::json!({"token":"mixed-settings","run_id":run,"authority_revision":1,"settings_revision":0,"parameters":Parameters::default()});
+            send(&mut r, &request);
+            assert_eq!(
+                r.navigation().revision,
+                0,
+                "must reject after preceding {change}"
+            );
+        }
+    }
 }

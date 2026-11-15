@@ -92,7 +92,7 @@ Phone depth, when ARCore Depth is supported, uses the raw 16-bit image and its c
 
 ## Waypoint
 
-**Go to waypoint** calls `MobileWaypoint.setOrigin` and `setGoal`. While the goal is latched the sliders stay idle. Each tick steps the follower with the simulated plant pose, the phone body pose, or the Zorvane depth frame’s body pose, and that twist is the command. On Zenoh it is `cmd_vel`. The `goal` topic stays idle during that run, so Zorvane does not latch a second follower. **Cancel waypoint**, Stop, and leaving the app drop the latch. **Johnson Center, 12 m north** fills the same default fields as iOS. The reachable square is 49 m. Map taps use `geographicPosition`.
+**Go to waypoint** calls `MobileWaypoint.setOrigin` and `setGoal`. While the goal is latched the sliders stay idle. Each tick steps the follower with the simulated plant pose, the phone body pose, or the Zorvane depth frame’s body pose, and that twist is the controller's velocity target. The `goal` topic stays idle during that run, so Zorvane does not latch a second follower. **Cancel waypoint**, Stop, and leaving the app drop the latch. **Johnson Center, 12 m north** fills the same default fields as iOS. The reachable square is 49 m. Map taps use `geographicPosition`.
 
 ## Autonomy
 
@@ -131,12 +131,12 @@ Not verified:
 
 - An Android emulator UI session. An API 35 AVD was created and QEMU started with KVM, but the process never created vCPUs and adb stayed offline, so the APK was not installed. No demo was recorded.
 - ARCore tracking, raw depth, or the mount presets on hardware.
-- Bluetooth on a radio. The physical-phone screen scans for service `7e5a0010-4c2b-4f91-9e3a-1d8c6b2a0f10`, connects, accepts pairing, reads status, subscribes, and exchanges capabilities, layout, stage, and commit. Motion uses Rust. A rover that reports `control_mode: streamed_relay` gets `(id, signed percent)` drive bytes from `actuator_encode_relay_drive` after `actuator_route_profiles`. A status document with a session and no streamed-relay mode gets `TA` frames from `actuator_encode_frame`, including disarm. Arm, Disarm, Stop, emergency stop, and leaving the app send safe output; Stop and leaving the app also disconnect. None of that has been run against a rover or a BlueZ adapter. See [Bluetooth peripheral](hardware/BLUETOOTH.md).
+- Bluetooth on a radio. The physical-phone screen scans for service `7e5a0010-4c2b-4f91-9e3a-1d8c6b2a0f10`, connects, accepts pairing, reads status, subscribes, and exchanges capabilities, layout, stage, and commit. Motion uses Rust. A rover that reports `control_mode: streamed_relay` gets `(id, signed percent)` drive bytes from `actuator_encode_relay_drive` after `actuator_route_profiles`. Arm, Disarm, Stop, emergency stop, and leaving the app send safe output; Stop and leaving the app also disconnect. None of that has been run against a rover or a BlueZ adapter. See [Bluetooth peripheral](hardware/BLUETOOTH.md).
 - The iOS app after the Swift call sites moved onto the new UniFFI functions. Rebuild with `./scripts/ios/build-ios.sh` on a Mac before running TerraPhone there. The new actuator functions are additive. Swift still sends a waypoint as an arbiter `goal` rather than stepping `MobileWaypoint` itself. iOS keeps its own streamed-relay encoder until that app calls the new exports.
 
 ## iOS follow-up on a Mac
 
-`PhoneController` now calls `deviceVectorToBody`, `yUpCameraToBodyPose`, `yUpCameraToOpticalPose`, `latchGroundOffset`, `PoseVelocityFilter`, `SimulatedPlant`, and `simulatedRoomDepth`. Those symbols appear only after `./scripts/ios/build-ios.sh` regenerates `apps/ios/Generated`. This checkout cannot run `xcodebuild`.
+`PhoneController` calls `SimulatedPlant` and `simulatedRoomDepth`. Those symbols appear only after `./scripts/ios/build-ios.sh` regenerates `apps/ios/Generated`. This checkout cannot run `xcodebuild`.
 
 ### Integrated exploration
 

@@ -1,4 +1,4 @@
-//! Control-plane loopback routing and bounded stop-preserving queue scenarios.
+//! Control-plane loopback routing and router-loss diagnostics.
 //! Network scenarios require local TCP sockets and use bounded receipt waits.
 use terra_transport::ControlPlane;
 use zenoh::Wait;
@@ -81,50 +81,5 @@ fn router_loss_has_a_specific_diagnostic_reason() {
     assert_eq!(
         service.diagnostics()["failure_reason"],
         "router_unavailable"
-    );
-}
-#[test]
-/// Floods a queue with 600 teleop messages and checks the distinct stop survives
-/// within the 256-entry bound and is drained last.
-fn emergency_stop_survives_burst_and_is_drained_last() {
-    let mut q = std::collections::VecDeque::new();
-    terra_transport::enqueue_control_action(
-        &mut q,
-        "safety".into(),
-        br#"{"action":"stop","token":"stop"}"#.to_vec(),
-        std::time::Instant::now(),
-    );
-    for _ in 0..600 {
-        terra_transport::enqueue_control_action(
-            &mut q,
-            "teleop".into(),
-            br#"{"linear":1,"angular":0}"#.to_vec(),
-            std::time::Instant::now(),
-        );
-    }
-    let actions = terra_transport::drain_control_actions(&mut q);
-    assert_eq!(actions.last().unwrap().0, "safety");
-    assert!(actions.len() <= 256);
-}
-#[test]
-/// Queues distinct and malformed safety stops and verifies the newer stop token is retained.
-fn delayed_or_malformed_stop_cannot_displace_distinct_new_stop() {
-    let mut q = std::collections::VecDeque::new();
-    for payload in [
-        br#"{"action":"stop","token":"new"}"#.as_slice(),
-        br#"{"action":"stop","token":"old"}"#,
-        br#"{"action":"stop"}"#,
-    ] {
-        terra_transport::enqueue_control_action(
-            &mut q,
-            "safety".into(),
-            payload.to_vec(),
-            std::time::Instant::now(),
-        );
-    }
-    assert!(
-        terra_transport::drain_control_actions(&mut q)
-            .iter()
-            .any(|a| serde_json::from_slice::<serde_json::Value>(&a.1).unwrap()["token"] == "new")
     );
 }

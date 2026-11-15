@@ -64,6 +64,11 @@ fn signaling_bypasses_the_2048_byte_control_inbox_and_cannot_publish_motion() {
         .wait()
         .unwrap();
     let service = ControlPlane::connect(&endpoint, "fpv-test", 3).unwrap();
+    // Puts before the service's subscriptions reach the router are lost.
+    for key in ["fpv-test/3/teleop", "fpv-test/3/safety", "fpv-test/3/webrtc/request"] {
+        let publisher = operator.declare_publisher(key).wait().unwrap();
+        wait_for(|| publisher.matching_status().wait().unwrap().matching());
+    }
 
     let small_teleop = r#"{"linear":0.1,"angular":0}"#;
     let oversized_teleop = format!("{{\"linear\":0,\"pad\":\"{}\"}}", "x".repeat(3000));
@@ -86,8 +91,8 @@ fn signaling_bypasses_the_2048_byte_control_inbox_and_cannot_publish_motion() {
         .unwrap();
     operator
         .put(
-            "fpv-test/3/hardware",
-            r#"{"action":"disarm","token":"fpv-must-not-mix","run_id":"run","authority_revision":0}"#,
+            "fpv-test/3/safety",
+            r#"{"action":"stop","token":"fpv-must-not-mix"}"#,
         )
         .wait()
         .unwrap();
@@ -106,13 +111,13 @@ fn signaling_bypasses_the_2048_byte_control_inbox_and_cannot_publish_motion() {
         actions.extend(service.take_actions());
         signals.extend(service.take_signaling());
         actions.iter().any(|action| action.0 == "teleop")
-            && actions.iter().any(|action| action.0 == "hardware")
+            && actions.iter().any(|action| action.0 == "safety")
             && signals.iter().any(|signal| signal.0 == "webrtc/request")
     });
     assert!(
         actions
             .iter()
-            .all(|action| action.0 == "teleop" || action.0 == "hardware")
+            .all(|action| action.0 == "teleop" || action.0 == "safety")
     );
     assert!(actions.iter().all(|action| action.1.len() <= 2048));
     assert!(signals.iter().all(|signal| signal.0 == "webrtc/request"));

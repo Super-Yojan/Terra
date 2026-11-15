@@ -165,7 +165,9 @@ impl EvidenceWriter {
                 .is_none_or(|s| s.is_empty() || s.len() > 256)
             || bundle.attachments.len() > 8
             || bundle.attachments.iter().any(|a| {
-                a.data.len() > 32 * 1024 * 1024 || a.dimensions.len() > 3 || a.name.len() > 64
+                a.data.len() > crate::MAX_ATTACHMENT_BYTES
+                    || a.dimensions.len() > 3
+                    || a.name.len() > 64
             })
             || bundle
                 .attachments
@@ -180,9 +182,9 @@ impl EvidenceWriter {
             Ok(()) => CaptureOutcome::Queued,
             Err(_) => {
                 self.journal.try_record(EventInput::new(
-                    "_producer",
+                    crate::PRODUCER_ROVER,
                     "observability",
-                    "observability.gap",
+                    crate::GAP_KIND,
                     serde_json::json!({"reason":"capture_queue_full","dropped_bundles":1}),
                 ));
                 CaptureOutcome::Dropped
@@ -212,7 +214,7 @@ impl EvidenceWriter {
 }
 fn gap(journal: &Journal, event: &EventInput, reason: &str, count: u64) {
     let mut e = event.clone();
-    e.kind = "observability.gap".into();
+    e.kind = crate::GAP_KIND.into();
     e.component = "observability".into();
     e.attributes = serde_json::json!({"reason":reason,"attachments":count});
     journal.try_record(e);

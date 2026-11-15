@@ -1,25 +1,14 @@
 use crate::*;
 use outdoor::{CourseFix, GpsFix, HeadingFix};
-pub(crate) fn invalid(s: &str) -> ControllerError {
-    ControllerError::InvalidInput { message: s.into() }
-}
-pub(crate) use terra_runtime::outdoor::evidence;
 #[uniffi::export]
 impl MobileController {
     /// Invalidate geographic guidance when the platform starts a new local AR frame.
     pub fn reset_outdoor_frame(&self) -> Result<(), ControllerError> {
-        let mut b = self.brain.lock().map_err(|_| ControllerError::Internal)?;
-        b.outdoor.cancel();
-        b.outdoor.invalidate_sensors();
-        b.pose = None;
-        b.map = None;
-        b.imu_time = None;
-        b.estimator.reset();
-        b.outdoor.revision = b.outdoor.revision.saturating_add(1);
-        if b.outdoor.selected {
-            b.autonomy.clear_guidance();
-            b.controller.reset();
-        }
+        self.brain
+            .lock()
+            .map_err(|_| ControllerError::Internal)?
+            .runtime
+            .reset_outdoor_frame();
         Ok(())
     }
 
@@ -27,8 +16,8 @@ impl MobileController {
         self.brain
             .lock()
             .map_err(|_| ControllerError::Internal)?
-            .outdoor
-            .invalidate_sensors();
+            .runtime
+            .invalidate_outdoor_sensors();
         self.brain.inbox.clear_outdoor();
         Ok(())
     }
@@ -37,8 +26,8 @@ impl MobileController {
         self.brain
             .lock()
             .map_err(|_| ControllerError::Internal)?
-            .outdoor
-            .supported = true;
+            .runtime
+            .enable_outdoor_gps();
         Ok(())
     }
     /// Queue a fix for the next `step`; `now` is the clock its freshness is judged against.

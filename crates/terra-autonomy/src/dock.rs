@@ -21,12 +21,9 @@ use serde::{Deserialize, Serialize};
 use terra_mapping::MapSnapshot;
 use terra_navigation::{Pose, Twist};
 
-/// Occupancy at or above this blocks the docking corridor (the planner's own threshold).
-const OCCUPIED: i8 = 65;
-
 /// How far past the dock range the camera may already have lost the bucket
 /// (out of view under the phone, or nearer than the depth minimum), metres.
-pub const DOCK_BLIND_MARGIN: f64 = 0.5;
+const DOCK_BLIND_MARGIN: f64 = 0.5;
 
 fn default_target_clear_margin() -> f64 {
     0.3
@@ -40,7 +37,9 @@ fn default_open_range_timeout() -> f64 {
 /// waits for a lock, metres.
 const OPEN_RANGE_MARGIN: f64 = 0.15;
 
-/// Geometry, tolerances and speeds for docking. Defaults fit Terra (CrabTrapBot).
+/// Geometry, tolerances and speeds for docking. The default is a 0.85 m
+/// square body that cannot spin (the Zorvane dumper); hosts describe their
+/// own body with [`DockConfig::for_body`], as the rover profile does.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DockConfig {
     /// Rover centre to dump-outlet centre along the body x axis when the outlet
@@ -141,7 +140,7 @@ impl DockConfig {
     pub fn for_body(length: f64, width: f64, can_spin: bool, min_turn_radius: f64) -> Self {
         let target_radius = 0.1524;
         Self {
-            outlet_ahead: length / 2. + target_radius + 0.03,
+            outlet_ahead: 0.,
             target_radius,
             // A tennis ball (0.067 m) through the outlet lands inside the
             // 0.30 m rim while the outlet centre is within ~0.12 m of the
@@ -169,7 +168,7 @@ impl DockConfig {
             lock_timeout: 5.,
             fix_timeout: 1.5,
             reacquire_seconds: 2.,
-            blind_range: length / 2. + target_radius + DOCK_BLIND_MARGIN,
+            blind_range: 0.,
             target_clear_margin: default_target_clear_margin(),
             open_range_timeout: default_open_range_timeout(),
             blind_verify_travel: 0.7,
@@ -184,6 +183,15 @@ impl DockConfig {
             lock_match_radius: 0.5,
             blend: 0.6,
         }
+        .with_outlet_ahead(length / 2. + target_radius + 0.03)
+    }
+
+    /// Put the outlet `ahead` metres in front of the rover centre; the blind
+    /// range follows it, 0.5 m past the dock range.
+    pub fn with_outlet_ahead(mut self, ahead: f64) -> Self {
+        self.outlet_ahead = ahead;
+        self.blind_range = ahead + DOCK_BLIND_MARGIN;
+        self
     }
 
     pub fn valid(&self) -> bool {
@@ -481,7 +489,7 @@ impl Dock {
         pose: Pose,
         now: f64,
     ) {
-        if !self.active() || class != "bucket" || !x.is_finite() || !y.is_finite() {
+        if !self.active() || class != crate::objects::BUCKET_CLASS || !x.is_finite() || !y.is_finite() {
             return;
         }
         let (dx, dy) = (x - pose.x, y - pose.y);
@@ -861,8 +869,8 @@ impl Dock {
                 let (wx, wy) = (pose.x + x * cos - y * sin, pose.y + x * sin + y * cos);
                 let near_target = (wx - self.target.x).hypot(wy - self.target.y) <= clear;
                 if !near_target
-                    && let Some((c, r)) = terra_navigation::grid_cell(map, wx, wy)
-                    && map.occupancy[r * map.width as usize + c] >= OCCUPIED
+                    && let Some((c, r)) = map.cell(wx, wy)
+                    && map.occupancy[r * map.width as usize + c] >= terra_mapping::OCCUPIED
                 {
                     return true;
                 }
@@ -929,10 +937,7 @@ pub struct DockRequest {
 /// Decode a `dock` request of at most 2048 bytes. `start` needs `object_id`
 /// and `dump` needs `dock_id`.
 pub fn decode_dock(b: &[u8]) -> Option<DockRequest> {
-    if b.is_empty() || b.len() > 2048 {
-        return None;
-    }
-    serde_json::from_slice::<DockRequest>(b).ok().filter(|r| {
+    crate::contract::decode::<DockRequest>(b).filter(|r| {
         crate::valid_token(&r.token)
             && r.run_id.as_ref().is_none_or(|s| crate::valid_token(s))
             && match r.action {
@@ -1190,8 +1195,7 @@ mod tests {
     /// Settle on a blind finish (no fix after the last one) and report the result.
     fn blind_finish(by: f64) -> Dock {
         let mut config = DockConfig::default();
-        config.outlet_ahead = 0.22;
-        config.blind_range = config.outlet_ahead + DOCK_BLIND_MARGIN;
+        config = config.with_outlet_ahead(0.22);
         let pose = Pose::default();
         let mut dock = Dock::start(config, 1, "t".into(), target(0.22, by), pose, 0.).unwrap();
         fix_at(&mut dock, 0.22, by, 0.5);
@@ -1227,8 +1231,7 @@ mod tests {
         // Outlet over the camera, close behind the bucket: 0.055 m off the axis
         // is a 12° bearing, which the old 6° heading test refused.
         let mut config = DockConfig::default();
-        config.outlet_ahead = 0.25;
-        config.blind_range = config.outlet_ahead + DOCK_BLIND_MARGIN;
+        config = config.with_outlet_ahead(0.25);
         let pose = Pose::default();
         let mut dock = Dock::start(config, 1, "t".into(), target(0.25, 0.055), pose, 0.).unwrap();
         dock.enter(DockPhase::Settle, "at_range");
@@ -1522,7 +1525,7 @@ mod tests {
             occupancy: vec![0; 1600],
         };
         // A box at x = 0.9 m on the rover axis, short of the bucket at 2 m.
-        let (c, r) = terra_navigation::grid_cell(&map, 0.9, 0.).unwrap();
+        let (c, r) = map.cell(0.9, 0.).unwrap();
         map.occupancy[r * 40 + c] = 100;
         let mut dock = Dock::start(
             DockConfig::default(),

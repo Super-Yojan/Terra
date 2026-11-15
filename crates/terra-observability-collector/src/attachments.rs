@@ -11,6 +11,10 @@ impl std::fmt::Display for InvalidAttachment {
 }
 impl std::error::Error for InvalidAttachment {}
 impl Store {
+    /// Content-addressed attachment files beside the collector database.
+    fn attachment_directory(&self) -> std::path::PathBuf {
+        self.config.path.with_extension("attachments")
+    }
     pub fn put_attachment(
         &self,
         scope: &Scope,
@@ -19,9 +23,10 @@ impl Store {
         bytes: &[u8],
     ) -> Result<(), JournalError> {
         if scope.read
-            || (!scope.rovers.iter().any(|r| r == rover) && rover != "_producer")
+            || (!scope.rovers.iter().any(|r| r == rover)
+                && rover != terra_observability::PRODUCER_ROVER)
             || !valid_hash(hash)
-            || bytes.len() > 32 * 1024 * 1024
+            || bytes.len() > terra_observability::MAX_ATTACHMENT_BYTES
             || bytes.len() as u64 > self.config.attachment_max_bytes
             || format!("{:x}", Sha256::digest(bytes)) != hash
         {
@@ -31,7 +36,7 @@ impl Store {
             .attachment_lock
             .lock()
             .map_err(|_| "attachment storage lock unavailable")?;
-        let directory = self.config.path.with_extension("attachments");
+        let directory = self.attachment_directory();
         std::fs::create_dir_all(&directory)?;
         let db = self.db()?;
         db.execute_batch("CREATE TABLE IF NOT EXISTS attachments(hash TEXT,rover TEXT,producer TEXT,bytes INTEGER,stored_ns INTEGER,PRIMARY KEY(hash,rover,producer))")?;
@@ -87,13 +92,14 @@ impl Store {
             })?
             .filter_map(Result::ok)
             .any(|(r, p)| {
-                scope.rovers.contains(&r) || (r == "_producer" && scope.producer_id == p)
+                scope.rovers.contains(&r)
+                    || (r == terra_observability::PRODUCER_ROVER && scope.producer_id == p)
             });
         if !allowed {
             return Err("attachment not found".into());
         }
-        let path = self.config.path.with_extension("attachments").join(hash);
-        if std::fs::metadata(&path)?.len() > 32 * 1024 * 1024 {
+        let path = self.attachment_directory().join(hash);
+        if std::fs::metadata(&path)?.len() > terra_observability::MAX_ATTACHMENT_BYTES as u64 {
             return Err("attachment too large".into());
         }
         Ok(std::fs::read(path)?)
@@ -111,7 +117,7 @@ impl Store {
             .attachment_lock
             .lock()
             .map_err(|_| "attachment storage lock unavailable")?;
-        let directory = self.config.path.with_extension("attachments");
+        let directory = self.attachment_directory();
         if !directory.exists() {
             return Ok(());
         }

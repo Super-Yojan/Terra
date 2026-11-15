@@ -5,9 +5,16 @@
 //! orientation and [`MotorOutput`] carries normalized wheel effort. This crate
 //! holds the vocabulary used by estimation, control, and hardware adapters.
 
-pub mod connectivity_policy;
 pub mod point_capture;
+pub mod requests;
+pub mod telemetry;
 pub mod timing;
+pub mod turning;
+
+/// `angle` in radians wrapped to `[-π, π)`.
+pub fn wrap_angle(angle: f64) -> f64 {
+    (angle + std::f64::consts::PI).rem_euclid(std::f64::consts::TAU) - std::f64::consts::PI
+}
 
 /// Three-component vector; units and reference frame are defined by the containing field.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -140,6 +147,58 @@ impl Quaternion {
         vector
             .plus(twice_cross.scaled(self.w))
             .plus(axis.cross(twice_cross))
+    }
+    /// Heading of the rotated +X axis in the world XY plane, radians from +X
+    /// toward +Y. Callers must normalize the quaternion first.
+    pub fn yaw(self) -> f64 {
+        let forward = self.rotate(Vector3 {
+            x: 1.0,
+            ..Vector3::ZERO
+        });
+        forward.y.atan2(forward.x)
+    }
+    /// Rotation from a proper rotation matrix, row-major (`m[row][col]`; the
+    /// columns are the images of the basis). Returns `None` when the result
+    /// cannot be normalized, as for a non-rotation matrix with nonfinite entries.
+    pub fn from_rotation_matrix(m: [[f64; 3]; 3]) -> Option<Self> {
+        let (m00, m01, m02) = (m[0][0], m[0][1], m[0][2]);
+        let (m10, m11, m12) = (m[1][0], m[1][1], m[1][2]);
+        let (m20, m21, m22) = (m[2][0], m[2][1], m[2][2]);
+        let trace = m00 + m11 + m22;
+        let q = if trace > 0.0 {
+            let s = (trace + 1.0).sqrt() * 2.0;
+            Self {
+                w: 0.25 * s,
+                x: (m21 - m12) / s,
+                y: (m02 - m20) / s,
+                z: (m10 - m01) / s,
+            }
+        } else if m00 > m11 && m00 > m22 {
+            let s = (1.0 + m00 - m11 - m22).sqrt() * 2.0;
+            Self {
+                w: (m21 - m12) / s,
+                x: 0.25 * s,
+                y: (m01 + m10) / s,
+                z: (m02 + m20) / s,
+            }
+        } else if m11 > m22 {
+            let s = (1.0 + m11 - m00 - m22).sqrt() * 2.0;
+            Self {
+                w: (m02 - m20) / s,
+                x: (m01 + m10) / s,
+                y: 0.25 * s,
+                z: (m12 + m21) / s,
+            }
+        } else {
+            let s = (1.0 + m22 - m00 - m11).sqrt() * 2.0;
+            Self {
+                w: (m10 - m01) / s,
+                x: (m02 + m20) / s,
+                y: (m12 + m21) / s,
+                z: 0.25 * s,
+            }
+        };
+        q.normalized()
     }
     /// Construct an axis-angle rotation: vector direction is the axis and length
     /// is the angle in radians. Inputs must be finite; zero yields identity.

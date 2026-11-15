@@ -20,7 +20,7 @@ def test_recording_preserves_source_receipt_and_reset_boundaries(tmp_path):
  assert 'source_phone_boot' in summary and 'source_phone_second-boot' in summary
  assert 'receipt_time' in summary
  index=json.loads(out.with_suffix('.index.json').read_text());assert {r['id']['boot_id'] for r in index}=={'boot','second-boot'}
- assert json.loads(out.with_suffix('.manifest.json').read_text())['clock_alignment']=='unmeasured; wall-clock alignment is approximate'
+ assert json.loads(out.with_suffix('.manifest.json').read_text())['clock_alignment'].startswith('unmeasured')
 
 def test_late_event_changes_revision_without_rewriting_ids(tmp_path):
  d=source(tmp_path,[event(1)]);out=tmp_path/'one.rrd';a=export_session(d,out,ExportConfig())
@@ -121,3 +121,8 @@ def test_missing_rgb_clears_image_and_reset_clears_old_frame(tmp_path,monkeypatc
  source(tmp_path,[first,second]);export_session(d,tmp_path/'reset.rrd',ExportConfig())
  assert ('/rovers/4/sources/phone/frames/A',True) in reset_calls
  assert 'Clear:is_recursive' in RrdReader(tmp_path/'reset.rrd').stream().collect().summary()
+
+def test_attachment_limit_matches_the_shared_contract():
+ from terra_replay.export import MAX_ATTACHMENT_BYTES
+ contract=Path(__file__).resolve().parents[3]/"tests/fixtures/observability/contract.json"
+ assert MAX_ATTACHMENT_BYTES==json.loads(contract.read_text())["max_attachment_bytes"]

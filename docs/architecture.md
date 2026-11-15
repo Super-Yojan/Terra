@@ -50,12 +50,12 @@ flowchart TB
 
 ```mermaid
 flowchart LR
-  Client[RoverConnection client] -->|cmd_vel and actions| Peer[Zorvane or peer]
+  Client[RoverConnection client] -->|teleop and actions| Peer[Zorvane or peer]
   Peer -->|depth and autonomy/status| Client
   Dash[ControlPlane] -->|status on loopback| Local[tcp/127.0.0.1 only]
 ```
 
-*`RoverConnection` is the Simulator client. `ControlPlane` refuses every address except loopback.*
+*`RoverConnection` is the simulator client. `ControlPlane` listens only on loopback; the phone also connects it out to a fleet router.*
 
 ## Planned
 

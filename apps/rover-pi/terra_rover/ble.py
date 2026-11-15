@@ -16,7 +16,7 @@ from .bless_transport import BlessTransport
 from .configuration import ConfigurationStore
 from .drive_relay import DriveRelay
 from .protocol import (FragmentAssembler, ProtocolError, decode_drive,
-                       decode_control, fragment_message, JSON_LIMIT)
+                       decode_control, fragment_message, JSON_LIMIT, MAX_ACTUATORS)
 
 SERVICE_UUID = '7e5a0010-4c2b-4f91-9e3a-1d8c6b2a0f10'
 DRIVE_UUID = '7e5a0011-4c2b-4f91-9e3a-1d8c6b2a0f10'
@@ -188,7 +188,7 @@ class BlePeripheral:
             if self.configuring: raise DBusError('org.bluez.Error.InProgress', 'configuration in progress')
             pending = {v.id: v for v in self.drive[1]} if self.drive is not None and self.drive[0] == self.generation else {}
             pending.update((v.id, v) for v in values)
-            if len(pending) > 16: raise ProtocolError('too many actuator IDs in output loop')
+            if len(pending) > MAX_ACTUATORS: raise ProtocolError('too many actuator IDs in output loop')
             self.drive = (self.generation, tuple(pending.values()))
 
     def _emit(self, characteristic, payload, generation):

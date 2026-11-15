@@ -151,16 +151,6 @@ impl PhoneDriveLoop {
         }
     }
 
-    /// Re-pair the loop clock with the sensor clock, e.g. after the app resumes.
-    pub fn resync_clock(&self, now_s: f64) {
-        if let Ok(mut clock) = self.shared.clock.lock() {
-            *clock = Clock {
-                base_s: now_s,
-                base: Instant::now(),
-            };
-        }
-    }
-
     /// Current time on the loop clock (the sensor clock), seconds.
     pub fn now(&self) -> f64 {
         self.shared.clock.lock().map(|c| c.now()).unwrap_or(0.0)
@@ -291,7 +281,7 @@ fn tick(shared: &Shared, now: f64) -> Result<MotorCommand, ControllerError> {
     let controller = &shared.controller;
     let mut s = shared.state.lock().map_err(|_| ControllerError::Internal)?;
     let dashboard = controller.dashboard_status();
-    let fleet = dashboard == "connected";
+    let fleet = controller.fleet_owns_intent();
     match shared.source {
         DriveSource::BluetoothManual => {
             controller.set_actuation_mode(false)?;
@@ -301,11 +291,9 @@ fn tick(shared: &Shared, now: f64) -> Result<MotorCommand, ControllerError> {
             }
         }
         DriveSource::Phone | DriveSource::Simulation => {
-            // An attached fleet owns velocity intent; an idle phone stick must
-            // not overwrite it. A held stick, and its return to neutral, is sent.
-            if !(s.ble_active && fleet)
-                && (s.local != (0.0, 0.0) || s.last_local_sent != Some(s.local))
-            {
+            // A working fleet link owns velocity intent. Otherwise a held
+            // stick, and its return to neutral, is sent.
+            if !fleet && (s.local != (0.0, 0.0) || s.last_local_sent != Some(s.local)) {
                 controller.set_target(TwistSetpoint {
                     timestamp: now,
                     forward: s.local.0,
@@ -422,24 +410,34 @@ mod tests {
     #[test]
     /// A stop is handed out once, and an old frame is not handed out at all.
     fn take_returns_stops_once_and_drops_stale_frames() {
-        let drive = manual_loop();
-        {
-            let mut s = drive.shared.state.lock().unwrap();
-            s.latest_drive = Some(("[]".into(), 100.0));
-            s.pending_stop = Some("why".into());
-        }
-        assert_eq!(
-            drive.take_motor_command(1e9),
-            MotorCommand::Stop {
-                reason: "why".into()
-            }
-        );
+        let controller = MobileController::new(default_control_settings()).unwrap();
+        controller.set_actuator_layout(PROFILES.into()).unwrap();
+        let held = PhoneDriveLoop::new(controller, MotorGate::new(), DriveSource::Phone, 0.0);
+        held.set_link(true, true, false, true);
+        held.set_tracking(true);
+        assert!(matches!(held.step_once(0.0).unwrap(), MotorCommand::Stop { .. }));
         assert!(matches!(
-            drive.take_motor_command(1e9),
-            MotorCommand::Drive { .. }
+            held.take_motor_command(1e9),
+            MotorCommand::Stop { .. }
         ));
-        drive.resync_clock(200.0);
-        assert_eq!(drive.take_motor_command(0.15), MotorCommand::Idle);
+        assert_eq!(held.take_motor_command(1e9), MotorCommand::Idle);
+
+        let drive = manual_loop();
+        drive.set_link(true, true, false, true);
+        drive.set_local_input(0.5, 0.0);
+        let now = drive.now();
+        let driving = (0..10)
+            .map(|i| drive.step_once(now + i as f64 * 0.01).unwrap())
+            .any(|c| matches!(c, MotorCommand::Drive { .. }));
+        assert!(driving);
+        for _ in 0..2 {
+            assert!(matches!(
+                drive.take_motor_command(1e9),
+                MotorCommand::Drive { .. }
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(20));
+        assert_eq!(drive.take_motor_command(0.0), MotorCommand::Idle);
     }
 
     #[test]
@@ -471,17 +469,42 @@ mod tests {
     }
 
     #[test]
-    /// The thread ticks near 100 Hz on its own and stops when asked.
+    /// A working fleet link owns velocity intent whether or not Bluetooth is
+    /// up: the phone stick is not sent, and the loop keeps ticking.
+    fn fleet_link_without_bluetooth_keeps_the_loop_running() {
+        let socket = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("tcp/127.0.0.1:{}", socket.local_addr().unwrap().port());
+        drop(socket);
+        let controller = MobileController::new(default_control_settings()).unwrap();
+        controller
+            .host_dashboard(endpoint, "drive-loop-fleet".into(), 7)
+            .unwrap();
+        assert!(controller.fleet_owns_intent());
+        let drive = PhoneDriveLoop::new(controller, MotorGate::new(), DriveSource::Phone, 0.0);
+        drive.set_local_input(0.2, 0.0);
+        for i in 0..5 {
+            drive.step_once(i as f64 * 0.01).unwrap();
+        }
+        assert!(drive.snapshot().error.is_none());
+    }
+
+    #[test]
+    /// The thread ticks on its own without bursting past 100 Hz, and stops when asked.
     fn thread_ticks_and_stops() {
         let drive = manual_loop();
+        let started = Instant::now();
         drive.start().unwrap();
-        std::thread::sleep(Duration::from_millis(120));
+        while drive.snapshot().tick < 5 && started.elapsed() < Duration::from_secs(5) {
+            std::thread::sleep(Duration::from_millis(5));
+        }
         drive.stop();
+        let elapsed = started.elapsed();
         let snapshot = drive.snapshot();
         assert!(!snapshot.running);
+        let ceiling = elapsed.as_millis() as u64 / 10 + 2;
         assert!(
-            (5..=20).contains(&snapshot.tick),
-            "ticked {} times",
+            (5..=ceiling).contains(&snapshot.tick),
+            "ticked {} times in {elapsed:?}",
             snapshot.tick
         );
         let after = snapshot.tick;

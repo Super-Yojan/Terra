@@ -4,7 +4,8 @@ import json
 import math
 import struct
 
-DRIVE_LIMIT = 32  # Sixteen actuator ID / signed effort pairs.
+MAX_ACTUATORS = 16
+DRIVE_LIMIT = 2 * MAX_ACTUATORS  # Actuator ID / signed effort pairs.
 JSON_LIMIT = 16 * 1024
 PAGINATED_LIMIT = 4080  # 255 fragments at conservative 20-byte ATT capacity
 PAGINATED_OPERATIONS = frozenset(('layout_index', 'read_actuator', 'read_drive_profile', 'begin_layout_edit', 'stage_actuator', 'remove_actuator', 'validate_layout_edit', 'commit_layout_edit', 'discard_layout_edit'))
@@ -29,7 +30,7 @@ def _uint(value, bits):
 
 
 def encode_drive(values) -> bytes:
-    if not 1 <= len(values) <= 16:
+    if not 1 <= len(values) <= MAX_ACTUATORS:
         raise ProtocolError('expected one to sixteen actuator pairs')
     result = bytearray()
     ids = set()

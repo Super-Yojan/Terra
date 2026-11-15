@@ -62,11 +62,12 @@ impl AutonomyArbiter {
             status.budget_seconds,
             pose,
             &footprint,
+            self.turning_config.allow_in_place,
             map_text,
             &task.history,
         );
         // The built-in prompt ends by asking for JSON; agents act through tools instead.
-        if let Some(cut) = text.rfind("\nReply with one JSON object only.") {
+        if let Some(cut) = text.rfind(crate::task::PROMPT_REPLY_FOOTER) {
             text.truncate(cut);
         }
         text.push_str(&format!(
@@ -130,9 +131,8 @@ impl AutonomyArbiter {
                 task.count_step();
                 let names = task.follow(plan.clone(), note, rationale, now);
                 self.follower.cancel();
-                self.last_plan = None;
-                self.planner_trace = None;
-                self.event("task_plan", None, &names);
+                self.plan.forget();
+                self.event(EventKind::TaskPlan, None, &names);
                 Ok(AgentOutcome::Following(plan))
             }
         }
@@ -145,7 +145,7 @@ impl AutonomyArbiter {
         let task = self.task.as_mut().expect("checked by agent_control");
         task.ask(question, None);
         self.follower.cancel();
-        self.event("task_question", None, "agent");
+        self.event(EventKind::TaskQuestion, None, "agent");
         Ok(AgentOutcome::Asked)
     }
 
@@ -160,7 +160,7 @@ impl AutonomyArbiter {
         let task = self.task.as_mut().expect("checked by agent_control");
         let reason = task.conclude(done, clean(rationale, 300), now);
         self.follower.cancel();
-        self.event("task_ended", None, reason);
+        self.event(EventKind::TaskEnded, None, reason);
         Ok(AgentOutcome::Ended(reason))
     }
 
@@ -186,7 +186,7 @@ impl AutonomyArbiter {
             format!("asked to drive for {seconds:.0} s: {reason}"),
         );
         task.drive_request = Some((reason, seconds, now));
-        self.event("task_drive_requested", None, "agent");
+        self.event(EventKind::TaskDriveRequested, None, "agent");
         Ok(AgentOutcome::DriveRequested)
     }
 

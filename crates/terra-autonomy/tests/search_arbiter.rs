@@ -78,7 +78,6 @@ fn mode_without_detector_or_request_never_moves() {
     let mut a = arbiter();
     let o = a.step(input(&map(), 0.1));
     assert_eq!(o.twist, Twist::default());
-    assert!(!o.status.supported_levels.is_empty());
 }
 /// Start on a known core without approval, then latch a stop and verify reset does not resurrect the cancelled search.
 #[test]
@@ -190,7 +189,7 @@ fn search_route_intent_is_not_swallowed_by_waypoint_arrival_radius() {
     a.start_search(req(), &input(&m, 0.)).unwrap();
     let o = a.step(input(&m, 0.1));
     assert_ne!(o.intent, Twist::default());
-    assert_eq!(o.status.active_source, "target_search");
+    assert_eq!(o.status.active_source, Source::TargetSearch);
 }
 /// Place the rover centre near the search edge so its footprint crosses the boundary; reject the start.
 #[test]

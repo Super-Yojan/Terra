@@ -1,6 +1,6 @@
 """Independent journal reader/uploader. No imports of actuator or Bluetooth control."""
-import hashlib,json,os,pathlib,re,subprocess,time
-from .observability import ObservationJournal,ObservationUploader
+import hashlib,json,os,pathlib,subprocess,time
+from .observability import GAP_KIND,SENSITIVE_JOURNAL_PLACEHOLDER,ObservationUploader,journal_from_environment,sensitive_journal_message
 
 UNITS=('terra-rover.service','bluetooth.service','terra-network-setup.service',
        'hostapd.service','systemd-networkd.service','wpa_supplicant@wlan0.service',
@@ -18,9 +18,7 @@ def project_journal(entry):
         if isinstance(envelope,dict) and envelope.get('schema_version')==1 and isinstance(envelope.get('id'),dict):
             return {'envelope':envelope,'source_cursor':cursor}
     except (ValueError,TypeError):pass
-    if (any(word in text.lower() for word in ('password','passphrase','bearer ','private key','credential','authorization:'))
-            or re.search(r"(?i)\b(?:wpa[_-])?psk\b['\"]?\s*(?:[=:]|value\b)",text)):
-        text='[sensitive journal message omitted]'
+    if sensitive_journal_message(text):text=SENSITIVE_JOURNAL_PLACEHOLDER
     try:
         wall=int(entry.get('__REALTIME_TIMESTAMP',0))*1000
         mono=int(entry.get('__MONOTONIC_TIMESTAMP',0))*1000
@@ -32,7 +30,7 @@ def project_journal(entry):
 def main():
     root=pathlib.Path(os.environ.get('TERRA_OBSERVABILITY_STATE','/var/lib/terra-observability-pi'))
     root.mkdir(parents=True,exist_ok=True)
-    journal=ObservationJournal(root/'events.db',os.environ['TERRA_OBSERVABILITY_PRODUCER'],os.environ['TERRA_OBSERVABILITY_ROVER'], max_bytes=int(os.getenv('TERRA_OBSERVABILITY_EVENT_BYTES',512*1024*1024)), retention_seconds=int(os.getenv('TERRA_OBSERVABILITY_RETENTION_SECONDS',7*86400)))
+    journal=journal_from_environment(root/'events.db')
     token=pathlib.Path(os.environ['TERRA_OBSERVABILITY_UPLOAD_TOKEN_FILE']).read_text().strip()
     ObservationUploader(journal,os.environ['TERRA_OBSERVABILITY_ENDPOINT'],token)
     cursor_file=root/'journal.cursor'
@@ -51,7 +49,7 @@ def main():
                 line=process.stdout.readline(1024*1024)
                 if not line:break
                 if not line.endswith(b'\n'):
-                    journal.record({'component':'observability','kind':'observability.gap','attributes':{'reason':'oversized_journal_line'}})
+                    journal.record({'component':'observability','kind':GAP_KIND,'attributes':{'reason':'oversized_journal_line'}})
                     break
                 try:entry=json.loads(line)
                 except ValueError:continue
@@ -66,9 +64,7 @@ def main():
                 journal.flush()
                 identity=event.get('envelope',{}).get('id') or {'producer_id':journal.producer,'boot_id':hashlib.sha256(event['source_cursor'].encode()).hexdigest(),'sequence':0}
                 # Advance only when the original identity exists durably in the queue.
-                with journal._db() as db:
-                    present=db.execute('SELECT 1 FROM events WHERE id=?',(json.dumps(identity,sort_keys=True),)).fetchone()
-                if not present:break
+                if not journal.contains(identity):break
                 temporary=cursor_file.with_suffix('.tmp');temporary.write_text(event['source_cursor']);temporary.replace(cursor_file)
         finally:
             process.terminate()

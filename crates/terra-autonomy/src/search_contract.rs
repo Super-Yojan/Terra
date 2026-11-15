@@ -2,40 +2,7 @@
 
 use crate::valid_token;
 use serde::{Deserialize, Serialize};
-/// Axis-aligned search rectangle in world metres; valid sides are positive and at most 100 m.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct SearchBounds {
-    /// Inclusive minimum world x coordinate, in metres.
-    pub min_x: f64,
-    /// Inclusive minimum world y coordinate, in metres.
-    pub min_y: f64,
-    /// Inclusive maximum world x coordinate, in metres.
-    pub max_x: f64,
-    /// Inclusive maximum world y coordinate, in metres.
-    pub max_y: f64,
-}
-impl SearchBounds {
-    /// Return whether all coordinates are finite and each side is positive and at most 100 m.
-    pub fn valid(self) -> bool {
-        [self.min_x, self.min_y, self.max_x, self.max_y]
-            .iter()
-            .all(|v| v.is_finite())
-            && self.max_x > self.min_x
-            && self.max_y > self.min_y
-            && self.max_x - self.min_x <= 100.
-            && self.max_y - self.min_y <= 100.
-    }
-    /// Return whether finite world-metre coordinates lie inside the rectangle, including its edges.
-    pub fn contains(self, x: f64, y: f64) -> bool {
-        x.is_finite()
-            && y.is_finite()
-            && x >= self.min_x
-            && x <= self.max_x
-            && y >= self.min_y
-            && y <= self.max_y
-    }
-}
+pub use terra_exploration::SearchBounds;
 /// Version-one target-search session with a bounded region and time budget.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -177,7 +144,6 @@ pub struct SearchStatus {
     pub search_id: String,
     /// Monotonically advancing state or authority revision.
     pub revision: u64,
-    /// Current lifecycle phase.
     pub phase: SearchPhase,
     /// Machine-readable explanation of the current decision or transition.
     pub reason: String,
@@ -209,13 +175,7 @@ pub struct SearchReportAck {
     /// Request correlation token; command tokens use 1–64 ASCII letters, digits, or `._:-`.
     pub token: String,
 }
-fn decode<T: serde::de::DeserializeOwned>(b: &[u8]) -> Option<T> {
-    if b.is_empty() || b.len() > 2048 {
-        None
-    } else {
-        serde_json::from_slice(b).ok()
-    }
-}
+use crate::contract::decode;
 /// Decode strict JSON up to 2048 bytes, returning `None` unless the complete search request validates.
 pub fn decode_search_request(b: &[u8]) -> Option<SearchRequest> {
     decode::<SearchRequest>(b).filter(SearchRequest::valid)

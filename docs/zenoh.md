@@ -3,14 +3,14 @@
 > [!TIP]
 > **TL;DR**
 > Prefix: `terra/rover/<id>/…`
-> The `RoverConnection` client publishes `cmd_vel` at 20 Hz. No TerraPhone app uses it.
+> The `RoverConnection` simulator client publishes `teleop` at 20 Hz. No TerraPhone app uses it.
 > Lease is 250 ms, then zeros.
 > TerraPhone iOS does not open this socket. It uses Bluetooth.
 
 ```mermaid
 flowchart LR
   ARGOS[ARGOS] -->|teleop goal safety| Z[Zorvane]
-  Client[RoverConnection client] -->|cmd_vel| Z
+  Client[RoverConnection client] -->|teleop| Z
   Z -->|camera/depth| Client
   Dash[Loopback dashboard] --> Local[127.0.0.1 only]
 ```
@@ -20,14 +20,14 @@ flowchart LR
 | Session | Who | Address |
 | --- | --- | --- |
 | `RoverConnection` | `terra-transport` tests and tools | Any `tcp/` endpoint. Usually `tcp/127.0.0.1:7447`. |
-| `ControlPlane` | `host_dashboard` | `tcp/127.0.0.1` only. `0.0.0.0` is rejected. |
+| `ControlPlane` | `host_dashboard`, fleet router link | `listen`: `tcp/127.0.0.1` only, `0.0.0.0` is rejected. `connect`: any `tcp/` or `tls/` router. |
 
 ## Keys
 
 ```mermaid
 flowchart TB
   subgraph out [Phone client publishes]
-V[cmd_vel]
+V[teleop]
 A[autonomy safety goal decision]
   end
   subgraph inn [Phone client subscribes]
@@ -39,11 +39,10 @@ M[map/occupancy pose goal/status]
   end
 ```
 
-*RGB and a client fleet subscription are planned.*
+*RGB and a client fleet subscription are planned. Request topics are listed in `terra_types::requests`, telemetry topics and their byte caps in `terra_types::telemetry`.*
 
 | Key | What moves |
 | --- | --- |
-| `cmd_vel` | `{"linear","angular"}` only. Within ±2. 20 Hz. |
 | `teleop` | Stick, plus optional session and sequence. |
 | `goal` | `cancel`, or `local` / `wgs84`. |
 | `goal/status` | `idle`, `active`, `arrived`. |

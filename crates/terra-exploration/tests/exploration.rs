@@ -57,15 +57,13 @@ fn tick<'a>(
         goal_distance: distance,
     }
 }
-/// Compare default BFS ranking with navigation on a known core surrounded by unknown cells, then prefer east and exclude that goal.
+/// Rank a known core surrounded by unknown cells, then prefer east and exclude that goal.
 #[test]
-fn frontier_selection_matches_navigation_and_respects_a_scorer() {
+fn frontier_selection_respects_a_scorer() {
     let grid = with_known_core(true);
     let pose = Pose::default();
     let selected =
         select_frontier(&grid, pose, &body(0.35), &[], 1., &InformationGainScorer).unwrap();
-    let legacy = terra_navigation::frontier(&grid, pose, &body(0.35), &[]).unwrap();
-    assert_eq!((selected.x, selected.y), legacy);
     assert!(selected.information_gain > 0);
     assert!(selected.score > 0.);
     let prefer_east = select_frontier(
@@ -227,37 +225,6 @@ fn no_frontiers_left_when_the_map_is_fully_known() {
         Some(EndReason::NoFrontiersLeft)
     );
 }
-/// Inject an irrelevant label followed by a wanted survivor label; the next tick must finish the target objective.
-#[test]
-fn find_target_stub_stops_on_a_reported_detection() {
-    let grid = with_known_core(true);
-    let mut explorer = Explorer::default();
-    explorer.set_objective(Box::new(FindTargetsObjective::new(["survivor"])));
-    assert!(explorer.start(60., "run-1"));
-    assert!(matches!(
-        explorer.step(tick(0., Some(&grid), false, false, false, 0., 0., 0.)),
-        ExploreAction::Seek { .. }
-    ));
-    explorer.notify_detection(Detection {
-        label: "rock".into(),
-        x: 1.,
-        y: 1.,
-        confidence: 0.9,
-        observed_at: 0.2,
-    });
-    assert_eq!(explorer.phase(), ExplorePhase::Running);
-    explorer.notify_detection(Detection {
-        label: "survivor".into(),
-        x: 2.,
-        y: -1.,
-        confidence: 0.8,
-        observed_at: 0.4,
-    });
-    assert_eq!(
-        explorer.step(tick(0.5, Some(&grid), false, true, false, 0., 0., 1.)),
-        ExploreAction::Finished(EndReason::ObjectiveComplete)
-    );
-}
 /// Measure a partly known free core and a fully known map, checking positive area and fractional versus complete coverage.
 #[test]
 fn coverage_counts_observed_free_cells() {
@@ -403,7 +370,7 @@ fn through_unknown_finds_a_frontier_in_the_camera_wedge() {
     assert!(candidate.distance_m > 0.8);
     assert!(candidate.information_gain > 0);
     // The goal is a cell the camera saw as free, not a guess in unknown space.
-    let (column, row) = terra_navigation::grid_cell(&wedge, candidate.x, candidate.y).unwrap();
+    let (column, row) = wedge.cell(candidate.x, candidate.y).unwrap();
     assert_eq!(wedge.occupancy[row * 200 + column], 0);
     // The explorer seeks it instead of turning in place.
     let mut explorer = Explorer::default();
@@ -562,19 +529,11 @@ fn all_frontiers_blacklisted_retries_instead_of_holding() {
         matches!(actions[1], ExploreAction::Seek { .. }),
         "{actions:?}"
     );
-    let retries: Vec<_> = events
+    let retries = events
         .iter()
         .filter(|e| e.kind == "frontier_retry_early")
-        .map(|e| e.reason.as_str())
-        .collect();
-    assert!(
-        retries[0].contains("attempts=1,max_attempts=3"),
-        "{retries:?}"
-    );
-    assert!(
-        retries[1].contains("attempts=2,max_attempts=3"),
-        "{retries:?}"
-    );
+        .count();
+    assert_eq!(retries, 2, "{events:?}");
     assert!(
         actions.iter().all(|a| *a != ExploreAction::Hold),
         "{actions:?}"

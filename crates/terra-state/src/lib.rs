@@ -35,9 +35,11 @@ use terra_types::*;
 /// Maximum ages of the sensor evidence, in seconds on a shared monotonic clock.
 #[derive(Clone, Copy, Debug)]
 pub struct EstimatorConfig {
-    /// IMU age at which estimates become stale; defaults to 0.1 s.
+    /// IMU age at which estimates become stale; defaults to
+    /// [`timing::IMU_FRESHNESS_SECONDS`] (0.5 s).
     pub imu_timeout: f64,
-    /// VIO age at which estimates become stale; defaults to 0.35 s.
+    /// VIO age at which estimates become stale; defaults to
+    /// [`timing::VIO_FRESHNESS_SECONDS`] (0.35 s).
     pub vio_timeout: f64,
 }
 impl Default for EstimatorConfig {

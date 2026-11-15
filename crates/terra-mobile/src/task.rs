@@ -22,14 +22,14 @@ impl MobileController {
         self.brain
             .lock()
             .map_err(|_| ControllerError::Internal)?
-            .autonomy
+            .runtime
             .set_task_model(name);
         Ok(())
     }
     /// Take the next model query, if the task is waiting for one. Each query is returned once.
     pub fn take_task_query(&self) -> Option<MobileTaskQuery> {
         let mut b = self.brain.lock().ok()?;
-        b.autonomy.take_task_query().map(|q| MobileTaskQuery {
+        b.runtime.take_task_query().map(|q| MobileTaskQuery {
             query_id: q.query_id,
             task_id: q.task_id,
             system: q.system,
@@ -40,7 +40,7 @@ impl MobileController {
     /// `latency_seconds` is how long the model took. Returns false for an unknown query.
     pub fn submit_task_response(&self, query_id: u64, text: String, latency_seconds: f64) -> bool {
         self.brain.lock().is_ok_and(|mut b| {
-            b.autonomy
+            b.runtime
                 .submit_task_response(query_id, text, Some(latency_seconds))
         })
     }
@@ -48,23 +48,6 @@ impl MobileController {
     pub fn fail_task_query(&self, query_id: u64, reason: String) -> bool {
         self.brain
             .lock()
-            .is_ok_and(|mut b| b.autonomy.fail_task_query(query_id, reason))
-    }
-    /// Name a point the phone recognised (for example a detector hit) in local metres,
-    /// so the model can choose it as a landmark target.
-    pub fn observe_task_landmark(
-        &self,
-        label: String,
-        x: f64,
-        y: f64,
-        confidence: f64,
-        timestamp: f64,
-    ) -> Result<(), ControllerError> {
-        self.brain
-            .lock()
-            .map_err(|_| ControllerError::Internal)?
-            .autonomy
-            .observe_task_landmark(&label, x, y, confidence, timestamp);
-        Ok(())
+            .is_ok_and(|mut b| b.runtime.fail_task_query(query_id, reason))
     }
 }

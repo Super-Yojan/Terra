@@ -19,9 +19,12 @@
 //! ```
 
 mod barrier;
+mod capture;
 mod floor;
-pub use barrier::{BARRIER_HEIGHT_MARGIN, BARRIER_MIN_FACES, BarrierSurface};
-pub use floor::{FLOOR_BELOW_CAMERA, FLOOR_OUTLIER, FloorSurface};
+mod square_grid;
+pub use barrier::BarrierSurface;
+pub use capture::{DepthCapture, LabelledReturns};
+pub use floor::FloorSurface;
 use std::sync::Arc;
 pub use terra_types::point_capture::PointLabel;
 use terra_types::{Quaternion, Vector3};
@@ -130,6 +133,104 @@ pub struct MapSnapshot {
     /// Row-major; rows increase in world +Y. -1 unknown, 0..100 occupancy probability.
     pub occupancy: Vec<i8>,
 }
+/// Occupancy at or above this value is an obstacle; `0..OCCUPIED` is free and
+/// negative values are unknown.
+pub const OCCUPIED: i8 = 65;
+/// Largest map, in cells, that grid searches over a whole snapshot (route
+/// planning, search coverage) accept; bounds their time and memory per call.
+pub const MAX_PLANNING_CELLS: usize = 250_000;
+/// Most cells a side a dashboard draws; narrower than onboard maps.
+const TELEMETRY_MAX_SIDE: u32 = 512;
+/// Most cells in one `map/occupancy` body.
+const TELEMETRY_MAX_CELLS: usize = 250_000;
+/// Longest run id, in bytes, a dashboard accepts.
+const TELEMETRY_MAX_RUN_ID_BYTES: usize = 256;
+impl MapSnapshot {
+    /// Whether this grid fits the dashboard's `map/occupancy` envelope under
+    /// `run_id`: 1 to 512 cells a side and at most 250 000 cells, values
+    /// -1..=100, resolution 0.01..=2 m, finite origin and extent, and a run id
+    /// of 1 to 256 bytes. Narrower than [`Self::valid`]; onboard planning
+    /// still uses maps that fail it.
+    pub fn telemetry_valid(&self, run_id: &str) -> bool {
+        !run_id.is_empty()
+            && run_id.len() <= TELEMETRY_MAX_RUN_ID_BYTES
+            && (1..=TELEMETRY_MAX_SIDE).contains(&self.width)
+            && (1..=TELEMETRY_MAX_SIDE).contains(&self.height)
+            && self.width as usize * self.height as usize <= TELEMETRY_MAX_CELLS
+            && self.occupancy.len() == self.width as usize * self.height as usize
+            && self.resolution.is_finite()
+            && (0.01..=2.).contains(&self.resolution)
+            && self.origin_x.is_finite()
+            && self.origin_y.is_finite()
+            && (self.origin_x + f64::from(self.width) * self.resolution).is_finite()
+            && (self.origin_y + f64::from(self.height) * self.resolution).is_finite()
+            && self.occupancy.iter().all(|cell| (-1..=100).contains(cell))
+    }
+    /// The `map/occupancy/heartbeat` body: the last full snapshot's run and
+    /// sequence are still current. Carries `schema_version` like the snapshot.
+    pub fn heartbeat(rover_id: u64, run_id: &str, sequence: u64) -> serde_json::Value {
+        serde_json::json!({
+            "schema_version": 1,
+            "rover_id": rover_id,
+            "run_id": run_id,
+            "sequence": sequence,
+        })
+    }
+    /// The `map/occupancy` telemetry body: schema version 1, the caller's
+    /// rover, run and sequence, and the grid as it is. Observed cells only, so
+    /// simulator ground truth never reaches the dashboard. Does not validate.
+    pub fn telemetry(&self, rover_id: u64, run_id: &str, sequence: u64) -> serde_json::Value {
+        serde_json::json!({
+            "schema_version": 1,
+            "rover_id": rover_id,
+            "run_id": run_id,
+            "sequence": sequence,
+            "width": self.width,
+            "height": self.height,
+            "resolution": self.resolution,
+            "origin_x": self.origin_x,
+            "origin_y": self.origin_y,
+            "occupancy": self.occupancy,
+        })
+    }
+    /// Non-empty, at most 1000 cells a side, storage matching the size, finite
+    /// origin and a resolution of at least 1 cm.
+    pub fn valid(&self) -> bool {
+        self.width > 0
+            && self.height > 0
+            && self.width <= 1000
+            && self.height <= 1000
+            && self.occupancy.len() == self.width as usize * self.height as usize
+            && self.resolution.is_finite()
+            && self.resolution >= 0.01
+            && self.origin_x.is_finite()
+            && self.origin_y.is_finite()
+    }
+    /// `(column, row)` of the cell holding world point `(x, y)`; `None` off the
+    /// grid or for an invalid snapshot.
+    pub fn cell(&self, x: f64, y: f64) -> Option<(usize, usize)> {
+        if !self.valid() || !x.is_finite() || !y.is_finite() {
+            return None;
+        }
+        let column = ((x - self.origin_x) / self.resolution).floor();
+        let row = ((y - self.origin_y) / self.resolution).floor();
+        (column >= 0. && row >= 0. && column < self.width as f64 && row < self.height as f64)
+            .then_some((column as usize, row as usize))
+    }
+    /// Occupancy at world point `(x, y)`; `None` off the grid.
+    pub fn at(&self, x: f64, y: f64) -> Option<i8> {
+        self.cell(x, y)
+            .map(|(c, r)| self.occupancy[r * self.width as usize + c])
+    }
+    /// World `(x, y)` of the centre of cell `(column, row)`. Does not check
+    /// that the cell is on the grid.
+    pub fn centre(&self, column: usize, row: usize) -> (f64, f64) {
+        (
+            self.origin_x + (column as f64 + 0.5) * self.resolution,
+            self.origin_y + (row as f64 + 0.5) * self.resolution,
+        )
+    }
+}
 /// Invalid mapping input; rejected frames do not update evidence or the last timestamp.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MapError {
@@ -166,11 +267,10 @@ pub struct LocalOccupancyMap {
     barrier: Option<Arc<BarrierSurface>>,
     /// Centre last requested by [`Self::recenter`], to spot local frame jumps.
     last_center: Option<(f64, f64)>,
-    frame_jumps: u64,
 }
 /// A recentre farther than this from the previous one is a local frame jump
 /// (VIO relocalization or a reset), not travel, in metres.
-pub const FRAME_JUMP_M: f64 = 1.0;
+const FRAME_JUMP_M: f64 = 1.0;
 impl LocalOccupancyMap {
     /// Allocate an unknown grid centered on world `(0, 0)`.
     ///
@@ -192,12 +292,7 @@ impl LocalOccupancyMap {
             floor: None,
             barrier: None,
             last_center: None,
-            frame_jumps: 0,
         })
-    }
-    /// Times [`Self::recenter`] cleared the map after a local frame jump.
-    pub fn frame_jumps(&self) -> u64 {
-        self.frame_jumps
     }
     /// Erase observations, timestamp history and the mesh surfaces while
     /// retaining geometry and origin.
@@ -232,8 +327,8 @@ impl LocalOccupancyMap {
     }
     /// Shift by whole cells, preserving overlapping world cells. Newly exposed cells are unknown.
     ///
-    /// Callers recentre on the rover every frame. A centre more than
-    /// [`FRAME_JUMP_M`] from the previous one is treated as a local frame jump
+    /// Callers recentre on the rover every frame. A centre more than 1 m
+    /// from the previous one is treated as a local frame jump
     /// and clears the map (see [`Self::clear`]) before shifting.
     ///
     /// The requested center `(x, y)` is in world metres; shifts round to the
@@ -257,7 +352,6 @@ impl LocalOccupancyMap {
             .is_some_and(|(px, py)| (x - px).hypot(y - py) > FRAME_JUMP_M)
         {
             self.clear();
-            self.frame_jumps += 1;
         }
         let resolution = self.config.resolution;
         let column_shift = ((x - self.config.width as f64 * resolution / 2.0 - self.origin_x)
@@ -708,34 +802,6 @@ struct Mesh<'a> {
     floor: Option<&'a FloorSurface>,
     barrier: Option<&'a BarrierSurface>,
 }
-/// Label every pixel of a depth frame without mesh surfaces; see
-/// [`label_depth_with_mesh`].
-///
-/// # Errors
-/// As [`label_depth_with_mesh`].
-pub fn label_depth(
-    config: &MapConfig,
-    intrinsics: CameraIntrinsics,
-    pose: CameraPose,
-    depth: &[f32],
-    classifier: DepthClassifier,
-) -> Result<Vec<LabeledPoint>, MapError> {
-    label_depth_with_mesh(config, intrinsics, pose, depth, classifier, None, None)
-}
-/// [`label_depth_with_mesh`] with a floor surface and no barrier surface.
-///
-/// # Errors
-/// As [`label_depth_with_mesh`].
-pub fn label_depth_with_floor(
-    config: &MapConfig,
-    intrinsics: CameraIntrinsics,
-    pose: CameraPose,
-    depth: &[f32],
-    classifier: DepthClassifier,
-    floor: Option<&FloorSurface>,
-) -> Result<Vec<LabeledPoint>, MapError> {
-    label_depth_with_mesh(config, intrinsics, pose, depth, classifier, floor, None)
-}
 /// Label every pixel of a depth frame with exactly the rules
 /// [`LocalOccupancyMap::integrate_classified`] applies to its sampled pixels,
 /// including the floor veto and barrier stops when `floor` and `barrier` are
@@ -786,46 +852,68 @@ pub fn label_depth_with_mesh(
     }
     Ok(points)
 }
-/// Copy of one accepted depth frame and the rules it was integrated with.
-#[derive(Clone, Debug)]
-pub struct DepthCapture {
-    /// Exposure time, seconds.
-    pub timestamp: f64,
-    /// Calibration of `depth`.
-    pub intrinsics: CameraIntrinsics,
-    /// Camera pose at exposure.
-    pub pose: CameraPose,
-    /// Classifier used for this frame.
-    pub classifier: DepthClassifier,
-    /// Mapper limits in force.
-    pub config: MapConfig,
-    /// Row-major axial depth in metres.
-    pub depth: Vec<f32>,
-    /// Mesh floor the map consulted for this frame, if any.
-    pub floor: Option<Arc<FloorSurface>>,
-    /// Mesh barrier the map consulted for this frame, if any.
-    pub barrier: Option<Arc<BarrierSurface>>,
-}
-impl DepthCapture {
-    /// Label every pixel; see [`label_depth`].
-    ///
-    /// # Errors
-    /// As [`label_depth`]; a frame the map accepted does not fail.
-    pub fn label(&self) -> Result<Vec<LabeledPoint>, MapError> {
-        label_depth_with_mesh(
-            &self.config,
-            self.intrinsics,
-            self.pose,
-            &self.depth,
-            self.classifier,
-            self.floor.as_deref(),
-            self.barrier.as_deref(),
-        )
-    }
-}
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    /// Exercises accepted dashboard dimensions and rejects excessive dimensions/cell count,
+    /// invalid resolution/cells/origin, and empty or oversized run identities.
+    fn visualization_envelope_matches_dashboard_without_narrowing_local_maps() {
+        // Build unknown-free test geometry with the requested dimensions and valid 0.1 m cells.
+        let map = |width, height| MapSnapshot {
+            width,
+            height,
+            resolution: 0.1,
+            origin_x: 0.,
+            origin_y: 0.,
+            occupancy: vec![0; width as usize * height as usize],
+        };
+        for (width, height) in [(400, 400), (500, 500), (512, 1)] {
+            assert!(map(width, height).telemetry_valid("run"));
+        }
+        for (width, height) in [(600, 500), (512, 500), (513, 1), (1, 513)] {
+            let unsupported = map(width, height);
+            // All examples fit the wire cap; byte acceptance alone is insufficient.
+            assert!(serde_json::to_vec(&unsupported.occupancy).unwrap().len() < 2_000_000);
+            assert!(!unsupported.telemetry_valid("run"));
+        }
+        for resolution in [0.009, 2.001, f64::NAN, f64::INFINITY] {
+            let mut unsupported = map(2, 2);
+            unsupported.resolution = resolution;
+            assert!(!unsupported.telemetry_valid("run"));
+        }
+        for cell in [-2, 101] {
+            let mut unsupported = map(2, 2);
+            unsupported.occupancy[0] = cell;
+            assert!(!unsupported.telemetry_valid("run"));
+        }
+        let mut unsupported = map(2, 2);
+        unsupported.origin_x = f64::INFINITY;
+        assert!(!unsupported.telemetry_valid("run"));
+        assert!(!map(2, 2).telemetry_valid(""));
+        assert!(!map(2, 2).telemetry_valid(&"x".repeat(257)));
+        assert!(map(2, 2).telemetry_valid(&"x".repeat(256)));
+    }
+
+    fn label_depth(
+        config: &MapConfig,
+        intrinsics: CameraIntrinsics,
+        pose: CameraPose,
+        depth: &[f32],
+        classifier: DepthClassifier,
+    ) -> Result<Vec<LabeledPoint>, MapError> {
+        label_depth_with_mesh(config, intrinsics, pose, depth, classifier, None, None)
+    }
+    fn label_depth_with_floor(
+        config: &MapConfig,
+        intrinsics: CameraIntrinsics,
+        pose: CameraPose,
+        depth: &[f32],
+        classifier: DepthClassifier,
+        floor: Option<&FloorSurface>,
+    ) -> Result<Vec<LabeledPoint>, MapError> {
+        label_depth_with_mesh(config, intrinsics, pose, depth, classifier, floor, None)
+    }
     /// Use a single-pixel camera looking along world +X from 0.5 m above ground.
     fn setup() -> (LocalOccupancyMap, CameraIntrinsics, CameraPose) {
         let map = LocalOccupancyMap::new(MapConfig {
@@ -896,10 +984,8 @@ mod tests {
         map.recenter(0.05, 0.0).unwrap();
         map.recenter(0.1, 0.0).unwrap();
         assert!(map.snapshot().occupancy.iter().any(|x| *x > 50));
-        assert_eq!(map.frame_jumps(), 0);
         map.recenter(2.85, 0.0).unwrap();
         assert!(map.snapshot().occupancy.iter().all(|x| *x == -1));
-        assert_eq!(map.frame_jumps(), 1);
         map.integrate_depth(0.0, camera_intrinsics, p, &[2.0])
             .unwrap();
     }
