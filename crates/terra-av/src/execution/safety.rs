@@ -1,10 +1,11 @@
-//! The last check before the motors: stale data, e-stop, tilt. Can only
-//! reduce a command, never add to it.
+//! The last step before the motors: if the e-stop is pressed, stop.
+//! Nothing else.
 use super::WheelCommand;
-use crate::{estimation::State, sense::SensorFrame};
+use crate::sense::SensorFrame;
 
-pub struct SafetyGate { pub max_data_age: f64 }
+pub struct SafetyGate;
 
 impl SafetyGate {
-    pub fn check(&mut self, command: WheelCommand, frame: &SensorFrame, state: &State) -> WheelCommand { todo!() }
+    /// `frame.estop` set → zero wheels; otherwise `command` unchanged.
+    pub fn check(&mut self, command: WheelCommand, frame: &SensorFrame) -> WheelCommand { todo!() }
 }

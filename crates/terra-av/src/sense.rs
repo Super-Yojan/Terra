@@ -5,6 +5,7 @@ use crate::geometry::{Pose2, Vec2};
 
 pub struct SensorFrame {
     pub t: f64,
+    pub estop: bool,                   // operator or phone e-stop pressed
     pub vio: Option<VioPose>,          // ARKit pose, camera frame
     pub gyro_z: Option<f64>,           // IMU yaw rate
     pub gps: Option<GpsFix>,           // Core Location
