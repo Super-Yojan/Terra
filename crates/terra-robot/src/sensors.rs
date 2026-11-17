@@ -3,7 +3,7 @@
 use terra_autonomy::outdoor::{CourseFix, GpsFix, HeadingFix};
 use terra_types::{ImuSample, VioSample};
 
-/// One control tick's inputs from the phone. Swift or Kotlin fills it from
+/// One control tick's inputs from the phone. Swift fills it from
 /// its own sensor callbacks and hands it to [`crate::Robot::update`].
 /// A sample already seen (same timestamp) is not applied twice.
 #[derive(Clone, Debug, Default)]

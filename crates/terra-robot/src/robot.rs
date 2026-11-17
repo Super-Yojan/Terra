@@ -1,4 +1,4 @@
-//! [`Robot`]: the one object a phone app talks to. Swift or Kotlin owns the
+//! [`Robot`]: the one object the phone app talks to. Swift owns the
 //! loop and the sensors and calls [`Robot::update`] once per control tick:
 //!
 //! ```text

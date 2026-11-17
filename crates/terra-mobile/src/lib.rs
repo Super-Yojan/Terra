@@ -12,12 +12,8 @@ uniffi::setup_scaffolding!();
 mod actuators;
 pub use actuators::*;
 mod autonomy;
-mod connection;
-mod depth;
 mod diagnostics;
 pub use autonomy::{FpvEffect, WebrtcSignal};
-pub use connection::*;
-pub use depth::*;
 pub use diagnostics::ObservationAttachment;
 pub mod outdoor;
 mod outdoor_bridge;
@@ -32,14 +28,12 @@ pub use mcp::{
 };
 mod task;
 pub use task::MobileTaskQuery;
-mod frames;
+mod geo;
 mod mapping;
-mod mount;
-mod waypoint;
-pub use frames::*;
+mod simulation;
+pub use geo::*;
 pub use mapping::*;
-pub use mount::*;
-pub use waypoint::*;
+pub use simulation::*;
 
 /// Shared presentation and router-loss defaults. Local sensor limits are independent.
 #[uniffi::export]
@@ -94,7 +88,7 @@ pub struct ControlSettings {
 }
 impl ControlSettings {
     fn controller(&self) -> ControllerConfig {
-        // Until a rover profile is selected (Android has no picker yet),
+        // Until a rover profile is selected (before the phone picks one),
         // back up with Terra's reverse compensation.
         terra_robot::rover_profile::RoverProfile::terra().reverse_compensation(ControllerConfig {
             linear_kp: self.linear_kp,

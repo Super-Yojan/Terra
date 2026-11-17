@@ -11,7 +11,7 @@
 
 ```mermaid
 flowchart LR
-  Phone[Swift / Kotlin<br/>100 Hz] -- SensorData --> U["Robot::update"]
+  Phone[Swift<br/>100 Hz] -- SensorData --> U["Robot::update"]
   U --> P["Core::plan<br/>(arbiter, ARGOS requests)"]
   P --> L[LevelModule::propose]
   L --> D[drive: wheels or velocity loop]
@@ -20,7 +20,7 @@ flowchart LR
   R -- MotorCommand --> Phone
 ```
 
-*Swift and Kotlin only sample sensors, run the radio and draw the screen.*
+*Swift only samples sensors, runs the radio and draws the screen.*
 
 ## One tick
 

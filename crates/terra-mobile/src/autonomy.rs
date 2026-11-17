@@ -153,18 +153,6 @@ impl MobileController {
     }
 }
 
-/// Levels the shared arbiter accepts today.
-///
-/// Target search is advertised dynamically only when a fresh detector is available,
-/// and the L5 `task` level only while the phone advertises a language model.
-#[uniffi::export]
-pub fn supported_autonomy_levels() -> Vec<String> {
-    terra_autonomy::Level::BASE
-        .iter()
-        .map(|level| level.as_str().to_string())
-        .collect()
-}
-
 /// Operator-facing label for a wire level name, from [`terra_autonomy::Level::label`].
 /// Unknown names are returned unchanged.
 #[uniffi::export]

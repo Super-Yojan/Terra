@@ -1,3 +1,0 @@
--keep class com.sun.jna.** { *; }
--keep class dev.superyojan.terra.core.** { *; }
--dontwarn java.awt.**

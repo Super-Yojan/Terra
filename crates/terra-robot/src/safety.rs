@@ -1,7 +1,6 @@
 //! The last word before the motors: one ordered list of checks between a
-//! level's proposal and the actuator frame. iOS kept these in Swift
-//! (`routeHardware`) and Android in a separate Rust gate; both apps now get
-//! the same answer from [`crate::Robot::update`].
+//! level's proposal and the actuator frame. These used to live in Swift
+//! (`routeHardware`); the app now gets the answer from [`crate::Robot::update`].
 use crate::sensors::{DriveSource, SensorData};
 use crate::{ActuationMode, Plan};
 use terra_autonomy::Safety;

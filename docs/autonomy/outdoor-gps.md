@@ -44,8 +44,7 @@ motion while confirmation is pending. An outside fix resets confirmation.
 source, supported/acknowledged, navigation_revision, readiness, phase, hold_reason,
 source ages/accuracies, raw GPS, destination, remaining_m, arrival_radius_m and
 request result/token. `ready` describes sensor readiness, separate from explicit
-arming/L3 admission. Unsupported platforms remain local-only. Kotlin bindings are
-regenerated, but Android does not advertise outdoor capability without ingestion.
+arming/L3 admission. Unsupported platforms remain local-only.
 
 Validation covers mission simulation, source-time/replay rejection, paused recovery,
 immutable geographic identity/radius, controller/checked-trace equality, occupied

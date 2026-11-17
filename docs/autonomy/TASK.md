@@ -128,5 +128,4 @@ Other MCP clients reach the same tools through `MobileController::mcp_handle(ses
 - The Qwen model id and the MLX Swift API are untested on a device; the app has not been built with the new packages in CI.
 - No HTTP or Bluetooth transport for outside MCP clients.
 - No model has been scored on the vlm-eval pack through this path.
-- Android has no model runner.
 - The model thinks while the rover holds. Planning the next step while driving the current one is not implemented.

@@ -68,10 +68,9 @@ export const sections: NavSection[] = [
     {
         title: "TerraPhone",
         path: "/phone",
-        blurb: "The iPhone and Android app: build, run, pair, calibrate.",
+        blurb: "The iPhone app: build, run, pair, calibrate.",
         pages: [
             { path: "/phone/build", label: "Building in Xcode" },
-            { path: "/MOBILE_ANDROID", label: "Android" },
             { path: "/phone/simulator", label: "Simulator and iPhone" },
             { path: "/phone/bluetooth", label: "Bluetooth pairing" },
             { path: "/phone/fpv", label: "FPV video" },

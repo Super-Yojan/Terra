@@ -93,16 +93,6 @@ flowchart LR
 
 *Gate closed is not the same as armed.*
 
-## Android TerraPhone
-
-A physical Android phone scans for `7e5a0010`, connects, and reads status before any write. That read is what asks the user to pair. Setup mode (`type: setup`) saves the bond and disconnects; it does not arm. The emulator build does not show this section.
-
-The phone then subscribes to status and replies and sends `capabilities`, `read_layout`, and, when the rover advertises `actuator_pagination_v1`, `layout_index` plus `read_drive_profile`. Stage and commit use the active layout document the rover returned. There is no Android layout editor.
-
-Drive bytes come from Rust. The rover service in this repo reports `control_mode: streamed_relay` and takes `actuator_encode_relay_drive`: `(id: u8, effort: i8)` percent pairs on the drive characteristic, after `actuator_route_profiles`. Every JSON control body goes through `actuator_encode_control`, which knows the rover's whole operation set (including the paginated reads and layout edits), and is fragmented with `actuator_fragment`. The one exception is restaging a layout the rover returned: Rust's ESC calibration requires `arming_duration_ms` and the rover's rejects it, so if Rust cannot parse that document Android sends it as the rover wrote it. Notification reassembly uses `ActuatorAssembler` (100 ms). `tests/fixtures/actuators/control_operations.json` holds the operation set, limits and GATT UUIDs both sides test against.
-
-Arm sends safe output before motion. Disarm, emergency stop, Stop, and leaving the foreground send safe output. Stop and leaving the foreground also disconnect. Positive turn is a left turn. None of this has been exercised on a phone radio or a rover. The iOS app still encodes streamed-relay pairs itself.
-
 ## Swift/CoreBluetooth integration
 
 Periodic status also includes `hardware_gate_open_confirmed`: true only after the
