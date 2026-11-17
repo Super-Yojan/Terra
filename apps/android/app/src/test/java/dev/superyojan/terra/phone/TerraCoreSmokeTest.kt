@@ -12,13 +12,13 @@ import dev.superyojan.terra.core.MappingDepthFrame
 import dev.superyojan.terra.core.MobileController
 import dev.superyojan.terra.core.MobileOccupancyMap
 import dev.superyojan.terra.core.MobileWaypoint
-import dev.superyojan.terra.core.MotorCommand
-import dev.superyojan.terra.core.MotorGate
-import dev.superyojan.terra.core.PhoneDriveLoop
+import dev.superyojan.terra.core.MotorAction
+import dev.superyojan.terra.core.MotorLink
+import dev.superyojan.terra.core.PhoneSensors
 import dev.superyojan.terra.core.PhonePosePipeline
 import dev.superyojan.terra.core.PoseAxes
 import dev.superyojan.terra.core.SafetyState
-import dev.superyojan.terra.core.TwistSetpoint
+import dev.superyojan.terra.core.StickInput
 import dev.superyojan.terra.core.VioReading
 import dev.superyojan.terra.core.WaypointPhase
 import dev.superyojan.terra.core.defaultControlSettings
@@ -43,28 +43,10 @@ class TerraCoreSmokeTest {
     @Test
     fun controllerStepsWaypointAndBenchmark() {
         val brain = MobileController(defaultControlSettings())
-        brain.pushImu(ImuReading(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0))
-        brain.pushVio(
-            VioReading(
-                timestamp = 0.0,
-                positionX = 0.0,
-                positionY = 0.0,
-                positionZ = 0.0,
-                quaternionX = 0.0,
-                quaternionY = 0.0,
-                quaternionZ = 0.0,
-                quaternionW = 1.0,
-                velocityX = 0.0,
-                velocityY = 0.0,
-                velocityZ = 0.0,
-                tracked = true,
-            ),
-        )
-        brain.setTarget(TwistSetpoint(timestamp = 0.0, forward = 1.0, yawRate = 0.3))
-        val output = brain.step(0.0)
+        val output = brain.update(sensors(0.0, DriveSource.SIMULATION, StickInput(1.0, 0.3, 0.0)))
         assertEquals(SafetyState.ACTIVE, output.safety)
         assertTrue(output.rightEffort > output.leftEffort)
-        val stale = brain.step(1.0)
+        val stale = brain.update(sensors(1.0, DriveSource.SIMULATION, null))
         assertEquals(0.0, stale.leftEffort, 0.0)
         assertEquals(0.0, stale.rightEffort, 0.0)
 
@@ -134,27 +116,25 @@ class TerraCoreSmokeTest {
 
 class PhoneDriveSmokeTest {
     @Test
-    fun rustLoopGatesBluetoothFrames() {
+    fun rustGatesBluetoothFrames() {
         val brain = MobileController(defaultControlSettings())
         // A full layout works as well as drive profiles.
         brain.setActuatorLayout(DRIVE_LAYOUT)
-        val drive = PhoneDriveLoop(brain, MotorGate(), DriveSource.BLUETOOTH_MANUAL, 10.0)
-        drive.setLink(true, true, false, true)
-        drive.setLocalInput(0.5, 0.0)
-        for (i in 0..10) drive.stepOnce(10.0 + i * 0.01)
-        val command = drive.takeMotorCommand(1e9)
-        assertTrue("expected a drive frame, got $command", command is MotorCommand.Drive)
-        assertTrue((command as MotorCommand.Drive).valuesJson.contains("\"id\":1"))
-        assertEquals("disconnected", drive.snapshot().dashboard)
+        brain.setActuationMode(false)
+        val link = MotorLink(connected = true, ready = true, mountConfirmed = false, tracked = false, feedbackCompatible = true)
+        val ticks = (0..10).map { i ->
+            val t = 10.0 + i * 0.01
+            brain.update(sensors(t, DriveSource.BLUETOOTH_MANUAL, StickInput(0.5, 0.0, t), link)).action
+        }
+        val frame = ticks.filterIsInstance<MotorAction.Drive>().firstOrNull()
+        assertTrue("expected a drive frame, got $ticks", frame != null)
+        assertTrue(frame!!.frameJson.contains("\"id\":1"))
+        assertEquals("disconnected", brain.dashboardStatus())
 
-        val phone = PhoneDriveLoop(MobileController(defaultControlSettings()), MotorGate(), DriveSource.PHONE, 0.0)
-        phone.setLink(true, true, true, true)
-        phone.setTracking(true)
-        phone.stepOnce(0.0)
-        val held = phone.takeMotorCommand(1.0)
-        assertTrue("an unconfirmed mount must stop output, got $held", held is MotorCommand.Stop)
-        drive.stop()
-        phone.stop()
+        val phone = MobileController(defaultControlSettings())
+        phone.setActuatorLayout(DRIVE_LAYOUT)
+        val held = phone.update(sensors(0.0, DriveSource.PHONE, null, link.copy(tracked = true))).action
+        assertTrue("an unconfirmed mount must stop output, got $held", held is MotorAction.Stop)
     }
 
     @Test
@@ -195,3 +175,32 @@ private const val DRIVE_PROFILES = """{"schema_version":1,"revision":1,"actuator
     {"id":1,"kind":"dc_motor","limits":{"min":-1.0,"max":1.0},"route":{"type":"right_effort"},"safe":{"type":"zero"}}
 ]}"""
 
+private fun sensors(
+    now: Double,
+    source: DriveSource,
+    stick: StickInput?,
+    motors: MotorLink = MotorLink(connected = false, ready = false, mountConfirmed = false, tracked = true, feedbackCompatible = false),
+) = PhoneSensors(
+    now = now,
+    imu = ImuReading(now, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+    vio = VioReading(
+        timestamp = now,
+        positionX = 0.0,
+        positionY = 0.0,
+        positionZ = 0.0,
+        quaternionX = 0.0,
+        quaternionY = 0.0,
+        quaternionZ = 0.0,
+        quaternionW = 1.0,
+        velocityX = 0.0,
+        velocityY = 0.0,
+        velocityZ = 0.0,
+        tracked = true,
+    ),
+    gps = null,
+    heading = null,
+    course = null,
+    stick = stick,
+    motors = motors,
+    source = source,
+)

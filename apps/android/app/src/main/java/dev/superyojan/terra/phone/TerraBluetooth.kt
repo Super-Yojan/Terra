@@ -29,7 +29,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
 import dev.superyojan.terra.core.ActuatorAssembler
-import dev.superyojan.terra.core.MotorCommand
+import dev.superyojan.terra.core.MotorAction
 import dev.superyojan.terra.core.actuatorEncodeControl
 import dev.superyojan.terra.core.actuatorEncodeRelayDrive
 import dev.superyojan.terra.core.actuatorFragment
@@ -53,8 +53,8 @@ data class DiscoveredRover(val address: String, val name: String, val pairing: B
  * with a session and no `streamed_relay` mode uses the documented `TA` frames.
  * Pairing and disconnect never leave the link armed.
  *
- * While a controller runs, [setFrameSource] hands the drive loop the Rust
- * motor gate's frames instead of the sliders.
+ * While a controller runs, [setFrameSource] hands the drive loop the frames
+ * Rust's safety gate decided instead of the sliders.
  */
 @SuppressLint("MissingPermission")
 class TerraBluetooth(context: Context) {
@@ -127,7 +127,7 @@ class TerraBluetooth(context: Context) {
     private var localArmed = false
     private var effortForward = 0f
     private var effortTurn = 0f
-    private var frameSource: (() -> MotorCommand)? = null
+    private var frameSource: (() -> MotorAction)? = null
     private var sentFrame = false
     private var waiting: Waiting? = null
     private var shutdownLatch: CountDownLatch? = null
@@ -335,7 +335,7 @@ class TerraBluetooth(context: Context) {
      * the slider effort: a frame as is, a stop as neutral output, and idle as
      * nothing (one neutral output right after a frame). Arm still gates output.
      */
-    fun setFrameSource(source: (() -> MotorCommand)?) {
+    fun setFrameSource(source: (() -> MotorAction)?) {
         handler.post {
             frameSource = source
             sentFrame = false
@@ -895,15 +895,15 @@ class TerraBluetooth(context: Context) {
     private fun queueMotion() {
         val source = frameSource ?: return queueValues(routedValues(effortForward, effortTurn))
         when (val command = source()) {
-            is MotorCommand.Drive -> {
-                queueValues(command.valuesJson)
+            is MotorAction.Drive -> {
+                queueValues(command.frameJson)
                 sentFrame = true
             }
-            is MotorCommand.Stop -> {
+            is MotorAction.Stop -> {
                 queueValues(safeValues())
                 sentFrame = false
             }
-            MotorCommand.Idle -> if (sentFrame) {
+            MotorAction.Idle -> if (sentFrame) {
                 queueValues(safeValues())
                 sentFrame = false
             }

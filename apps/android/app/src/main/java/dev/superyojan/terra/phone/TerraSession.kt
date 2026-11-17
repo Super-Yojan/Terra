@@ -8,28 +8,28 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import dev.superyojan.terra.core.ConnectionPolicy
-import dev.superyojan.terra.core.DriveLoopSnapshot
 import dev.superyojan.terra.core.DriveSource
 import dev.superyojan.terra.core.ImuReading
 import dev.superyojan.terra.core.MappingDepthFrame
 import dev.superyojan.terra.core.MobileController
 import dev.superyojan.terra.core.MobileOccupancyMap
 import dev.superyojan.terra.core.MobileWaypoint
-import dev.superyojan.terra.core.MotorCommand
-import dev.superyojan.terra.core.MotorGate
+import dev.superyojan.terra.core.MotorAction
+import dev.superyojan.terra.core.MotorLink
+import dev.superyojan.terra.core.MotorTick
 import dev.superyojan.terra.core.OccupancyGrid
 import dev.superyojan.terra.core.OffsetFitCancel
 import dev.superyojan.terra.core.OffsetFitOutcome
 import dev.superyojan.terra.core.OffsetFitState
-import dev.superyojan.terra.core.PhoneDriveLoop
 import dev.superyojan.terra.core.PhoneMountCalibration
 import dev.superyojan.terra.core.PhonePose
 import dev.superyojan.terra.core.PhonePosePipeline
+import dev.superyojan.terra.core.PhoneSensors as SensorSnapshot
 import dev.superyojan.terra.core.PoseAxes
 import dev.superyojan.terra.core.RouterSettings
 import dev.superyojan.terra.core.SafetyState
 import dev.superyojan.terra.core.SimulatedPlant
-import dev.superyojan.terra.core.TwistSetpoint
+import dev.superyojan.terra.core.StickInput
 import dev.superyojan.terra.core.VioReading
 import dev.superyojan.terra.core.WaypointPhase
 import dev.superyojan.terra.core.defaultControlSettings
@@ -57,10 +57,10 @@ private enum class DriveMode { Stopped, Simulation, Phone, Bluetooth }
  * Thin shell over `terra-mobile`. Estimation, the plant, the waypoint follower,
  * occupancy integration, and Zenoh framing all stay in Rust.
  *
- * Phone and Bluetooth drive run the Rust [PhoneDriveLoop]: it owns the 100 Hz
- * control tick and the [MotorGate], and the Bluetooth writer takes its frames.
- * This class polls ARCore, forwards the phone stick and link facts, connects
- * ARGOS, and copies a snapshot into Compose state at 10 Hz.
+ * Every 10 ms this class hands Rust the latest sensors, stick and link facts
+ * through [MobileController.update]. Rust's level module, safety gate and
+ * actuator routing decide the motor frame; the Bluetooth writer takes it.
+ * This class also polls ARCore, connects ARGOS and copies state into Compose.
  */
 class TerraSession(context: Context) {
     private val appContext = context.applicationContext
@@ -75,7 +75,8 @@ class TerraSession(context: Context) {
     val ble: TerraBluetooth? = if (emulator) null else TerraBluetooth(appContext)
     val supportedLevels: List<String> = supportedAutonomyLevels()
     /** Mount confirmation and the e-stop latch outlive each drive session. */
-    private val gate = MotorGate()
+    @Volatile private var mountOk = false
+    @Volatile private var estopLatched = false
     private val connectionPolicy = ConnectionPolicy()
     private val pipeline = PhonePosePipeline(loadMount(), PoseAxes.DEVICE, 0.0)
 
@@ -113,11 +114,21 @@ class TerraSession(context: Context) {
     var fitStatus by mutableStateOf("No turn pass running")
     var fitCollecting by mutableStateOf(false)
     var runLog by mutableStateOf<File?>(null)
-    /** Bluetooth drive: the stick is normalized effort instead of m/s and rad/s. */
-    var normalizedStick by mutableStateOf(false)
+    /** The stick is normalized effort in every mode (Rust scales it). */
+    val normalizedStick = true
 
     @Volatile private var controller: MobileController? = null
-    @Volatile private var driveLoop: PhoneDriveLoop? = null
+    // Latest samples, read by each tick (control thread only).
+    private var latestImu: ImuReading? = null
+    private var latestVio: VioReading? = null
+    private var tracked = false
+    private var lastStick: Twist? = null
+    private var routesOk = false
+    // The newest motor action for the Bluetooth writer thread.
+    private val motorLock = Any()
+    private var latestDrive: Pair<String, Double>? = null
+    private var pendingStop: String? = null
+    private var lastStop: String? = null
     private var map: MobileOccupancyMap? = null
     private var follower: MobileWaypoint? = null
     private val plant = SimulatedPlant()
@@ -157,7 +168,7 @@ class TerraSession(context: Context) {
 
     init {
         // The Bluetooth drive tick writes whatever the Rust gate decided last.
-        ble?.setFrameSource { driveLoop?.takeMotorCommand(FRAME_MAX_AGE_S) ?: MotorCommand.Idle }
+        ble?.setFrameSource { takeMotorAction() }
     }
 
     fun setTarget(forward: Double, yaw: Double) {
@@ -193,11 +204,7 @@ class TerraSession(context: Context) {
                 mountHeight = { mountHeight() },
                 onImu = { sample ->
                     if (epoch != generation || mode != DriveMode.Phone) return@PhoneSensors
-                    try {
-                        controller?.pushImu(sample)
-                    } catch (error: Exception) {
-                        fail(error)
-                    }
+                    latestImu = sample
                 },
                 onPose = { pose ->
                     if (epoch != generation || mode != DriveMode.Phone) return@PhoneSensors
@@ -228,7 +235,7 @@ class TerraSession(context: Context) {
             try {
                 prepare(DriveMode.Phone)
                 sensors = phone
-                startDriveLoop(DriveSource.PHONE)
+                startDrive()
                 beginLoop()
                 publish {
                     source = "SensorManager + ARCore"
@@ -247,7 +254,7 @@ class TerraSession(context: Context) {
         control.post {
             try {
                 prepare(DriveMode.Bluetooth)
-                startDriveLoop(DriveSource.BLUETOOTH_MANUAL)
+                startDrive()
                 beginLoop()
                 publish {
                     source = "Bluetooth drive · no phone sensors"
@@ -380,12 +387,8 @@ class TerraSession(context: Context) {
             yaw = 0.0
             goalLatched = false
             try {
-                if (reset) {
-                    gate.clearEmergencyStop()
-                    gate.clearStopReason()
-                } else {
-                    gate.emergencyStop(PhoneSensors.monotonicSeconds())
-                }
+                estopLatched = !reset
+                if (reset) controller?.clearStopReason() else stopMotors("Emergency stop")
             } catch (_: Exception) {
             }
             try {
@@ -478,8 +481,8 @@ class TerraSession(context: Context) {
 
     private fun acceptPose(pose: PhonePose) {
         try {
-            controller?.pushVio(pose.vio)
-            driveLoop?.setTracking(pose.tracked)
+            latestVio = pose.vio
+            tracked = pose.tracked
             if (pose.tracked) {
                 phonePose = Pose(pose.vio.positionX, pose.vio.positionY, pose.yaw)
             } else {
@@ -509,9 +512,13 @@ class TerraSession(context: Context) {
         tick = 0
         simulatedTime = 0.0
         phonePose = null
+        latestImu = null
+        latestVio = null
+        tracked = false
+        lastStick = null
+        clearMotors()
         publish {
             runLog = log
-            normalizedStick = next == DriveMode.Bluetooth
             occupancy = null
             mapX = 0.0
             mapY = 0.0
@@ -526,126 +533,182 @@ class TerraSession(context: Context) {
         control.post(loop)
     }
 
+    /** One control tick: latest sensors in, the Rust motor action out. */
     private fun step() {
         val brain = controller ?: return
         if (mode == DriveMode.Stopped) return
-        driveLoop?.let { drive ->
-            // The Rust loop ticks on its own thread; this thread feeds it.
-            if (mode == DriveMode.Phone) sensors?.poll()
-            val command = commandFor(phonePose)
-            drive.setLocalInput(command.forward, command.yaw)
-            tick += 1
-            if (tick % 10 == 0) serviceDrive(brain, drive)
-            return
-        }
-        val now = simulatedTime
-        val pose = if (mode == DriveMode.Simulation) plant.state() else null
+        val simulated = mode == DriveMode.Simulation
+        val now = if (simulated) simulatedTime else PhoneSensors.monotonicSeconds()
+        if (mode == DriveMode.Phone) sensors?.poll()
+        val pose = if (simulated) plant.state() else null
         if (pose != null) {
-            brain.pushImu(
-                ImuReading(
-                    timestamp = now,
-                    accelerationForward = pose.accelerationForward,
-                    accelerationLeft = pose.forward * pose.yawRate,
-                    accelerationUp = 0.0,
-                    gyroRoll = 0.0,
-                    gyroPitch = 0.0,
-                    gyroYaw = pose.yawRate,
-                ),
+            latestImu = ImuReading(
+                timestamp = now,
+                accelerationForward = pose.accelerationForward,
+                accelerationLeft = pose.forward * pose.yawRate,
+                accelerationUp = 0.0,
+                gyroRoll = 0.0,
+                gyroPitch = 0.0,
+                gyroYaw = pose.yawRate,
             )
             if (tick % 5 == 0) {
-                brain.pushVio(
-                    VioReading(
-                        timestamp = now,
-                        positionX = pose.x,
-                        positionY = pose.y,
-                        positionZ = 0.0,
-                        quaternionX = pose.quaternionX,
-                        quaternionY = pose.quaternionY,
-                        quaternionZ = pose.quaternionZ,
-                        quaternionW = pose.quaternionW,
-                        velocityX = pose.velocityX,
-                        velocityY = pose.velocityY,
-                        velocityZ = 0.0,
-                        tracked = true,
-                    ),
+                latestVio = VioReading(
+                    timestamp = now,
+                    positionX = pose.x,
+                    positionY = pose.y,
+                    positionZ = 0.0,
+                    quaternionX = pose.quaternionX,
+                    quaternionY = pose.quaternionY,
+                    quaternionZ = pose.quaternionZ,
+                    quaternionW = pose.quaternionW,
+                    velocityX = pose.velocityX,
+                    velocityY = pose.velocityY,
+                    velocityZ = 0.0,
+                    tracked = true,
                 )
             }
         }
-        val command = commandFor(pose?.let { Pose(it.x, it.y, it.yaw) })
-        brain.setTarget(TwistSetpoint(timestamp = now, forward = command.forward, yawRate = command.yaw))
-        val output = brain.step(now)
-        if (mode == DriveMode.Simulation && pose != null) {
+        val link = ble
+        syncLayout(brain, link)
+        brain.setActuationMode(mode != DriveMode.Bluetooth)
+        val command = commandFor(pose?.let { Pose(it.x, it.y, it.yaw) } ?: phonePose)
+        val output = brain.update(snapshot(now, command, link))
+        offer(output.action, PhoneSensors.monotonicSeconds())
+        if (simulated && pose != null) {
             if (tick % 10 == 0) integrateRoom(pose.x, pose.y, pose.yaw, now)
             plant.step(output.leftEffort, output.rightEffort)
             simulatedTime += 0.01
         }
         tick += 1
-        if (tick % 10 == 0) {
-            publish {
-                measuredForward = output.estimatedForward
-                measuredYaw = output.estimatedYawRate
-                leftEffort = output.leftEffort
-                rightEffort = output.rightEffort
-                status = safetyText(output.safety)
+        if (tick % 10 == 0) service(brain, output, link)
+    }
+
+    private fun snapshot(now: Double, command: Twist, link: TerraBluetooth?): SensorSnapshot {
+        // The local follower speaks m/s and rad/s; the stick is normalized.
+        val stick = if (goalLatched) {
+            Twist((command.forward / MANUAL_FULL_FORWARD).coerceIn(-1.0, 1.0), command.yaw.coerceIn(-1.0, 1.0))
+        } else {
+            command
+        }
+        // Bluetooth drive streams its stick. Elsewhere an idle stick is sent
+        // once on release so it never overwrites remote intent every tick.
+        val send = mode == DriveMode.Bluetooth || stick.forward != 0.0 || stick.yaw != 0.0 || stick != lastStick
+        if (send) lastStick = stick
+        return SensorSnapshot(
+            now = now,
+            imu = latestImu,
+            vio = latestVio,
+            gps = null,
+            heading = null,
+            course = null,
+            stick = if (send) StickInput(stick.forward, stick.yaw, now) else null,
+            motors = MotorLink(
+                connected = mode != DriveMode.Simulation && link?.connected == true,
+                ready = link?.ready == true && link.armed,
+                mountConfirmed = mountOk,
+                tracked = tracked,
+                feedbackCompatible = routesOk,
+            ),
+            source = when (mode) {
+                DriveMode.Bluetooth -> DriveSource.BLUETOOTH_MANUAL
+                DriveMode.Simulation -> DriveSource.SIMULATION
+                else -> DriveSource.PHONE
+            },
+        )
+    }
+
+    private fun syncLayout(brain: MobileController, link: TerraBluetooth?) {
+        val layout = link?.driveLayout
+        if (layout == syncedLayout) return
+        syncedLayout = layout
+        try {
+            brain.setActuatorLayout(layout ?: "")
+        } catch (error: Exception) {
+            publish { motorStatus = "Rover layout rejected: ${error.message}" }
+        }
+        routesOk = brain.layoutSupportsVioControl()
+    }
+
+    /** Keep the newest drive frame; a stop is handed to the writer once per cause. */
+    private fun offer(action: MotorAction, at: Double) = synchronized(motorLock) {
+        when (action) {
+            is MotorAction.Drive -> {
+                lastStop = null
+                if (!estopLatched) latestDrive = action.frameJson to at
             }
-            readAuthority(brain.autonomyStatus())
+            is MotorAction.Stop -> {
+                latestDrive = null
+                if (action.reason != lastStop) {
+                    lastStop = action.reason
+                    pendingStop = action.reason
+                }
+            }
+            MotorAction.Idle -> {}
         }
     }
 
-    private fun startDriveLoop(source: DriveSource) {
-        val brain = controller ?: return
-        gate.reset()
-        val drive = PhoneDriveLoop(brain, gate, source, PhoneSensors.monotonicSeconds())
-        drive.start()
-        driveLoop = drive
+    /** Bluetooth writer thread. A frame older than [FRAME_MAX_AGE_S] is not written. */
+    private fun takeMotorAction(): MotorAction = synchronized(motorLock) {
+        pendingStop?.let {
+            pendingStop = null
+            return@synchronized MotorAction.Stop(it)
+        }
+        val (frame, at) = latestDrive ?: return@synchronized MotorAction.Idle
+        if (PhoneSensors.monotonicSeconds() - at <= FRAME_MAX_AGE_S) MotorAction.Drive(frame) else MotorAction.Idle
+    }
+
+    private fun stopMotors(reason: String) = synchronized(motorLock) {
+        latestDrive = null
+        pendingStop = reason
+    }
+
+    private fun clearMotors() = synchronized(motorLock) {
+        latestDrive = null
+        pendingStop = null
+        lastStop = null
+    }
+
+    private fun startDrive() {
         handledLosses = 0u
         if (!routerSuppressed) routerRetryAt = 0.0
     }
 
-    private fun stopDriveLoop() {
-        driveLoop?.stop()
-        driveLoop = null
-    }
-
-    /** 10 Hz on the sensor thread: layout and link facts in, snapshot out. */
-    private fun serviceDrive(brain: MobileController, drive: PhoneDriveLoop) {
-        val link = ble
-        val layout = link?.driveLayout
-        if (layout != syncedLayout) {
-            syncedLayout = layout
-            try {
-                brain.setActuatorLayout(layout ?: "")
-            } catch (error: Exception) {
-                publish { motorStatus = "Rover layout rejected: ${error.message}" }
+    /** 10 Hz: router loss and retry, offset fit, and a snapshot into Compose. */
+    private fun service(brain: MobileController, output: MotorTick, link: TerraBluetooth?) {
+        val dashboard = brain.dashboardStatus()
+        if (dashboard == "failed") {
+            brain.handleDashboardLinkLoss()
+            handledLosses += 1u
+            forward = 0.0
+            yaw = 0.0
+            routerRetryAt = PhoneSensors.monotonicSeconds() + routerDelay()
+            val keeps = runCatching { brain.acceptedOnboardMission() }.getOrDefault(false)
+            publish {
+                routerConnected = false
+                routerStatus = if (keeps) "Router interrupted · continuing onboard mission" else "Router connection lost · retrying"
             }
         }
+        serviceRouter(dashboard)
+        serviceFit()
         val connected = link?.connected == true
         val armed = link?.ready == true && link.armed
-        val routes = brain.layoutSupportsVioControl()
-        drive.setLink(connected, armed, mode == DriveMode.Phone, routes)
-        val snapshot = drive.snapshot()
-        snapshot.error?.let { throw IllegalStateException(it) }
-        serviceRouter(snapshot)
-        serviceFit()
-        val output = snapshot.output
+        val held = brain.stopReason()
         val note = when {
-            snapshot.emergencyStopped -> "Emergency stop latched · Reset stop to drive"
+            estopLatched -> "Emergency stop latched · Reset stop to drive"
             !connected -> "No rover link"
             !armed -> "Arm the rover to drive"
-            mode == DriveMode.Phone && !routes -> "Phone drive needs left and right wheel routes in the rover layout"
-            snapshot.stopReason != null -> "Held · ${snapshot.stopReason}"
-            else -> "Driving through the Rust motor gate"
+            mode == DriveMode.Phone && !routesOk -> "Phone drive needs left and right wheel routes in the rover layout"
+            held != null -> "Held · $held"
+            else -> "Driving through the Rust safety gate"
         }
         publish {
             motorStatus = note
-            emergencyLatched = snapshot.emergencyStopped
-            if (output != null) {
-                measuredForward = output.estimatedForward
-                measuredYaw = output.estimatedYawRate
-                leftEffort = output.leftEffort
-                rightEffort = output.rightEffort
-                status = safetyText(output.safety)
-            }
+            emergencyLatched = estopLatched
+            measuredForward = output.estimatedForward
+            measuredYaw = output.estimatedYawRate
+            leftEffort = output.leftEffort
+            rightEffort = output.rightEffort
+            status = safetyText(output.safety)
         }
         readAuthority(brain.autonomyStatus())
     }
@@ -715,7 +778,7 @@ class TerraSession(context: Context) {
     private fun attemptRouter() {
         val settings = routerSettings ?: return
         val brain = controller
-        if (brain == null || driveLoop == null) {
+        if (brain == null || (mode != DriveMode.Phone && mode != DriveMode.Bluetooth)) {
             publish { routerStatus = "Start Phone sensors or Bluetooth drive, then connect" }
             return
         }
@@ -766,20 +829,9 @@ class TerraSession(context: Context) {
 
     private fun routerDelay(): Double = runCatching { connectionPolicy.nextRouterDelay() }.getOrDefault(5.0)
 
-    private fun serviceRouter(snapshot: DriveLoopSnapshot) {
-        if (snapshot.linkLosses > handledLosses) {
-            handledLosses = snapshot.linkLosses
-            forward = 0.0
-            yaw = 0.0
-            routerRetryAt = PhoneSensors.monotonicSeconds() + routerDelay()
-            val keeps = runCatching { controller?.acceptedOnboardMission() == true }.getOrDefault(false)
-            publish {
-                routerConnected = false
-                routerStatus = if (keeps) "Router interrupted · continuing onboard mission" else "Router connection lost · retrying"
-            }
-        }
+    private fun serviceRouter(dashboard: String) {
         val retry = routerRetryAt ?: return
-        if (routerSuppressed || routerBusy || snapshot.dashboard == "connected") return
+        if (routerSuppressed || routerBusy || dashboard == "connected") return
         if (PhoneSensors.monotonicSeconds() >= retry) {
             routerRetryAt = null
             attemptRouter()
@@ -812,10 +864,10 @@ class TerraSession(context: Context) {
     /** The person checked the phone is in its mount. Motors stay held until then. */
     fun confirmMount(confirmed: Boolean) {
         mountConfirmed = confirmed
+        mountOk = confirmed
         control.post {
             try {
-                gate.setMountConfirmed(confirmed)
-                if (confirmed) gate.clearStopReason()
+                if (confirmed) controller?.clearStopReason()
             } catch (_: Exception) {
             }
         }
@@ -992,13 +1044,9 @@ class TerraSession(context: Context) {
     private fun stopOnControl() {
         looping = false
         control.removeCallbacks(loop)
-        stopDriveLoop()
+        clearMotors()
         routerBusy = false
         routerAttempt += 1
-        try {
-            gate.reset()
-        } catch (_: Exception) {
-        }
         sensors?.close()
         sensors = null
         mode = DriveMode.Stopped
@@ -1032,7 +1080,7 @@ class TerraSession(context: Context) {
     private fun fail(error: Exception) {
         looping = false
         control.removeCallbacks(loop)
-        stopDriveLoop()
+        clearMotors()
         routerBusy = false
         routerAttempt += 1
         sensors?.close()
@@ -1085,5 +1133,7 @@ class TerraSession(context: Context) {
         const val RUN_LOG_DIR = "runs"
         /** A Rust frame older than this is not written; the rover lease then stops it. */
         private const val FRAME_MAX_AGE_S = 0.15
+        /** Full stick forward, m/s; matches `terra_robot::MANUAL_FULL_FORWARD`. */
+        private const val MANUAL_FULL_FORWARD = 0.5
     }
 }
