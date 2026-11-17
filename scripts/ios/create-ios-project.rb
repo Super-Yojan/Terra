@@ -5,7 +5,7 @@ project_path = File.join(root, 'apps/ios/TerraPhone.xcodeproj')
 project = Xcodeproj::Project.new(project_path)
 app = project.new_target(:application, 'TerraPhone', :ios, '17.0')
 sources = project.main_group.new_group('TerraPhone', 'TerraPhone')
-# One group per feature folder (App, Connection, Drive, ...); Resources holds non-Swift files.
+# One group per folder (App, Sense, TerraAV, Drive, Motors); Resources holds non-Swift files.
 Dir.glob(File.join(root, 'apps/ios/TerraPhone/*/')).sort.each do |dir|
   folder = File.basename(dir)
   next if folder == 'Resources'
@@ -17,14 +17,8 @@ end
 resources = sources.new_group('Resources', 'Resources')
 resources.new_file('Info.plist')
 app.resources_build_phase.add_file_reference(resources.new_file('Assets.xcassets'))
-models = resources.new_file('Models')
-models.last_known_file_type = 'folder'
-app.resources_build_phase.add_file_reference(models)
-generated = project.main_group.new_group('Generated', 'Generated')
-app.source_build_phase.add_file_reference(generated.new_file('TerraCore.swift'))
-framework = generated.new_file('TerraCore.xcframework')
-framework.last_known_file_type = 'wrapper.xcframework'
-app.frameworks_build_phase.add_file_reference(framework)
+app.resources_build_phase.add_file_reference(resources.new_file('terra-av.toml'))
+# TODO: add the terra-av UniFFI bindings (Generated/) once terra-av exposes them.
 %w[ARKit CoreMotion CoreLocation SwiftUI CoreBluetooth].each { |name| app.add_system_framework(name) }
 app.build_configurations.each do |config|
   config.build_settings['PRODUCT_BUNDLE_IDENTIFIER'] = 'org.terra.robotics.phone'
@@ -32,6 +26,9 @@ app.build_configurations.each do |config|
   config.build_settings['SWIFT_VERSION'] = '5.0'
   config.build_settings['TARGETED_DEVICE_FAMILY'] = '1'
   config.build_settings['CODE_SIGN_STYLE'] = 'Automatic'
+  config.build_settings['DEVELOPMENT_TEAM'] = 'GW3G7G5WGR'
+  config.build_settings['ASSETCATALOG_COMPILER_APPICON_NAME'] = 'AppIcon'
+  config.build_settings['ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME'] = 'AccentColor'
   config.build_settings['GENERATE_INFOPLIST_FILE'] = 'NO'
   config.build_settings['ENABLE_USER_SCRIPT_SANDBOXING'] = 'NO'
   config.build_settings['MARKETING_VERSION'] = '0.1.0'

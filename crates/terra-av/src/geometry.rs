@@ -19,6 +19,8 @@ impl Rotation2 {
 
 impl Rotation3 {
     pub fn from_euler(roll: f64, pitch: f64, yaw: f64) -> Self { todo!() }
+    /// Row-major 3×3, e.g. the rotation part of ARKit's camera transform.
+    pub fn from_matrix(m: [[f64; 3]; 3]) -> Self { Self { m } }
     pub fn transpose(&self) -> Self { todo!() }
     pub fn apply(&self, v: Vec3) -> Vec3 { todo!() }
 }
