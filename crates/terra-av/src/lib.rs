@@ -1,10 +1,10 @@
 //! A modular autonomy pipeline for a ground vehicle, one module per stage:
 //!
 //! ```text
-//! sense ─► estimation ─► mapping ─► planning (global ─► local) ─► execution ─► motors
-//!                ▲                      ▲            ▲
-//!                └──── vehicle (shared) ┴────────────┘
-//!                      geometry (shared)
+//! sense ─► estimation ─► mapping ─► planning (global ─► local) ─► safety ─► target twist
+//!                ▲                      ▲                                  │
+//!                └──── vehicle (shared) ┘                                  ▼
+//!                      geometry (shared)              platform velocity loop ─► motors
 //! ```
 //!
 //! Each stage is a trait; each algorithm is one implementation of it.

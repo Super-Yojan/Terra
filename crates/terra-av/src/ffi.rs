@@ -1,5 +1,5 @@
 //! The phone boundary (UniFFI). Plain records that mirror `sense`, `planning`
-//! and `execution`, plus one object that owns the pipeline. Swift sees only
+//! and `pipeline`, plus one object that owns the pipeline. Swift sees only
 //! what is in this file.
 use std::sync::{Arc, Mutex};
 
@@ -32,8 +32,14 @@ pub enum Goal {
     Pose { x: f64, y: f64, yaw: f64 },
 }
 
+/// Body velocity: forward m/s, yaw rad/s (+ = left).
 #[derive(uniffi::Record)]
-pub struct WheelCommand { pub left: f64, pub right: f64 }
+pub struct Twist { pub v: f64, pub w: f64 }
+
+/// Target twist for the phone's velocity loop, plus the measured twist it
+/// feeds back on (`None` until the pose is tracked).
+#[derive(uniffi::Record)]
+pub struct DriveCommand { pub target: Twist, pub measured: Option<Twist> }
 
 #[derive(uniffi::Object)]
 pub struct TerraAv {
@@ -51,13 +57,14 @@ impl TerraAv {
     }
 
     /// One control tick. Stops when there is no pipeline.
-    pub fn tick(&self, frame: SensorFrame, goal: Goal) -> WheelCommand {
+    pub fn tick(&self, frame: SensorFrame, goal: Goal) -> DriveCommand {
+        let stop = DriveCommand { target: Twist { v: 0.0, w: 0.0 }, measured: None };
         let mut pipeline = self.pipeline.lock().unwrap();
         match pipeline.as_mut() {
-            None => WheelCommand { left: 0.0, right: 0.0 },
+            None => stop,
             // TODO: convert frame/goal to crate::sense / crate::planning
-            // types and return pipeline.tick(..).command.
-            Some(_) => WheelCommand { left: 0.0, right: 0.0 },
+            // types and return pipeline.tick(..).
+            Some(_) => stop,
         }
     }
 }
@@ -71,6 +78,7 @@ mod tests {
         let av = TerraAv::new(String::new());
         let frame = SensorFrame { t: 0.0, estop: false, vio: None, gyro: None, gps: None, depth: vec![] };
         let out = av.tick(frame, Goal::Velocity { v: 0.5, w: 0.0 });
-        assert_eq!((out.left, out.right), (0.0, 0.0));
+        assert_eq!((out.target.v, out.target.w), (0.0, 0.0));
+        assert!(out.measured.is_none());
     }
 }

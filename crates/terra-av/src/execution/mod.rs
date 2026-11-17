@@ -1,15 +1,6 @@
-//! Stage 5, Execution: follow the target twist, then make it safe to send.
-mod proportional;
+//! Stage 5, Execution, Rust half: the last check on the target twist before
+//! it leaves the pipeline. The velocity loop (twist → wheel effort) runs on
+//! the platform that owns the motors; on TerraPhone that is
+//! `Motors/VelocityController.swift`.
 mod safety;
-pub use proportional::Proportional;
 pub use safety::SafetyGate;
-
-use crate::estimation::State;
-use crate::vehicle::{Twist, VehicleModel};
-
-/// Wheel efforts in [-1, 1], ready for the motor driver.
-pub struct WheelCommand { pub left: f64, pub right: f64 }
-
-pub trait Controller: Send {
-    fn command(&mut self, target: Twist, state: &State, vehicle: &dyn VehicleModel, dt: f64) -> WheelCommand;
-}

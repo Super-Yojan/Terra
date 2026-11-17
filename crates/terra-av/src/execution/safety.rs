@@ -1,11 +1,10 @@
-//! The last step before the motors: if the e-stop is pressed, stop.
-//! Nothing else.
-use super::WheelCommand;
-use crate::sense::SensorFrame;
+//! The last step before the twist leaves the pipeline: if the e-stop is
+//! pressed, stop. Nothing else.
+use crate::{sense::SensorFrame, vehicle::Twist};
 
 pub struct SafetyGate;
 
 impl SafetyGate {
-    /// `frame.estop` set → zero wheels; otherwise `command` unchanged.
-    pub fn check(&mut self, command: WheelCommand, frame: &SensorFrame) -> WheelCommand { todo!() }
+    /// `frame.estop` set → zero twist; otherwise `target` unchanged.
+    pub fn check(&mut self, target: Twist, frame: &SensorFrame) -> Twist { todo!() }
 }

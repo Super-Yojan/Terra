@@ -1,19 +1,31 @@
 import Combine
 import Foundation
 
-/// The whole app in one loop, 100 times a second:
+/// Two independent loops that share only the latest drive command:
 ///
-///     PhoneSensors ─► SensorFrame ─► TerraAv.tick ─► WheelCommand ─► BluetoothLink
-///                         ▲               ▲
-///                      e-stop        Goal (joystick)
+///     Planner loop, 20 Hz:   PhoneSensors ─► SensorFrame ─► TerraAv.tick ─► DriveCommand
+///                                                ▲ e-stop        ▲ Goal (joystick)
+///     Velocity loop, 50 Hz:  latest DriveCommand ─► VelocityController ─► BluetoothLink
+///
+/// A slow terra-av tick only delays the target; the velocity loop keeps its
+/// fixed rate and stops on its own if the target goes stale.
 final class RoverLoop: ObservableObject {
     let sensors = PhoneSensors()
     let motors = BluetoothLink()
     private let av: TerraAv
-    private let queue = DispatchQueue(label: "terra.loop")
-    private var timer: DispatchSourceTimer?
+    private var controller = VelocityController()
+
+    private let plannerQueue = DispatchQueue(label: "terra.planner")
+    private let velocityQueue = DispatchQueue(label: "terra.velocity", qos: .userInteractive)
+    private var plannerTimer: DispatchSourceTimer?
+    private var velocityTimer: DispatchSourceTimer?
+
+    // Planner-queue state.
     private var goal = Goal.none
     private var estop = false
+    // Shared between the loops.
+    private let lock = NSLock()
+    private var latest: (command: DriveCommand, at: TimeInterval)?
 
     @Published private(set) var running = false
     @Published private(set) var estopped = false
@@ -29,17 +41,17 @@ final class RoverLoop: ObservableObject {
     }
 
     func start() {
-        guard timer == nil else { return }
+        guard plannerTimer == nil else { return }
         sensors.start()
-        let t = DispatchSource.makeTimerSource(queue: queue)
-        t.schedule(deadline: .now(), repeating: .milliseconds(10))
-        t.setEventHandler { [weak self] in self?.tick() }
-        t.resume(); timer = t
+        plannerTimer = repeating(every: .milliseconds(50), on: plannerQueue) { [weak self] in self?.plannerTick() }
+        velocityTimer = repeating(every: .milliseconds(20), on: velocityQueue) { [weak self] in self?.velocityTick() }
         running = true
     }
 
     func stop() {
-        timer?.cancel(); timer = nil
+        plannerTimer?.cancel(); plannerTimer = nil
+        velocityTimer?.cancel(); velocityTimer = nil
+        lock.lock(); latest = nil; lock.unlock()
         sensors.stop()
         motors.send(.stop)
         running = false
@@ -48,21 +60,40 @@ final class RoverLoop: ObservableObject {
 
     /// Stick in [-1, 1] → Goal.velocity.
     func setStick(forward: Double, turn: Double) {
-        queue.async {
+        plannerQueue.async {
             self.goal = (forward == 0 && turn == 0) ? .none : .velocity(v: forward * self.maxSpeed, w: turn * self.maxTurn)
         }
     }
 
     func setEstop(_ on: Bool) {
-        queue.async { self.estop = on }
+        plannerQueue.async { self.estop = on }
+        if on { lock.lock(); latest = nil; lock.unlock(); motors.send(.stop) }
         estopped = on
-        if on { motors.send(.stop) }
     }
 
-    private func tick() {
-        let frame = sensors.frame(estop: estop)
-        let out = av.tick(frame: frame, goal: goal)
+    private func plannerTick() {
+        let out = av.tick(frame: sensors.frame(estop: estop), goal: goal)
+        lock.lock(); latest = (out, ProcessInfo.processInfo.systemUptime); lock.unlock()
+    }
+
+    private func velocityTick() {
+        lock.lock(); let latest = self.latest; lock.unlock()
+        let out: WheelCommand
+        if let latest {
+            out = controller.command(target: latest.command.target, measured: latest.command.measured,
+                                     targetAge: ProcessInfo.processInfo.systemUptime - latest.at)
+        } else {
+            out = .stop
+        }
         motors.send(out)
         DispatchQueue.main.async { if self.command != out { self.command = out } }
+    }
+
+    private func repeating(every interval: DispatchTimeInterval, on queue: DispatchQueue, _ body: @escaping () -> Void) -> DispatchSourceTimer {
+        let t = DispatchSource.makeTimerSource(flags: .strict, queue: queue)
+        t.schedule(deadline: .now(), repeating: interval, leeway: .milliseconds(1))
+        t.setEventHandler(handler: body)
+        t.resume()
+        return t
     }
 }

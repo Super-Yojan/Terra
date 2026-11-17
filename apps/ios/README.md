@@ -5,19 +5,22 @@ read the phone's sensors, and send wheel commands to the rover. Every
 decision in between happens in the Rust crate `terra-av`.
 
 ```text
-PhoneSensors ─► SensorFrame ─► TerraAv.tick ─► WheelCommand ─► BluetoothLink ─► Pi
-                    ▲               ▲
-                 e-stop        Goal (joystick)
+Planner loop, 20 Hz:   PhoneSensors ─► SensorFrame ─► TerraAv.tick ─► DriveCommand (target + measured twist)
+                                           ▲ e-stop        ▲ Goal (joystick)
+Velocity loop, 50 Hz:  latest DriveCommand ─► VelocityController ─► BluetoothLink ─► Pi
 ```
+
+The two loops share only the latest command, so a slow planner tick never
+delays the motors. The velocity loop stops if the target is older than 0.3 s.
 
 | Folder | Job |
 | --- | --- |
 | `Sense/` | ARKit pose, gyro, GPS, thinned LiDAR depth. Raw, in each sensor's own frame. |
-| `TerraAV/` | Phone helpers for the generated terra-av types (`Vec3`, `VioPose` from ARKit, `WheelCommand.stop`). |
+| `TerraAV/` | Phone helpers for the generated terra-av types (`Vec3`, `VioPose` from ARKit). |
 | `../Generated/` | Built by the script, not committed: `TerraAV.swift` bindings + `TerraAV.xcframework`. |
 | `Drive/` | Joystick → `Goal.velocity`. |
-| `Motors/` | Bluetooth link to the rover's Raspberry Pi (pairing, actuator layout, drive frames). |
-| `App/` | `RoverLoop` (100 Hz tick) and the one screen. |
+| `Motors/` | `VelocityController` (twist → wheel effort, P + feedforward) and the Bluetooth link to the Pi. |
+| `App/` | `RoverLoop` (the two loops) and the one screen. |
 | `Resources/terra-av.toml` | Which algorithm runs in each stage, plus the phone mount. |
 
 The phone mount (rotation and camera offset) lives in `terra-av.toml`, not in
@@ -26,7 +29,7 @@ the app.
 ## Status
 
 The app calls the real Rust `TerraAv.tick` (crates/terra-av/src/ffi.rs). It
-returns stop until the pipeline stages are implemented. Bluetooth, sensors,
+returns a zero twist until the pipeline stages are implemented. Bluetooth, sensors,
 joystick and e-stop are real.
 
 ## Build

@@ -4,13 +4,9 @@ import simd
 // The Swift ↔ Rust boundary is generated from crates/terra-av/src/ffi.rs into
 // apps/ios/Generated/TerraAV.swift by scripts/ios/build-ios.sh:
 //
-//     SensorFrame, VioPose, GpsFix, Vec3, Goal, WheelCommand, TerraAv
+//     SensorFrame, VioPose, GpsFix, Vec3, Goal, Twist, DriveCommand, TerraAv
 //
 // This file only adds phone-side conveniences.
-
-extension WheelCommand {
-    static let stop = WheelCommand(left: 0, right: 0)
-}
 
 extension Vec3 {
     init(_ v: SIMD3<Double>) { self.init(x: v.x, y: v.y, z: v.z) }
