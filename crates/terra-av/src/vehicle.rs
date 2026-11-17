@@ -7,7 +7,7 @@ pub struct Twist { pub v: f64, pub w: f64 }
 /// Left and right wheel ground speeds, m/s.
 pub struct WheelSpeeds { pub left: f64, pub right: f64 }
 
-pub trait VehicleModel {
+pub trait VehicleModel: Send {
     /// Inverse kinematics: twist → wheel speeds.
     fn wheels_for(&self, twist: Twist) -> WheelSpeeds;
     /// Forward kinematics: wheel speeds → twist.

@@ -21,3 +21,8 @@ pub mod execution;
 
 pub mod config;
 pub mod pipeline;
+
+/// Swift bindings for the phone.
+pub mod ffi;
+
+uniffi::setup_scaffolding!();

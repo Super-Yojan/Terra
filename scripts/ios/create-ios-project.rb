@@ -18,7 +18,12 @@ resources = sources.new_group('Resources', 'Resources')
 resources.new_file('Info.plist')
 app.resources_build_phase.add_file_reference(resources.new_file('Assets.xcassets'))
 app.resources_build_phase.add_file_reference(resources.new_file('terra-av.toml'))
-# TODO: add the terra-av UniFFI bindings (Generated/) once terra-av exposes them.
+# terra-av: generated Swift bindings + static library (scripts/ios/build-ios.sh).
+generated = project.main_group.new_group('Generated', 'Generated')
+app.source_build_phase.add_file_reference(generated.new_file('TerraAV.swift'))
+framework = generated.new_file('TerraAV.xcframework')
+framework.last_known_file_type = 'wrapper.xcframework'
+app.frameworks_build_phase.add_file_reference(framework)
 %w[ARKit CoreMotion CoreLocation SwiftUI CoreBluetooth].each { |name| app.add_system_framework(name) }
 app.build_configurations.each do |config|
   config.build_settings['PRODUCT_BUNDLE_IDENTIFIER'] = 'org.terra.robotics.phone'

@@ -1,0 +1,4 @@
+[bindings.swift]
+module_name = "TerraAV"
+ffi_module_name = "TerraAVFFI"
+generate_module_map = true

@@ -13,9 +13,9 @@ final class PhoneSensors: NSObject, ARSessionDelegate, CLLocationManagerDelegate
     private let location = CLLocationManager()
     private let lock = NSLock()
     private var vio: VioPose?
-    private var gyro: SIMD3<Double>?
+    private var gyro: Vec3?
     private var gps: GpsFix?
-    private var depth: [SIMD3<Float>] = []
+    private var depth: [Vec3] = []
 
     /// Keep about this many depth points per frame.
     private let depthTarget = 600
@@ -33,7 +33,7 @@ final class PhoneSensors: NSObject, ARSessionDelegate, CLLocationManagerDelegate
         motion.deviceMotionUpdateInterval = 0.01
         motion.startDeviceMotionUpdates(to: OperationQueue()) { [weak self] data, _ in
             guard let r = data?.rotationRate else { return }
-            self?.store { $0.gyro = SIMD3(r.x, r.y, r.z) }
+            self?.store { $0.gyro = Vec3(x: r.x, y: r.y, z: r.z) }
         }
 
         location.delegate = self
@@ -59,18 +59,13 @@ final class PhoneSensors: NSObject, ARSessionDelegate, CLLocationManagerDelegate
     // MARK: ARKit
 
     func session(_ session: ARSession, didUpdate frame: ARFrame) {
-        let m = frame.camera.transform
-        let rotation = simd_double3x3(
-            SIMD3(Double(m.columns.0.x), Double(m.columns.0.y), Double(m.columns.0.z)),
-            SIMD3(Double(m.columns.1.x), Double(m.columns.1.y), Double(m.columns.1.z)),
-            SIMD3(Double(m.columns.2.x), Double(m.columns.2.y), Double(m.columns.2.z)))
-        let position = SIMD3(Double(m.columns.3.x), Double(m.columns.3.y), Double(m.columns.3.z))
         var tracked = false
         if case .normal = frame.camera.trackingState { tracked = true }
+        let pose = VioPose(arkit: frame.camera.transform, tracked: tracked)
         let points = frame.sceneDepth.map { depthPoints(from: $0, intrinsics: frame.camera.intrinsics,
                                                          imageSize: frame.camera.imageResolution) } ?? []
         store {
-            $0.vio = VioPose(position: position, rotation: rotation, tracked: tracked)
+            $0.vio = pose
             $0.depth = points
         }
     }
@@ -80,7 +75,7 @@ final class PhoneSensors: NSObject, ARSessionDelegate, CLLocationManagerDelegate
 
     /// Back-project a thinned grid of LiDAR depth pixels into camera-frame
     /// points (ARKit camera axes, metres). Low-confidence pixels are skipped.
-    private func depthPoints(from depth: ARDepthData, intrinsics: simd_float3x3, imageSize: CGSize) -> [SIMD3<Float>] {
+    private func depthPoints(from depth: ARDepthData, intrinsics: simd_float3x3, imageSize: CGSize) -> [Vec3] {
         let map = depth.depthMap
         CVPixelBufferLockBaseAddress(map, .readOnly)
         defer { CVPixelBufferUnlockBaseAddress(map, .readOnly) }
@@ -102,7 +97,7 @@ final class PhoneSensors: NSObject, ARSessionDelegate, CLLocationManagerDelegate
         let cx = intrinsics[2][0] * sx, cy = intrinsics[2][1] * sy
         let step = max(1, Int((Float(width * height) / Float(depthTarget)).squareRoot()))
 
-        var points: [SIMD3<Float>] = []
+        var points: [Vec3] = []
         points.reserveCapacity(depthTarget)
         for v in stride(from: 0, to: height, by: step) {
             let row = base.advanced(by: v * rowBytes).assumingMemoryBound(to: Float32.self)
@@ -112,7 +107,7 @@ final class PhoneSensors: NSObject, ARSessionDelegate, CLLocationManagerDelegate
                 let z = row[u]
                 guard z.isFinite, z > 0.1, z < 5 else { continue }
                 // ARKit camera axes: +X right, +Y up, -Z forward (image v grows down).
-                points.append(SIMD3((Float(u) - cx) * z / fx, -(Float(v) - cy) * z / fy, -z))
+                points.append(Vec3(SIMD3((Float(u) - cx) * z / fx, -(Float(v) - cy) * z / fy, -z)))
             }
         }
         return points

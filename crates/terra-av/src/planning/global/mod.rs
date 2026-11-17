@@ -8,6 +8,6 @@ pub use hybrid_astar::HybridAStar;
 use super::{Goal, Path};
 use crate::{estimation::State, mapping::Map, vehicle::VehicleModel};
 
-pub trait PathPlanner {
+pub trait PathPlanner: Send {
     fn plan(&mut self, state: &State, map: &Map, goal: &Goal, vehicle: &dyn VehicleModel) -> Path;
 }

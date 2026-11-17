@@ -4,8 +4,22 @@ version.workspace = true
 edition.workspace = true
 description = "Modular autonomy pipeline: sensors, state estimation, perception and mapping, planning, execution."
 
+[lib]
+# lib: Rust users and tests. staticlib: linked into the iOS app.
+# cdylib: read by the binding generator.
+crate-type = ["lib", "staticlib", "cdylib"]
+
 [lints.rust]
 unused_variables = "allow"
 dead_code = "allow"
 
 [dependencies]
+uniffi = "=0.31.1"
+
+[features]
+bindgen = ["uniffi/cli"]
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+required-features = ["bindgen"]

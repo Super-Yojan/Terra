@@ -10,6 +10,6 @@ use crate::vehicle::{Twist, VehicleModel};
 
 pub struct State { pub t: f64, pub pose: Pose2, pub twist: Twist }
 
-pub trait StateEstimator {
+pub trait StateEstimator: Send {
     fn update(&mut self, frame: &SensorFrame, vehicle: &dyn VehicleModel) -> State;
 }

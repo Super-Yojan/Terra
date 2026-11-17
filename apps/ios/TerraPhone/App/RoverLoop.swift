@@ -3,13 +3,13 @@ import Foundation
 
 /// The whole app in one loop, 100 times a second:
 ///
-///     PhoneSensors ─► SensorFrame ─► TerraAV.tick ─► WheelCommand ─► BluetoothLink
+///     PhoneSensors ─► SensorFrame ─► TerraAv.tick ─► WheelCommand ─► BluetoothLink
 ///                         ▲               ▲
 ///                      e-stop        Goal (joystick)
 final class RoverLoop: ObservableObject {
     let sensors = PhoneSensors()
     let motors = BluetoothLink()
-    private let av: TerraAV
+    private let av: TerraAv
     private let queue = DispatchQueue(label: "terra.loop")
     private var timer: DispatchSourceTimer?
     private var goal = Goal.none
@@ -25,7 +25,7 @@ final class RoverLoop: ObservableObject {
 
     init() {
         let url = Bundle.main.url(forResource: "terra-av", withExtension: "toml")
-        av = TerraAV(configTOML: url.flatMap { try? String(contentsOf: $0, encoding: .utf8) } ?? "")
+        av = TerraAv(configToml: url.flatMap { try? String(contentsOf: $0, encoding: .utf8) } ?? "")
     }
 
     func start() {
@@ -61,7 +61,7 @@ final class RoverLoop: ObservableObject {
 
     private func tick() {
         let frame = sensors.frame(estop: estop)
-        let out = av.tick(frame, goal: goal)
+        let out = av.tick(frame: frame, goal: goal)
         motors.send(out)
         DispatchQueue.main.async { if self.command != out { self.command = out } }
     }

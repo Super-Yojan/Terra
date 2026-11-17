@@ -11,6 +11,6 @@ use crate::sense::SensorFrame;
 /// What the planner sees: occupied points in the world frame.
 pub struct Map { pub obstacles: Vec<Vec2> }
 
-pub trait Mapper {
+pub trait Mapper: Send {
     fn update(&mut self, frame: &SensorFrame, state: &State) -> &Map;
 }
