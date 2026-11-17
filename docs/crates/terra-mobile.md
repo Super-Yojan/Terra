@@ -19,17 +19,23 @@ flowchart LR
 
 *[Build steps](../phone/build.md). Deployment target is iOS 17.*
 
-## Sensor queue
+## One call per tick
 
-`pushImu`, `pushVio`, `pushGps`, `pushHeading` and `pushCourse` only queue the sample, so they are safe to call from any sensor thread and never wait for a running control tick. Each sensor has its own bounded queue (IMU 256, VIO 64, GPS/heading/course 32); a full queue drops its oldest sample. The next time the controller locks its state (every `step`, and any call that reads state) it applies all queued samples in timestamp order, so a call always sees every sample pushed before it.
+The app keeps the latest sample of each sensor and calls `update(sensors:)` every 10 ms with a `PhoneSensors` record: IMU, VIO, GPS, heading, course, the stick, the motor link facts and the drive source. Rust skips a sample it has already applied, so passing the same one again is harmless. The returned `MotorTick` carries a `MotorAction`:
 
-A sample the runtime rejects when it is applied (older than one already applied, or invalid) is dropped and counted instead of stopping the controller; if a sensor really stops, the freshness checks still make the output neutral. Only a nonfinite timestamp is refused at push time. `sensorQueueStats()` reports queue depths, overflow drops, rejections and the last rejection reason.
+| Action | App does |
+| --- | --- |
+| `drive(frameJson)` | Writes the frame to the rover. |
+| `stop(reason)` | Stops the rover once per reason and shows the reason. |
+| `idle` | Nothing. |
+
+The stick is normalized effort in `[-1, 1]` in every mode; Rust scales forward by 0.5 m/s.
 
 [API](https://super-yojan.dev/Terra/api/terra_mobile/index.html)
 
 | Swift name | Rust |
 | --- | --- |
-| `MobileController` | Estimator, PI, arbiter, recorder. |
+| `MobileController` | `terra_robot::Robot`: the whole control loop. |
 | `MobileWaypoint` | `terra-waypoint`. |
 | `MobileOccupancyMap` | `terra-mapping`. |
 | `reconnectDashboardAuthenticated` | Fleet `ControlPlane`. |

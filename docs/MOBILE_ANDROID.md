@@ -3,7 +3,7 @@
 > [!TIP]
 > **TL;DR**
 > Kotlin and Compose shell over `terra-mobile`.
-> Rust owns the 100 Hz control tick and decides every motor frame.
+> Kotlin calls `update()` every 10 ms; Rust decides every motor frame.
 > Any target can connect to ARGOS. The phone does not connect to the Zorvane simulator.
 
 ```mermaid
@@ -11,12 +11,12 @@ flowchart LR
   AR[ARCore + SensorManager] -->|device-axis pose, IMU, raw depth| Pipe[PhonePosePipeline]
   Pipe --> Ctrl[MobileController]
   Map[MobileOccupancyMap] --> Ctrl
-  Loop[PhoneDriveLoop<br/>100 Hz, Rust thread] -->|step| Ctrl
-  Loop -->|decide| Gate[MotorGate]
-  Gate -->|frame, stop or idle| BLE[TerraBluetooth<br/>20 Hz writer]
+  Loop[TerraSession<br/>10 ms loop] -->|"update(sensors)"| Ctrl
+  Ctrl -->|frame, stop or idle| Loop
+  Loop -->|newest frame| BLE[TerraBluetooth<br/>20 Hz writer]
   Ctrl <-->|Zenoh| ARGOS[ARGOS router]
-  UI[Compose] -->|stick, link facts| Loop
-  Loop -->|snapshot 10 Hz| UI
+  UI[Compose] -->|stick| Loop
+  Loop -->|state 10 Hz| UI
 ```
 
 *Same crates as the iOS app. Kotlin samples sensors, runs the radio and draws the screen.*
@@ -62,7 +62,7 @@ The check is the emulator fingerprint (`goldfish` / `ranchu` / SDK build), not a
 
 ## Driving the rover
 
-Phone IMU + VIO and Bluetooth drive both start a `PhoneDriveLoop`. It is a Rust thread that ticks at 100 Hz on the sensor clock. Each tick it applies the phone stick (unless ARGOS owns intent), steps `MobileController`, handles a failed router link, and asks `MotorGate.decide` for a command. The Bluetooth writer takes that command every 50 ms:
+Every mode runs the same 10 ms loop in `TerraSession`: it hands `MobileController.update` the latest IMU, VIO, stick and link facts, and keeps the returned action for the Bluetooth writer. Rust applies the stick (unless ARGOS owns intent), runs the level module and the safety gate, and routes the frame. The writer takes the newest action every 50 ms:
 
 | Gate answer | Bluetooth writes |
 | --- | --- |
@@ -70,7 +70,7 @@ Phone IMU + VIO and Bluetooth drive both start a `PhoneDriveLoop`. It is a Rust 
 | `Stop` | Neutral values once. The link stays armed. |
 | `Idle` | Nothing, except one neutral write right after a frame. The rover's lease stops it. |
 
-The gate holds motors until **The phone is in its mount** is checked, latches emergency stop until **Reset stop**, stops on tracking loss in tracking-dependent modes, and needs left/right wheel routes for closed-loop drive. The controller's actuator layout is the rover's drive profiles, or the full layout on a framed session. Kotlin no longer mixes the stick itself.
+The Rust safety gate holds motors until **The phone is in its mount** is checked, latches emergency stop until **Reset stop**, stops on tracking loss in tracking-dependent modes, and needs left/right wheel routes for closed-loop drive. The controller's actuator layout is the rover's drive profiles, or the full layout on a framed session. Kotlin no longer mixes the stick itself.
 
 **ARGOS** connects the running controller with `reconnectDashboardAuthenticated` (defaults match iOS: `tls/argos.34.135.204.210.sslip.io:7448`, prefix `terra/phone`, user `terra`). A lost link calls `handle_dashboard_link_loss` in Rust and retries on the `ConnectionPolicy` back-off. Connecting never arms the rover. The password sits in app-private preferences.
 
@@ -108,7 +108,7 @@ cargo test --locked --workspace
 cd apps/android && ./gradlew assembleDebug testDebugUnitTest
 ```
 
-`PhoneDriveSmokeTest` runs a `PhoneDriveLoop` over a full layout until it hands out a drive frame, checks that an unconfirmed mount stops the phone source, checks the device-axis mount convention, and decodes raw depth with confidence. `TerraCoreSmokeTest` constructs `MobileController`, steps a sample, and checks that the right wheel effort is larger and that a one-second gap returns zero. It also calls the shared axis conversion, `MobileWaypoint`, and `runVelocityBenchmark`. The actuator case routes a stick through a layout and a drive profile, checks streamed-relay percent pairs, a 16-byte `TA` disarm frame, fragment reassembly, and a `capabilities` control envelope.
+`PhoneDriveSmokeTest` calls `update` over a full layout until it hands out a drive frame, checks that an unconfirmed mount stops the phone source, checks the device-axis mount convention, and decodes raw depth with confidence. `TerraCoreSmokeTest` constructs `MobileController`, runs one `update` with a stick, and checks that the right wheel effort is larger and that a one-second gap returns zero. It also calls the shared axis conversion, `MobileWaypoint`, and `runVelocityBenchmark`. The actuator case routes a stick through a layout and a drive profile, checks streamed-relay percent pairs, a 16-byte `TA` disarm frame, fragment reassembly, and a `capabilities` control envelope.
 
 ## What was verified, and what was not
 
@@ -120,7 +120,7 @@ Verified on Linux, without a phone:
 
 Verified for P1 (Android parity), in a Linux container without the Android SDK:
 
-- `cargo test -p terra-mobile --lib`, including `PhoneDriveLoop`, full-layout frames, raw depth decoding, and the AR clock mapping.
+- `cargo test -p terra-mobile`, including the `update` entry point (`tests/update.rs`), raw depth decoding, and the AR clock mapping.
 - `TerraCoreSmokeTest` and `PhoneDriveSmokeTest` compiled with `kotlinc` 2.0.21 and run through JNA against the host library.
 - The app sources type-checked with `kotlinc` against Robolectric's `android-all` and hand-written stubs for Compose, ARCore and AndroidX. That is not a Gradle build.
 
