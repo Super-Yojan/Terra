@@ -1,4 +1,0 @@
-[bindings.swift]
-module_name = "TerraCore"
-ffi_module_name = "TerraCoreFFI"
-generate_module_map = true

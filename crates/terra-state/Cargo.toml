@@ -1,7 +1,0 @@
-[package]
-name = "terra-state"
-version.workspace = true
-edition.workspace = true
-
-[dependencies]
-terra-types.workspace = true

@@ -1,29 +1,10 @@
 [workspace]
 resolver = "3"
-members = ["crates/terra-robot", "crates/terra-observability-collector", "crates/terra-observability", "tools/vlm-eval", "crates/terra-actuators", "crates/terra-autonomy", "crates/terra-navigation", "crates/terra-exploration", "crates/terra-experiment", "crates/terra-types", "crates/terra-state", "crates/terra-control", "crates/terra-mobile", "crates/terra-motors","crates/terra-mapping", "crates/terra-transport", "crates/terra-waypoint", "crates/fpv-signaling", "crates/terra-map-merge", "crates/terra-av"]
+members = ["crates/terra-av"]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-
-[workspace.dependencies]
-terra-robot = { path = "crates/terra-robot" }
-terra-observability = { path = "crates/terra-observability" }
-terra-actuators = { path = "crates/terra-actuators" }
-terra-autonomy = { path = "crates/terra-autonomy" }
-terra-navigation = { path = "crates/terra-navigation" }
-terra-exploration = { path = "crates/terra-exploration" }
-terra-experiment = { path = "crates/terra-experiment" }
-terra-types = { path = "crates/terra-types" }
-terra-state = { path = "crates/terra-state" }
-terra-control = { path = "crates/terra-control" }
-terra-motors = { path = "crates/terra-motors" }
-terra-mapping = { path = "crates/terra-mapping" }
-terra-map-merge = { path = "crates/terra-map-merge" }
-terra-transport = { path = "crates/terra-transport" }
-fpv-signaling = { path = "crates/fpv-signaling" }
-terra-waypoint = { path = "crates/terra-waypoint" }
-uniffi = "=0.31.1"
 
 [profile.dev]
 debug = 0
