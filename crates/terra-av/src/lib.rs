@@ -1,7 +1,7 @@
 //! A modular autonomy pipeline for a ground vehicle, one module per stage:
 //!
 //! ```text
-//! sense ─► estimation ─► mapping ─► planning ─► execution ─► motors
+//! sense ─► estimation ─► mapping ─► planning (global ─► local) ─► execution ─► motors
 //!                ▲                      ▲            ▲
 //!                └──── vehicle (shared) ┴────────────┘
 //!                      geometry (shared)

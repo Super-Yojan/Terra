@@ -4,7 +4,8 @@
 //! [vehicle]    type = "diff_drive", track = 0.42, max_wheel_speed = 0.8
 //! [estimator]  type = "localization"
 //! [mapper]     type = "occupancy_grid"
-//! [planner]    type = "dwa", horizon = 2.0
+//! [path_planner]  type = "hybrid_astar", resolution = 0.1
+//! [local_planner] type = "dwa", horizon = 2.0
 //! [controller] type = "proportional", kp = 1.2
 //! ```
 use crate::pipeline::Pipeline;

@@ -1,25 +1,25 @@
-//! Stage 4, Planning: what should I do next. Every planner turns state, map
-//! and goal into a target twist.
-mod teleop;
-mod drive_pose;
-mod dwa;
-pub use teleop::Teleop;
-pub use drive_pose::DrivePose;
-pub use dwa::Dwa;
+//! Stage 4, Planning, in two layers:
+//!
+//! ```text
+//! Goal ─► global::PathPlanner ─► Path ─► local::LocalPlanner ─► Twist
+//!         (which route? slow)            (which v, ω now? every tick)
+//! ```
+pub mod global;
+pub mod local;
 
-use crate::estimation::State;
 use crate::geometry::Pose2;
-use crate::mapping::Map;
-use crate::vehicle::{Twist, VehicleModel};
+use crate::vehicle::Twist;
 
 pub enum Goal {
     None,
-    /// Drive at this twist (a stick).
+    /// Drive at this twist (a stick). No route needed.
     Velocity(Twist),
     /// Reach this pose.
     Pose(Pose2),
 }
 
-pub trait Planner {
-    fn plan(&mut self, state: &State, map: &Map, goal: &Goal, vehicle: &dyn VehicleModel) -> Twist;
+/// A route in the world frame, start to goal. Empty for `Goal::None` and
+/// `Goal::Velocity`.
+pub struct Path {
+    pub poses: Vec<Pose2>,
 }
