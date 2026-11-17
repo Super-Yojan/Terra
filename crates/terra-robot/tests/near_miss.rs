@@ -4,8 +4,8 @@ use terra_mapping::MapSnapshot;
 use terra_robot::*;
 use terra_types::*;
 
-fn pose(r: &mut Runtime, t: f64) {
-    r.ingest(RuntimeEvent::Vio {
+fn pose(r: &mut Core, t: f64) {
+    r.ingest(Event::Vio {
         sample: VioSample {
             timestamp: t,
             position: Vector3::ZERO,
@@ -19,7 +19,7 @@ fn pose(r: &mut Runtime, t: f64) {
 }
 
 /// Free 4 m square around the origin with one obstacle `ahead` metres along +X.
-fn map(r: &mut Runtime, t: f64, ahead: f64) {
+fn map(r: &mut Core, t: f64, ahead: f64) {
     let resolution = 0.05;
     let mut snapshot = MapSnapshot {
         width: 80,
@@ -31,7 +31,7 @@ fn map(r: &mut Runtime, t: f64, ahead: f64) {
     };
     let col = ((ahead + 2.) / resolution) as usize;
     snapshot.occupancy[40 * 80 + col] = 100;
-    r.ingest(RuntimeEvent::Map {
+    r.ingest(Event::Map {
         snapshot,
         timestamp: t,
         sequence: (t * 10.) as u64,
@@ -40,7 +40,7 @@ fn map(r: &mut Runtime, t: f64, ahead: f64) {
     .unwrap();
 }
 
-fn near_miss_kinds(output: &RuntimeOutput) -> Vec<String> {
+fn near_miss_kinds(output: &CoreOutput) -> Vec<String> {
     output
         .autonomy
         .events
@@ -52,7 +52,7 @@ fn near_miss_kinds(output: &RuntimeOutput) -> Vec<String> {
 
 #[test]
 fn clearance_episodes_become_decision_events() {
-    let mut r = Runtime::new(RuntimeConfig::default(), "run".into()).unwrap();
+    let mut r = Core::new(CoreConfig::default(), "run".into()).unwrap();
     map(&mut r, 0., 0.5);
     let out = r.step(0.).unwrap();
     assert_eq!(out.clearance, None, "no pose, no clearance");

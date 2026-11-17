@@ -7,7 +7,7 @@
 //!
 //! A live request keeps streaming, optionally decimated, until it is cancelled,
 //! replaced, or its lease lapses; repeating it with the same id renews the lease.
-use crate::Brain;
+use crate::Robot;
 use terra_types::point_capture::*;
 
 /// Seconds after the last due frame before a capture gives up waiting for depth.
@@ -31,36 +31,36 @@ pub(crate) struct Capture {
 }
 
 /// Abandon any capture without reporting, for a replaced or lost dashboard link.
-pub(crate) fn reset(brain: &mut Brain) {
-    if brain.capture.take().is_some() {
-        brain.runtime.mapping_handle().disarm_capture();
+pub(crate) fn reset(robot: &mut Robot) {
+    if robot.capture.take().is_some() {
+        robot.core.mapping_handle().disarm_capture();
     }
 }
 
 /// Apply pending requests and send the frame that is due, if any.
-pub(crate) fn advance(brain: &mut Brain, now: f64) {
-    let Some(dashboard) = brain.dashboard.as_ref().filter(|d| !d.failed()) else {
-        reset(brain);
+pub(crate) fn advance(robot: &mut Robot, now: f64) {
+    let Some(dashboard) = robot.dashboard.as_ref().filter(|d| !d.failed()) else {
+        reset(robot);
         return;
     };
     let rover_id = dashboard.rover_id();
     let requests = dashboard.take_capture_requests();
-    let grid = brain.runtime.mapping_handle();
+    let grid = robot.core.mapping_handle();
     for request in requests
         .iter()
         .filter_map(|bytes| CaptureRequest::decode(bytes))
     {
         if request.cancel {
-            if brain
+            if robot
                 .capture
                 .as_ref()
                 .is_some_and(|c| c.request_id == request.request_id)
             {
-                finish(brain, rover_id, CaptureState::Cancelled, "cancelled");
+                finish(robot, rover_id, CaptureState::Cancelled, "cancelled");
             }
             continue;
         }
-        if let Some(running) = brain
+        if let Some(running) = robot
             .capture
             .as_mut()
             .filter(|c| c.live && request.live && c.request_id == request.request_id)
@@ -68,8 +68,8 @@ pub(crate) fn advance(brain: &mut Brain, now: f64) {
             running.deadline = now + running.lease;
             continue;
         }
-        if brain.capture.is_some() {
-            finish(brain, rover_id, CaptureState::Cancelled, "replaced");
+        if robot.capture.is_some() {
+            finish(robot, rover_id, CaptureState::Cancelled, "replaced");
         }
         grid.arm_capture();
         // Only frames accepted after the request belong to this capture, so
@@ -77,7 +77,7 @@ pub(crate) fn advance(brain: &mut Brain, now: f64) {
         drop(grid.take_capture());
         let total = request.frame_count();
         let interval = 1.0 / request.rate_hz;
-        brain.capture = Some(Capture {
+        robot.capture = Some(Capture {
             request_id: request.request_id,
             total,
             live: request.live,
@@ -95,14 +95,14 @@ pub(crate) fn advance(brain: &mut Brain, now: f64) {
             last_progress: None,
         });
     }
-    let Some(capture) = brain.capture.as_mut() else {
+    let Some(capture) = robot.capture.as_mut() else {
         return;
     };
     if now >= capture.next_due {
         // Wait for depth rather than skipping the slot; the deadline bounds it.
         if let Some(depth) = grid.take_capture() {
             let sent = encode(&depth, rover_id, capture).is_some_and(|bytes| {
-                brain
+                robot
                     .dashboard
                     .as_ref()
                     .is_some_and(|d| d.publish_bulk(FRAME_TOPIC, bytes))
@@ -118,28 +118,28 @@ pub(crate) fn advance(brain: &mut Brain, now: f64) {
         }
     }
     if now >= capture.deadline && capture.live {
-        finish(brain, rover_id, CaptureState::Done, "lease_expired");
+        finish(robot, rover_id, CaptureState::Done, "lease_expired");
     } else if (!capture.live && capture.sent >= capture.total) || now >= capture.deadline {
         let detail = capture.detail;
-        finish(brain, rover_id, CaptureState::Done, detail);
+        finish(robot, rover_id, CaptureState::Done, detail);
     } else if capture
         .last_progress
         .is_none_or(|t| now - t >= PROGRESS_SECONDS)
     {
         capture.last_progress = Some(now);
         let progress = progress(rover_id, capture, CaptureState::Running, capture.detail);
-        if let Some(d) = brain.dashboard.as_ref() {
+        if let Some(d) = robot.dashboard.as_ref() {
             d.publish(PROGRESS_TOPIC, progress);
         }
     }
 }
 
-fn finish(brain: &mut Brain, rover_id: u64, state: CaptureState, detail: &str) {
-    let Some(capture) = brain.capture.take() else {
+fn finish(robot: &mut Robot, rover_id: u64, state: CaptureState, detail: &str) {
+    let Some(capture) = robot.capture.take() else {
         return;
     };
-    brain.runtime.mapping_handle().disarm_capture();
-    if let Some(d) = brain.dashboard.as_ref() {
+    robot.core.mapping_handle().disarm_capture();
+    if let Some(d) = robot.dashboard.as_ref() {
         d.publish(PROGRESS_TOPIC, progress(rover_id, &capture, state, detail));
     }
 }

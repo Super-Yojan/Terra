@@ -1,4 +1,6 @@
 //! L5 on the phone facade: Rust builds the query, the phone's model answers, Rust validates.
+mod support;
+use support::*;
 use terra_mobile::*;
 
 /// Stationary tracked IMU/VIO at the origin and a 10 x 10 m free map with an unknown rim.
@@ -67,14 +69,14 @@ fn l5_is_offered_only_with_a_phone_model_and_round_trips_a_query() {
     );
     let inline = r#"{"level":"task","token":"l5","task":{"task_id":"t1","instruction":"Look around the room."}}"#;
     assert!(
-        c.autonomy_request("autonomy".into(), inline.into(), 1.05)
+        c.request("autonomy".into(), inline.into(), 1.05)
             .is_err()
     );
 
     c.set_task_model(Some("apple-foundation-models".into()))
         .unwrap();
     // A rejected token is never replayed, so the retry uses a new one.
-    c.autonomy_request(
+    c.request(
         "autonomy".into(),
         inline.replace("\"l5\"", "\"l5-retry\""),
         1.1,
@@ -109,7 +111,7 @@ fn l5_is_offered_only_with_a_phone_model_and_round_trips_a_query() {
     assert_eq!(v["task"]["plan"][0]["label"], "F1");
     assert_eq!(v["task"]["last_latency_seconds"], 1.4);
 
-    c.autonomy_request(
+    c.request(
         "task/action".into(),
         r#"{"task_id":"t1","action":"cancel","token":"stop-task"}"#.into(),
         1.35,

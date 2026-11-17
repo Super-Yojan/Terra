@@ -1,12 +1,12 @@
 use crate::*;
 
-impl Runtime {
+impl Core {
     /// Start a target search against the current pose, map, detector and authority.
     pub fn start_search(
         &mut self,
         request: terra_autonomy::SearchRequest,
         now: f64,
-    ) -> Result<(), RuntimeError> {
+    ) -> Result<(), RobotError> {
         let healthy = self.sensors_ready(now);
         let input = arbiter_input(&self.estimator, self.pose, self.map.as_ref(), now, healthy);
         self.autonomy.start_search(request, &input).map_err(invalid)
@@ -14,11 +14,11 @@ impl Runtime {
 }
 
 pub(crate) fn dispatch_search(
-    b: &mut Runtime,
+    b: &mut Core,
     kind: &str,
     bytes: &[u8],
     timestamp: f64,
-) -> Result<(), RuntimeError> {
+) -> Result<(), RobotError> {
     match kind {
         requests::SEARCH => b.start_search(
             terra_autonomy::decode_search_request(bytes)

@@ -1,5 +1,7 @@
 //! Loopback recovery after dashboard-incompatible occupancy samples.
 //! Network scenarios require local TCP sockets and use bounded receipt waits.
+mod support;
+use support::*;
 use std::time::Duration;
 use terra_mobile::{MobileController, OccupancyGrid, default_control_settings};
 use zenoh::Wait;

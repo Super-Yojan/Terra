@@ -1,3 +1,5 @@
+mod support;
+use support::*;
 use terra_autonomy::outdoor::OutdoorPhase;
 use terra_mobile::outdoor::{
     CourseFix, Evidence, GpsFix, HeadingFix, OutdoorController, distance_bearing,
@@ -137,7 +139,7 @@ fn invalid_samples_and_hardware_fail_closed() {
 #[test]
 fn unsupported_platform_rejects_selection() {
     let c = terra_mobile::MobileController::new(terra_mobile::default_control_settings()).unwrap();
-    assert!(c.autonomy_request("navigation/source".into(),r#"{"schema_version":1,"source":"outdoor_gps","token":"pick","run_id":"x","navigation_revision":0}"#.into(),0.).is_err());
+    assert!(c.request("navigation/source".into(),r#"{"schema_version":1,"source":"outdoor_gps","token":"pick","run_id":"x","navigation_revision":0}"#.into(),0.).is_err());
     c.enable_outdoor_gps().unwrap();
     local_sensors(&c, 1.);
     c.push_gps(
@@ -217,11 +219,11 @@ fn mobile_outdoor_runs_checked_l3_and_preserves_mission_on_pause() {
     let c = terra_mobile::MobileController::new(settings).unwrap();
     c.enable_outdoor_gps().unwrap();
     local_sensors(&c, 1.);
-    hardware(&c, false);
     c.step(1.).unwrap();
+    hardware(&c, false);
     let run = state(&c)["status"]["run_id"].clone();
-    c.autonomy_request("navigation/source".into(),serde_json::json!({"schema_version":1,"source":"outdoor_gps","token":"select","run_id":run,"navigation_revision":0}).to_string(),1.).unwrap();
-    c.autonomy_request(
+    c.request("navigation/source".into(),serde_json::json!({"schema_version":1,"source":"outdoor_gps","token":"select","run_id":run,"navigation_revision":0}).to_string(),1.).unwrap();
+    c.request(
         "autonomy".into(),
         r#"{"level":"waypoint","token":"level"}"#.into(),
         1.,
@@ -254,7 +256,7 @@ fn mobile_outdoor_runs_checked_l3_and_preserves_mission_on_pause() {
         1.,
     )
     .unwrap();
-    c.autonomy_request("goal".into(),serde_json::json!({"frame":"wgs84","latitude":0.001,"longitude":0,"token":"mission","run_id":run,"navigation_revision":1,"arrival_radius_m":2.}).to_string(),1.01).unwrap();
+    c.request("goal".into(),serde_json::json!({"frame":"wgs84","latitude":0.001,"longitude":0,"token":"mission","run_id":run,"navigation_revision":1,"arrival_radius_m":2.}).to_string(),1.01).unwrap();
     local_sensors(&c, 1.05);
     let output = c.step(1.05).unwrap();
     let s = state(&c);
@@ -303,11 +305,11 @@ fn mobile_outdoor_runs_checked_l3_and_preserves_mission_on_pause() {
         "Recovered sensors must not resume motion automatically"
     );
     assert_eq!(state(&c)["outdoor"]["phase"], "paused");
-    c.autonomy_request("navigation/resume".into(),serde_json::json!({"schema_version":1,"token":"resume","run_id":run,"navigation_revision":1}).to_string(),5.05).unwrap();
+    c.request("navigation/resume".into(),serde_json::json!({"schema_version":1,"token":"resume","run_id":run,"navigation_revision":1}).to_string(),5.05).unwrap();
     local_sensors(&c, 5.1);
     assert!(c.step(5.1).unwrap().target_forward > 0.);
     assert_eq!(state(&c)["goal"]["token"], "mission");
-    assert!(c.autonomy_request("goal".into(),serde_json::json!({"frame":"wgs84","latitude":0.001,"longitude":0,"token":"stale-goal","run_id":"old-run","navigation_revision":1,"arrival_radius_m":2.}).to_string(),5.1).is_err());
+    assert!(c.request("goal".into(),serde_json::json!({"frame":"wgs84","latitude":0.001,"longitude":0,"token":"stale-goal","run_id":"old-run","navigation_revision":1,"arrival_radius_m":2.}).to_string(),5.1).is_err());
     assert_eq!(state(&c)["goal"]["token"], "mission");
     for (i, cell) in [100, -1].into_iter().enumerate() {
         let t = 5.15 + i as f64 * 0.05;
@@ -656,11 +658,11 @@ fn geographic_mission_survives_two_minute_cloud_outage_but_hardware_loss_latches
     let c = terra_mobile::MobileController::new(settings).unwrap();
     c.enable_outdoor_gps().unwrap();
     local_sensors(&c, 1.);
-    hardware(&c, false);
     c.step(1.).unwrap();
+    hardware(&c, false);
     let run = state(&c)["status"]["run_id"].clone();
-    c.autonomy_request("navigation/source".into(),serde_json::json!({"schema_version":1,"source":"outdoor_gps","token":"select","run_id":run,"navigation_revision":0}).to_string(),1.).unwrap();
-    c.autonomy_request(
+    c.request("navigation/source".into(),serde_json::json!({"schema_version":1,"source":"outdoor_gps","token":"select","run_id":run,"navigation_revision":0}).to_string(),1.).unwrap();
+    c.request(
         "autonomy".into(),
         r#"{"level":"waypoint","token":"level"}"#.into(),
         1.,
@@ -693,7 +695,7 @@ fn geographic_mission_survives_two_minute_cloud_outage_but_hardware_loss_latches
         1.,
     )
     .unwrap();
-    c.autonomy_request("goal".into(),serde_json::json!({"frame":"wgs84","latitude":0.001,"longitude":0,"token":"mission","run_id":run,"navigation_revision":1,"arrival_radius_m":2.}).to_string(),1.01).unwrap();
+    c.request("goal".into(),serde_json::json!({"frame":"wgs84","latitude":0.001,"longitude":0,"token":"mission","run_id":run,"navigation_revision":1,"arrival_radius_m":2.}).to_string(),1.01).unwrap();
     local_sensors(&c, 1.05);
     let output = c.step(1.05).unwrap();
     let s = state(&c);
@@ -754,11 +756,11 @@ fn manual_takeover_drives_while_an_outdoor_mission_is_paused() {
     let c = terra_mobile::MobileController::new(terra_mobile::default_control_settings()).unwrap();
     c.enable_outdoor_gps().unwrap();
     local_sensors(&c, 1.);
-    hardware(&c, false);
     c.step(1.).unwrap();
+    hardware(&c, false);
     let run = state(&c)["status"]["run_id"].clone();
-    c.autonomy_request("navigation/source".into(),serde_json::json!({"schema_version":1,"source":"outdoor_gps","token":"select","run_id":run,"navigation_revision":0}).to_string(),1.).unwrap();
-    c.autonomy_request(
+    c.request("navigation/source".into(),serde_json::json!({"schema_version":1,"source":"outdoor_gps","token":"select","run_id":run,"navigation_revision":0}).to_string(),1.).unwrap();
+    c.request(
         "autonomy".into(),
         r#"{"level":"waypoint","token":"level"}"#.into(),
         1.,
@@ -783,14 +785,14 @@ fn manual_takeover_drives_while_an_outdoor_mission_is_paused() {
         1.,
     )
     .unwrap();
-    c.autonomy_request("goal".into(),serde_json::json!({"frame":"wgs84","latitude":0.001,"longitude":0,"token":"mission","run_id":run,"navigation_revision":1,"arrival_radius_m":2.}).to_string(),1.01).unwrap();
+    c.request("goal".into(),serde_json::json!({"frame":"wgs84","latitude":0.001,"longitude":0,"token":"mission","run_id":run,"navigation_revision":1,"arrival_radius_m":2.}).to_string(),1.01).unwrap();
     local_sensors(&c, 1.05);
     c.step(1.05).unwrap();
     // GPS and heading go stale, as with a heading hold in the field.
     local_sensors(&c, 5.);
     c.step(5.).unwrap();
     assert_eq!(state(&c)["outdoor"]["phase"], "paused");
-    c.autonomy_request(
+    c.request(
         "autonomy".into(),
         r#"{"level":"teleop","token":"takeover"}"#.into(),
         5.,
@@ -864,14 +866,14 @@ fn explore_run(gps: bool, seconds: f64) -> serde_json::Value {
         .unwrap();
     };
     observe(1., pose);
-    hardware(&c, false);
     c.step(1.).unwrap();
+    hardware(&c, false);
     if gps {
         let run = state(&c)["status"]["run_id"].clone();
-        c.autonomy_request("navigation/source".into(),serde_json::json!({"schema_version":1,"source":"outdoor_gps","token":"select","run_id":run,"navigation_revision":0}).to_string(),1.).unwrap();
+        c.request("navigation/source".into(),serde_json::json!({"schema_version":1,"source":"outdoor_gps","token":"select","run_id":run,"navigation_revision":0}).to_string(),1.).unwrap();
     }
     hardware(&c, true);
-    c.autonomy_request(
+    c.request(
         "autonomy".into(),
         r#"{"level":"explore","budget_seconds":120,"token":"explore"}"#.into(),
         1.,

@@ -446,10 +446,7 @@ impl MobileController {
         map: Arc<MobileOccupancyMap>,
     ) -> Result<(), ControllerError> {
         let handle = map.map.clone();
-        self.brain
-            .lock()
-            .map_err(|_| ControllerError::Internal)?
-            .runtime
+        self.robot()?.core_mut()
             .attach_mapping(handle);
         Ok(())
     }

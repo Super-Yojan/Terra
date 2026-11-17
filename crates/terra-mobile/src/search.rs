@@ -93,11 +93,8 @@ impl MobileController {
         version: String,
         timestamp: f64,
     ) -> Result<(), ControllerError> {
-        self.brain
-            .lock()
-            .map_err(|_| ControllerError::Internal)?
-            .runtime
-            .ingest(terra_robot::RuntimeEvent::Detector {
+        self.robot()?.core_mut()
+            .ingest(terra_robot::Event::Detector {
                 classes,
                 version,
                 received_at: timestamp,
@@ -126,8 +123,8 @@ impl MobileController {
             },
             time_budget_s: r.time_budget_s,
         };
-        let mut b = self.brain.lock().map_err(|_| ControllerError::Internal)?;
-        Ok(b.runtime.start_search(request, timestamp)?)
+        let mut b = self.robot()?;
+        Ok(b.core_mut().start_search(request, timestamp)?)
     }
     /// Submit one detector observation for arbiter validation and confirmation.
     /// `timestamp` is current monotonic seconds. Returns `InvalidInput` for rejected
@@ -137,11 +134,8 @@ impl MobileController {
         o: MobileTargetObservation,
         timestamp: f64,
     ) -> Result<(), ControllerError> {
-        self.brain
-            .lock()
-            .map_err(|_| ControllerError::Internal)?
-            .runtime
-            .ingest(terra_robot::RuntimeEvent::Target {
+        self.robot()?.core_mut()
+            .ingest(terra_robot::Event::Target {
                 sample: terra_autonomy::TargetObservation {
                     run_id: o.run_id,
                     search_id: o.search_id,
@@ -166,10 +160,7 @@ impl MobileController {
         d: MobileObjectDetection,
         timestamp: f64,
     ) -> Result<(), ControllerError> {
-        self.brain
-            .lock()
-            .map_err(|_| ControllerError::Internal)?
-            .runtime
+        self.robot()?.core_mut()
             .observe_object(
                 terra_autonomy::objects::ObjectSighting {
                     class: d.class_name,
@@ -187,29 +178,25 @@ impl MobileController {
     }
     /// The run's object map as the `objects` topic body, for the phone's debug page.
     pub fn object_map_json(&self) -> String {
-        self.brain
-            .lock()
+        self.robot()
             .map(|b| {
-                b.objects()
-                    .telemetry(b.dashboard.as_ref().map_or(0, |d| d.rover_id()), b.run_id())
+                b.core().objects()
+                    .telemetry(b.rover_id().unwrap_or(0), b.run_id())
                     .to_string()
             })
             .unwrap_or_default()
     }
     /// Forget every mapped object, for example after moving buckets during a test.
     pub fn clear_object_map(&self) -> Result<(), ControllerError> {
-        self.brain
-            .lock()
-            .map_err(|_| ControllerError::Internal)?
-            .runtime
+        self.robot()?.core_mut()
             .clear_objects();
         Ok(())
     }
     /// Read search status at monotonic `timestamp` seconds without stepping motors.
     /// Returns `None` when no status is available, locking fails, or conversion fails.
     pub fn target_search_snapshot(&self, timestamp: f64) -> Option<MobileSearchSnapshot> {
-        let b = self.brain.lock().ok()?;
-        let s = b.autonomy().search_status(timestamp)?;
+        let b = self.robot().ok()?;
+        let s = b.core().autonomy().search_status(timestamp)?;
         Some(MobileSearchSnapshot {
             run_id: s.run_id,
             search_id: s.search_id,

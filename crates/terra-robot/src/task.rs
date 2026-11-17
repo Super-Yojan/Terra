@@ -3,7 +3,7 @@
 use crate::*;
 use terra_autonomy::{AgentOutcome, RequestedWaypoint, TaskQuery};
 
-impl Runtime {
+impl Core {
     /// Advertise the phone's language model by name, or withdraw it with `None`.
     pub fn set_task_model(&mut self, name: Option<String>) {
         self.autonomy.set_task_model(name);

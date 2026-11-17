@@ -117,7 +117,7 @@ pub struct State {
     /// Currently applied geometry and planner limits.
     pub parameters: Parameters,
     /// Settings revision within this controller session, bumped by
-    /// [`Runtime::settings_changed`](crate::Runtime): settings and outdoor
+    /// [`Core::settings_changed`](crate::Core): settings and outdoor
     /// requests must name it.
     pub revision: u64,
     /// Most recently processed unique settings token, including rejected requests.
@@ -149,7 +149,7 @@ struct Request {
 /// and age, only while live authority, goal, and hardware state permit
 /// reconfiguration. Invalid envelopes are ignored; unique valid tokens record
 /// an acceptance or rejection result and cannot be replayed.
-pub(crate) fn apply(b: &mut super::Runtime, bytes: &[u8], now: f64) -> bool {
+pub(crate) fn apply(b: &mut super::Core, bytes: &[u8], now: f64) -> bool {
     let Ok(r) = serde_json::from_slice::<Request>(bytes) else {
         return false;
     };
@@ -205,12 +205,12 @@ pub(crate) fn apply(b: &mut super::Runtime, bytes: &[u8], now: f64) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{HardwareStatus, Runtime, RuntimeEvent};
-    fn runtime() -> Runtime {
-        Runtime::new(Default::default(), "settings".into()).unwrap()
+    use crate::{HardwareStatus, Core, Event};
+    fn runtime() -> Core {
+        Core::new(Default::default(), "settings".into()).unwrap()
     }
-    fn hardware(r: &mut Runtime, output_active: bool) {
-        r.ingest(RuntimeEvent::Hardware {
+    fn hardware(r: &mut Core, output_active: bool) {
+        r.ingest(Event::Hardware {
             status: HardwareStatus::from_json(
                 &serde_json::json!({"ready":true,"output_active":output_active}),
             ),
@@ -218,7 +218,7 @@ mod tests {
         })
         .unwrap();
     }
-    fn send(r: &mut Runtime, request: &serde_json::Value) {
+    fn send(r: &mut Core, request: &serde_json::Value) {
         apply(r, &serde_json::to_vec(request).unwrap(), 0.0);
     }
     #[test]

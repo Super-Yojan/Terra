@@ -1,6 +1,6 @@
 //! `sensor_unhealthy` holds: naming their cause in the status, the settle wait
 //! after a long hold, and dropping a stale goal when a hold lasts too long.
-use super::Runtime;
+use super::Core;
 use serde_json::json;
 use terra_autonomy::{ArbiterOutput, SensorHold};
 
@@ -34,7 +34,7 @@ pub(crate) struct SensorHolds {
     goal_dropped: bool,
 }
 
-impl Runtime {
+impl Core {
     /// Whether fresh data must wait out the settle period after a long hold.
     /// Called once per tick with the health the sensors report on their own.
     pub(crate) fn settling(&mut self, healthy: bool, now: f64) -> bool {

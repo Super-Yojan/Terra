@@ -24,7 +24,7 @@ fn body(v: &impl Serialize) -> String {
     serde_json::to_string(v).expect("telemetry serializes")
 }
 
-impl RuntimeOutput {
+impl CoreOutput {
     /// This tick's fleet telemetry, one payload per topic. The
     /// `autonomy/status` record is the arbiter status with the runtime,
     /// drive, connectivity policy, navigation (with outdoor) and pose quality
@@ -72,7 +72,7 @@ impl RuntimeOutput {
     }
 }
 
-impl Runtime {
+impl Core {
     /// Full status JSON from the latest tick; empty before the first tick.
     pub fn status_json(&self) -> &str {
         &self.status_json

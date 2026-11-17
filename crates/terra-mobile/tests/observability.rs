@@ -1,3 +1,5 @@
+mod support;
+use support::*;
 use serde_json::json;
 use std::time::Duration;
 use terra_mobile::{MobileController, default_control_settings};
@@ -112,7 +114,7 @@ fn invalid_local_command_retains_rejection() {
     c.start_observability(json!({"path":path,"producer_id":"phone","rover_id":"4"}).to_string())
         .unwrap();
     assert!(
-        c.autonomy_request("autonomy".into(), "malformed".into(), 1.0)
+        c.request("autonomy".into(), "malformed".into(), 1.0)
             .is_err()
     );
     c.flush_observability(2.0).unwrap();

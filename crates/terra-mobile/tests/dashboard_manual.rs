@@ -1,4 +1,6 @@
 //! Characterize the existing router API used by sensor-free Bluetooth manual mode.
+mod support;
+use support::*;
 use std::time::{Duration, Instant};
 use terra_mobile::{MobileController, default_control_settings};
 use zenoh::Wait;

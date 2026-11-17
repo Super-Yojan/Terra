@@ -65,7 +65,7 @@ impl Connectivity {
     }
 }
 
-impl Runtime {
+impl Core {
     pub fn connectivity(&self) -> &ConnectivityPolicySettings {
         &self.connectivity.policy
     }
@@ -75,7 +75,7 @@ impl Runtime {
     pub fn set_connectivity_policy(
         &mut self,
         policy: ConnectivityPolicySettings,
-    ) -> Result<(), RuntimeError> {
+    ) -> Result<(), RobotError> {
         policy.validate().map_err(invalid)?;
         self.connectivity.policy = policy;
         if self.connectivity.loss_handled && self.connectivity.pauses() {
@@ -91,7 +91,7 @@ impl Runtime {
         self.autonomy.pause_for_router_loss();
         self.controller.reset();
     }
-    /// The fleet link came up or went down (see [`RuntimeEvent::Link`]).
+    /// The fleet link came up or went down (see [`Event::Link`]).
     pub(crate) fn link(&mut self, connected: bool) {
         if connected {
             if self.connectivity.loss_handled {

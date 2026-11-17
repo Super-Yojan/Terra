@@ -3,8 +3,8 @@
 use terra_robot::*;
 use terra_types::*;
 
-fn sample(r: &mut Runtime, t: f64) {
-    r.ingest(RuntimeEvent::Imu {
+fn sample(r: &mut Core, t: f64) {
+    r.ingest(Event::Imu {
         sample: ImuSample {
             timestamp: t,
             acceleration: Vector3::ZERO,
@@ -13,7 +13,7 @@ fn sample(r: &mut Runtime, t: f64) {
         received_at: t,
     })
     .unwrap();
-    r.ingest(RuntimeEvent::Vio {
+    r.ingest(Event::Vio {
         sample: VioSample {
             timestamp: t,
             position: Vector3 {
@@ -30,7 +30,7 @@ fn sample(r: &mut Runtime, t: f64) {
     .unwrap();
 }
 
-fn pose_topic(output: &RuntimeOutput) -> Option<serde_json::Value> {
+fn pose_topic(output: &CoreOutput) -> Option<serde_json::Value> {
     output
         .telemetry()
         .into_iter()
@@ -40,7 +40,7 @@ fn pose_topic(output: &RuntimeOutput) -> Option<serde_json::Value> {
 
 #[test]
 fn pose_is_published_only_while_ready() {
-    let mut r = Runtime::new(RuntimeConfig::default(), "run".into()).unwrap();
+    let mut r = Core::new(CoreConfig::default(), "run".into()).unwrap();
     r.set_rover_id(Some(7));
     assert_eq!(pose_topic(&r.step(0.).unwrap()), None);
 

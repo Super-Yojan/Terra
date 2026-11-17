@@ -1,4 +1,6 @@
 //! The rover's MCP server on the phone facade: JSON-RPC, the on-phone agent loop, and session control.
+mod support;
+use support::*;
 use serde_json::{Value, json};
 use terra_mobile::*;
 
@@ -83,7 +85,7 @@ fn agent_task() -> std::sync::Arc<MobileController> {
     let c = MobileController::new(default_control_settings()).unwrap();
     c.set_task_agent(Some("qwen3.5-2b".into()), true).unwrap();
     tick(&c, 1.);
-    c.autonomy_request(
+    c.request(
         "autonomy".into(),
         r#"{"level":"task","token":"l5","task":{"task_id":"t1","instruction":"Explore the room.","agent":"mcp"}}"#
             .into(),

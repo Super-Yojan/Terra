@@ -1,9 +1,9 @@
 use serde_json::json;
 use terra_robot::*;
 use terra_types::*;
-fn runtime(mode: ActuationMode) -> Runtime {
-    Runtime::new(
-        RuntimeConfig {
+fn runtime(mode: ActuationMode) -> Core {
+    Core::new(
+        CoreConfig {
             mode,
             ..Default::default()
         },
@@ -11,8 +11,8 @@ fn runtime(mode: ActuationMode) -> Runtime {
     )
     .unwrap()
 }
-fn sensors(r: &mut Runtime, t: f64) {
-    r.ingest(RuntimeEvent::Imu {
+fn sensors(r: &mut Core, t: f64) {
+    r.ingest(Event::Imu {
         sample: ImuSample {
             timestamp: t,
             acceleration: Vector3::ZERO,
@@ -21,7 +21,7 @@ fn sensors(r: &mut Runtime, t: f64) {
         received_at: t,
     })
     .unwrap();
-    r.ingest(RuntimeEvent::Vio {
+    r.ingest(Event::Vio {
         sample: VioSample {
             timestamp: t,
             position: Vector3::ZERO,
@@ -33,10 +33,10 @@ fn sensors(r: &mut Runtime, t: f64) {
     })
     .unwrap();
 }
-fn remote(r: &mut Runtime, kind: &str, mut v: serde_json::Value, t: f64) {
+fn remote(r: &mut Core, kind: &str, mut v: serde_json::Value, t: f64) {
     v["run_id"] = json!(r.run_id());
     v["authority_revision"] = json!(r.autonomy().authority_revision());
-    r.ingest(RuntimeEvent::Remote {
+    r.ingest(Event::Remote {
         kind: kind.into(),
         payload: serde_json::to_vec(&v).unwrap(),
         received_at: t,
@@ -112,19 +112,19 @@ fn link_loss_retires_operator_generation_without_replaying_on_reconnect() {
         0.,
     );
     assert!(r.step(0.).unwrap().motor.left > 0.);
-    r.ingest(RuntimeEvent::Link {
+    r.ingest(Event::Link {
         connected: false,
         received_at: 0.01,
     })
     .unwrap();
     assert!(r.autonomy().authority_revision() > old);
     assert_eq!(r.step(0.01).unwrap().motor.left, 0.);
-    r.ingest(RuntimeEvent::Link {
+    r.ingest(Event::Link {
         connected: true,
         received_at: 0.02,
     })
     .unwrap();
-    r.ingest(RuntimeEvent::Remote {
+    r.ingest(Event::Remote {
         kind: "teleop".into(),
         payload: serde_json::to_vec(
             &json!({"run_id":"run","authority_revision":old,"linear":0.2,"angular":0.}),
@@ -154,7 +154,7 @@ fn accepted_mission_survives_link_loss_with_fresh_onboard_evidence() {
     )
     .unwrap();
     r.step(0.).unwrap();
-    r.ingest(RuntimeEvent::Link {
+    r.ingest(Event::Link {
         connected: false,
         received_at: 0.01,
     })
@@ -171,7 +171,7 @@ fn future_and_reordered_samples_cannot_replace_measured_pose() {
     sensors(&mut r, 1.);
     let before = r.pose().unwrap().0;
     assert!(
-        r.ingest(RuntimeEvent::Vio {
+        r.ingest(Event::Vio {
             sample: VioSample {
                 timestamp: 2.,
                 position: Vector3 {
@@ -188,7 +188,7 @@ fn future_and_reordered_samples_cannot_replace_measured_pose() {
     );
     assert_eq!(r.pose().unwrap().0.x, before.x);
     assert!(
-        r.ingest(RuntimeEvent::Imu {
+        r.ingest(Event::Imu {
             sample: ImuSample {
                 timestamp: 0.5,
                 acceleration: Vector3::ZERO,
@@ -202,7 +202,7 @@ fn future_and_reordered_samples_cannot_replace_measured_pose() {
 #[test]
 fn recording_health_is_distinct_from_link_health() {
     let mut r = runtime(ActuationMode::DirectEffort);
-    r.ingest(RuntimeEvent::LocalManual {
+    r.ingest(Event::LocalManual {
         forward: 0.2,
         turn: 0.,
         received_at: 0.,
@@ -350,7 +350,7 @@ fn mount_height_keeps_floor_after_phone_is_mounted() {
 fn configuration_identity_tracks_profile_changes() {
     let mut r = runtime(ActuationMode::VelocityFeedback);
     let before = r.configuration_identity();
-    r.ingest(RuntimeEvent::Mode {
+    r.ingest(Event::Mode {
         mode: ActuationMode::DirectEffort,
         received_at: 0.,
     })
@@ -362,7 +362,7 @@ fn configuration_identity_tracks_profile_changes() {
 fn switching_actuation_mode_does_not_replay_local_input() {
     let mut r = runtime(ActuationMode::VelocityFeedback);
     sensors(&mut r, 0.);
-    r.ingest(RuntimeEvent::LocalVelocity {
+    r.ingest(Event::LocalVelocity {
         target: VelocityTarget {
             timestamp: 0.,
             forward: 0.2,
@@ -372,7 +372,7 @@ fn switching_actuation_mode_does_not_replay_local_input() {
     })
     .unwrap();
     r.step(0.).unwrap();
-    r.ingest(RuntimeEvent::Mode {
+    r.ingest(Event::Mode {
         mode: ActuationMode::DirectEffort,
         received_at: 0.01,
     })
@@ -404,7 +404,7 @@ fn autonomous_guidance_uses_feedback_even_with_a_direct_manual_profile() {
 #[test]
 fn changing_connectivity_policy_during_loss_pauses_the_accepted_mission() {
     let mut r = runtime(ActuationMode::DirectEffort);
-    r.ingest(RuntimeEvent::Link {
+    r.ingest(Event::Link {
         connected: false,
         received_at: 0.,
     })
@@ -484,7 +484,7 @@ fn attached_map_policy_changes_configuration_identity() {
 fn assigned_study_level_rejects_other_levels_but_keeps_takeover() {
     let mut r = runtime(ActuationMode::DirectEffort);
     let mut t = 0.0;
-    let mut send = |r: &mut Runtime, v: serde_json::Value| {
+    let mut send = |r: &mut Core, v: serde_json::Value| {
         t += 0.01;
         sensors(r, t);
         remote(r, "autonomy", v, t);

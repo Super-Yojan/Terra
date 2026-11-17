@@ -2,6 +2,8 @@
 //!
 //! The simulated rover starts at latitude 0, longitude 0 with local +x pointing
 //! true north, so local +y (left) is west.
+mod support;
+use support::*;
 use terra_mobile::*;
 
 const M_PER_DEG: f64 = 111_195.;
@@ -127,10 +129,10 @@ impl Sim {
             noise: 0.,
         };
         sim.sense(true);
-        hardware(&sim.c, false);
         sim.c.step(1.).unwrap();
+        hardware(&sim.c, false);
         sim.run = status(&sim.c)["status"]["run_id"].clone();
-        sim.c.autonomy_request("navigation/source".into(),serde_json::json!({"schema_version":1,"source":"outdoor_gps","token":"select","run_id":sim.run,"navigation_revision":0}).to_string(),1.).unwrap();
+        sim.c.request("navigation/source".into(),serde_json::json!({"schema_version":1,"source":"outdoor_gps","token":"select","run_id":sim.run,"navigation_revision":0}).to_string(),1.).unwrap();
         hardware(&sim.c, true);
         let request = match level {
             "explore" => {
@@ -142,7 +144,7 @@ impl Sim {
             _ => serde_json::json!({"level":level,"token":"level"}),
         };
         sim.c
-            .autonomy_request("autonomy".into(), request.to_string(), 1.)
+            .request("autonomy".into(), request.to_string(), 1.)
             .unwrap();
         sim.tick(0.05);
         sim
@@ -167,9 +169,9 @@ impl Sim {
     }
     /// Send a GPS goal `north` metres north and `west` metres west of the start.
     fn goal(&self, north: f64, west: f64, radius: f64) {
-        self.c.autonomy_request("goal".into(),serde_json::json!({"frame":"wgs84","latitude":north/M_PER_DEG,"longitude":-west/M_PER_DEG,"token":"gps-goal","run_id":self.run,"navigation_revision":1,"arrival_radius_m":radius}).to_string(),self.t).unwrap();
+        self.c.request("goal".into(),serde_json::json!({"frame":"wgs84","latitude":north/M_PER_DEG,"longitude":-west/M_PER_DEG,"token":"gps-goal","run_id":self.run,"navigation_revision":1,"arrival_radius_m":radius}).to_string(),self.t).unwrap();
     }
-    fn tick(&mut self, dt: f64) -> ControlOutput {
+    fn tick(&mut self, dt: f64) -> MotorTick {
         self.t += dt;
         // GPS once a second; pose and heading every tick.
         let gps = (self.t * 20.).round() as i64 % 20 == 0;

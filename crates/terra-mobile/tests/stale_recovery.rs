@@ -1,5 +1,7 @@
 //! Recovery from a sensor hold mid-goal (Terra#110): hold while pose data is
 //! stale, settle briefly after a long hold, and drop the goal after a timeout.
+mod support;
+use support::*;
 use terra_mobile::{MobileController, default_control_settings};
 
 fn fresh(c: &MobileController, t: f64) {
@@ -36,13 +38,13 @@ fn status(c: &MobileController) -> serde_json::Value {
 fn driving() -> std::sync::Arc<MobileController> {
     let c = MobileController::new(default_control_settings()).unwrap();
     fresh(&c, 1.);
-    c.autonomy_request(
+    c.request(
         "autonomy".into(),
         r#"{"level":"waypoint_direct","token":"level"}"#.into(),
         1.,
     )
     .unwrap();
-    c.autonomy_request(
+    c.request(
         "goal".into(),
         r#"{"frame":"local","x":4,"y":0,"token":"goal"}"#.into(),
         1.,

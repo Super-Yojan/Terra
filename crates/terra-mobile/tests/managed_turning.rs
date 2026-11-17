@@ -1,3 +1,5 @@
+mod support;
+use support::*;
 use terra_mobile::*;
 #[test]
 fn degraded_pose_is_explicit_and_blocks_local_and_geographic_goal_admission() {
@@ -13,10 +15,10 @@ fn degraded_pose_is_explicit_and_blocks_local_and_geographic_goal_admission() {
         r#"{"frame":"local","x":1,"y":0}"#,
         r#"{"frame":"wgs84","latitude":38.8,"longitude":-77.3}"#,
     ] {
-        assert!(c.autonomy_request("goal".into(), goal.into(), 1.).is_err());
+        assert!(c.request("goal".into(), goal.into(), 1.).is_err());
     }
     assert!(
-        c.autonomy_request("goal".into(), r#"{"cancel":true}"#.into(), 1.)
+        c.request("goal".into(), r#"{"cancel":true}"#.into(), 1.)
             .is_ok()
     );
 }
@@ -51,13 +53,13 @@ fn active_goal_stops_at_central_pose_freshness_threshold() {
         tracked: true,
     })
     .unwrap();
-    c.autonomy_request(
+    c.request(
         "autonomy".into(),
         r#"{"level":"waypoint_direct","token":"a"}"#.into(),
         0.,
     )
     .unwrap();
-    c.autonomy_request(
+    c.request(
         "goal".into(),
         r#"{"frame":"local","x":5,"y":0,"token":"b"}"#.into(),
         0.,
@@ -113,7 +115,7 @@ fn manual_emergency_stop_requires_explicit_reset_but_not_camera_tracking() {
         yaw_rate: 0.,
     })
     .unwrap();
-    c.autonomy_request(
+    c.request(
         "safety".into(),
         r#"{"action":"stop","token":"stop"}"#.into(),
         1.01,
@@ -123,7 +125,7 @@ fn manual_emergency_stop_requires_explicit_reset_but_not_camera_tracking() {
     let stopped: serde_json::Value = serde_json::from_str(&c.autonomy_status()).unwrap();
     assert_eq!(stopped["status"]["safety"], "emergency_stop");
     assert_eq!(stopped["twist"]["linear"], 0.);
-    c.autonomy_request(
+    c.request(
         "safety".into(),
         r#"{"action":"reset","token":"reset"}"#.into(),
         1.03,

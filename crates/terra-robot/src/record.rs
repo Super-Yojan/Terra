@@ -1,13 +1,12 @@
 //! The `control_tick` recording line, shared by every host that records runs.
 
 use serde_json::{Map, Value, json};
-use terra_robot::RuntimeOutput;
+use crate::CoreOutput;
+pub use terra_experiment::CONTROL_TICK;
 
-/// `kind` of a control-tick record.
-pub const CONTROL_TICK: &str = "control_tick";
 
 /// One control tick as recorded: what the runtime chose and why. Hosts build it
-/// from [`Runtime::step`](terra_robot::Runtime::step)'s output and
+/// from [`crate::Core::step`]'s output and
 /// [`crate::summarize`] reads the recorded lines back.
 pub struct ControlTickRecord<'a> {
     /// Seconds from run start.
@@ -18,13 +17,13 @@ pub struct ControlTickRecord<'a> {
     /// Fleet rover identity; per-rover metrics treat a missing one as rover 0.
     pub rover_id: Option<u64>,
     pub run_id: &'a str,
-    pub output: &'a RuntimeOutput,
+    pub output: &'a CoreOutput,
     /// Host-specific fields, such as the simulator's pose and mission status.
     pub extra: Map<String, Value>,
 }
 
 impl<'a> ControlTickRecord<'a> {
-    pub fn new(output: &'a RuntimeOutput, run_id: &'a str, sequence: u64, time: f64) -> Self {
+    pub fn new(output: &'a CoreOutput, run_id: &'a str, sequence: u64, time: f64) -> Self {
         Self {
             time,
             source_time: None,

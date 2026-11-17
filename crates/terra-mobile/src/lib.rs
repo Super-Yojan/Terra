@@ -1,34 +1,27 @@
-//! Thread-safe phone bindings around the portable robotics crates.
-//!
-//! [`MobileController`] combines sensor estimation and velocity control behind a
-//! mutex. The `mapping`, `waypoint`, `autonomy`, `actuators`, `transport`, and
-//! `search` modules expose their respective capabilities through UniFFI. Keep
-//! phone-facing conversion here and algorithm changes in the owning Rust crate.
+//! UniFFI bindings for the phone apps. All control lives in `terra-robot`:
+//! the apps fill a [`PhoneSensors`] each control tick, call
+//! [`MobileController::update`] and send the [`MotorTick`] it returns to the
+//! motor board. This crate only converts records and forwards calls.
 
 use std::sync::{Arc, Mutex};
 use terra_control::ControllerConfig;
+use terra_robot::Robot;
 use terra_state::EstimatorConfig;
 use terra_types::*;
 uniffi::setup_scaffolding!();
 mod actuators;
 pub use actuators::*;
 mod autonomy;
-mod capture;
 mod connection;
 mod depth;
-mod drive_loop;
-mod inbox;
+mod diagnostics;
 pub use autonomy::{FpvEffect, WebrtcSignal};
 pub use connection::*;
 pub use depth::*;
-pub use drive_loop::*;
-pub use inbox::SensorQueueStats;
-mod observability;
-pub use observability::ObservationAttachment;
+pub use diagnostics::ObservationAttachment;
 pub mod outdoor;
 mod outdoor_bridge;
 pub use outdoor::{CourseFix, GpsFix, HeadingFix};
-mod publication;
 mod search;
 pub use search::{
     MobileObjectDetection, MobileSearchRequest, MobileSearchSnapshot, MobileTargetObservation,
@@ -40,12 +33,10 @@ pub use mcp::{
 mod task;
 pub use task::MobileTaskQuery;
 mod frames;
-mod gate;
 mod mapping;
 mod mount;
 mod waypoint;
 pub use frames::*;
-pub use gate::*;
 pub use mapping::*;
 pub use mount::*;
 pub use waypoint::*;
@@ -208,58 +199,193 @@ pub struct VioReading {
     /// Whether visual tracking is currently valid.
     pub tracked: bool,
 }
-#[derive(Clone, Debug, uniffi::Record)]
-/// Local operator velocity intent, timestamped on the sensor clock.
-/// Submission does not bypass the autonomy arbiter or grant hardware authority.
-pub struct TwistSetpoint {
-    /// Sample or intent time in seconds on the shared monotonic clock.
-    pub timestamp: f64,
-    /// Requested body forward speed, m/s.
+impl From<ImuReading> for ImuSample {
+    fn from(s: ImuReading) -> Self {
+        ImuSample {
+            timestamp: s.timestamp,
+            acceleration: Vector3 {
+                x: s.acceleration_forward,
+                y: s.acceleration_left,
+                z: s.acceleration_up,
+            },
+            angular_velocity: Vector3 {
+                x: s.gyro_roll,
+                y: s.gyro_pitch,
+                z: s.gyro_yaw,
+            },
+        }
+    }
+}
+impl From<VioReading> for VioSample {
+    fn from(s: VioReading) -> Self {
+        VioSample {
+            timestamp: s.timestamp,
+            position: Vector3 {
+                x: s.position_x,
+                y: s.position_y,
+                z: s.position_z,
+            },
+            orientation: Quaternion {
+                x: s.quaternion_x,
+                y: s.quaternion_y,
+                z: s.quaternion_z,
+                w: s.quaternion_w,
+            },
+            velocity: Vector3 {
+                x: s.velocity_x,
+                y: s.velocity_y,
+                z: s.velocity_z,
+            },
+            tracked: s.tracked,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, uniffi::Record)]
+/// The phone's own joystick: `forward` and `turn` in `[-1, 1]`, positive turn
+/// is left. Full forward asks for 0.5 m/s.
+pub struct StickInput {
     pub forward: f64,
-    /// Requested body yaw rate, rad/s.
-    pub yaw_rate: f64,
+    pub turn: f64,
+    pub timestamp: f64,
+}
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, uniffi::Record)]
+/// The phone's link to the motor board, and the facts only the phone knows.
+pub struct MotorLink {
+    /// A rover Bluetooth link exists.
+    pub connected: bool,
+    /// The link is armed and accepts drive frames.
+    pub ready: bool,
+    /// The person confirmed the phone sits in its mount.
+    pub mount_confirmed: bool,
+    /// AR tracking is normal on the latest camera frame.
+    pub tracked: bool,
+    /// The rover reports a layout usable for velocity-feedback actuation.
+    pub feedback_compatible: bool,
+}
+/// What the phone is driving from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, uniffi::Enum)]
+pub enum DriveSource {
+    /// Phone sensors (ARKit / ARCore + IMU).
+    Phone,
+    /// The local simulated plant.
+    Simulation,
+    /// Bluetooth effort with no phone sensors: the debug joystick.
+    BluetoothManual,
+}
+#[derive(Clone, Debug, uniffi::Record)]
+/// Everything the phone knows this tick: the latest sample of each sensor,
+/// `None` until the first one. A sample already seen is not applied twice.
+pub struct PhoneSensors {
+    /// Control-clock time of this tick, monotonic seconds.
+    pub now: f64,
+    pub imu: Option<ImuReading>,
+    pub vio: Option<VioReading>,
+    pub gps: Option<GpsFix>,
+    pub heading: Option<HeadingFix>,
+    pub course: Option<CourseFix>,
+    pub stick: Option<StickInput>,
+    pub motors: MotorLink,
+    pub source: DriveSource,
+}
+impl From<PhoneSensors> for terra_robot::SensorData {
+    fn from(s: PhoneSensors) -> Self {
+        Self {
+            now: s.now,
+            imu: s.imu.map(Into::into),
+            vio: s.vio.map(Into::into),
+            gps: s.gps.map(Into::into),
+            heading: s.heading.map(Into::into),
+            course: s.course.map(Into::into),
+            stick: s.stick.map(|x| terra_robot::Stick {
+                forward: x.forward,
+                turn: x.turn,
+                t: x.timestamp,
+            }),
+            motors: terra_robot::MotorLink {
+                connected: s.motors.connected,
+                ready: s.motors.ready,
+                mount_confirmed: s.motors.mount_confirmed,
+                tracked: s.motors.tracked,
+                feedback_compatible: s.motors.feedback_compatible,
+            },
+            source: match s.source {
+                DriveSource::Phone => terra_robot::DriveSource::Phone,
+                DriveSource::Simulation => terra_robot::DriveSource::Simulation,
+                DriveSource::BluetoothManual => terra_robot::DriveSource::BluetoothManual,
+            },
+        }
+    }
 }
 #[derive(Clone, Copy, Debug, PartialEq, uniffi::Enum)]
-/// Reason the velocity loop is active or returns stopped wheel efforts.
+/// Why the velocity loop returns stopped wheel efforts, if it does.
 pub enum SafetyState {
-    /// Sensor and target checks permit active control.
     Active,
-    /// Required sensors have not initialized.
     SensorNotReady,
-    /// Visual tracking is unavailable.
     TrackingLost,
-    /// Required sensor observations exceeded their freshness limit.
     StaleSensors,
-    /// Velocity intent is unavailable or expired.
     StaleTarget,
-    /// Control timing is invalid.
     InvalidTime,
 }
+#[derive(Clone, Debug, PartialEq, uniffi::Enum)]
+/// What to do with the motor link this tick.
+pub enum MotorAction {
+    /// Send nothing; the rover's own lease keeps it safe.
+    Idle,
+    /// Write this actuator frame (`[{"id","value"}]` JSON).
+    Drive { frame_json: String },
+    /// Stop output now. `reason` is for the phone UI.
+    Stop { reason: String },
+}
+#[derive(Clone, Copy, Debug, PartialEq, uniffi::Record)]
+/// One servo target from Rust control.
+pub struct GateServo {
+    /// Actuator id in the layout.
+    pub id: u8,
+    /// Normalized position, already clipped to the servo's limits.
+    pub position: f64,
+}
 #[derive(Clone, Debug, uniffi::Record)]
-/// One control tick: normalized wheel efforts, velocities, and safety reason.
-pub struct ControlOutput {
-    /// Normalized signed left-wheel effort.
+/// One control tick's answer and the numbers behind it for the UI.
+pub struct MotorTick {
+    pub action: MotorAction,
     pub left_effort: f64,
-    /// Normalized signed right-wheel effort.
     pub right_effort: f64,
     /// Estimated body forward speed, m/s.
     pub estimated_forward: f64,
     /// Estimated body yaw rate, rad/s.
     pub estimated_yaw_rate: f64,
-    /// Selected and limited body forward target, m/s.
     pub target_forward: f64,
-    /// Selected and limited body yaw target, rad/s.
     pub target_yaw_rate: f64,
-    /// Active-loop or stopped-loop state for this tick.
     pub safety: SafetyState,
-    /// Efforts routed through the layout from [`MobileController::set_actuator_layout`],
-    /// as `[{"id","value"}]` JSON. `None` without a valid layout or when routing fails.
-    pub actuator_frame: Option<String>,
-    /// Dump-gate servo position chosen by the bucket dock this tick, when the
-    /// rover profile names a gate servo. Already in `actuator_frame`; a host
-    /// that routes servos itself applies it as that servo's target. `None`
-    /// when the actuator layout refuses that servo.
+    /// Dump-gate servo position chosen by the bucket dock, already in the frame.
     pub gate_servo: Option<GateServo>,
+}
+impl From<terra_robot::MotorCommand> for MotorTick {
+    fn from(c: terra_robot::MotorCommand) -> Self {
+        let m = c.motor;
+        Self {
+            action: match c.action {
+                terra_robot::MotorAction::Idle => MotorAction::Idle,
+                terra_robot::MotorAction::Drive { frame_json } => MotorAction::Drive { frame_json },
+                terra_robot::MotorAction::Stop { reason } => MotorAction::Stop { reason },
+            },
+            left_effort: m.left,
+            right_effort: m.right,
+            estimated_forward: m.estimated_forward,
+            estimated_yaw_rate: m.estimated_yaw_rate,
+            target_forward: m.target_forward,
+            target_yaw_rate: m.target_yaw_rate,
+            safety: match m.stop_reason {
+                StopReason::None => SafetyState::Active,
+                StopReason::SensorNotReady => SafetyState::SensorNotReady,
+                StopReason::TrackingLost => SafetyState::TrackingLost,
+                StopReason::StaleSensors => SafetyState::StaleSensors,
+                StopReason::StaleTarget => SafetyState::StaleTarget,
+                StopReason::InvalidTime => SafetyState::InvalidTime,
+            },
+            gate_servo: c.gate_servo.map(|(id, position)| GateServo { id, position }),
+        }
+    }
 }
 #[derive(Clone, Copy, Debug, PartialEq, uniffi::Record)]
 /// The dump gate as the person set it on the phone.
@@ -269,36 +395,6 @@ pub struct DumpGate {
     /// Normalized positions, -1..=1.
     pub open_position: f64,
     pub closed_position: f64,
-}
-#[derive(Clone, Copy, Debug, PartialEq, uniffi::Record)]
-/// One servo target from Rust control.
-pub struct GateServo {
-    /// Actuator id in the layout.
-    pub id: u8,
-    /// Normalized position, already clipped to the servo's limits by the layout.
-    pub position: f64,
-}
-impl From<MotorOutput> for ControlOutput {
-    fn from(value: MotorOutput) -> Self {
-        Self {
-            left_effort: value.left,
-            right_effort: value.right,
-            estimated_forward: value.estimated_forward,
-            estimated_yaw_rate: value.estimated_yaw_rate,
-            target_forward: value.target_forward,
-            target_yaw_rate: value.target_yaw_rate,
-            safety: match value.stop_reason {
-                StopReason::None => SafetyState::Active,
-                StopReason::SensorNotReady => SafetyState::SensorNotReady,
-                StopReason::TrackingLost => SafetyState::TrackingLost,
-                StopReason::StaleSensors => SafetyState::StaleSensors,
-                StopReason::StaleTarget => SafetyState::StaleTarget,
-                StopReason::InvalidTime => SafetyState::InvalidTime,
-            },
-            actuator_frame: None,
-            gate_servo: None,
-        }
-    }
 }
 #[derive(Debug, thiserror::Error, uniffi::Error)]
 /// Failure reported through UniFFI by validation or shared-state access.
@@ -320,580 +416,123 @@ impl From<InputError> for ControllerError {
         }
     }
 }
-struct Brain {
-    runtime: terra_robot::Runtime,
-    recorder: Option<terra_experiment::RunRecorder>,
-    map_gate: publication::MapGate,
-    dashboard: Option<terra_transport::ControlPlane>,
-    /// Running point capture, if the dashboard asked for one.
-    capture: Option<capture::Capture>,
-    last_tick: f64,
-    actuators: Option<actuators::ActiveLayout>,
-    /// Object-map revision and body for the `objects` topic.
-    objects_published: Option<(u64, String)>,
-    /// Why the layout last refused the dock's gate servo target, journaled once.
-    gate_rejected: Option<String>,
-}
-impl std::ops::Deref for Brain {
-    type Target = terra_robot::Runtime;
-    fn deref(&self) -> &Self::Target {
-        &self.runtime
-    }
-}
-impl Brain {
-    /// An attached, working fleet link owns velocity intent; local sticks
-    /// and targets must not overwrite it.
-    fn fleet_owns_intent(&self) -> bool {
-        self.dashboard.as_ref().is_some_and(|d| !d.failed())
-    }
-    /// No recorder, or one that has not failed.
-    fn recording_healthy(&self) -> bool {
-        self.recorder.as_ref().is_none_or(|r| !r.failed())
-    }
-}
-fn fleet_owns_intent() -> ControllerError {
-    ControllerError::InvalidInput {
-        message: "fleet connection owns velocity intent".into(),
-    }
-}
-impl From<terra_robot::RuntimeError> for ControllerError {
-    fn from(e: terra_robot::RuntimeError) -> Self {
+impl From<terra_robot::RobotError> for ControllerError {
+    fn from(e: terra_robot::RobotError) -> Self {
         Self::InvalidInput {
             message: e.to_string(),
         }
     }
 }
-/// Controller state plus the sensor samples waiting to be applied to it.
-///
-/// Sensor pushes only touch the inbox, so they never wait for a running tick.
-/// [`Self::lock`] applies every queued sample, in timestamp order, before it
-/// hands out the state, so each method sees all samples pushed before the call.
-struct BrainCell {
-    state: Mutex<Brain>,
-    inbox: inbox::SensorInbox,
-}
-impl BrainCell {
-    fn new(brain: Brain) -> Self {
-        Self {
-            state: Mutex::new(brain),
-            inbox: Default::default(),
-        }
-    }
-    fn lock(&self) -> std::sync::LockResult<std::sync::MutexGuard<'_, Brain>> {
-        let mut brain = self.state.lock()?;
-        for sample in self.inbox.drain() {
-            if let Err(error) = apply_sample(&mut brain, sample) {
-                self.inbox.reject(error.to_string());
-            }
-        }
-        // The recorder fails on its own thread; admission and the next tick
-        // must already see it.
-        let recording = brain.recording_healthy();
-        brain.runtime.set_recording_healthy(recording);
-        Ok(brain)
-    }
-    /// Lock without waiting and without applying queued samples. Only for reads
-    /// that do not depend on sensor data.
-    fn try_lock(&self) -> std::sync::TryLockResult<std::sync::MutexGuard<'_, Brain>> {
-        self.state.try_lock()
+pub(crate) fn invalid(message: impl Into<String>) -> ControllerError {
+    ControllerError::InvalidInput {
+        message: message.into(),
     }
 }
 #[derive(uniffi::Object)]
-/// Shared sensor estimator, autonomy arbiter, and velocity controller.
-/// Methods serialize state access with a mutex. Supply timestamped sensors,
-/// submit intent, and call [`Self::step`] on the same monotonic clock.
-/// Returned efforts still require an independently armed hardware adapter.
+/// The robot behind a mutex, plus the video-signaling and MCP state that
+/// never touch motion.
 pub struct MobileController {
-    brain: BrainCell,
+    robot: Mutex<Robot>,
+    diagnostics: Arc<terra_robot::diagnostics::Diagnostics>,
     /// Video signaling only. It cannot arm the rover or change the velocity target.
     fpv: Mutex<fpv_signaling::SignalingSession>,
-    observation: observability::ObservationState,
     /// MCP sessions, the camera frame for `look`, and the on-phone agent's conversation.
     mcp: Mutex<mcp::McpState>,
+}
+impl MobileController {
+    pub(crate) fn robot(&self) -> Result<std::sync::MutexGuard<'_, Robot>, ControllerError> {
+        self.robot.lock().map_err(|_| ControllerError::Internal)
+    }
 }
 #[uniffi::export]
 impl MobileController {
     #[uniffi::constructor]
-    /// Construct an idle controller with validated estimator and control settings.
-    ///
-    /// # Errors
-    /// Returns `InvalidInput` for nonfinite or out-of-range gains, limits, or
-    /// freshness settings. No network or hardware connection is opened.
+    /// An idle controller with validated estimator and control settings.
+    /// Opens no network or hardware connection.
     pub fn new(settings: ControlSettings) -> Result<Arc<Self>, ControllerError> {
+        let robot = Robot::new(
+            terra_robot::CoreConfig {
+                estimator: settings.estimator(),
+                controller: settings.controller(),
+                ..Default::default()
+            },
+            format!(
+                "phone-{}",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_nanos()
+            ),
+        )?;
         Ok(Arc::new(Self {
+            diagnostics: robot.diagnostics(),
+            robot: Mutex::new(robot),
             fpv: Mutex::new(fpv_signaling::SignalingSession::phone()),
-            observation: Default::default(),
             mcp: Default::default(),
-            brain: BrainCell::new(Brain {
-                runtime: terra_robot::Runtime::new(
-                    terra_robot::RuntimeConfig {
-                        estimator: settings.estimator(),
-                        controller: settings.controller(),
-                        ..Default::default()
-                    },
-                    format!(
-                        "phone-{}",
-                        std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .as_nanos()
-                    ),
-                )?,
-                recorder: None,
-                map_gate: Default::default(),
-                dashboard: None,
-                capture: None,
-                last_tick: 0.,
-                actuators: None,
-                objects_published: None,
-                gate_rejected: None,
-            }),
         }))
     }
-    /// Queue one body-frame IMU reading for the next [`Self::step`]. Safe to call
-    /// from any thread; it never waits for a running tick. The sample is validated
-    /// when it is applied; a rejected sample is dropped and counted (see
-    /// [`Self::sensor_queue_stats`]).
-    ///
-    /// # Errors
-    /// Returns `InvalidInput` for a nonfinite timestamp and `Internal` if the
-    /// queue cannot be locked.
-    pub fn push_imu(&self, sample: ImuReading) -> Result<(), ControllerError> {
-        self.brain.inbox.push(inbox::Sample::Imu(sample))
+    /// One control tick: the only call that moves the rover. Send the
+    /// returned action to the motor board.
+    pub fn update(&self, sensors: PhoneSensors) -> Result<MotorTick, ControllerError> {
+        Ok(self.robot()?.update(&sensors.into())?.into())
     }
-    /// Queue one VIO reading for the next [`Self::step`]; when tracked it updates the
-    /// planar world pose as it is applied. Never waits for a running tick.
-    /// The tracked quaternion is normalized before extracting heading. A
-    /// reading the estimator rejects when applied sets no pose and is dropped
-    /// and counted (see [`Self::sensor_queue_stats`]).
-    ///
-    /// # Errors
-    /// Returns `InvalidInput` for a nonfinite timestamp and `Internal` if the
-    /// queue cannot be locked.
-    pub fn push_vio(&self, sample: VioReading) -> Result<(), ControllerError> {
-        self.brain.inbox.push(inbox::Sample::Vio(sample))
-    }
-    /// Select the same actuation profile used by simulator adapters.
+    /// Velocity feedback (true) or direct effort for operator levels.
     pub fn set_actuation_mode(&self, feedback: bool) -> Result<(), ControllerError> {
-        let mut b = self.brain.lock().map_err(|_| ControllerError::Internal)?;
-        let at = b.last_tick;
-        b.runtime.ingest(terra_robot::RuntimeEvent::Mode {
-            mode: if feedback {
-                terra_robot::ActuationMode::VelocityFeedback
-            } else {
-                terra_robot::ActuationMode::DirectEffort
-            },
-            received_at: at,
-        })?;
-        Ok(())
+        Ok(self.robot()?.set_actuation_mode(feedback)?)
     }
-    /// Replace the rover drive profiles used to route each tick's efforts into
-    /// [`ControlOutput::actuator_frame`]. Servo targets reset to their safe values.
-    /// An empty string clears the layout.
-    ///
-    /// # Errors
-    /// Returns `InvalidInput` for malformed or invalid profiles; the layout is
-    /// cleared so no frame is produced from stale profiles.
+    /// Replace the rover drive profiles that turn efforts into frames; an
+    /// empty string clears them.
     pub fn set_actuator_layout(&self, profiles_json: String) -> Result<(), ControllerError> {
-        let mut b = self.brain.lock().map_err(|_| ControllerError::Internal)?;
-        b.actuators = None;
-        if profiles_json.is_empty() {
-            return Ok(());
-        }
-        b.actuators = Some(actuators::ActiveLayout::parse(&profiles_json).map_err(|e| {
-            ControllerError::InvalidInput {
-                message: e.to_string(),
-            }
-        })?);
-        Ok(())
+        Ok(self.robot()?.set_actuator_layout(&profiles_json)?)
     }
     /// Set a normalized servo target, clipped to that servo's limits.
-    ///
-    /// # Errors
-    /// Returns `InvalidInput` without a layout, for an unknown or non-servo ID,
-    /// or for a nonfinite value.
     pub fn set_servo_target(&self, id: u8, value: f64) -> Result<(), ControllerError> {
-        let mut b = self.brain.lock().map_err(|_| ControllerError::Internal)?;
-        let layout = b.actuators.as_mut().ok_or(ControllerError::InvalidInput {
-            message: "no actuator layout".into(),
-        })?;
-        layout
-            .set_servo(id, value)
-            .map_err(|e| ControllerError::InvalidInput {
-                message: e.to_string(),
-            })
+        Ok(self.robot()?.set_servo_target(id, value)?)
     }
-    /// Dump-gate servo and its open and closed positions, set by the person on
-    /// the phone. They replace the rover profile's gate and survive profile
-    /// changes; `None` returns to the profile's. Local and trusted.
-    ///
-    /// # Errors
-    /// Returns `InvalidInput` for positions outside -1..=1 or equal.
+    /// Whether the current actuator layout has differential drive routes (L2–L5 need them).
+    pub fn layout_supports_vio_control(&self) -> bool {
+        self.robot()
+            .is_ok_and(|r| r.layout_supports_vio_control())
+    }
+    /// First motor stop cause since [`Self::clear_stop_reason`].
+    pub fn stop_reason(&self) -> Option<String> {
+        self.robot().ok()?.stop_reason().map(str::to_owned)
+    }
+    pub fn clear_stop_reason(&self) {
+        if let Ok(mut r) = self.robot() {
+            r.clear_stop_reason();
+        }
+    }
+    /// Dump-gate servo and its positions as the person set them; `None`
+    /// returns to the rover profile's.
     pub fn set_dump_gate(&self, gate: Option<DumpGate>) -> Result<(), ControllerError> {
-        let mut b = self.brain.lock().map_err(|_| ControllerError::Internal)?;
-        b.runtime
-            .set_dock_gate(gate.map(|g| (g.servo_id, g.open_position, g.closed_position)))?;
-        Ok(())
+        Ok(self
+            .robot()?
+            .core_mut()
+            .set_dock_gate(gate.map(|g| (g.servo_id, g.open_position, g.closed_position)))?)
     }
-    /// Dump outlet ahead of the rover centre, metres. Terra's outlet sits over
-    /// the phone, so the apps pass the mount's camera forward offset. `None`
-    /// returns to the rover profile's value.
-    ///
-    /// # Errors
-    /// Returns `InvalidInput` outside 0.05..=3 m.
+    /// Dump outlet ahead of the rover centre, metres; `None` returns to the profile's.
     pub fn set_dock_outlet_ahead(&self, metres: Option<f64>) -> Result<(), ControllerError> {
-        let mut b = self.brain.lock().map_err(|_| ControllerError::Internal)?;
-        b.runtime.set_dock_outlet(metres)?;
-        Ok(())
+        Ok(self.robot()?.core_mut().set_dock_outlet(metres)?)
     }
-    /// Hold the dump gate open (`Some(true)`) or closed to try its positions,
-    /// or end the test (`None`). A running dock always controls the gate.
-    ///
-    /// # Errors
-    /// Returns `InvalidInput` while a dock runs or without a gate servo.
+    /// Hold the dump gate open or closed to try it, or end the test (`None`).
     pub fn test_dump_gate(&self, open: Option<bool>) -> Result<(), ControllerError> {
-        let mut b = self.brain.lock().map_err(|_| ControllerError::Internal)?;
-        b.runtime.test_dock_gate(open)?;
-        Ok(())
+        Ok(self.robot()?.core_mut().test_dock_gate(open)?)
     }
-    /// Drive and plan as the rover described by `profile_json`, one entry of
-    /// [`rover_profile_presets`] or an edited copy. Sets the planner footprint,
-    /// turning policy, speed limits, velocity-loop gains and wheel deadband, and
-    /// restarts the velocity loop. Local and trusted; ARGOS cannot call it.
-    ///
-    /// # Errors
-    /// Returns `InvalidInput` for malformed JSON or out-of-range values; the
-    /// current profile then stays in place.
+    /// Drive and plan as the rover in `profile_json`, one entry of
+    /// [`rover_profile_presets`] or an edited copy. Local and trusted.
     pub fn set_rover_profile(&self, profile_json: String) -> Result<(), ControllerError> {
-        let profile =
-            serde_json::from_str(&profile_json).map_err(|e| ControllerError::InvalidInput {
-                message: format!("rover profile: {e}"),
-            })?;
-        let mut b = self.brain.lock().map_err(|_| ControllerError::Internal)?;
-        b.runtime.apply_rover_profile(profile)?;
-        Ok(())
+        let profile = serde_json::from_str(&profile_json)
+            .map_err(|e| invalid(format!("rover profile: {e}")))?;
+        Ok(self.robot()?.core_mut().apply_rover_profile(profile)?)
     }
-    /// Trusted local normalized manual input; remote envelopes cannot access this ingress.
-    pub fn set_manual_input(
-        &self,
-        forward: f64,
-        turn: f64,
-        timestamp: f64,
-    ) -> Result<(), ControllerError> {
-        let mut b = self.brain.lock().map_err(|_| ControllerError::Internal)?;
-        if b.fleet_owns_intent() {
-            return Err(fleet_owns_intent());
-        }
-        b.runtime.ingest(terra_robot::RuntimeEvent::LocalManual {
-            forward,
-            turn,
-            received_at: timestamp,
-        })?;
-        Ok(())
-    }
-    /// Submit local operator intent to the autonomy arbiter.
-    /// `forward` is m/s and `yaw_rate` is rad/s, each limited in magnitude to 5
-    /// at ingress. The arbiter may further limit or decline the request.
-    ///
-    /// # Errors
-    /// Returns `InvalidInput` for nonfinite timestamps or velocities, or excessive
-    /// velocity magnitudes; returns `Internal` for a poisoned mutex.
-    pub fn set_target(&self, target: TwistSetpoint) -> Result<(), ControllerError> {
-        let mut brain = self.brain.lock().map_err(|_| ControllerError::Internal)?;
-        if brain.fleet_owns_intent() {
-            return Err(fleet_owns_intent());
-        }
-        brain
-            .runtime
-            .ingest(terra_robot::RuntimeEvent::LocalVelocity {
-                target: VelocityTarget {
-                    timestamp: target.timestamp,
-                    forward: target.forward,
-                    yaw_rate: target.yaw_rate,
-                },
-                received_at: target.timestamp,
-            })?;
-        Ok(())
-    }
-    /// Run one sensor, remote-intent, autonomy, telemetry, and motor-control tick.
-    /// `timestamp` uses the sensor monotonic seconds clock. Stale or unhealthy
-    /// inputs produce stopped efforts with a safety reason; successful submission
-    /// of an intent does not guarantee motion. Also refreshes [`Self::autonomy_status`].
-    ///
-    /// # Errors
-    /// Returns `Internal` for a poisoned mutex or propagates a rejected controller
-    /// target as `InvalidInput`. Timing and freshness stops are returned as output.
-    pub fn step(&self, timestamp: f64) -> Result<ControlOutput, ControllerError> {
-        let mut brain = self.brain.lock().map_err(|_| ControllerError::Internal)?;
-        if brain.dashboard.as_ref().is_some_and(|d| d.failed()) {
-            self.apply_dashboard_link_loss(&mut brain, timestamp);
-        }
-        let incoming = brain
-            .dashboard
-            .as_ref()
-            .filter(|d| !d.failed())
-            .map(|d| d.take_actions())
-            .unwrap_or_default();
-        brain.last_tick = timestamp;
-        capture::advance(&mut brain, timestamp);
-        for (kind, bytes, age) in incoming {
-            brain.runtime.ingest(terra_robot::RuntimeEvent::Remote {
-                kind,
-                payload: bytes,
-                received_at: timestamp - age,
-            })?;
-        }
-        let recording = brain.recording_healthy();
-        let runtime_output = brain.runtime.step(timestamp)?;
-        let start = brain.run_start().unwrap_or(timestamp);
-        let run_id = brain.run_id().to_owned();
-        for event in &runtime_output.events {
-            if let Some(recorder) = brain.recorder.as_ref() {
-                let _=recorder.record(serde_json::json!({"kind":"runtime.event","event":event,"time":timestamp-start,"source_time":timestamp,"run_id":run_id}));
-            }
-            self.observation.event(
-                "runtime",
-                event["kind"].as_str().unwrap_or("runtime.event"),
-                event.clone(),
-                &run_id,
-                timestamp,
-            );
-        }
-        let fleet_telemetry = brain
-            .dashboard
-            .is_some()
-            .then(|| (runtime_output.telemetry(), runtime_output.search_reports()));
-        let output = &runtime_output.autonomy;
-        let status = &runtime_output.status;
-        // The dock owns the gate: open only on its request, closed otherwise.
-        let mut gate = brain.runtime.gate_servo(output.gate_open);
-        if let (Some((id, position)), Some(layout)) = (gate, brain.actuators.as_mut()) {
-            let rejected = layout.set_servo(id, position).err().map(|e| e.to_string());
-            if rejected.is_some() {
-                // Not in the actuator frame, so not reported as applied.
-                gate = None;
-            }
-            if rejected != brain.gate_rejected {
-                if let Some(error) = &rejected {
-                    self.observation.event(
-                        "actuators",
-                        "actuators.gate_rejected",
-                        serde_json::json!({"servo": id, "error": error}),
-                        &run_id,
-                        timestamp,
-                    );
-                }
-                brain.gate_rejected = rejected;
-            }
-        }
-        let map = brain.map().cloned();
-        let map_publication = if brain.dashboard.is_some() {
-            map.as_ref().map(|(grid, time, sequence)| {
-                if !publication::fresh_map_sample(timestamp, *time) {
-                    return publication::Publication::Skip;
-                }
-                if !brain.map_gate.is_newer(&run_id, *sequence) {
-                    return publication::Publication::Skip;
-                }
-                if !grid.telemetry_valid(&run_id) {
-                    brain.map_gate.reject_source(run_id.clone(), *sequence);
-                    return publication::Publication::Skip;
-                }
-                let content = (
-                    run_id.clone(),
-                    grid.width,
-                    grid.height,
-                    grid.resolution,
-                    grid.origin_x,
-                    grid.origin_y,
-                    grid.occupancy.clone(),
-                );
-                brain.map_gate.observe(
-                    content,
-                    run_id.clone(),
-                    *sequence,
-                    std::time::Instant::now(),
-                    std::time::Duration::from_millis(200),
-                )
-            })
-        } else {
-            None
-        };
-        let mut map_full_rejected = false;
-        // Telemetry expires after 500 ms, so the cached body is resent every
-        // step and only re-serialized when the object map changes.
-        if let Some(rover) = brain.dashboard.as_ref().map(|d| d.rover_id())
-            && brain
-                .objects_published
-                .as_ref()
-                .is_none_or(|(revision, _)| *revision != brain.objects().revision)
-        {
-            brain.objects_published = Some((
-                brain.objects().revision,
-                brain.objects().telemetry(rover, &run_id).to_string(),
-            ));
-        }
-        if let Some(d) = brain.dashboard.as_ref() {
-            d.publish(telemetry::EXPERIMENT_STATUS,serde_json::json!({
-                "run_id": run_id,
-                "run_elapsed": timestamp-start,
-                "schema_version": 1,
-                "utc": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs_f64(),
-                "recording": recording && brain.recorder.is_some(),
-                "runtime": status["runtime"],
-            }).to_string());
-            if let Some((topics, reports)) = fleet_telemetry {
-                for (topic, body) in topics {
-                    d.publish(topic, body);
-                }
-                d.publish_batch(telemetry::SEARCH_REPORT, reports);
-            }
-            if let Some((_, objects)) = &brain.objects_published {
-                d.publish(telemetry::OBJECTS, objects.clone());
-            }
-            if let Some((grid, _, sequence)) = map.as_ref() {
-                match map_publication {
-                    Some(publication::Publication::Full) => {
-                        map_full_rejected = !d.publish_visualization(
-                            telemetry::MAP_OCCUPANCY,
-                            grid.telemetry(d.rover_id(), &run_id, *sequence).to_string(),
-                        );
-                    }
-                    Some(publication::Publication::Heartbeat(sequence)) => d.publish(
-                        telemetry::MAP_OCCUPANCY_HEARTBEAT,
-                        terra_mapping::MapSnapshot::heartbeat(d.rover_id(), &run_id, sequence)
-                            .to_string(),
-                    ),
-                    _ => {}
-                }
-            }
-        }
-        brain.map_gate.full_enqueued(!map_full_rejected);
-        for event in &output.events {
-            self.observation.event(
-                "autonomy",
-                "decision.event",
-                serde_json::to_value(event).unwrap_or_default(),
-                &run_id,
-                timestamp,
-            );
-        }
-        let estimate = brain.estimate(timestamp);
-        self.observation.tick(&brain, timestamp, &estimate, status);
-        if let Some(r) = brain.recorder.as_ref() {
-            let mut record = terra_experiment::ControlTickRecord::new(
-                &runtime_output,
-                &run_id,
-                brain.sequence(),
-                timestamp - start,
-            );
-            record.source_time = Some(timestamp);
-            let _ = r.record(record.to_value());
-        }
-        self.observation
-            .effort(&brain, timestamp, &runtime_output.motor);
-        let mut control: ControlOutput = runtime_output.motor.into();
-        control.actuator_frame = brain
-            .actuators
-            .as_ref()
-            .and_then(|layout| layout.frame(control.left_effort, control.right_effort).ok());
-        control.gate_servo = gate.map(|(id, position)| GateServo { id, position });
-        Ok(control)
-    }
-
-    /// Reset estimator, velocity loop, and autonomy; detach dashboard and close recording.
-    /// Clears pose and map while retaining configured navigation geometry.
-    ///
-    /// # Errors
-    /// Returns `Internal` for a poisoned mutex. Recorder-close errors are ignored.
+    /// Reset estimator, velocity loop and autonomy; detach the fleet link and
+    /// close the recording.
     pub fn reset(&self) -> Result<(), ControllerError> {
-        let mut brain = self.brain.lock().map_err(|_| ControllerError::Internal)?;
-        self.brain.inbox.clear();
-        brain.runtime.reset()?;
-        brain.last_tick = 0.;
-        brain.dashboard = None;
-        brain.map_gate = Default::default();
-        if let Some(mut r) = brain.recorder.take() {
-            let _ = r.close();
-        }
-        Ok(())
-    }
-    /// Queue depths and how many sensor samples were dropped or rejected.
-    pub fn sensor_queue_stats(&self) -> SensorQueueStats {
-        self.brain.inbox.stats()
+        Ok(self.robot()?.reset()?)
     }
 }
 
-/// Apply one queued sensor sample to the runtime. Called by `step` with the
-/// controller locked, in timestamp order.
-fn apply_sample(brain: &mut Brain, sample: inbox::Sample) -> Result<(), ControllerError> {
-    match sample {
-        inbox::Sample::Imu(sample) => {
-            brain.runtime.ingest(terra_robot::RuntimeEvent::Imu {
-                sample: ImuSample {
-                    timestamp: sample.timestamp,
-                    acceleration: Vector3 {
-                        x: sample.acceleration_forward,
-                        y: sample.acceleration_left,
-                        z: sample.acceleration_up,
-                    },
-                    angular_velocity: Vector3 {
-                        x: sample.gyro_roll,
-                        y: sample.gyro_pitch,
-                        z: sample.gyro_yaw,
-                    },
-                },
-                received_at: sample.timestamp,
-            })?;
-            Ok(())
-        }
-        inbox::Sample::Vio(sample) => {
-            let event = terra_robot::RuntimeEvent::Vio {
-                sample: VioSample {
-                    timestamp: sample.timestamp,
-                    position: Vector3 {
-                        x: sample.position_x,
-                        y: sample.position_y,
-                        z: sample.position_z,
-                    },
-                    orientation: Quaternion {
-                        x: sample.quaternion_x,
-                        y: sample.quaternion_y,
-                        z: sample.quaternion_z,
-                        w: sample.quaternion_w,
-                    },
-                    velocity: Vector3 {
-                        x: sample.velocity_x,
-                        y: sample.velocity_y,
-                        z: sample.velocity_z,
-                    },
-                    tracked: sample.tracked,
-                },
-                received_at: sample.timestamp,
-            };
-            brain.runtime.ingest(event)?;
-            Ok(())
-        }
-        inbox::Sample::Gps(fix, now) => {
-            Ok(brain.runtime.ingest(terra_robot::RuntimeEvent::Gps {
-                sample: fix.into(),
-                received_at: now,
-            })?)
-        }
-        inbox::Sample::Heading(fix, now) => {
-            Ok(brain.runtime.ingest(terra_robot::RuntimeEvent::Heading {
-                sample: fix.into(),
-                received_at: now,
-            })?)
-        }
-        inbox::Sample::Course(fix, now) => {
-            Ok(brain.runtime.ingest(terra_robot::RuntimeEvent::Course {
-                sample: fix.into(),
-                received_at: now,
-            })?)
-        }
-    }
-}
 #[derive(Clone, Debug, uniffi::Record)]
 /// Final velocities and absolute errors from the deterministic motor benchmark.
 pub struct BenchmarkReport {
@@ -911,44 +550,61 @@ pub struct BenchmarkReport {
 /// Deterministic 10 s motor plant experiment using the same facade as iOS.
 #[uniffi::export]
 pub fn run_velocity_benchmark() -> Result<BenchmarkReport, ControllerError> {
-    let brain = MobileController::new(default_control_settings())?;
+    let mut robot = Robot::new(
+        terra_robot::CoreConfig {
+            estimator: default_control_settings().estimator(),
+            controller: default_control_settings().controller(),
+            ..Default::default()
+        },
+        "benchmark".into(),
+    )?;
     let (mut v, mut w, mut yaw, mut ax) = (0.0, 0.0, 0.0, 0.0);
+    let mut sensors = terra_robot::SensorData {
+        source: terra_robot::DriveSource::Simulation,
+        ..Default::default()
+    };
     for tick in 0..1000 {
         let t = tick as f64 * 0.01;
-        brain.push_imu(ImuReading {
+        sensors.now = t;
+        sensors.imu = Some(ImuSample {
             timestamp: t,
-            acceleration_forward: ax,
-            acceleration_left: v * w,
-            acceleration_up: 0.0,
-            gyro_roll: 0.0,
-            gyro_pitch: 0.0,
-            gyro_yaw: w,
-        })?;
+            acceleration: Vector3 {
+                x: ax,
+                y: v * w,
+                z: 0.0,
+            },
+            angular_velocity: Vector3 { x: 0.0, y: 0.0, z: w },
+        });
         if tick % 5 == 0 {
-            brain.push_vio(VioReading {
+            sensors.vio = Some(VioSample {
                 timestamp: t,
-                position_x: 0.0,
-                position_y: 0.0,
-                position_z: 0.0,
-                quaternion_x: 0.0,
-                quaternion_y: 0.0,
-                quaternion_z: (yaw * 0.5_f64).sin(),
-                quaternion_w: (yaw * 0.5_f64).cos(),
-                velocity_x: v * yaw.cos(),
-                velocity_y: v * yaw.sin(),
-                velocity_z: 0.0,
+                position: Vector3::default(),
+                orientation: Quaternion {
+                    x: 0.0,
+                    y: 0.0,
+                    z: (yaw * 0.5_f64).sin(),
+                    w: (yaw * 0.5_f64).cos(),
+                },
+                velocity: Vector3 {
+                    x: v * yaw.cos(),
+                    y: v * yaw.sin(),
+                    z: 0.0,
+                },
                 tracked: true,
-            })?;
+            });
         }
-        brain.set_target(TwistSetpoint {
-            timestamp: t,
-            forward: if tick < 300 { 2.0 } else { 0.8 },
-            yaw_rate: 0.3,
+        robot.core_mut().ingest(terra_robot::Event::LocalVelocity {
+            target: VelocityTarget {
+                timestamp: t,
+                forward: if tick < 300 { 2.0 } else { 0.8 },
+                yaw_rate: 0.3,
+            },
+            received_at: t,
         })?;
-        let output = brain.step(t)?;
-        ax = 3.0 * (output.left_effort + output.right_effort) * 0.5 - v - 0.15;
+        let output = robot.update(&sensors)?.motor;
+        ax = 3.0 * (output.left + output.right) * 0.5 - v - 0.15;
         v += ax * 0.01;
-        w += (5.0 * (output.right_effort - output.left_effort) * 0.5 - w) * 0.01;
+        w += (5.0 * (output.right - output.left) * 0.5 - w) * 0.01;
         yaw += w * 0.01;
     }
     let forward_error = (v - 0.8).abs();
@@ -965,6 +621,19 @@ pub fn run_velocity_benchmark() -> Result<BenchmarkReport, ControllerError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    pub(crate) fn sensors(now: f64) -> PhoneSensors {
+        PhoneSensors {
+            now,
+            imu: None,
+            vio: None,
+            gps: None,
+            heading: None,
+            course: None,
+            stick: None,
+            motors: MotorLink::default(),
+            source: DriveSource::Phone,
+        }
+    }
     #[test]
     /// Runs the deterministic ten-second phone sensor/control/motor loop and checks its final-error acceptance criterion.
     fn mobile_facade_runs_the_same_sensor_and_motor_loop() {
@@ -986,8 +655,8 @@ mod tests {
         let controller = MobileController::new(default_control_settings()).unwrap();
         assert_eq!(controller.autonomy_status(), "");
         assert_eq!(controller.autonomy_brief(), "");
-        controller.step(0.0).unwrap();
-        controller.step(0.01).unwrap();
+        controller.update(sensors(0.0)).unwrap();
+        controller.update(sensors(0.01)).unwrap();
         let status: serde_json::Value =
             serde_json::from_str(&controller.autonomy_status()).unwrap();
         let keys =
@@ -1055,10 +724,6 @@ mod tests {
                 "safety"
             ]
         );
-        let typed = controller.autonomy_brief_typed();
-        assert_eq!(typed.requested_level, "teleop");
-        assert_eq!(typed.goal_state, "idle");
-        assert!(typed.pose_degraded);
     }
     #[test]
     /// A preset from `rover_profile_presets` sets the planner footprint and is
@@ -1070,7 +735,7 @@ mod tests {
         let mini = presets.iter().find(|p| p["name"] == "terra_mini").unwrap();
         assert!(controller.set_rover_profile("{}".into()).is_err());
         controller.set_rover_profile(mini.to_string()).unwrap();
-        controller.step(0.0).unwrap();
+        controller.update(sensors(0.0)).unwrap();
         let status: serde_json::Value =
             serde_json::from_str(&controller.autonomy_status()).unwrap();
         assert_eq!(status["navigation"]["profile"], "terra_mini");
@@ -1082,5 +747,3 @@ mod tests {
     }
 }
 
-#[cfg(test)]
-mod runtime_parity_tests;

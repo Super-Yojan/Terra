@@ -1,7 +1,7 @@
 //! Platform-independent control orchestration. Time and all external evidence are injected.
 //!
 //! The runtime is the only place rover state changes: hosts feed it
-//! [`RuntimeEvent`]s and intent calls, call [`Runtime::step`] at control rate,
+//! [`Event`]s and intent calls, call [`Core::step`] at control rate,
 //! and publish what the tick returns.
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -13,8 +13,19 @@ use terra_navigation::{Pose, Twist};
 use terra_state::{EstimatorConfig, VelocityEstimator};
 use terra_types::*;
 pub const SOURCE_REVISION: &str = env!("TERRA_ROBOT_REVISION");
+pub mod actuators;
+mod capture;
 mod command;
 pub mod connectivity;
+pub mod diagnostics;
+pub mod level;
+pub mod levels;
+mod link;
+mod publication;
+mod record;
+mod robot;
+pub mod safety;
+pub mod sensors;
 mod dock;
 pub mod ground;
 mod hardware;
@@ -32,31 +43,37 @@ mod task;
 pub mod tilt;
 pub use hardware::{HARDWARE_FRESHNESS_SECONDS, HardwareStatus};
 pub use sensor_hold::SENSOR_HOLD_GOAL_TIMEOUT_SECONDS;
+pub use record::{CONTROL_TICK, ControlTickRecord};
+pub use robot::{MotorAction, MotorCommand, Robot};
+pub use sensors::{DriveSource, MotorLink, SensorData, Stick};
 pub use status::Brief;
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum RuntimeError {
+pub enum RobotError {
     InvalidInput { message: String },
 }
-impl std::fmt::Display for RuntimeError {
+impl std::fmt::Display for RobotError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::InvalidInput { message } => f.write_str(message),
         }
     }
 }
-impl std::error::Error for RuntimeError {}
-impl From<InputError> for RuntimeError {
+impl std::error::Error for RobotError {}
+impl From<InputError> for RobotError {
     fn from(e: InputError) -> Self {
         invalid(&format!("{e:?}"))
     }
 }
-impl From<terra_mapping::MapError> for RuntimeError {
+impl From<terra_mapping::MapError> for RobotError {
     fn from(e: terra_mapping::MapError) -> Self {
         invalid(&format!("{e:?}"))
     }
 }
-fn invalid(s: &str) -> RuntimeError {
-    RuntimeError::InvalidInput { message: s.into() }
+fn invalid(s: &str) -> RobotError {
+    RobotError::InvalidInput { message: s.into() }
+}
+fn invalid_owned(message: String) -> RobotError {
+    RobotError::InvalidInput { message }
 }
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -66,7 +83,7 @@ pub enum ActuationMode {
     VelocityFeedback,
 }
 #[derive(Clone, Debug, Default)]
-pub struct RuntimeConfig {
+pub struct CoreConfig {
     pub estimator: EstimatorConfig,
     pub controller: ControllerConfig,
     pub navigation: navigation::Parameters,
@@ -75,7 +92,7 @@ pub struct RuntimeConfig {
     pub mode: ActuationMode,
     pub outdoor_supported: bool,
 }
-impl RuntimeConfig {
+impl CoreConfig {
     pub fn identity(&self) -> String {
         let data = format!(
             "v1:{:?}:{:?}:{:?}:{}:{}:{:?}:{}",
@@ -93,7 +110,7 @@ impl RuntimeConfig {
         format!("fnv1a64:{hash:016x}")
     }
 }
-pub enum RuntimeEvent {
+pub enum Event {
     Imu {
         sample: ImuSample,
         received_at: f64,
@@ -158,7 +175,7 @@ pub enum RuntimeEvent {
         received_at: f64,
     },
 }
-impl RuntimeEvent {
+impl Event {
     fn received_at(&self) -> f64 {
         match self {
             Self::Imu { received_at, .. }
@@ -179,7 +196,7 @@ impl RuntimeEvent {
     }
 }
 /// Reject evidence stamped after it was received.
-fn not_future(timestamp: f64, received: f64, message: &str) -> Result<(), RuntimeError> {
+fn not_future(timestamp: f64, received: f64, message: &str) -> Result<(), RobotError> {
     if timestamp > received {
         return Err(invalid(message));
     }
@@ -197,7 +214,7 @@ fn local_teleop(linear: f64, angular: f64) -> terra_autonomy::TeleopRequest {
     }
 }
 /// Forward speed, m/s, that a full local manual stick asks for.
-const MANUAL_FULL_FORWARD: f64 = 0.5;
+pub const MANUAL_FULL_FORWARD: f64 = 0.5;
 /// Largest local velocity target accepted, m/s and rad/s.
 const MAX_LOCAL_VELOCITY: f64 = 5.0;
 /// Speed cap, m/s, while the outdoor GPS source is selected.
@@ -231,10 +248,10 @@ fn arbiter_input<'a>(
         healthy,
     }
 }
-pub struct RuntimeOutput {
+pub struct CoreOutput {
     pub autonomy: ArbiterOutput,
     pub motor: MotorOutput,
-    /// This tick's status record; the same JSON as [`Runtime::status_json`].
+    /// This tick's status record; the same JSON as [`Core::status_json`].
     pub status: Value,
     /// What the wheels did this tick, for the dashboard.
     pub drive: Value,
@@ -245,15 +262,24 @@ pub struct RuntimeOutput {
     /// The `pose` telemetry body, while the pose is ready.
     pose: Option<Value>,
 }
-pub struct Runtime {
+/// Authority, safety and the planned levels' decision for one tick, before
+/// anything drives. See [`Core::plan`].
+pub struct Plan {
+    pub output: ArbiterOutput,
+    outdoor: Value,
+    clearance: Option<f64>,
+    /// How the planned levels drive this tick.
+    pub mode: ActuationMode,
+}
+pub struct Core {
     /// Authority, planning and mission state; hosts read it through
-    /// [`Runtime::autonomy`] and change it through the runtime's intents.
+    /// [`Core::autonomy`] and change it through the runtime's intents.
     autonomy: AutonomyArbiter,
     estimator: VelocityEstimator,
     controller: VelocityController,
     pose: Option<(Pose, f64)>,
     map: Option<(MapSnapshot, f64, u64)>,
-    /// Whether the host supplies maps itself (see [`RuntimeEvent::Map`]).
+    /// Whether the host supplies maps itself (see [`Event::Map`]).
     host_maps: bool,
     imu_time: Option<f64>,
     run_id: String,
@@ -276,7 +302,7 @@ pub struct Runtime {
     recording_healthy: bool,
     control_limits: (f64, f64),
     mode: ActuationMode,
-    configuration: RuntimeConfig,
+    configuration: CoreConfig,
     /// [`Self::configuration_identity`], refreshed when an input to it changes.
     identity: String,
     grid: mapping::MappingState,
@@ -303,8 +329,8 @@ pub struct Runtime {
 const DRIVE_STALL_MIN_COMMAND: f64 = 0.05;
 /// Measured forward speed, m/s, below which a pushing rover counts as stalled.
 const DRIVE_STALL_SPEED: f64 = 0.03;
-impl Runtime {
-    pub fn new(config: RuntimeConfig, run_id: String) -> Result<Self, RuntimeError> {
+impl Core {
+    pub fn new(config: CoreConfig, run_id: String) -> Result<Self, RobotError> {
         if run_id.is_empty()
             || !config.navigation.valid()
             || config.connectivity.validate().is_err()
@@ -369,7 +395,7 @@ impl Runtime {
         runtime.refresh_identity();
         Ok(runtime)
     }
-    /// Runtime identity for a recording header; each tick's status adds the
+    /// Core identity for a recording header; each tick's status adds the
     /// tilt and the effective mode.
     pub fn metadata(&self) -> Value {
         json!({"schema_version":1,"configured_mode":self.mode,"source_revision":SOURCE_REVISION,"configuration_identity":self.identity})
@@ -432,7 +458,7 @@ impl Runtime {
         self.recording_healthy = healthy;
     }
     /// Replace run authority without discarding the adapter's current sensor clock.
-    pub fn begin_run(&mut self, run_id: String) -> Result<(), RuntimeError> {
+    pub fn begin_run(&mut self, run_id: String) -> Result<(), RobotError> {
         if run_id.is_empty() {
             return Err(invalid("invalid run identity"));
         }
@@ -457,7 +483,7 @@ impl Runtime {
         Ok(())
     }
     /// Begin a fresh control session while retaining configured policy and calibration.
-    pub fn reset(&mut self) -> Result<(), RuntimeError> {
+    pub fn reset(&mut self) -> Result<(), RobotError> {
         // The session keeps its run, so published times keep their origin.
         let run_start = self.run_start;
         // `begin_run` also clears the queue, events and velocity loop.
@@ -515,7 +541,7 @@ impl Runtime {
         self.rover_id = None;
     }
     /// Geographic origin for WGS84 goals.
-    pub fn set_geo_origin(&mut self, latitude: f64, longitude: f64) -> Result<(), RuntimeError> {
+    pub fn set_geo_origin(&mut self, latitude: f64, longitude: f64) -> Result<(), RobotError> {
         if self.autonomy.set_origin(latitude, longitude) {
             Ok(())
         } else {
@@ -543,7 +569,7 @@ impl Runtime {
         &mut self,
         mut sighting: terra_autonomy::objects::ObjectSighting,
         now: f64,
-    ) -> Result<(), RuntimeError> {
+    ) -> Result<(), RobotError> {
         sighting.geo = self.pose.and_then(|(pose, t)| {
             pose_quality::fresh(now - t)
                 .then(|| self.outdoor.geolocate(now, pose, sighting.x, sighting.y))
@@ -591,7 +617,7 @@ impl Runtime {
     pub fn apply_rover_profile(
         &mut self,
         profile: rover_profile::RoverProfile,
-    ) -> Result<(), RuntimeError> {
+    ) -> Result<(), RobotError> {
         if !profile.valid() {
             return Err(invalid("invalid rover profile"));
         }
@@ -618,7 +644,7 @@ impl Runtime {
         self.grid.clone()
     }
     /// Share the host's mapper. Each tick takes its newest snapshot unless
-    /// the host supplies maps itself through [`RuntimeEvent::Map`].
+    /// the host supplies maps itself through [`Event::Map`].
     pub fn attach_mapping(&mut self, map: mapping::MappingState) {
         self.grid = map;
         self.map = None;
@@ -642,20 +668,20 @@ impl Runtime {
     fn sensors_ready(&self, now: f64) -> bool {
         pose_quality::ready(self, now) && self.recording_healthy
     }
-    pub fn ingest(&mut self, event: RuntimeEvent) -> Result<(), RuntimeError> {
+    pub fn ingest(&mut self, event: Event) -> Result<(), RobotError> {
         let received = event.received_at();
         if !received.is_finite() || received < 0.0 {
             return Err(invalid("invalid receipt timestamp"));
         }
         match event {
-            RuntimeEvent::Imu { sample, .. } => {
+            Event::Imu { sample, .. } => {
                 not_future(sample.timestamp, received, "future sensor timestamp")?;
                 self.estimator.push_imu(sample)?;
                 self.imu_time = Some(sample.timestamp);
                 self.tilt
                     .observe_gyro(sample.angular_velocity, sample.timestamp);
             }
-            RuntimeEvent::Vio { sample, .. } => {
+            Event::Vio { sample, .. } => {
                 not_future(sample.timestamp, received, "future sensor timestamp")?;
                 self.estimator.push_vio(sample)?;
                 if sample.tracked {
@@ -673,7 +699,7 @@ impl Runtime {
                     self.tilt.observe(q, sample.timestamp);
                 }
             }
-            RuntimeEvent::Map {
+            Event::Map {
                 snapshot,
                 timestamp,
                 sequence,
@@ -688,7 +714,7 @@ impl Runtime {
                     self.map = Some((snapshot, timestamp, sequence));
                 }
             }
-            RuntimeEvent::LocalManual { forward, turn, .. } => {
+            Event::LocalManual { forward, turn, .. } => {
                 if !forward.is_finite()
                     || !turn.is_finite()
                     || forward.abs() > 1.
@@ -700,7 +726,7 @@ impl Runtime {
                 self.autonomy
                     .accept_operator(local_teleop(forward * MANUAL_FULL_FORWARD, turn), received);
             }
-            RuntimeEvent::LocalVelocity { target, .. } => {
+            Event::LocalVelocity { target, .. } => {
                 if !target.timestamp.is_finite()
                     || target.timestamp < 0.0
                     || target.timestamp > received
@@ -716,7 +742,7 @@ impl Runtime {
                     target.timestamp,
                 );
             }
-            RuntimeEvent::Remote { kind, payload, .. } => {
+            Event::Remote { kind, payload, .. } => {
                 if payload.len() > requests::MAX_REQUEST_BYTES
                     || self.queue.len() >= requests::MAX_QUEUED_REQUESTS
                 {
@@ -724,14 +750,14 @@ impl Runtime {
                 }
                 self.queue.push_back((kind, payload, received));
             }
-            RuntimeEvent::Link { connected, .. } => self.link(connected),
-            RuntimeEvent::Hardware { status, .. } => {
+            Event::Link { connected, .. } => self.link(connected),
+            Event::Hardware { status, .. } => {
                 self.hardware = Some(hardware::Hardware {
                     status,
                     received_at: received,
                 })
             }
-            RuntimeEvent::Mode { mode, .. } => {
+            Event::Mode { mode, .. } => {
                 if mode != self.mode {
                     self.controller.reset();
                     self.local_manual = None;
@@ -743,23 +769,23 @@ impl Runtime {
                         .push(json!({"kind":"actuation.mode_changed","mode":mode}));
                 }
             }
-            RuntimeEvent::Gps { sample, .. } => {
+            Event::Gps { sample, .. } => {
                 self.outdoor.gps(sample, received).map_err(invalid)?
             }
-            RuntimeEvent::Heading { sample, .. } => {
+            Event::Heading { sample, .. } => {
                 self.outdoor.heading(sample, received).map_err(invalid)?
             }
-            RuntimeEvent::Course { sample, .. } => {
+            Event::Course { sample, .. } => {
                 self.outdoor.course(sample, received).map_err(invalid)?
             }
-            RuntimeEvent::Detector {
+            Event::Detector {
                 classes, version, ..
             } => {
                 self.autonomy
                     .set_detector_capability(classes, version, received)
                     .map_err(invalid)?;
             }
-            RuntimeEvent::Target { sample, .. } => {
+            Event::Target { sample, .. } => {
                 self.autonomy
                     .accept_target_observation(sample, received)
                     .map_err(invalid)?;
@@ -817,7 +843,7 @@ impl Runtime {
         estimate: VelocityEstimate,
         mode: ActuationMode,
         now: f64,
-    ) -> Result<MotorOutput, RuntimeError> {
+    ) -> Result<MotorOutput, RobotError> {
         Ok(if output.status.safety != terra_autonomy::Safety::Clear {
             self.controller.reset();
             MotorOutput::stopped(if estimate.health == Health::Ready {
@@ -869,14 +895,23 @@ impl Runtime {
             self.controller.step(estimate)
         })
     }
-    pub fn step(&mut self, now: f64) -> Result<RuntimeOutput, RuntimeError> {
+    /// One whole tick: [`Self::plan`], the planned levels' wheel efforts,
+    /// then [`Self::finish`]. [`crate::Robot::update`] runs the same three
+    /// steps with a level module choosing the wheels in between.
+    pub fn step(&mut self, now: f64) -> Result<CoreOutput, RobotError> {
+        let plan = self.plan(now)?;
+        let motor = self.track(&plan, now)?;
+        Ok(self.finish(plan, motor, now))
+    }
+    /// Apply queued requests and sensors, then run authority, safety and the
+    /// planned levels for this tick. Nothing drives yet.
+    pub fn plan(&mut self, now: f64) -> Result<Plan, RobotError> {
         if !now.is_finite() || now < 0.0 || self.last_step.is_some_and(|last| now < last) {
             return Err(invalid("invalid control time"));
         }
         self.apply_pending(now);
         self.last_step = Some(now);
         self.refresh_map();
-        let estimate = self.estimator.estimate(now);
         let outdoor_motion = outdoor::update(self, now);
         // A paused outdoor mission holds L3 motion only. L0 takeover drives
         // while the mission waits for an explicit resume.
@@ -910,7 +945,7 @@ impl Runtime {
             healthy,
         ));
         self.note_sensor_hold(&mut output, now, outdoor_motion, settling);
-        let outdoor_status = self.apply_outdoor_status(&mut output, outdoor_motion, manual, now);
+        let outdoor = self.apply_outdoor_status(&mut output, outdoor_motion, manual, now);
         let clearance = self.observed_clearance();
         if let Some(kind) = self.near_miss.update(clearance) {
             output.events.push(terra_autonomy::DecisionEvent {
@@ -923,14 +958,54 @@ impl Runtime {
         if output.reset_controller {
             self.controller.reset();
         }
-        let effective_mode = self.effective_mode(&output);
-        let motor = self.motor_output(&output, estimate, effective_mode, now)?;
+        let mode = self.effective_mode(&output);
+        Ok(Plan {
+            output,
+            outdoor,
+            clearance,
+            mode,
+        })
+    }
+    /// Wheel efforts for a planned level: the arbiter's allowed twist,
+    /// mixed or tracked by the velocity loop (see [`Plan::mode`]).
+    pub fn track(&mut self, plan: &Plan, now: f64) -> Result<MotorOutput, RobotError> {
+        let estimate = self.estimator.estimate(now);
+        self.motor_output(&plan.output, estimate, plan.mode, now)
+    }
+    /// Wheel efforts that track an operator twist with the velocity loop,
+    /// without the managed turning limits.
+    pub fn track_operator(&mut self, twist: Twist, now: f64) -> Result<MotorOutput, RobotError> {
+        let estimate = self.estimator.estimate(now);
+        if estimate.health != Health::Ready {
+            self.controller.reset();
+            return Ok(MotorOutput::stopped(StopReason::SensorNotReady));
+        }
+        self.controller.set_turning_constraint(None);
+        self.controller.set_target(VelocityTarget {
+            timestamp: now,
+            forward: twist.linear,
+            yaw_rate: twist.angular,
+        })?;
+        Ok(self.controller.step(estimate))
+    }
+    /// Stop the velocity loop, for a tick that drives without it.
+    pub fn release_velocity_loop(&mut self) {
+        self.controller.reset();
+    }
+    /// Publish this tick's status with the wheel efforts actually chosen.
+    pub fn finish(&mut self, plan: Plan, motor: MotorOutput, now: f64) -> CoreOutput {
+        let Plan {
+            output,
+            outdoor,
+            clearance,
+            mode,
+        } = plan;
         self.sequence += 1;
         let drive = self.drive_status(now, &motor);
         let mut runtime = self.metadata();
         runtime["tilt"] = self.tilt.status(now);
-        runtime["mode"] = json!(effective_mode);
-        let status = self.publish_status(&output, outdoor_status, runtime, now);
+        runtime["mode"] = json!(mode);
+        let status = self.publish_status(&output, outdoor, runtime, now);
         let mut events = std::mem::take(&mut self.events);
         events.extend(
             output
@@ -938,7 +1013,7 @@ impl Runtime {
                 .iter()
                 .map(|e| json!({"kind":"decision.event","event":e})),
         );
-        Ok(RuntimeOutput {
+        CoreOutput {
             autonomy: output,
             motor,
             status,
@@ -946,7 +1021,7 @@ impl Runtime {
             events,
             clearance,
             pose: self.pose_telemetry(now),
-        })
+        }
     }
     /// Tracked pose for the dashboard, with the tick sequence; `None` until
     /// the pose is fresh and the velocity estimate ready.

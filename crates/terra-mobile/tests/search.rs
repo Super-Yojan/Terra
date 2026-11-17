@@ -1,4 +1,6 @@
 //! Phone search capability and detector-evidence confirmation scenarios.
+mod support;
+use support::*;
 use terra_mobile::*;
 /// Feed stationary tracked IMU/VIO and a 40×40 map at `t` seconds. The map uses
 /// 0.25 m cells with a central observed free square and unknown surrounding cells.
@@ -77,7 +79,7 @@ fn mobile_search_replays_confirmation_and_exports_report() {
     let run = v["status"]["run_id"].as_str().unwrap().to_string();
     c.register_search_detector(vec!["survivor".into()], "sim-test".into(), 1.1)
         .unwrap();
-    c.autonomy_request(
+    c.request(
         "autonomy".into(),
         r#"{"level":"target_search","token":"mode"}"#.into(),
         1.1,
@@ -138,7 +140,7 @@ fn offline_search_preserves_identity_and_budget() {
     let run = root["status"]["run_id"].as_str().unwrap().to_owned();
     c.register_search_detector(vec!["survivor".into()], "offline".into(), 1.)
         .unwrap();
-    c.autonomy_request(
+    c.request(
         "autonomy".into(),
         r#"{"level":"target_search","token":"mode"}"#.into(),
         1.,
@@ -188,7 +190,7 @@ fn offline_detector_loss_still_requires_attention() {
     let run = root["status"]["run_id"].as_str().unwrap().to_owned();
     c.register_search_detector(vec!["survivor".into()], "offline".into(), 1.)
         .unwrap();
-    c.autonomy_request(
+    c.request(
         "autonomy".into(),
         r#"{"level":"target_search","token":"mode"}"#.into(),
         1.,

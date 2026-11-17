@@ -1,4 +1,6 @@
 //! Real loopback transport. No sensors, Bluetooth, or motor authority.
+mod support;
+use support::*;
 use std::time::{Duration, Instant};
 use terra_mobile::{MobileController, default_control_settings};
 use zenoh::Wait;

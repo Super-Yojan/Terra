@@ -14,8 +14,8 @@ fn pitched(degrees: f64) -> Quaternion {
     }
 }
 
-fn vio(r: &mut Runtime, t: f64, pitch: f64) {
-    r.ingest(RuntimeEvent::Vio {
+fn vio(r: &mut Core, t: f64, pitch: f64) {
+    r.ingest(Event::Vio {
         sample: VioSample {
             timestamp: t,
             position: Vector3::ZERO,
@@ -28,8 +28,8 @@ fn vio(r: &mut Runtime, t: f64, pitch: f64) {
     .unwrap();
 }
 
-fn drive(r: &mut Runtime, t: f64) -> RuntimeOutput {
-    r.ingest(RuntimeEvent::LocalManual {
+fn drive(r: &mut Core, t: f64) -> CoreOutput {
+    r.ingest(Event::LocalManual {
         forward: 0.4,
         turn: 0.,
         received_at: t,
@@ -38,11 +38,11 @@ fn drive(r: &mut Runtime, t: f64) -> RuntimeOutput {
     r.step(t).unwrap()
 }
 
-fn safety(r: &mut Runtime, action: &str, token: &str, t: f64) {
+fn safety(r: &mut Core, action: &str, token: &str, t: f64) {
     let mut v = json!({"action": action, "token": token});
     v["run_id"] = json!(r.run_id());
     v["authority_revision"] = json!(r.autonomy().authority_revision());
-    r.ingest(RuntimeEvent::Remote {
+    r.ingest(Event::Remote {
         kind: "safety".into(),
         payload: serde_json::to_vec(&v).unwrap(),
         received_at: t,
@@ -52,8 +52,8 @@ fn safety(r: &mut Runtime, action: &str, token: &str, t: f64) {
 
 #[test]
 fn manual_drive_stops_when_the_rover_tips_over_and_waits_for_reset() {
-    let mut r = Runtime::new(
-        RuntimeConfig {
+    let mut r = Core::new(
+        CoreConfig {
             mode: ActuationMode::DirectEffort,
             ..Default::default()
         },
@@ -106,8 +106,8 @@ fn manual_drive_stops_when_the_rover_tips_over_and_waits_for_reset() {
 
 #[test]
 fn a_new_run_keeps_the_tilt_hold() {
-    let mut r = Runtime::new(
-        RuntimeConfig {
+    let mut r = Core::new(
+        CoreConfig {
             mode: ActuationMode::DirectEffort,
             ..Default::default()
         },

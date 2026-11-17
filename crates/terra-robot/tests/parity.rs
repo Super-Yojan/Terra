@@ -1,7 +1,7 @@
 use terra_robot::*;
 use terra_types::{ImuSample, Quaternion, Vector3, VioSample};
-fn samples(r: &mut Runtime, now: f64) {
-    r.ingest(RuntimeEvent::Imu {
+fn samples(r: &mut Core, now: f64) {
+    r.ingest(Event::Imu {
         sample: ImuSample {
             timestamp: now,
             acceleration: Vector3::ZERO,
@@ -10,7 +10,7 @@ fn samples(r: &mut Runtime, now: f64) {
         received_at: now,
     })
     .unwrap();
-    r.ingest(RuntimeEvent::Vio {
+    r.ingest(Event::Vio {
         sample: VioSample {
             timestamp: now,
             position: Vector3::ZERO,
@@ -24,14 +24,14 @@ fn samples(r: &mut Runtime, now: f64) {
 }
 #[test]
 fn replay_is_deterministic_and_managed_spin_is_blocked() {
-    let mut phone = Runtime::new(RuntimeConfig::default(), "run-1".into()).unwrap();
-    let mut simulator = Runtime::new(RuntimeConfig::default(), "run-1".into()).unwrap();
+    let mut phone = Core::new(CoreConfig::default(), "run-1".into()).unwrap();
+    let mut simulator = Core::new(CoreConfig::default(), "run-1".into()).unwrap();
     for n in 1..=80 {
         let t = n as f64 * 0.01;
         for r in [&mut phone, &mut simulator] {
             samples(r, t);
             let payload = serde_json::json!({"linear":0.0,"angular":0.5,"run_id":"run-1","authority_revision":r.autonomy().authority_revision(),"operator_session_id":"operator","sequence":n});
-            r.ingest(RuntimeEvent::Remote {
+            r.ingest(Event::Remote {
                 kind: "teleop".into(),
                 payload: serde_json::to_vec(&payload).unwrap(),
                 received_at: t,
@@ -48,15 +48,15 @@ fn replay_is_deterministic_and_managed_spin_is_blocked() {
 }
 #[test]
 fn direct_manual_works_without_camera() {
-    let mut r = Runtime::new(
-        RuntimeConfig {
+    let mut r = Core::new(
+        CoreConfig {
             mode: ActuationMode::DirectEffort,
             ..Default::default()
         },
         "manual".into(),
     )
     .unwrap();
-    r.ingest(RuntimeEvent::LocalManual {
+    r.ingest(Event::LocalManual {
         forward: 0.4,
         turn: 0.1,
         received_at: 0.0,
@@ -68,8 +68,8 @@ fn direct_manual_works_without_camera() {
 }
 #[test]
 fn link_loss_clears_remote_input() {
-    let mut r = Runtime::new(
-        RuntimeConfig {
+    let mut r = Core::new(
+        CoreConfig {
             mode: ActuationMode::DirectEffort,
             ..Default::default()
         },
@@ -77,7 +77,7 @@ fn link_loss_clears_remote_input() {
     )
     .unwrap();
     let payload = serde_json::json!({"linear":0.2,"angular":0.0,"run_id":"link","authority_revision":r.autonomy().authority_revision(),"operator_session_id":"operator","sequence":1});
-    r.ingest(RuntimeEvent::Remote {
+    r.ingest(Event::Remote {
         kind: "teleop".into(),
         payload: serde_json::to_vec(&payload).unwrap(),
         received_at: 0.0,
@@ -88,7 +88,7 @@ fn link_loss_clears_remote_input() {
     // Still well inside the command's lease, so only the link loss stops it.
     let leased = r.step(0.01).unwrap();
     assert!(leased.motor.left > 0.0 && leased.motor.right > 0.0);
-    r.ingest(RuntimeEvent::Link {
+    r.ingest(Event::Link {
         connected: false,
         received_at: 0.02,
     })
@@ -98,8 +98,8 @@ fn link_loss_clears_remote_input() {
 }
 #[test]
 fn queued_action_is_checked_at_execution_and_future_events_are_rejected() {
-    let mut r = Runtime::new(RuntimeConfig::default(), "run-1".into()).unwrap();
-    r.ingest(RuntimeEvent::Remote {
+    let mut r = Core::new(CoreConfig::default(), "run-1".into()).unwrap();
+    r.ingest(Event::Remote {
         kind: "autonomy".into(),
         payload: br#"{"level":"waypoint","token":"old","run_id":"run-1","authority_revision":0}"#
             .to_vec(),
@@ -113,7 +113,7 @@ fn queued_action_is_checked_at_execution_and_future_events_are_rejected() {
     );
     assert!(out.events.iter().any(|e| e["kind"] == "command.rejected"));
     assert!(
-        r.ingest(RuntimeEvent::LocalManual {
+        r.ingest(Event::LocalManual {
             forward: f64::NAN,
             turn: 0.0,
             received_at: 1.0
@@ -125,15 +125,15 @@ fn queued_action_is_checked_at_execution_and_future_events_are_rejected() {
 
 #[test]
 fn direct_effort_does_not_keep_an_expired_local_command() {
-    let mut r = Runtime::new(
-        RuntimeConfig {
+    let mut r = Core::new(
+        CoreConfig {
             mode: ActuationMode::DirectEffort,
             ..Default::default()
         },
         "run".into(),
     )
     .unwrap();
-    r.ingest(RuntimeEvent::LocalManual {
+    r.ingest(Event::LocalManual {
         forward: 0.4,
         turn: 0.0,
         received_at: 0.0,
@@ -146,8 +146,8 @@ fn direct_effort_does_not_keep_an_expired_local_command() {
 }
 #[test]
 fn teleop_received_before_a_late_tick_still_drives() {
-    let mut r = Runtime::new(
-        RuntimeConfig {
+    let mut r = Core::new(
+        CoreConfig {
             mode: ActuationMode::DirectEffort,
             ..Default::default()
         },
@@ -159,7 +159,7 @@ fn teleop_received_before_a_late_tick_still_drives() {
         let t = 1. + n as f64 * 0.01;
         let payload = serde_json::json!({"linear":0.2,"angular":0.0,"run_id":"late","authority_revision":r.autonomy().authority_revision(),"operator_session_id":"operator","sequence":n});
         // Each command waited 30 ms in the inbox, three 10 ms ticks.
-        r.ingest(RuntimeEvent::Remote {
+        r.ingest(Event::Remote {
             kind: "teleop".into(),
             payload: serde_json::to_vec(&payload).unwrap(),
             received_at: t - 0.03,

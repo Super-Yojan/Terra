@@ -75,6 +75,19 @@ impl AutonomyArbiter {
     }
 
     /// Operator-selected level, even while safety holds motion.
+    /// Latest accepted operator command (local stick or fleet teleop) as a
+    /// twist, with its receipt time. The L0 level module drives from it.
+    pub fn operator_command(&self) -> Option<(Twist, f64)> {
+        self.operator.as_ref().map(|(r, t)| {
+            (
+                Twist {
+                    linear: r.linear,
+                    angular: r.angular,
+                },
+                *t,
+            )
+        })
+    }
     pub fn level(&self) -> Level {
         self.level
     }

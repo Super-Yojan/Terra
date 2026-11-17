@@ -3,8 +3,8 @@ use terra_autonomy::objects::ObjectSighting;
 use terra_robot::*;
 use terra_types::{ImuSample, Quaternion, Vector3, VioSample};
 
-fn pose_at(r: &mut Runtime, now: f64) {
-    r.ingest(RuntimeEvent::Imu {
+fn pose_at(r: &mut Core, now: f64) {
+    r.ingest(Event::Imu {
         sample: ImuSample {
             timestamp: now,
             acceleration: Vector3::ZERO,
@@ -13,7 +13,7 @@ fn pose_at(r: &mut Runtime, now: f64) {
         received_at: now,
     })
     .unwrap();
-    r.ingest(RuntimeEvent::Vio {
+    r.ingest(Event::Vio {
         sample: VioSample {
             timestamp: now,
             position: Vector3::ZERO,
@@ -26,7 +26,7 @@ fn pose_at(r: &mut Runtime, now: f64) {
     .unwrap();
 }
 
-fn sight(r: &mut Runtime, frame: u64, color: &str, now: f64) {
+fn sight(r: &mut Core, frame: u64, color: &str, now: f64) {
     r.observe_object(
         ObjectSighting {
             class: "bucket".into(),
@@ -45,7 +45,7 @@ fn sight(r: &mut Runtime, frame: u64, color: &str, now: f64) {
 
 #[test]
 fn dock_starts_only_on_a_confirmed_bucket() {
-    let mut r = Runtime::new(RuntimeConfig::default(), "run-1".into()).unwrap();
+    let mut r = Core::new(CoreConfig::default(), "run-1".into()).unwrap();
     pose_at(&mut r, 0.1);
     sight(&mut r, 1, "orange", 0.1);
     let id = r.objects().objects()[0].id;
@@ -68,7 +68,7 @@ fn dock_starts_only_on_a_confirmed_bucket() {
 
 #[test]
 fn remote_dock_needs_current_authority_but_cancel_does_not() {
-    let r = Runtime::new(RuntimeConfig::default(), "run-1".into()).unwrap();
+    let r = Core::new(CoreConfig::default(), "run-1".into()).unwrap();
     assert_eq!(
         r.remote_action(
             "dock",
@@ -85,7 +85,7 @@ fn remote_dock_needs_current_authority_but_cancel_does_not() {
 
 #[test]
 fn gate_servo_follows_the_profile() {
-    let mut r = Runtime::new(RuntimeConfig::default(), "run-1".into()).unwrap();
+    let mut r = Core::new(CoreConfig::default(), "run-1".into()).unwrap();
     assert_eq!(r.gate_servo(true), None);
     let mut profile = rover_profile::RoverProfile::terra();
     profile.dock.gate_servo = Some(8);
@@ -103,7 +103,7 @@ fn gate_servo_follows_the_profile() {
 
 #[test]
 fn phone_gate_and_outlet_survive_profile_changes() {
-    let mut r = Runtime::new(RuntimeConfig::default(), "run-1".into()).unwrap();
+    let mut r = Core::new(CoreConfig::default(), "run-1".into()).unwrap();
     assert!(r.test_dock_gate(Some(true)).is_err(), "no gate servo yet");
     assert!(r.set_dock_gate(Some((3, 0.5, 0.5))).is_err());
     assert!(r.set_dock_outlet(Some(0.01)).is_err());

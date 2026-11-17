@@ -1,6 +1,6 @@
 //! Dock outlet and gate servo: the rover profile's values with the phone's
 //! local settings on top, plus the setup-screen gate test.
-use super::{Runtime, RuntimeError, invalid, rover_profile};
+use super::{Core, RobotError, invalid, rover_profile};
 use rover_profile::{GATE_POSITION, OUTLET_AHEAD_M, within};
 
 /// Dock values set on the phone, kept across rover profile changes.
@@ -10,7 +10,7 @@ pub(crate) struct DockLocal {
     gate: Option<(u8, f64, f64)>,
 }
 
-impl Runtime {
+impl Core {
     /// The dock's gate request this tick as a servo position, when a gate
     /// servo is set: `(actuator id, normalized position)`. With no dock
     /// running, a gate test from the setup screen holds the gate where it put it.
@@ -26,7 +26,7 @@ impl Runtime {
     ///
     /// # Errors
     /// Outside 0.05..=3 m; the current value stays.
-    pub fn set_dock_outlet(&mut self, ahead: Option<f64>) -> Result<(), RuntimeError> {
+    pub fn set_dock_outlet(&mut self, ahead: Option<f64>) -> Result<(), RobotError> {
         if ahead.is_some_and(|v| !within(v, &OUTLET_AHEAD_M)) {
             return Err(invalid("dock outlet must be 0.05 to 3 m ahead"));
         }
@@ -40,7 +40,7 @@ impl Runtime {
     ///
     /// # Errors
     /// Positions outside -1..=1 or equal; the current gate stays.
-    pub fn set_dock_gate(&mut self, gate: Option<(u8, f64, f64)>) -> Result<(), RuntimeError> {
+    pub fn set_dock_gate(&mut self, gate: Option<(u8, f64, f64)>) -> Result<(), RobotError> {
         if let Some((_, open, closed)) = gate
             && !(within(open, &GATE_POSITION) && within(closed, &GATE_POSITION) && open != closed)
         {
@@ -56,7 +56,7 @@ impl Runtime {
     ///
     /// # Errors
     /// While a dock runs, or without a gate servo.
-    pub fn test_dock_gate(&mut self, open: Option<bool>) -> Result<(), RuntimeError> {
+    pub fn test_dock_gate(&mut self, open: Option<bool>) -> Result<(), RobotError> {
         if open.is_some() && self.autonomy.dock_active() {
             return Err(invalid("a dock is running"));
         }

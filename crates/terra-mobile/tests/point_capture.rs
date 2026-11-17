@@ -1,6 +1,8 @@
 //! Loopback point capture: nothing is sent until the dashboard asks, then
 //! labelled full-resolution frames arrive at the requested rate.
 //! Network scenarios require local TCP sockets and use bounded receipt waits.
+mod support;
+use support::*;
 use std::time::Duration;
 use terra_mobile::{
     MappingDepthFrame, MobileController, MobileOccupancyMap, default_control_settings,

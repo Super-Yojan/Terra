@@ -1,4 +1,6 @@
 //! The phone-facing WebRTC API does not create hardware or motion intent.
+mod support;
+use support::*;
 use terra_mobile::{MobileController, default_control_settings};
 
 #[test]

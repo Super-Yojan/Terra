@@ -26,11 +26,11 @@
 //! assert!(mission.status(3.0).complete);
 //! ```
 
+/// `kind` of a control-tick record.
+pub const CONTROL_TICK: &str = "control_tick";
 mod mission;
 mod writer;
 pub use mission::*;
 pub use writer::*;
 mod metrics;
 pub use metrics::*;
-mod record;
-pub use record::*;

@@ -21,7 +21,7 @@ impl Admission {
     }
 }
 
-pub(crate) fn evidence(b: &Runtime, now: f64) -> Evidence {
+pub(crate) fn evidence(b: &Core, now: f64) -> Evidence {
     Evidence {
         pose: b.pose.map(|p| p.0),
         pose_ready: pose_quality::ready(b, now),
@@ -35,11 +35,11 @@ pub(crate) fn evidence(b: &Runtime, now: f64) -> Evidence {
 /// A `navigation/source` or `navigation/resume` request, already admitted
 /// for size, age and authority.
 pub(crate) fn request(
-    b: &mut Runtime,
+    b: &mut Core,
     kind: &str,
     bytes: &[u8],
     now: f64,
-) -> Result<(), RuntimeError> {
+) -> Result<(), RobotError> {
     let v: serde_json::Value =
         serde_json::from_slice(bytes).map_err(|_| invalid("invalid request"))?;
     let token = v["token"]
@@ -93,7 +93,7 @@ pub(crate) fn request(
     });
     result
 }
-fn goal(b: &mut Runtime, g: &terra_waypoint::GoalCommand, now: f64, radius: f64) -> bool {
+fn goal(b: &mut Core, g: &terra_waypoint::GoalCommand, now: f64, radius: f64) -> bool {
     use terra_waypoint::GoalCommand;
     if matches!(g, GoalCommand::Cancel) {
         b.outdoor.cancel();
@@ -154,7 +154,7 @@ fn goal(b: &mut Runtime, g: &terra_waypoint::GoalCommand, now: f64, radius: f64)
     }
     true
 }
-pub(crate) fn update(b: &mut Runtime, now: f64) -> bool {
+pub(crate) fn update(b: &mut Core, now: f64) -> bool {
     if !b.outdoor.selected() {
         b.autonomy.set_outdoor_destination(None);
         return true;
@@ -190,7 +190,7 @@ pub(crate) fn update(b: &mut Runtime, now: f64) -> bool {
 /// outdoor goal carries its review (run, navigation revision and arrival
 /// radius); it is checked here and removed, with `run_id`, before the
 /// waypoint decoder.
-pub(crate) fn dispatch_goal(b: &mut Runtime, bytes: &[u8], now: f64) -> bool {
+pub(crate) fn dispatch_goal(b: &mut Core, bytes: &[u8], now: f64) -> bool {
     let Ok(mut value) = serde_json::from_slice::<serde_json::Value>(bytes) else {
         return false;
     };

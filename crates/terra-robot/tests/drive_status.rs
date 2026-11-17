@@ -3,8 +3,8 @@
 use terra_robot::*;
 use terra_types::*;
 
-fn vio(r: &mut Runtime, t: f64, speed: f64) {
-    r.ingest(RuntimeEvent::Imu {
+fn vio(r: &mut Core, t: f64, speed: f64) {
+    r.ingest(Event::Imu {
         sample: ImuSample {
             timestamp: t,
             acceleration: Vector3::ZERO,
@@ -13,7 +13,7 @@ fn vio(r: &mut Runtime, t: f64, speed: f64) {
         received_at: t,
     })
     .unwrap();
-    r.ingest(RuntimeEvent::Vio {
+    r.ingest(Event::Vio {
         sample: VioSample {
             timestamp: t,
             position: Vector3::ZERO,
@@ -30,8 +30,8 @@ fn vio(r: &mut Runtime, t: f64, speed: f64) {
     .unwrap();
 }
 
-fn drive(r: &mut Runtime, t: f64, forward: f64) -> serde_json::Value {
-    r.ingest(RuntimeEvent::LocalManual {
+fn drive(r: &mut Core, t: f64, forward: f64) -> serde_json::Value {
+    r.ingest(Event::LocalManual {
         forward,
         turn: 0.,
         received_at: t,
@@ -42,8 +42,8 @@ fn drive(r: &mut Runtime, t: f64, forward: f64) -> serde_json::Value {
 
 #[test]
 fn reports_backing_up_and_how_long_it_has_stalled() {
-    let mut r = Runtime::new(
-        RuntimeConfig {
+    let mut r = Core::new(
+        CoreConfig {
             mode: ActuationMode::DirectEffort,
             ..Default::default()
         },

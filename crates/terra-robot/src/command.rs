@@ -7,7 +7,7 @@ fn request_token(bytes: &[u8]) -> Option<String> {
     v["token"].as_str().map(str::to_owned)
 }
 
-impl Runtime {
+impl Core {
     /// Check a network request against current authority and its receipt
     /// `age`, then strip the authority envelope its decoder does not take.
     pub fn remote_action(
@@ -77,7 +77,7 @@ impl Runtime {
         }
     }
     /// Run a request from the phone's own UI, which needs no network authority.
-    pub fn local_action(&mut self, kind: &str, bytes: &[u8], now: f64) -> Result<(), RuntimeError> {
+    pub fn local_action(&mut self, kind: &str, bytes: &[u8], now: f64) -> Result<(), RobotError> {
         if !now.is_finite()
             || now < 0.0
             || bytes.len() > MAX_REQUEST_BYTES

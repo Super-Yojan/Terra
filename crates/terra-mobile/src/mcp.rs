@@ -225,7 +225,7 @@ fn waypoints(args: &Value) -> Result<Vec<RequestedWaypoint>, String> {
 
 impl MobileController {
     fn snapshot(&self) -> Snapshot {
-        let Ok(b) = self.brain.lock() else {
+        let Ok(b) = self.robot() else {
             return Snapshot {
                 phase: None,
                 drive_request: false,
@@ -234,7 +234,7 @@ impl MobileController {
                 last: None,
             };
         };
-        let status = b.runtime.autonomy().task_status(b.last_tick);
+        let status = b.core().autonomy().task_status(b.last_tick());
         Snapshot {
             phase: status.as_ref().map(|s| s.phase),
             drive_request: status.as_ref().is_some_and(|s| s.drive_request.is_some()),
@@ -296,12 +296,12 @@ impl MobileController {
         if name == "look" {
             return self.look_tool(session);
         }
-        let Ok(mut b) = self.brain.lock() else {
+        let Ok(mut b) = self.robot() else {
             return error("internal");
         };
-        let now = b.last_tick;
+        let now = b.last_tick();
         if WRITE_TOOLS.contains(&name) {
-            let Some(task_id) = b.runtime.autonomy().agent_task_id().map(str::to_owned) else {
+            let Some(task_id) = b.core().autonomy().agent_task_id().map(str::to_owned) else {
                 return error(
                     "not_in_control: ARGOS has not started a task for an MCP agent (level task, agent mcp)",
                 );
@@ -317,11 +317,11 @@ impl MobileController {
                 _ => m.controller = Some((task_id, session.to_owned())),
             }
         }
-        let pose = b.pose().map(|p| p.0).unwrap_or_default();
+        let pose = b.core().pose().map(|p| p.0).unwrap_or_default();
         let result = match name {
             "get_state" => {
-                let brief = b.brief();
-                let task = b.runtime.autonomy().task_status(now);
+                let brief = b.core().brief();
+                let task = b.core().autonomy().task_status(now);
                 Ok(text(
                     json!({
                         "pose": {"x": pose.x, "y": pose.y, "yaw_deg": pose.yaw.to_degrees()},
@@ -335,28 +335,28 @@ impl MobileController {
                     .to_string(),
                 ))
             }
-            "get_task" => Ok(match b.runtime.autonomy().task_status(now) {
+            "get_task" => Ok(match b.core().autonomy().task_status(now) {
                 Some(status) => text(serde_json::to_string(&status).unwrap_or_default()),
                 None => error("no_task: ARGOS has not started a task"),
             }),
-            "get_map" => b.runtime.agent_view(now).map(text).map_err(str::to_owned),
+            "get_map" => b.core_mut().agent_view(now).map(text).map_err(str::to_owned),
             "get_detections" => {
-                let objects = b.objects().objects().to_vec();
+                let objects = b.core().objects().objects().to_vec();
                 Ok(text(json!({"objects": objects}).to_string()))
             }
             "go_to" => waypoints(args)
                 .and_then(|w| {
-                    b.runtime
+                    b.core_mut()
                         .agent_go(&w, args["rationale"].as_str().map(str::to_owned), now)
                 })
                 .map(|o| self.outcome(o)),
             "ask_operator" => b
-                .runtime
+                .core_mut()
                 .agent_ask(args["question"].as_str().unwrap_or_default())
                 .map(|o| self.outcome(o)),
             "finish" => match args["status"].as_str() {
                 Some(s @ ("done" | "fail")) => b
-                    .runtime
+                    .core_mut()
                     .agent_finish(
                         s == "done",
                         args["rationale"].as_str().unwrap_or_default(),
@@ -366,7 +366,7 @@ impl MobileController {
                 _ => Err("status must be done or fail".into()),
             },
             "request_drive" => b
-                .runtime
+                .core_mut()
                 .agent_request_drive(
                     args["reason"].as_str().unwrap_or_default(),
                     args["seconds"].as_f64().unwrap_or(f64::NAN),
@@ -374,7 +374,7 @@ impl MobileController {
                 )
                 .map(|o| self.outcome(o)),
             "drive" => b
-                .runtime
+                .core_mut()
                 .agent_drive(
                     args["linear"].as_f64().unwrap_or(f64::NAN),
                     args["angular"].as_f64().unwrap_or(f64::NAN),
@@ -394,13 +394,13 @@ impl MobileController {
                     })
                     .unwrap_or_else(|_| "agent-stop".into());
                 let request = json!({"action": "stop", "token": token});
-                match b.runtime.local_action(
+                match b.core_mut().local_action(
                     terra_types::requests::SAFETY,
                     request.to_string().as_bytes(),
                     now,
                 ) {
                     Ok(()) => {
-                        self.observation.event(
+                        self.diagnostics.event(
                             "agent",
                             "command.dispatched",
                             json!({"topic": terra_types::requests::SAFETY, "payload": request}),
@@ -415,17 +415,19 @@ impl MobileController {
             other => Err(format!("unknown tool {other}")),
         };
         let result = result.unwrap_or_else(error);
-        if let Some(recorder) = b.recorder.as_ref() {
+        {
             // A rejected record already marks the run incomplete and counts the
             // drop; the tool call itself must not fail because logging did.
-            let _ = recorder.record(json!({
+            let start = b.core().run_start().unwrap_or(now);
+            let run_id = b.run_id().to_owned();
+            b.record(json!({
                 "kind": "task.agent_call",
                 "session": session,
                 "tool": name,
                 "arguments": args,
                 "error": result["isError"],
-                "time": now - b.run_start().unwrap_or(now),
-                "run_id": b.run_id(),
+                "time": now - start,
+                "run_id": run_id,
             }));
         }
         result
@@ -472,7 +474,7 @@ impl MobileController {
     }
 
     fn look_tool(&self, session: &str) -> Value {
-        let now = self.brain.lock().map(|b| b.last_tick).unwrap_or_default();
+        let now = self.robot().map(|b| b.last_tick()).unwrap_or_default();
         let Ok(mut m) = self.mcp.lock() else {
             return error("internal");
         };
@@ -536,10 +538,7 @@ impl MobileController {
         in_process: bool,
     ) -> Result<(), ControllerError> {
         let attached = name.is_some() && in_process;
-        self.brain
-            .lock()
-            .map_err(|_| ControllerError::Internal)?
-            .runtime
+        self.robot()?.core_mut()
             .set_task_agent(name);
         self.mcp
             .lock()
@@ -562,10 +561,10 @@ impl MobileController {
     pub fn take_agent_prompt(&self) -> Option<MobileAgentPrompt> {
         let snapshot = self.snapshot();
         let (task_id, view) = {
-            let mut b = self.brain.lock().ok()?;
-            let task_id = b.runtime.autonomy().agent_task_id()?.to_owned();
-            let now = b.last_tick;
-            let view = b.runtime.agent_view(now).ok()?;
+            let mut b = self.robot().ok()?;
+            let task_id = b.core().autonomy().agent_task_id()?.to_owned();
+            let now = b.last_tick();
+            let view = b.core_mut().agent_view(now).ok()?;
             (task_id, view)
         };
         let mut m = self.mcp.lock().ok()?;
@@ -772,10 +771,10 @@ impl MobileController {
     /// every tool call from any session. JSON.
     pub fn agent_debug_json(&self) -> String {
         let snapshot = self.snapshot();
-        let (agent_name, task) = match self.brain.lock() {
+        let (agent_name, task) = match self.robot() {
             Ok(b) => (
-                b.runtime.autonomy().task_agent().map(str::to_owned),
-                b.runtime.autonomy().task_status(b.last_tick),
+                b.core().autonomy().task_agent().map(str::to_owned),
+                b.core().autonomy().task_status(b.last_tick()),
             ),
             Err(_) => (None, None),
         };

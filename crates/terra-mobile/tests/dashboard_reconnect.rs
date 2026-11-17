@@ -1,5 +1,7 @@
 //! Loopback router-loss and explicit reconnect regression scenario.
 //! Network scenarios require local TCP sockets and use bounded receipt waits.
+mod support;
+use support::*;
 use std::time::{Duration, Instant};
 use terra_mobile::{MobileController, default_control_settings};
 use zenoh::Wait;
@@ -31,7 +33,7 @@ fn accepted_goal_does_not_resume_after_router_loss_and_explicit_reconnect() {
         .connect_dashboard(endpoint.clone(), "phone-reconnect".into(), 7)
         .unwrap();
     controller
-        .autonomy_request(
+        .request(
             "autonomy".into(),
             r#"{"level":"waypoint","token":"level"}"#.into(),
             1.,
@@ -161,13 +163,13 @@ fn automatic_loss_preserves_accepted_mission_and_pause_policy_is_latched() {
         c.connect_dashboard(endpoint.clone(), "auto-loss".into(), 0)
             .unwrap();
         fresh_local(&c, 1.);
-        c.autonomy_request(
+        c.request(
             "autonomy".into(),
             format!(r#"{{"level":"{mode}","token":"level"}}"#),
             1.,
         )
         .unwrap();
-        c.autonomy_request(
+        c.request(
             "goal".into(),
             r#"{"frame":"local","x":4,"y":0,"token":"accepted"}"#.into(),
             1.,
@@ -229,7 +231,7 @@ fn automatic_loss_preserves_accepted_mission_and_pause_policy_is_latched() {
             !c.accepted_onboard_mission(),
             "policy changes never resume a pause"
         );
-        c.autonomy_request(
+        c.request(
             "safety".into(),
             r#"{"action":"stop","token":"new-stop"}"#.into(),
             121.3,
@@ -253,13 +255,13 @@ fn automatic_loss_preserves_accepted_mission_and_pause_policy_is_latched() {
 fn router_loss_does_not_mask_local_sensor_and_estop_stops() {
     let c = MobileController::new(default_control_settings()).unwrap();
     fresh_local(&c, 1.);
-    c.autonomy_request(
+    c.request(
         "autonomy".into(),
         r#"{"level":"waypoint","token":"mode"}"#.into(),
         1.,
     )
     .unwrap();
-    c.autonomy_request(
+    c.request(
         "goal".into(),
         r#"{"frame":"local","x":4,"y":0,"token":"goal"}"#.into(),
         1.,
@@ -271,7 +273,7 @@ fn router_loss_does_not_mask_local_sensor_and_estop_stops() {
     assert_eq!((stale.left_effort, stale.right_effort), (0., 0.));
     assert_eq!(status(&c)["status"]["reason"], "sensor_unhealthy");
     fresh_local(&c, 2.1);
-    c.autonomy_request(
+    c.request(
         "safety".into(),
         r#"{"action":"stop","token":"stop"}"#.into(),
         2.1,
@@ -319,7 +321,7 @@ fn exploration_failed_transport_tick_preserves_budget_without_sensor_failure() {
     };
     observe(1.);
     c.step(1.).unwrap();
-    c.autonomy_request(
+    c.request(
         "autonomy".into(),
         r#"{"level":"explore","budget_seconds":2,"token":"explore"}"#.into(),
         1.,
@@ -353,7 +355,7 @@ fn exploration_failed_transport_tick_preserves_budget_without_sensor_failure() {
 fn sensor_hold_reports_its_cause_after_it_clears() {
     let c = MobileController::new(default_control_settings()).unwrap();
     fresh_local(&c, 1.);
-    c.autonomy_request(
+    c.request(
         "autonomy".into(),
         r#"{"level":"waypoint","token":"mode"}"#.into(),
         1.,
@@ -385,7 +387,7 @@ fn sensor_hold_reports_its_cause_after_it_clears() {
 fn autonomy_brief_is_small_and_matches_the_full_status() {
     let c = MobileController::new(default_control_settings()).unwrap();
     fresh_local(&c, 1.);
-    c.autonomy_request(
+    c.request(
         "autonomy".into(),
         r#"{"level":"waypoint","token":"mode"}"#.into(),
         1.,

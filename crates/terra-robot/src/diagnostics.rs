@@ -1,6 +1,8 @@
-//! Optional diagnostics. Never participates in control health or command admission.
-use super::*;
+//! Optional diagnostics: the on-phone journal, evidence and upload. Never
+//! participates in control health or command admission.
+use crate::Robot;
 use serde::Deserialize;
+use std::sync::{Arc, Mutex};
 use std::{path::PathBuf, sync::RwLock, time::Duration};
 use terra_observability::{EventInput, Journal, JournalConfig, RecordOutcome};
 struct Attached {
@@ -12,7 +14,7 @@ struct Attached {
     settings: terra_observability::ObservationSettings,
 }
 #[derive(Default)]
-pub(super) struct ObservationState {
+pub struct Diagnostics {
     last_router: Mutex<Option<(String, std::time::Instant)>>,
     attached: RwLock<Option<Attached>>,
     rover: RwLock<Option<String>>,
@@ -26,8 +28,8 @@ struct Config {
     #[serde(default)]
     settings: terra_observability::ObservationSettings,
 }
-impl ObservationState {
-    pub(super) fn router_connect_failed(&self, error: &terra_transport::TransportError) {
+impl Diagnostics {
+    pub fn router_connect_failed(&self, error: &terra_transport::TransportError) {
         // Classify diagnostic text locally; never store text that might contain credentials.
         let category = match error {
             terra_transport::TransportError::InvalidSettings => "invalid_settings",
@@ -54,14 +56,14 @@ impl ObservationState {
             serde_json::json!({"stage":"open_session","error_category":category}),
         );
     }
-    pub(super) fn router_event(&self, kind: &str, attributes: serde_json::Value) {
+    pub fn router_event(&self, kind: &str, attributes: serde_json::Value) {
         if let Ok(attached) = self.attached.try_read()
             && let Some(a) = attached.as_ref()
         {
             a.router_diagnostics.try_record(kind, attributes);
         }
     }
-    pub(super) fn router_status(&self, service: Option<&terra_transport::ControlPlane>) {
+    pub fn router_status(&self, service: Option<&terra_transport::ControlPlane>) {
         let details = service
             .map(|s| s.diagnostics())
             .unwrap_or_else(|| serde_json::json!({"state":"disconnected"}));
@@ -84,7 +86,7 @@ impl ObservationState {
             }
         }
     }
-    pub(super) fn event(
+    pub fn event(
         &self,
         component: &str,
         kind: &str,
@@ -107,18 +109,18 @@ impl ObservationState {
             a.journal.try_record(event);
         }
     }
-    pub(super) fn effort(&self, brain: &Brain, time: f64, output: &terra_types::MotorOutput) {
+    pub fn effort(&self, robot: &Robot, time: f64, output: &terra_types::MotorOutput) {
         let Ok(last) = self.last.try_lock() else {
             return;
         };
         if time != last.1 {
             return;
         }
-        self.event("control", "control.output", serde_json::json!({"left_effort":output.left,"right_effort":output.right,"estimated_forward":output.estimated_forward,"estimated_yaw_rate":output.estimated_yaw_rate,"target_forward":output.target_forward,"target_yaw_rate":output.target_yaw_rate,"stop_reason":format!("{:?}",output.stop_reason)}), &brain.run_id(), time);
+        self.event("control", "control.output", serde_json::json!({"left_effort":output.left,"right_effort":output.right,"estimated_forward":output.estimated_forward,"estimated_yaw_rate":output.estimated_yaw_rate,"target_forward":output.target_forward,"target_yaw_rate":output.target_yaw_rate,"stop_reason":format!("{:?}",output.stop_reason)}), robot.run_id(), time);
     }
-    pub(super) fn tick(
+    pub fn tick(
         &self,
-        brain: &Brain,
+        robot: &Robot,
         time: f64,
         estimate: &terra_types::VelocityEstimate,
         status: &serde_json::Value,
@@ -135,7 +137,7 @@ impl ObservationState {
         .to_string();
         let transition = key != last.0;
         if transition {
-            self.event("autonomy","autonomy.transition",serde_json::json!({"previous":last.0,"reason":status["status"]["reason"],"status":status,"pose_age":brain.pose().map(|p|time-p.1),"map_age":brain.map().map(|m|time-m.1),"imu_age":brain.imu_time().map(|t|time-t),"map_timeout":brain.autonomy().map_freshness_timeout(),"pose_timeout":terra_robot::pose_quality::FRESHNESS_SECONDS,"router_connected":brain.dashboard.as_ref().map(|d|!d.failed()),"recorder_failed":brain.recorder.as_ref().is_some_and(|r|r.failed())}),&brain.run_id(),time);
+            self.event("autonomy","autonomy.transition",serde_json::json!({"previous":last.0,"reason":status["status"]["reason"],"status":status,"pose_age":robot.core().pose().map(|p|time-p.1),"map_age":robot.core().map().map(|m|time-m.1),"imu_age":robot.core().imu_time().map(|t|time-t),"map_timeout":robot.core().autonomy().map_freshness_timeout(),"pose_timeout":crate::pose_quality::FRESHNESS_SECONDS,"router_connected":robot.fleet_connected_state(),"recorder_failed":robot.recorder_failed()}),robot.run_id(),time);
             last.0 = key;
         }
         let interval = self
@@ -147,30 +149,22 @@ impl ObservationState {
                 terra_observability::ObservationSettings::default().control_sample_seconds
             });
         if transition || time - last.1 >= interval {
-            self.event("control","control.summary",serde_json::json!({"state":status,"estimated_forward":estimate.forward,"estimated_yaw_rate":estimate.yaw_rate,"sensor_health":format!("{:?}",estimate.health),"pose":brain.pose().map(|p|serde_json::json!({"x":p.0.x,"y":p.0.y,"yaw":p.0.yaw})),"map_revision":brain.map().map(|m|m.2)}),&brain.run_id(),time);
+            self.event("control","control.summary",serde_json::json!({"state":status,"estimated_forward":estimate.forward,"estimated_yaw_rate":estimate.yaw_rate,"sensor_health":format!("{:?}",estimate.health),"pose":robot.core().pose().map(|p|serde_json::json!({"x":p.0.x,"y":p.0.y,"yaw":p.0.yaw})),"map_revision":robot.core().map().map(|m|m.2)}),robot.run_id(),time);
             last.1 = time;
         }
     }
 }
-#[uniffi::export]
-impl MobileController {
-    /// Open the independent local journal on an administrative/background queue.
-    pub fn start_observability(&self, config_json: String) -> Result<(), ControllerError> {
-        let config: Config =
-            serde_json::from_str(&config_json).map_err(|_| ControllerError::InvalidInput {
-                message: "invalid observability configuration".into(),
-            })?;
+impl Diagnostics {
+    /// Attach the journal, evidence store and router diagnostics described
+    /// by `config_json` (`path`, `producer_id`, `rover_id`, `settings`).
+    pub fn start(&self, config_json: &str) -> Result<(), String> {
+        let config: Config = serde_json::from_str(config_json)
+            .map_err(|_| "invalid observability configuration".to_string())?;
         if !config.settings.valid() {
-            return Err(ControllerError::InvalidInput {
-                message: "invalid observability settings".into(),
-            });
+            return Err("invalid observability settings".into());
         }
         {
-            let mut rover = self
-                .observation
-                .rover
-                .write()
-                .map_err(|_| ControllerError::Internal)?;
+            let mut rover = self.rover.write().map_err(|_| POISONED)?;
             if rover.is_none() {
                 *rover = Some(config.rover_id.clone());
             }
@@ -178,7 +172,7 @@ impl MobileController {
         let evidence_path = terra_observability::evidence_directory(&config.path);
         let router_diagnostics =
             terra_observability::DiagnosticRecorder::open(&config.path, "router")
-                .map_err(|_| ControllerError::Internal)?;
+                .map_err(|_| POISONED)?;
         let journal = Journal::open(JournalConfig {
             path: config.path.clone(),
             producer_id: config.producer_id,
@@ -186,19 +180,9 @@ impl MobileController {
             retention_seconds: config.settings.retention_seconds,
             ..Default::default()
         })
-        .map_err(|_| ControllerError::InvalidInput {
-            message: "observability storage unavailable".into(),
-        })?;
-        let mut attached = self
-            .observation
-            .attached
-            .write()
-            .map_err(|_| ControllerError::Internal)?;
-        let selected = self
-            .observation
-            .rover
-            .read()
-            .map_err(|_| ControllerError::Internal)?;
+        .map_err(|_| "observability storage unavailable".to_string())?;
+        let mut attached = self.attached.write().map_err(|_| POISONED)?;
+        let selected = self.rover.read().map_err(|_| POISONED)?;
         journal.try_record(EventInput::new(
             selected.as_deref().unwrap_or(&config.rover_id),
             "phone",
@@ -212,9 +196,7 @@ impl MobileController {
             journal.clone(),
             config.settings.attachment_max_bytes,
         )
-        .map_err(|_| ControllerError::InvalidInput {
-            message: "evidence storage unavailable".into(),
-        })?;
+        .map_err(|_| "evidence storage unavailable".to_string())?;
         *attached = Some(Attached {
             router_diagnostics,
             journal,
@@ -225,95 +207,92 @@ impl MobileController {
         });
         Ok(())
     }
-    pub fn set_observability_rover(&self, rover_id: String) {
-        // Context has no disk/network work and survives attachment startup or replacement.
-        if let Ok(mut rover) = self.observation.rover.write() {
+    /// Rover named in every event. Context has no disk or network work and
+    /// survives attachment startup or replacement.
+    pub fn set_rover(&self, rover_id: String) {
+        if let Ok(mut rover) = self.rover.write() {
             *rover = Some(rover_id);
         }
     }
-    pub fn record_observation(&self, event_json: String) -> bool {
+    /// Record one host event (JSON `EventInput`); `false` when not queued.
+    pub fn record(&self, event_json: &str) -> bool {
         if event_json.len() > terra_observability::MAX_EVENT_BYTES {
             return false;
         }
-        let Ok(event) = serde_json::from_str::<EventInput>(&event_json) else {
+        let Ok(event) = serde_json::from_str::<EventInput>(event_json) else {
             return false;
         };
-        self.observation
-            .attached
+        self.attached
             .try_read()
             .ok()
             .and_then(|a| {
-                a.as_ref()
-                    .map(|a| {
-                        if matches!(event.component.as_str(), "router" | "bluetooth" | "phone") {
-                            // Whitelist metadata; never duplicate payloads, credentials or location.
-                            let attributes: serde_json::Map<String, serde_json::Value> = event.attributes.as_object().into_iter().flatten()
-                                .filter(|(key,_)| matches!(key.as_str(), "reason"|"status"|"generation"|"mode"|"local_waypoint_retained"|"keep_bluetooth"|"error_domain"|"error_code"))
-                                .map(|(key,value)|(key.clone(),value.clone())).collect();
-                            a.router_diagnostics.try_record(&event.kind, serde_json::json!({"component":event.component,"attributes":attributes}));
-                        }
-                        a.journal.try_record(event) == RecordOutcome::Queued
-                    })
+                a.as_ref().map(|a| {
+                    if matches!(event.component.as_str(), "router" | "bluetooth" | "phone") {
+                        // Whitelist metadata; never duplicate payloads, credentials or location.
+                        let attributes: serde_json::Map<String, serde_json::Value> = event
+                            .attributes
+                            .as_object()
+                            .into_iter()
+                            .flatten()
+                            .filter(|(key, _)| {
+                                matches!(
+                                    key.as_str(),
+                                    "reason"
+                                        | "status"
+                                        | "generation"
+                                        | "mode"
+                                        | "local_waypoint_retained"
+                                        | "keep_bluetooth"
+                                        | "error_domain"
+                                        | "error_code"
+                                )
+                            })
+                            .map(|(key, value)| (key.clone(), value.clone()))
+                            .collect();
+                        a.router_diagnostics.try_record(
+                            &event.kind,
+                            serde_json::json!({"component":event.component,"attributes":attributes}),
+                        );
+                    }
+                    a.journal.try_record(event) == RecordOutcome::Queued
+                })
             })
             .unwrap_or(false)
     }
-    /// Administrative/testing barrier. Never call from a live control tick.
-    pub fn flush_observability(&self, seconds: f64) -> Result<(), ControllerError> {
+    pub fn flush(&self, seconds: f64) -> Result<(), String> {
         if !seconds.is_finite() || seconds <= 0. || seconds > 30. {
-            return Err(ControllerError::InvalidInput {
-                message: "invalid flush timeout".into(),
-            });
+            return Err("invalid flush timeout".into());
         }
-        let a = self
-            .observation
-            .attached
-            .read()
-            .map_err(|_| ControllerError::Internal)?;
+        let a = self.attached.read().map_err(|_| POISONED)?;
         if let Some(a) = a.as_ref() {
             a.evidence
                 .flush(Duration::from_secs_f64(seconds))
-                .map_err(|_| ControllerError::InvalidInput {
-                    message: "evidence flush failed".into(),
-                })?;
+                .map_err(|_| "evidence flush failed".to_string())?;
             a.journal
                 .flush(Duration::from_secs_f64(seconds))
-                .map_err(|_| ControllerError::InvalidInput {
-                    message: "observability flush failed".into(),
-                })?;
+                .map_err(|_| "observability flush failed".to_string())?;
         }
         Ok(())
     }
-}
-
-#[derive(Clone, uniffi::Record)]
-pub struct ObservationAttachment {
-    pub name: String,
-    pub data: Vec<u8>,
-    pub encoding: String,
-    pub dimensions: Vec<u32>,
-    pub units: String,
-}
-#[uniffi::export]
-impl MobileController {
-    /// Owned exposure-aligned evidence; file I/O and hashing stay on the evidence worker.
+    /// Queue one camera evidence bundle; `false` when not queued.
     pub fn record_mapping_evidence(
         &self,
-        manifest_json: String,
-        attachments: Vec<ObservationAttachment>,
+        manifest_json: &str,
+        attachments: Vec<terra_observability::AttachmentInput>,
     ) -> bool {
         if manifest_json.len() > 65536 {
             return false;
         }
-        let Ok(manifest) = serde_json::from_str::<serde_json::Value>(&manifest_json) else {
+        let Ok(manifest) = serde_json::from_str::<serde_json::Value>(manifest_json) else {
             return false;
         };
-        let Ok(attached) = self.observation.attached.try_read() else {
+        let Ok(attached) = self.attached.try_read() else {
             return false;
         };
         let Some(a) = attached.as_ref() else {
             return false;
         };
-        let Ok(rover) = self.observation.rover.try_read() else {
+        let Ok(rover) = self.rover.try_read() else {
             return false;
         };
         let mut event = EventInput::new(
@@ -330,25 +309,12 @@ impl MobileController {
         a.evidence.try_capture(terra_observability::EvidenceBundle {
             event,
             manifest,
-            attachments: attachments
-                .into_iter()
-                .map(|a| terra_observability::AttachmentInput {
-                    name: a.name,
-                    data: a.data,
-                    encoding: a.encoding,
-                    dimensions: a.dimensions,
-                    units: a.units,
-                })
-                .collect(),
+            attachments,
         }) == terra_observability::CaptureOutcome::Queued
     }
-}
-
-#[uniffi::export]
-impl MobileController {
-    pub fn observability_settings(&self) -> String {
+    /// Current settings as JSON (defaults while detached).
+    pub fn settings_json(&self) -> String {
         let settings = self
-            .observation
             .attached
             .try_read()
             .ok()
@@ -356,43 +322,15 @@ impl MobileController {
             .unwrap_or_default();
         serde_json::to_string(&settings).unwrap_or_default()
     }
-    pub fn record_observation_gap(&self, reason: String) {
-        self.observation.event(
-            "observability",
-            terra_observability::GAP_KIND,
-            serde_json::json!({"reason":reason,"time_basis":"wall_only"}),
-            &self.observation_run_id(),
-            0.,
-        );
-    }
-    /// The runtime session used by Swift diagnostics and camera evidence.
-    pub fn observation_run_id(&self) -> String {
-        self.brain
-            .try_lock()
-            .map(|b| b.run_id().to_owned())
-            .unwrap_or_default()
-    }
-    /// Configure the independent uploader. Invoke off the control queue; credentials are memory-only.
-    pub fn start_observability_upload(
-        &self,
-        endpoint: String,
-        token: String,
-    ) -> Result<(), ControllerError> {
-        let mut attached = self
-            .observation
-            .attached
-            .write()
-            .map_err(|_| ControllerError::Internal)?;
+    /// Configure the independent uploader. Invoke off the control queue;
+    /// credentials are memory-only.
+    pub fn start_upload(&self, endpoint: String, token: String) -> Result<(), String> {
+        let mut attached = self.attached.write().map_err(|_| POISONED)?;
         let Some(a) = attached.as_mut() else {
-            return Err(ControllerError::InvalidInput {
-                message: "observability not initialized".into(),
-            });
+            return Err("observability not initialized".into());
         };
-        let reader = terra_observability::JournalReader::open(&a.path).map_err(|_| {
-            ControllerError::InvalidInput {
-                message: "observability journal unavailable".into(),
-            }
-        })?;
+        let reader = terra_observability::JournalReader::open(&a.path)
+            .map_err(|_| "observability journal unavailable".to_string())?;
         a.uploader = Some(
             terra_observability::UploadHandle::start(
                 reader,
@@ -403,10 +341,10 @@ impl MobileController {
                     clock_journal: Some(a.journal.clone()),
                 },
             )
-            .map_err(|_| ControllerError::InvalidInput {
-                message: "invalid observability upload settings".into(),
-            })?,
+            .map_err(|_| "invalid observability upload settings".to_string())?,
         );
         Ok(())
     }
 }
+
+const POISONED: &str = "observability lock was poisoned";
