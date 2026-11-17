@@ -1,0 +1,11 @@
+[package]
+name = "terra-av"
+version.workspace = true
+edition.workspace = true
+description = "Modular autonomy pipeline: sensors, state estimation, perception and mapping, planning, execution."
+
+[lints.rust]
+unused_variables = "allow"
+dead_code = "allow"
+
+[dependencies]

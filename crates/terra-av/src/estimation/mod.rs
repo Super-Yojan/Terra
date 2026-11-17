@@ -1,0 +1,15 @@
+//! Stage 2, State estimation: where am I, how fast am I moving.
+mod dead_reckoning;
+mod localization;
+pub use dead_reckoning::DeadReckoning;
+pub use localization::Localization;
+
+use crate::geometry::Pose2;
+use crate::sense::SensorFrame;
+use crate::vehicle::{Twist, VehicleModel};
+
+pub struct State { pub t: f64, pub pose: Pose2, pub twist: Twist }
+
+pub trait StateEstimator {
+    fn update(&mut self, frame: &SensorFrame, vehicle: &dyn VehicleModel) -> State;
+}
