@@ -96,8 +96,6 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
     @Published var phoneMounted = false
     // Control-queue copy of `phoneMounted`, read on every motor command.
     var phoneMountConfirmed = false
-    var mountHoldReported = false
-    static let mountHoldReason = "Phone mount not confirmed · only the debug joystick can drive"
     @Published var hardwareStatus = "Disconnected"
     @Published private(set) var lastStopDiagnostic = TerraStopDiagnostic()
     @Published var capabilitiesJSON = "{}"
@@ -116,9 +114,13 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
     var bleFeedback = false
     var bleLayout = "{}"
     var servoTargets: [String: Double] = [:]
-    /// Controller and layout last handed to Rust's actuator routing (shadow mode).
+    /// Controller and layout last handed to Rust's actuator routing.
     var rustLayoutSync: (controller: ObjectIdentifier, layout: String)?
-    var lastShadowMismatchLog: TimeInterval = 0
+    /// Latest sensor samples, read by each control tick (control queue only).
+    var latestImu: ImuReading?, latestVio: VioReading?, arTracked = false
+    var latestGps: GpsFix?, latestHeading: HeadingFix?, latestCourse: CourseFix?
+    /// Last stop Rust asked for, so the board is stopped once per cause.
+    var motorStopReason: String?
     @Published var actuatorEditor = ActuatorPaginationState()
     @Published var actuatorPageLoading = false
     typealias EditorRequest = (id: UInt32, operation: String, generation: UInt64, actuator: ActuatorDraft?, actuatorID: Int?)
@@ -142,7 +144,6 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
     /// Qwen 3.5 2B as the on-phone MCP agent for L5 tasks; loads on the first phone start.
     let taskAgent = TaskAgentRunner()
     var detectorHealth = "not started"
-    var feedbackTrackingHealthy = false
     var phoneFrameOrder = PhoneFrameOrder()
     var bleReady = false
     var bleCompatible = false
@@ -317,15 +318,13 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
             self.controlQueue.async {
                 let dequeued = CACurrentMediaTime()
                 guard self.mode == .phone, self.sensorEpochMatches(epoch) else { return }
-                do {
-                    // Upright, rear-camera-forward mount, the same mapping ARKit poses use.
-                    let toBody = self.mountCalibration.deviceToBody
-                    let a = toBody.act(deviceAcceleration)
-                    let g = toBody.act(deviceRate)
-                    try self.controller?.pushImu(sample: ImuReading(timestamp: data.timestamp, accelerationForward: Double(a.x), accelerationLeft: Double(a.y), accelerationUp: Double(a.z), gyroRoll: Double(g.x), gyroPitch: Double(g.y), gyroYaw: Double(g.z)))
-                    self.timingLastImu = data.timestamp
-                    SensorTimingProbe.shared.record(.imu, sensor: data.timestamp, os: delivered, queue: dequeued, done: CACurrentMediaTime())
-                } catch { self.fail(error, context: "IMU sample at \(data.timestamp)") }
+                // Upright, rear-camera-forward mount, the same mapping ARKit poses use.
+                let toBody = self.mountCalibration.deviceToBody
+                let a = toBody.act(deviceAcceleration)
+                let g = toBody.act(deviceRate)
+                self.latestImu = ImuReading(timestamp: data.timestamp, accelerationForward: Double(a.x), accelerationLeft: Double(a.y), accelerationUp: Double(a.z), gyroRoll: Double(g.x), gyroPitch: Double(g.y), gyroYaw: Double(g.z))
+                self.timingLastImu = data.timestamp
+                SensorTimingProbe.shared.record(.imu, sensor: data.timestamp, os: delivered, queue: dequeued, done: CACurrentMediaTime())
             }
         }
         phoneTrackingActive = true
@@ -359,7 +358,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
             self.mode = .stopped
             self.isCollectingOffsetFit = false; self.offsetFitSamples.removeAll(); self.firstTurnFit = nil
             DispatchQueue.main.async { self.offsetFitInProgress = false }
-            self.bleActive = false; self.bleReady = false; self.bleFeedback = false; self.feedbackTrackingHealthy = false; self.target = (0, 0); self.servoTargets = [:]
+            self.bleActive = false; self.bleReady = false; self.bleFeedback = false; self.target = (0, 0); self.servoTargets = [:]
             self.phonePose = nil
             try? self.controller?.reset()
             self.controller = nil
@@ -411,6 +410,7 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
         self.mode = mode
         phoneStartedAt = ProcessInfo.processInfo.systemUptime
         target = (0, 0)
+        latestImu = nil; latestVio = nil; arTracked = false; latestGps = nil; latestHeading = nil; latestCourse = nil; motorStopReason = nil
         tick = 0; simulatedTime = 0
         if mode == .simulation { try plant.reset() }
         previousPosition = nil; previousPoseTime = nil; filteredVelocity = .zero
@@ -427,55 +427,32 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
         self.timer = timer
         timer.resume()
     }
+    /// One control tick: hand Rust the latest sensors, send what it returns.
+    /// Gating, the level module and actuator routing all live in `Robot::update`.
     private func update() {
-        if mode == .bluetoothManual {
-            let now = CACurrentMediaTime()
-            do {
-                if controller == nil { controller = try makeController() }
-                guard let controller else { return }
-                try controller.setActuationMode(feedback: false)
-                // Without a fleet session this is the phone's own debug joystick.
-                let localDebug = controller.dashboardStatus() != "connected"
-                if localDebug {
-                    try controller.setManualInput(forward: target.forward, turn: target.yaw, timestamp: now)
-                }
-                syncRustLayout(controller)
-                let output = try controller.step(timestamp: now)
-                applyGateServo(output.gateServo)
-                if tick % 10 == 0 { serviceManualDashboard(); updateAuthority() }
-                tick += 1
-                if tick % 5 == 0 {
-                    let command = DriveJoystickCommand(forward: (output.leftEffort + output.rightEffort) / 2, yaw: (output.rightEffort - output.leftEffort) / 2)
-                    routeHardware(left: output.leftEffort, right: output.rightEffort, now: ProcessInfo.processInfo.systemUptime, manualTarget: command, localDebug: localDebug, rustFrame: output.actuatorFrame)
-                }
-            } catch { fail(error, context: "Shared runtime manual drive") }
-            return
+        if mode == .bluetoothManual && controller == nil {
+            do { controller = try makeController() } catch { fail(error, context: "Manual drive"); return }
         }
         guard let controller, mode != .stopped else { return }
         let now = mode == .simulation ? simulatedTime : CACurrentMediaTime()
         do {
             if mode == .simulation {
                 let pose = try plant.state()
-                try controller.pushImu(sample: ImuReading(timestamp: now, accelerationForward: pose.accelerationForward, accelerationLeft: pose.forward * pose.yawRate, accelerationUp: 0, gyroRoll: 0, gyroPitch: 0, gyroYaw: pose.yawRate))
+                latestImu = ImuReading(timestamp: now, accelerationForward: pose.accelerationForward, accelerationLeft: pose.forward * pose.yawRate, accelerationUp: 0, gyroRoll: 0, gyroPitch: 0, gyroYaw: pose.yawRate)
                 if tick % 5 == 0 {
-                    try controller.pushVio(sample: VioReading(timestamp: now, positionX: pose.x, positionY: pose.y, positionZ: 0, quaternionX: pose.quaternionX, quaternionY: pose.quaternionY, quaternionZ: pose.quaternionZ, quaternionW: pose.quaternionW, velocityX: pose.velocityX, velocityY: pose.velocityY, velocityZ: 0, tracked: true))
+                    latestVio = VioReading(timestamp: now, positionX: pose.x, positionY: pose.y, positionZ: 0, quaternionX: pose.quaternionX, quaternionY: pose.quaternionY, quaternionZ: pose.quaternionZ, quaternionW: pose.quaternionW, velocityX: pose.velocityX, velocityY: pose.velocityY, velocityZ: 0, tracked: true)
                 }
             }
-            // An attached fleet owns velocity intent; idle phone input must not
-            // overwrite ARGOS teleop commands between incoming router messages.
-            if !(bleActive && controller.dashboardStatus() == "connected") {
-                // Idle phone controls must not overwrite remote operator intent every tick.
-            // A local held input has priority; its transition to neutral is still sent once.
-            if target.forward != 0 || target.yaw != 0 || target != lastLocalTarget {
-                try controller.setTarget(target: TwistSetpoint(timestamp:now,forward:target.forward,yawRate:target.yaw))
-                lastLocalTarget = target
-            }
-            }
-            let direct = bleActive && !bleFeedback
-            try controller.setActuationMode(feedback: !direct)
+            try controller.setActuationMode(feedback: mode != .bluetoothManual && !(bleActive && !bleFeedback))
             syncRustLayout(controller)
-            let output = try controller.step(timestamp: now)
+            let output = try controller.update(sensors: sensors(now: now))
             applyGateServo(output.gateServo)
+            send(output.action)
+            if mode == .bluetoothManual {
+                if tick % 10 == 0 { serviceManualDashboard(); updateAuthority() }
+                tick += 1
+                return
+            }
             if mode == .phone {
                 SensorTimingProbe.shared.record(.tick, sensor: timingLastImu, queue: now, done: CACurrentMediaTime(), a: timingLastVio, b: output.safety == .active ? 1 : 0)
             }
@@ -500,36 +477,39 @@ final class PhoneController: NSObject, ObservableObject, ARSessionDelegate, CLLo
                 simulatedTime += 0.01
             }
             tick += 1
-            let autonomy = controller.autonomyBrief()
-            let fullyManual = TerraFleetManualDrive.isFullyManual(autonomy)
-            let vioWaypoint = TerraFleetManualDrive.requiresAutonomousControl(autonomy)
-            let vioCompatible = (try? ActuatorDriveProfileSet.decode(json: bleLayout).supportsVioControl) == true
-            if bleActive && (bleFeedback || vioWaypoint) {
-                feedbackTrackingHealthy = mode == .phone && TerraFleetManualDrive.vioReady(autonomy)
-                if vioWaypoint && !vioCompatible { revokeHardwareMotion(reason: "L3 requires differential motor routes") }
-            }
-            if bleActive && fullyManual && tick % 5 == 0 {
-                // L0 has no sensor-driven motor correction. The arbiter still
-                // gates the operator command by authority, freshness and safety.
-                let command = DriveJoystickCommand(forward: (output.leftEffort + output.rightEffort) / 2, yaw: (output.rightEffort - output.leftEffort) / 2)
-                routeHardware(left: output.leftEffort, right: output.rightEffort, now: ProcessInfo.processInfo.systemUptime, manualTarget: command, rustFrame: output.actuatorFrame)
-            }
-            if bleActive && (bleFeedback || vioWaypoint) && !fullyManual {
-                if !feedbackTrackingHealthy || output.safety != .active {
-                    pauseHardwareMotion(reason: "Autonomy: \(TerraStopDiagnostic.autonomyReason(autonomy)); feedback controller safety=\(String(describing: output.safety)); time=\(now) target=(\(output.targetForward),\(output.targetYawRate)) estimated=(\(output.estimatedForward),\(output.estimatedYawRate)) effort=(\(output.leftEffort),\(output.rightEffort))")
-                }
-                if tick % 5 == 0 { routeHardware(left: output.leftEffort, right: output.rightEffort, now: ProcessInfo.processInfo.systemUptime, closedLoop: true, rustFrame: output.actuatorFrame) }
-            }
-            if bleActive && !bleFeedback && !vioWaypoint && !fullyManual && tick % 5 == 0 && controller.dashboardStatus() == "connected" {
-                let command = DriveJoystickCommand(forward: (output.leftEffort + output.rightEffort) / 2, yaw: (output.rightEffort - output.leftEffort) / 2)
-                routeHardware(left: output.leftEffort, right: output.rightEffort, now: ProcessInfo.processInfo.systemUptime, manualTarget: command, rustFrame: output.actuatorFrame)
-            }
-            if tick % 10 == 0 { publish(output);updateAuthority() }
+            if tick % 10 == 0 { publish(output); updateAuthority() }
             if tick % 10 == 0, mode == .phone { taskModel?.service(controller); taskAgent.service(controller) }
             if mode == .phone { publishLocalization(controller) }
         } catch { fail(error, context: "Control update in \(mode) at \(now)") }
     }
-    private func publish(_ output: ControlOutput) {
+    /// The latest sample of each sensor; Rust skips any it has already seen.
+    private func sensors(now: TimeInterval) -> PhoneSensors {
+        var stick: StickInput?
+        // The manual screen streams its stick. Elsewhere an idle stick is sent
+        // once on release so it never overwrites remote intent every tick.
+        if mode == .bluetoothManual || target.forward != 0 || target.yaw != 0 || target != lastLocalTarget {
+            stick = StickInput(forward: target.forward, turn: target.yaw, timestamp: now)
+            lastLocalTarget = target
+        }
+        let source: DriveSource = mode == .simulation ? .simulation : mode == .bluetoothManual ? .bluetoothManual : .phone
+        let motors = MotorLink(connected: bleActive, ready: bleReady, mountConfirmed: phoneMountConfirmed, tracked: arTracked, feedbackCompatible: bleCompatible)
+        return PhoneSensors(now: now, imu: latestImu, vio: latestVio, gps: latestGps, heading: latestHeading, course: latestCourse, stick: stick, motors: motors, source: source)
+    }
+    private func send(_ action: MotorAction) {
+        switch action {
+        case .idle: break
+        case .drive(let frameJson) where !dashboardEmergencyStop:
+            motorStopReason = nil
+            bluetooth.drive(valuesJSON: frameJson, producedAt: ProcessInfo.processInfo.systemUptime)
+        case .drive: break
+        case .stop(let reason):
+            // Rust repeats a stop every tick; stop the board once per cause.
+            guard reason != motorStopReason else { return }
+            motorStopReason = reason
+            pauseHardwareMotion(reason: reason)
+        }
+    }
+    private func publish(_ output: MotorTick) {
         DispatchQueue.main.async {
             self.measuredForward = output.estimatedForward; self.measuredYaw = output.estimatedYawRate
             self.leftEffort = output.leftEffort; self.rightEffort = output.rightEffort

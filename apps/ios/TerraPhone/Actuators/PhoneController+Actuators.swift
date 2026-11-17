@@ -79,28 +79,14 @@ extension PhoneController {
             catch { DispatchQueue.main.async { self.configurationStatus = "Rover profile rejected: \(error)" } }
         }
     }
-    /// Shadow mode: Rust routes the same efforts so its frame can be compared with Swift's.
+    /// Hand Rust the committed layout; it routes every motor frame from it.
     func syncRustLayout(_ controller: MobileController) {
         let id = ObjectIdentifier(controller)
         if let sync = rustLayoutSync, sync.controller == id, sync.layout == bleLayout { return }
         rustLayoutSync = (id, bleLayout)
-        // A pending ("{}") or invalid layout leaves Rust without one, as Swift's decode fails too.
+        // A pending ("{}") or invalid layout leaves Rust without one, so nothing drives.
         try? controller.setActuatorLayout(profilesJson: bleLayout == "{}" ? "" : bleLayout)
         for (key, value) in servoTargets { if let id = UInt8(key) { try? controller.setServoTarget(id: id, value: value) } }
-    }
-    func compareRustFrame(_ rustFrame: String?, with routed: [[String: Any]], now: TimeInterval) {
-        let rust = rustFrame.flatMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) as? [[String: Any]] }
-        func pairs(_ frame: [[String: Any]]) -> [(Int, Double)] {
-            frame.compactMap { entry in (entry["id"] as? NSNumber).flatMap { id in (entry["value"] as? NSNumber).map { (id.intValue, $0.doubleValue) } } }
-        }
-        let expected = pairs(routed)
-        let matches = rust.map { frame in
-            let actual = pairs(frame)
-            return actual.count == expected.count && zip(actual, expected).allSatisfy { $0.0 == $1.0 && abs($0.1 - $1.1) < 1e-3 }
-        } ?? false
-        guard !matches, now - lastShadowMismatchLog >= 1 else { return }
-        lastShadowMismatchLog = now
-        TerraLog.control.error("Rust actuator frame differs; swift=\(String(describing: expected), privacy: .public) rust=\(rustFrame ?? "nil", privacy: .public)")
     }
     var configurationAllowed: Bool {
         configurationBlockingReason == nil

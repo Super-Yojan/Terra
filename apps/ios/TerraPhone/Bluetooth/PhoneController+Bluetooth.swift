@@ -247,32 +247,4 @@ extension PhoneController {
     func stopHardware() {
         controlQueue.async { self.revokeHardwareMotion(reason: "output stop requested") }
     }
-    func routeHardware(left: Double, right: Double, now: TimeInterval, manualTarget: DriveJoystickCommand? = nil, closedLoop: Bool = false, localDebug: Bool = false, rustFrame: String? = nil) {
-        guard bleActive, bleReady, !dashboardEmergencyStop, !bleFeedback || bleCompatible else { return }
-        guard phoneMountConfirmed || localDebug else {
-            // Report once per hold; neutral output stays latched until the mount is confirmed.
-            if !mountHoldReported {
-                mountHoldReported = true
-                pauseHardwareMotion(reason: Self.mountHoldReason)
-            }
-            return
-        }
-        do {
-            // Resolve numeric values before erasing their types into Any. Otherwise
-            // Swift can infer feedback's neutral literal as Int inside this dictionary.
-            let forward: Double = manualTarget?.forward ?? (bleFeedback ? 0 : target.forward)
-            let turn: Double = manualTarget?.yaw ?? (bleFeedback ? 0 : target.yaw)
-            let input: [String: Any] = ["left_effort": left, "right_effort": right, "forward": forward, "turn": turn, "servo_positions": servoTargets]
-            let profile = try ActuatorDriveProfileSet.decode(json: bleLayout)
-            let routed = try closedLoop ? profile.routeClosedLoop(left: left, right: right, servos: servoTargets) : profile.route(input: input)
-            compareRustFrame(rustFrame, with: routed, now: now)
-            let values = String(decoding: try JSONSerialization.data(withJSONObject: routed), as: UTF8.self)
-            bluetooth.drive(valuesJSON: values, producedAt: now)
-        } catch {
-            let detail = "Actuator routing failed: \(error); left=\(left) right=\(right) feedback=\(bleFeedback)"
-            TerraLog.control.error("\(detail, privacy: .public)")
-            DispatchQueue.main.async { self.configurationStatus = detail }
-            revokeHardwareMotion(reason: detail)
-        }
-    }
 }

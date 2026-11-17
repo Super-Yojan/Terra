@@ -124,25 +124,16 @@ extension PhoneController {
         }
         previousPosition = tracked ? roverPosition : nil
         previousPoseTime = tracked ? frame.timestamp : nil
-        if !tracked {
-            filteredVelocity = .zero
-            if bleActive {
-                feedbackTrackingHealthy = false
-                let fullyManual = TerraFleetManualDrive.isFullyManual(controller.autonomyBrief())
-                if DriveJoystickSafety.trackingLossRequiresStop(feedback: bleFeedback || TerraFleetManualDrive.requiresVioControl(controller.autonomyBrief()), fullyManual: fullyManual) {
-                    pauseHardwareMotion(reason: localizationTrackingReason ?? "Camera tracking lost in tracking-dependent mode")
-                }
-            }
-        }
+        // Rust's safety gate stops tracking-dependent levels when this is false.
+        arTracked = tracked
+        if !tracked { filteredVelocity = .zero }
         let q = orientation.vector
         let bodyForward = orientation.act(SIMD3<Float>(1, 0, 0))
         phonePose = (Double(roverPosition.x), Double(roverPosition.y), atan2(Double(bodyForward.y), Double(bodyForward.x)))
-        do {
-            try controller.pushVio(sample: VioReading(timestamp: frame.timestamp, positionX: Double(roverPosition.x), positionY: Double(roverPosition.y), positionZ: Double(roverPosition.z), quaternionX: Double(q.x), quaternionY: Double(q.y), quaternionZ: Double(q.z), quaternionW: Double(q.w), velocityX: Double(filteredVelocity.x), velocityY: Double(filteredVelocity.y), velocityZ: Double(filteredVelocity.z), tracked: tracked && velocityReady))
-            timingLastVio = frame.timestamp; timingVioPushedAt = CACurrentMediaTime()
-            if tracked { updatePhoneGround(frame: frame, position: position, bodyUp: orientation.act(SIMD3(0, 0, 1))); updatePhoneMap(frame: frame, position: position, roverPosition: roverPosition, bodyOrientation: orientation) }
-            else { DispatchQueue.main.async { self.mapStatus = "Tracking lost · map paused" } }
-        } catch { fail(error, context: "AR frame at \(frame.timestamp)") }
+        latestVio = VioReading(timestamp: frame.timestamp, positionX: Double(roverPosition.x), positionY: Double(roverPosition.y), positionZ: Double(roverPosition.z), quaternionX: Double(q.x), quaternionY: Double(q.y), quaternionZ: Double(q.z), quaternionW: Double(q.w), velocityX: Double(filteredVelocity.x), velocityY: Double(filteredVelocity.y), velocityZ: Double(filteredVelocity.z), tracked: tracked && velocityReady)
+        timingLastVio = frame.timestamp; timingVioPushedAt = CACurrentMediaTime()
+        if tracked { updatePhoneGround(frame: frame, position: position, bodyUp: orientation.act(SIMD3(0, 0, 1))); updatePhoneMap(frame: frame, position: position, roverPosition: roverPosition, bodyOrientation: orientation) }
+        else { DispatchQueue.main.async { self.mapStatus = "Tracking lost · map paused" } }
     }
     /// Mount measurements feed the live IMU and VIO path, so saving stops the
     /// controller first. stop() queues the switch to .stopped on the serial
@@ -252,7 +243,6 @@ extension PhoneController {
     func setPhoneMounted(_ mounted: Bool) {
         controlQueue.async {
             self.phoneMountConfirmed = mounted
-            self.mountHoldReported = false
             DispatchQueue.main.async { self.phoneMounted = mounted }
         }
     }

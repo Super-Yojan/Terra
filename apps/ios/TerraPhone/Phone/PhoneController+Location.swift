@@ -56,10 +56,10 @@ extension PhoneController {
         try? controller.enableOutdoorGps()
         if let fix = locationFix, outdoorFixTime != fix.timestamp {
             outdoorFixTime = fix.timestamp
-            try? controller.pushGps(sample: GpsFix(timestamp: monotonic - (now - fix.timestamp.timeIntervalSince1970), latitude: fix.coordinate.latitude, longitude: fix.coordinate.longitude, accuracy: fix.horizontalAccuracy), now: monotonic)
+            latestGps = GpsFix(timestamp: monotonic - (now - fix.timestamp.timeIntervalSince1970), latitude: fix.coordinate.latitude, longitude: fix.coordinate.longitude, accuracy: fix.horizontalAccuracy)
             // Course is travel direction; the core pairs it with AR travel, so no mount rotation here.
             if fix.course >= 0, fix.courseAccuracy >= 0, fix.speed >= 0 {
-                try? controller.pushCourse(sample: CourseFix(timestamp: monotonic - (now - fix.timestamp.timeIntervalSince1970), course: fix.course, accuracy: fix.courseAccuracy, speed: fix.speed), now: monotonic)
+                latestCourse = CourseFix(timestamp: monotonic - (now - fix.timestamp.timeIntervalSince1970), course: fix.course, accuracy: fix.courseAccuracy, speed: fix.speed)
             }
         }
         if let heading = locationHeading, outdoorHeadingTime != heading.timestamp,
@@ -68,7 +68,7 @@ extension PhoneController {
             outdoorHeadingTime = heading.timestamp
             // Pair compass phone-right reference with that same AR axis, then rotate to rover forward.
             let corrected = PhoneMountGeometry.roverTrueHeading(compass: heading.trueHeading, roverYaw: pose.yaw, referenceYaw: reference)
-            try? controller.pushHeading(sample: HeadingFix(timestamp: monotonic - (now - heading.timestamp.timeIntervalSince1970), trueHeading: corrected, accuracy: heading.headingAccuracy), now: monotonic)
+            latestHeading = HeadingFix(timestamp: monotonic - (now - heading.timestamp.timeIntervalSince1970), trueHeading: corrected, accuracy: heading.headingAccuracy)
         }
         guard now - lastLocalizationPublish >= 1 else { return }
         lastLocalizationPublish = now

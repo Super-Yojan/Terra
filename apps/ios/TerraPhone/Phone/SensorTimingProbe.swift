@@ -16,8 +16,8 @@ import UIKit
 ///
 /// | stream     | t_sensor               | t_os                  | t_queue                | t_done              | a                        | b              |
 /// |------------|------------------------|-----------------------|------------------------|---------------------|--------------------------|----------------|
-/// | imu        | CMDeviceMotion stamp   | motion handler entry  | control block start    | after pushImu       |                          |                |
-/// | ar         | ARFrame stamp          | delegate entry        | processARFrame start   | after pushVio       | processARFrame end       | dropped frames |
+/// | imu        | CMDeviceMotion stamp   | motion handler entry  | control block start    | after sample stored |                          |                |
+/// | ar         | ARFrame stamp          | delegate entry        | processARFrame start   | after sample stored | processARFrame end       | dropped frames |
 /// | detector   | camera frame stamp     | YOLO result callback  | control block start    | after Rust pushes   | detections               |                |
 /// | gps        | CLLocation stamp       | delegate entry        | control block start    |                     | horizontal accuracy (m)  | speed (m/s)    |
 /// | heading    | CLHeading stamp        | delegate entry        | control block start    |                     | heading accuracy (deg)   |                |

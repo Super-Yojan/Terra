@@ -72,35 +72,6 @@ struct ActuatorDriveProfileSet: Codable {
         }
         return left && right
     }
-    func routeClosedLoop(left: Double, right: Double, servos: [String: Double]) throws -> [[String: Any]] {
-        guard supportsVioControl else { throw ActuatorProfileError.invalidInput("Differential motor routes required") }
-        return try route(input: ["left_effort": left, "right_effort": right,
-                                 "forward": (left + right) / 2, "turn": (right - left) / 2,
-                                 "servo_positions": servos])
-    }
-    func route(input: [String: Any]) throws -> [[String: Any]] {
-        let keys = ["left_effort", "right_effort", "forward", "turn"]
-        var values: [String: Double] = [:]
-        for key in keys {
-            guard let number = input[key] as? Double, number.isFinite, abs(number) <= 1 else { throw ActuatorProfileError.invalidInput("\(key)=\(String(describing: input[key])) must be finite and within -1...1") }
-            values[key] = number
-        }
-        let servos = input["servo_positions"] as? [String: Double] ?? [:]
-        for (id, value) in servos {
-            guard value.isFinite, abs(value) <= 1, let identifier = Int(id),
-                  actuators.contains(where: { $0.id == identifier && $0.route.type == "servo" }) else { throw ActuatorProfileError.invalidInput("servo \(id)=\(value) is invalid or missing from the current profile") }
-        }
-        return actuators.map { actuator in
-            let value: Double
-            switch actuator.route.type {
-            case "left_effort": value = values["left_effort"]!
-            case "right_effort": value = values["right_effort"]!
-            case "manual": value = actuator.route.forward_coefficient! * values["forward"]! + actuator.route.turn_coefficient! * values["turn"]!
-            default: value = servos[String(actuator.id)] ?? actuator.safeValue
-            }
-            return ["id": actuator.id, "value": min(actuator.limits.max, max(actuator.limits.min, value))]
-        }
-    }
 }
 
 /// Collects one revision of runtime descriptors before making drive data available.

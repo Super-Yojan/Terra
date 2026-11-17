@@ -15,18 +15,6 @@ import Foundation
         precondition(fixedProfile.actuators[0].limits.max == 0)
         precondition(profile.supportsFeedback)
         precondition(profile.safeValues.map { $0["value"] as! Double } == [0, 0, 0.25])
-        let input: [String: Any] = ["left_effort": 1.0, "right_effort": -0.6, "forward": 0.4, "turn": 0.2, "servo_positions": ["2": -0.8]]
-        // Feedback routing has no manual command: its neutral values must remain
-        // Double when placed in the heterogeneous actuator-input dictionary.
-        let manualForward: Double? = nil
-        let feedback = true
-        let forward: Double = manualForward ?? (feedback ? 0 : 0.4)
-        let turn: Double = manualForward ?? (feedback ? 0 : 0.2)
-        let feedbackInput: [String: Any] = ["left_effort": 0.0, "right_effort": 0.0, "forward": forward, "turn": turn, "servo_positions": [String: Double]()]
-        let neutralOutput = try profile.route(input: feedbackInput)
-        precondition(neutralOutput.map { $0["value"] as! Double } == [0, 0, 0.25])
-        let output = try profile.route(input: input)
-        precondition(output.map { $0["value"] as! Double } == [0.8, -0.6, -0.5])
         func rejects(_ json: String) {
             do { _ = try ActuatorDriveProfileSet.decode(json: json); preconditionFailure("Invalid profile accepted") }
             catch { }
@@ -39,15 +27,9 @@ import Foundation
         let manualProfile = try ActuatorDriveProfileSet.decode(json: manual)
         precondition(!manualProfile.supportsFeedback)
         precondition(manualProfile.supportsVioControl)
-        let closed = try manualProfile.routeClosedLoop(left: 0.4, right: -0.2, servos: [:])
-        precondition(abs((closed[0]["value"] as! Double) - 0.4) < 0.00001)
-        precondition(abs((closed[1]["value"] as! Double) + 0.2) < 0.00001)
         let throttleOnly = manual.replacingOccurrences(of: "\"turn_coefficient\":-1", with: "\"turn_coefficient\":0")
         let throttleProfile = try ActuatorDriveProfileSet.decode(json: throttleOnly)
         precondition(!throttleProfile.supportsVioControl)
-        let manualOutput = try manualProfile.route(input: input)
-        precondition(abs((manualOutput[0]["value"] as! Double) - 0.2) < 0.00001)
-        do { _ = try profile.route(input: ["left_effort": Double.nan]); preconditionFailure("Invalid input accepted") } catch { }
         var sync = ActuatorProfileSynchronization()
         try sync.begin(revision: 7, ids: [0, 1, 2])
         precondition(sync.completed == nil)

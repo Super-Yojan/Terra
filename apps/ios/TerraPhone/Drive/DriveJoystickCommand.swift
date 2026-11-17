@@ -35,22 +35,13 @@ struct DriveJoystickCommand: Equatable {
 }
 
 enum DriveJoystickSafety {
-    static func trackingLossRequiresStop(feedback: Bool, fullyManual: Bool) -> Bool {
-        feedback && !fullyManual
-    }
     static func canDrive(ready: Bool, manual: Bool, stopped: Bool, foreground: Bool) -> Bool {
         ready && manual && !stopped && foreground
     }
 }
 
-/// Route only the arbiter-selected manual intent, never an unvalidated network payload.
+/// Reads of the Rust autonomy status JSON for presentation.
 enum TerraFleetManualDrive {
-    static func requiresAutonomousControl(_ json: String) -> Bool {
-        guard let root = (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any],
-              let status = root["status"] as? [String: Any] else { return false }
-        return ["waypoint", "waypoint_direct", "supervised", "explore", "target_search", "task"].contains(status["requested_level"] as? String ?? "")
-    }
-
     /// L3, and L5 tasks that drive on the L3 route, use phone VIO motion estimates,
     /// independently of the actuator routing format.
     static func requiresVioControl(_ json: String) -> Bool {
@@ -63,13 +54,6 @@ enum TerraFleetManualDrive {
               let quality = root["pose_quality"] as? [String: Any], quality["degraded"] as? Bool == false,
               let age = quality["pose_age_s"] as? Double, age.isFinite, (0...0.35).contains(age) else { return false }
         return true
-    }
-    static func isFullyManual(_ json: String) -> Bool {
-        guard let root = (try? JSONSerialization.jsonObject(with: Data(json.utf8))) as? [String: Any],
-              let status = root["status"] as? [String: Any] else { return false }
-        // An idle/held L0 has no effective level. Mode selection must use
-        // the requested level; command() separately enforces live authority.
-        return (status["requested_level"] as? String ?? status["effective_level"] as? String) == "teleop"
     }
 
 }

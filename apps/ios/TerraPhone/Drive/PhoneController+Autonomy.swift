@@ -135,7 +135,7 @@ extension PhoneController {
         guard let raw,let data=raw.data(using:.utf8),let object=(try? JSONSerialization.jsonObject(with:data)) as? [String:Any] else{return}
         #if DEBUG
         if tick % 50 == 0 {
-            let snapshot: [String: Any] = ["time": ISO8601DateFormatter().string(from: Date()), "mode": String(describing: mode), "feedback": bleFeedback, "feedbackTrackingHealthy": feedbackTrackingHealthy, "router": controller?.dashboardStatus() ?? "none", "autonomy": object]
+            let snapshot: [String: Any] = ["time": ISO8601DateFormatter().string(from: Date()), "mode": String(describing: mode), "feedback": bleFeedback, "router": controller?.dashboardStatus() ?? "none", "autonomy": object]
             let file = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("ControlDiagnostics.json")
             if let bytes = try? JSONSerialization.data(withJSONObject: snapshot) { try? bytes.write(to: file, options: .atomic) }
         }
