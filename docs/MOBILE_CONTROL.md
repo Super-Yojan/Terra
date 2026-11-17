@@ -34,7 +34,7 @@ Run `./scripts/ios/build-ios.sh` on a Mac with Xcode, Cargo and Rust targets `aa
 
 The app offers a simulated sensor mode and a phone sensor mode, plus a repeatable Rust benchmark. Simulator mode exercises the same UniFFI controller without requiring a camera. Phone mode reads Core Motion's gravity-free acceleration and angular rate and estimates world velocity from ARKit poses. Camera permission and a device supporting AR world tracking are required for phone mode. Loss of tracking produces neutral effort. Leaving the foreground stops the controller.
 
-The Android shell in `apps/android/` calls the same crate. Its build and what has not been run on a device are in [TerraPhone for Android](MOBILE_ANDROID.md).
+
 
 Which hardware link the connection UI shows depends on the run destination. See [Connection surfaces](#connection-surfaces).
 

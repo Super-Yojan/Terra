@@ -3,7 +3,6 @@
 > [!TIP]
 > **TL;DR**
 > SwiftUI app in `apps/ios/`.
-> Android shell in `apps/android/`.
 > Shared math is `terra-mobile`.
 > Simulator talks to Zorvane. iPhone talks to the Pi.
 > Tap-to-configure is not built.
@@ -31,7 +30,7 @@
 
 | Question | Page |
 | --- | --- |
-| How do I compile it? | [Xcode](build.md) or [Android](../MOBILE_ANDROID.md) |
+| How do I compile it? | [Xcode](build.md) |
 | Simulator or iPhone? | [Split](simulator.md) |
 | How do I pair? | [Bluetooth](bluetooth.md) |
 | How does the live camera reach ARGOS? | [FPV video](fpv.md) |

@@ -1,0 +1,31 @@
+# terra-av pipeline for Terra. One implementation per stage; see
+# crates/terra-av/src/config.rs.
+
+[vehicle]
+type = "diff_drive"
+track = 0.5
+max_wheel_speed = 0.8
+
+# Phone landscape on the rover, screen facing the rover, rear camera out,
+# camera 0.23 m above the ground. Roll sign untested.
+[mount]
+roll = -90
+pitch = 0
+yaw = 0
+offset = [0.0, 0.0, 0.23]
+
+[estimator]
+type = "vio"
+
+[mapper]
+type = "occupancy_grid"
+resolution = 0.1
+
+[path_planner]
+type = "straight_line"
+
+[local_planner]
+type = "teleop"
+
+# The velocity loop (twist → wheel effort) runs in the app:
+# Motors/VelocityController.swift.

@@ -2,56 +2,16 @@
 
 > [!TIP]
 > **TL;DR**
-> Eighteen crates under `crates/`.
-> `terra-mobile` is the only UniFFI boundary.
-> The Pi reimplements Bluetooth in Python. It does not link these crates.
+> One crate: `crates/terra-av`, the modular autonomy pipeline.
+> The Pi (`apps/rover-pi`) is Python and does not link it.
 
 ```mermaid
 flowchart LR
-  Types[terra-types] --> State[terra-state]
-  State --> Control[terra-control]
-  Types --> Motors[terra-motors]
-  Types --> Way[terra-waypoint]
-  Types --> Map[terra-mapping]
-  Map --> Nav[terra-navigation]
-  Nav --> Exp[terra-exploration]
-  Way --> Auto[terra-autonomy]
-  Nav --> Auto
-  Exp --> Auto
-  Auto --> Runtime[terra-runtime]
-  Control --> Runtime
-  Runtime --> Record[terra-experiment]
-  Runtime --> Mobile[terra-mobile]
-  Record --> Mobile
-  Types --> Transport[terra-transport]
-  Transport --> Mobile
+  Sense[Sensors] --> Est[State estimation]
+  Est --> Map[Perception and mapping]
+  Map --> Plan[Planning]
+  Plan --> Exec[Execution]
 ```
 
-*Phone and Zorvane each run one `terra-runtime` per rover. PWM stays in `terra-motors`.*
-
-![Body axes shared by the crates](../assets/body-axes.svg)
-
-*+X forward, +Y left, +Z up.*
-
-| Crate | One line |
-| --- | --- |
-| [terra-types](terra-types.md) | Samples, axes, effort. |
-| [terra-state](terra-state.md) | VIO anchor, short IMU prediction. |
-| [terra-control](terra-control.md) | Differential PI. |
-| [terra-waypoint](terra-waypoint.md) | One goal, one twist. |
-| [terra-transport](terra-transport.md) | Zenoh client and loopback plane. |
-| [fpv-signaling](fpv-signaling.md) | Shared WebRTC FPV signaling. No media. |
-| [terra-mapping](terra-mapping.md) | Rolling occupancy grid. |
-| [terra-map-merge](terra-map-merge.md) | Fuse several rovers' grids. |
-| [terra-navigation](terra-navigation.md) | Local planner and Hybrid A* routes. |
-| [terra-exploration](terra-exploration.md) | Time-bounded autonomous exploration. |
-| [terra-autonomy](terra-autonomy.md) | Five levels and a safety hold. |
-| [terra-runtime](terra-runtime.md) | One rover's control loop, no I/O. |
-| [terra-experiment](terra-experiment.md) | JSONL logs and summaries. |
-| [terra-motors](terra-motors.md) | PWM, enable, watchdog, coast. |
-| [terra-actuators](terra-actuators.md) | Layouts and Bluetooth frames. |
-| [terra-mobile](terra-mobile.md) | Swift exports. |
-
-`terra-observability` and `terra-observability-collector` (event contract and collector) are covered in [Observability operations](../observability/operations.md). `tools/vlm-eval` is a workspace tool, not a crate under `crates/`.
-
-Rustdoc: [super-yojan.dev/Terra/api/](https://super-yojan.dev/Terra/api/).
+Each stage is a trait with swappable implementations; a TOML config picks them.
+See the module docs in `crates/terra-av/src/lib.rs`.

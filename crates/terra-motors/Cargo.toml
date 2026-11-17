@@ -1,7 +1,0 @@
-[package]
-name = "terra-motors"
-version.workspace = true
-edition.workspace = true
-
-[dependencies]
-terra-types.workspace = true

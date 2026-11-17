@@ -3,7 +3,6 @@
 > [!TIP]
 > **TL;DR**
 > Zorvane runs on Linux.
-> The Android shell builds on Linux.
 > The iOS app still needs a Mac.
 > The Pi image also builds on Linux, with Docker.
 
@@ -16,7 +15,6 @@ flowchart LR
   Linux[Linux] --> Z[Zorvane]
   Linux --> Pi[Pi package]
   Mac[Mac] --> Phone[iOS TerraPhone]
-  Linux --> Android[Android TerraPhone]
 ```
 
 *From a [Zorvane](https://super-yojan.dev/Zorvane/) checkout: `cargo run -p zorvane`.*
@@ -26,5 +24,3 @@ flowchart LR
 Build notes: [Zorvane README](https://github.com/Super-Yojan/Zorvane/blob/main/README.md).
 
 iOS: `./scripts/ios/build-ios.sh` on a Mac. See [Xcode](phone/build.md).
-
-Android, from this checkout: `./scripts/android/build-android.sh`, then `apps/android/gradlew assembleDebug`. See [TerraPhone for Android](MOBILE_ANDROID.md).

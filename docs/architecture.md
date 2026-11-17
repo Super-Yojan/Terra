@@ -68,6 +68,6 @@ flowchart LR
 ARGOS is the React web operator interface backed by a Rust Axum server. The server
 bridges browser commands and telemetry to Zenoh. ARGOS Swift is a legacy fallback;
 Unity is a historical prototype. TerraPhone iOS remains the physical vehicle's
-sensor, Bluetooth and shared Rust runtime. Android is an additional mobile adapter.
+sensor, Bluetooth and shared Rust runtime.
 Zorvane owns simulation; Terra owns onboard control, mapping and autonomy.
 The VLM evaluator under `tools/vlm-eval` is offline research infrastructure.
