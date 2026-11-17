@@ -1,7 +1,7 @@
 //! Stage 2, State estimation: where am I, how fast am I moving.
-mod dead_reckoning;
+mod vio;
 mod localization;
-pub use dead_reckoning::DeadReckoning;
+pub use vio::Vio;
 pub use localization::Localization;
 
 use crate::geometry::Pose2;
