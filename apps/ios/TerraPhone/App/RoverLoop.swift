@@ -72,12 +72,33 @@ final class RoverLoop: ObservableObject {
     }
 
     private func plannerTick() {
+        print(goal)
         let out = av.tick(frame: sensors.frame(estop: estop), goal: goal)
         lock.lock(); latest = (out, ProcessInfo.processInfo.systemUptime); lock.unlock()
     }
 
+    
+    /// Joystick → wheel efforts (arcade drive).
+    /// forward: +1 = full ahead, turn: +1 = full left. Both in [-1, 1].
+    func joystickToMotors(forward: Double, turn: Double, maxEffort: Double = 0.5) -> WheelCommand {
+        var left = forward - turn
+        var right = forward + turn
+        // Keep the ratio between the wheels if either side would exceed 1.
+        let biggest = max(1, abs(left), abs(right))
+        left /= biggest
+        right /= biggest
+        return WheelCommand(left: left * maxEffort, right: right * maxEffort)
+    }
+    
     private func velocityTick() {
         lock.lock(); let latest = self.latest; lock.unlock()
+        
+        if case let .velocity(v, w) = goal {
+            motors.send(joystickToMotors(forward: v, turn: w))
+        } else {
+            motors.send(.stop)
+        }
+        
         let out: WheelCommand
         if let latest {
             out = controller.command(target: latest.command.target, measured: latest.command.measured,
@@ -85,7 +106,8 @@ final class RoverLoop: ObservableObject {
         } else {
             out = .stop
         }
-        motors.send(out)
+        
+        //motors.send(out)
         DispatchQueue.main.async { if self.command != out { self.command = out } }
     }
 

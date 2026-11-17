@@ -14,7 +14,7 @@
             buildForAnalyzing = "YES">
             <BuildableReference
                BuildableIdentifier = "primary"
-               BlueprintIdentifier = "515C28DEB2F239F1A9D44A5C"
+               BlueprintIdentifier = "D914F1A26DD64B38F9078BCB"
                BuildableName = "TerraPhone.app"
                BlueprintName = "TerraPhone"
                ReferencedContainer = "container:TerraPhone.xcodeproj">
@@ -30,7 +30,7 @@
       <MacroExpansion>
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "515C28DEB2F239F1A9D44A5C"
+            BlueprintIdentifier = "D914F1A26DD64B38F9078BCB"
             BuildableName = "TerraPhone.app"
             BlueprintName = "TerraPhone"
             ReferencedContainer = "container:TerraPhone.xcodeproj">
@@ -53,7 +53,7 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "515C28DEB2F239F1A9D44A5C"
+            BlueprintIdentifier = "D914F1A26DD64B38F9078BCB"
             BuildableName = "TerraPhone.app"
             BlueprintName = "TerraPhone"
             ReferencedContainer = "container:TerraPhone.xcodeproj">
@@ -70,7 +70,7 @@
          runnableDebuggingMode = "0">
          <BuildableReference
             BuildableIdentifier = "primary"
-            BlueprintIdentifier = "515C28DEB2F239F1A9D44A5C"
+            BlueprintIdentifier = "D914F1A26DD64B38F9078BCB"
             BuildableName = "TerraPhone.app"
             BlueprintName = "TerraPhone"
             ReferencedContainer = "container:TerraPhone.xcodeproj">
