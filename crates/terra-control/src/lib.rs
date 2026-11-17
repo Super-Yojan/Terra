@@ -28,7 +28,7 @@ use terra_types::turning::TurningConfig;
 use terra_types::*;
 /// PI gains and safety limits for differential wheel control.
 ///
-/// Defaults are Terra's drive: terra-runtime's `RoverProfile::terra` derives the
+/// Defaults are Terra's drive: terra-robot's `RoverProfile::terra` derives the
 /// same gains and adds its reverse compensation. All numbers must be finite;
 /// call [`Self::validate`] after changing settings. Gains convert velocity
 /// errors into normalized effort.

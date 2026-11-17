@@ -1,6 +1,6 @@
 //! The `pose` topic comes with the rest of a tick's telemetry, and only while
 //! the pose is ready.
-use terra_runtime::*;
+use terra_robot::*;
 use terra_types::*;
 
 fn sample(r: &mut Runtime, t: f64) {

@@ -53,7 +53,7 @@ pub use waypoint::*;
 /// Shared presentation and router-loss defaults. Local sensor limits are independent.
 #[uniffi::export]
 pub fn default_connectivity_policy_settings() -> String {
-    serde_json::to_string(&terra_runtime::connectivity::ConnectivityPolicySettings::default())
+    serde_json::to_string(&terra_robot::connectivity::ConnectivityPolicySettings::default())
         .expect("finite policy defaults")
 }
 
@@ -61,7 +61,7 @@ pub fn default_connectivity_policy_settings() -> String {
 /// [`MobileController::set_rover_profile`]. The first entry is Terra.
 #[uniffi::export]
 pub fn rover_profile_presets() -> String {
-    serde_json::to_string(&terra_runtime::rover_profile::RoverProfile::presets())
+    serde_json::to_string(&terra_robot::rover_profile::RoverProfile::presets())
         .expect("finite rover profiles")
 }
 
@@ -105,7 +105,7 @@ impl ControlSettings {
     fn controller(&self) -> ControllerConfig {
         // Until a rover profile is selected (Android has no picker yet),
         // back up with Terra's reverse compensation.
-        terra_runtime::rover_profile::RoverProfile::terra().reverse_compensation(ControllerConfig {
+        terra_robot::rover_profile::RoverProfile::terra().reverse_compensation(ControllerConfig {
             linear_kp: self.linear_kp,
             linear_ki: self.linear_ki,
             yaw_kp: self.yaw_kp,
@@ -321,7 +321,7 @@ impl From<InputError> for ControllerError {
     }
 }
 struct Brain {
-    runtime: terra_runtime::Runtime,
+    runtime: terra_robot::Runtime,
     recorder: Option<terra_experiment::RunRecorder>,
     map_gate: publication::MapGate,
     dashboard: Option<terra_transport::ControlPlane>,
@@ -335,7 +335,7 @@ struct Brain {
     gate_rejected: Option<String>,
 }
 impl std::ops::Deref for Brain {
-    type Target = terra_runtime::Runtime;
+    type Target = terra_robot::Runtime;
     fn deref(&self) -> &Self::Target {
         &self.runtime
     }
@@ -356,8 +356,8 @@ fn fleet_owns_intent() -> ControllerError {
         message: "fleet connection owns velocity intent".into(),
     }
 }
-impl From<terra_runtime::RuntimeError> for ControllerError {
-    fn from(e: terra_runtime::RuntimeError) -> Self {
+impl From<terra_robot::RuntimeError> for ControllerError {
+    fn from(e: terra_robot::RuntimeError) -> Self {
         Self::InvalidInput {
             message: e.to_string(),
         }
@@ -425,8 +425,8 @@ impl MobileController {
             observation: Default::default(),
             mcp: Default::default(),
             brain: BrainCell::new(Brain {
-                runtime: terra_runtime::Runtime::new(
-                    terra_runtime::RuntimeConfig {
+                runtime: terra_robot::Runtime::new(
+                    terra_robot::RuntimeConfig {
                         estimator: settings.estimator(),
                         controller: settings.controller(),
                         ..Default::default()
@@ -477,11 +477,11 @@ impl MobileController {
     pub fn set_actuation_mode(&self, feedback: bool) -> Result<(), ControllerError> {
         let mut b = self.brain.lock().map_err(|_| ControllerError::Internal)?;
         let at = b.last_tick;
-        b.runtime.ingest(terra_runtime::RuntimeEvent::Mode {
+        b.runtime.ingest(terra_robot::RuntimeEvent::Mode {
             mode: if feedback {
-                terra_runtime::ActuationMode::VelocityFeedback
+                terra_robot::ActuationMode::VelocityFeedback
             } else {
-                terra_runtime::ActuationMode::DirectEffort
+                terra_robot::ActuationMode::DirectEffort
             },
             received_at: at,
         })?;
@@ -584,7 +584,7 @@ impl MobileController {
         if b.fleet_owns_intent() {
             return Err(fleet_owns_intent());
         }
-        b.runtime.ingest(terra_runtime::RuntimeEvent::LocalManual {
+        b.runtime.ingest(terra_robot::RuntimeEvent::LocalManual {
             forward,
             turn,
             received_at: timestamp,
@@ -605,7 +605,7 @@ impl MobileController {
         }
         brain
             .runtime
-            .ingest(terra_runtime::RuntimeEvent::LocalVelocity {
+            .ingest(terra_robot::RuntimeEvent::LocalVelocity {
                 target: VelocityTarget {
                     timestamp: target.timestamp,
                     forward: target.forward,
@@ -637,7 +637,7 @@ impl MobileController {
         brain.last_tick = timestamp;
         capture::advance(&mut brain, timestamp);
         for (kind, bytes, age) in incoming {
-            brain.runtime.ingest(terra_runtime::RuntimeEvent::Remote {
+            brain.runtime.ingest(terra_robot::RuntimeEvent::Remote {
                 kind,
                 payload: bytes,
                 received_at: timestamp - age,
@@ -829,7 +829,7 @@ impl MobileController {
 fn apply_sample(brain: &mut Brain, sample: inbox::Sample) -> Result<(), ControllerError> {
     match sample {
         inbox::Sample::Imu(sample) => {
-            brain.runtime.ingest(terra_runtime::RuntimeEvent::Imu {
+            brain.runtime.ingest(terra_robot::RuntimeEvent::Imu {
                 sample: ImuSample {
                     timestamp: sample.timestamp,
                     acceleration: Vector3 {
@@ -848,7 +848,7 @@ fn apply_sample(brain: &mut Brain, sample: inbox::Sample) -> Result<(), Controll
             Ok(())
         }
         inbox::Sample::Vio(sample) => {
-            let event = terra_runtime::RuntimeEvent::Vio {
+            let event = terra_robot::RuntimeEvent::Vio {
                 sample: VioSample {
                     timestamp: sample.timestamp,
                     position: Vector3 {
@@ -875,19 +875,19 @@ fn apply_sample(brain: &mut Brain, sample: inbox::Sample) -> Result<(), Controll
             Ok(())
         }
         inbox::Sample::Gps(fix, now) => {
-            Ok(brain.runtime.ingest(terra_runtime::RuntimeEvent::Gps {
+            Ok(brain.runtime.ingest(terra_robot::RuntimeEvent::Gps {
                 sample: fix.into(),
                 received_at: now,
             })?)
         }
         inbox::Sample::Heading(fix, now) => {
-            Ok(brain.runtime.ingest(terra_runtime::RuntimeEvent::Heading {
+            Ok(brain.runtime.ingest(terra_robot::RuntimeEvent::Heading {
                 sample: fix.into(),
                 received_at: now,
             })?)
         }
         inbox::Sample::Course(fix, now) => {
-            Ok(brain.runtime.ingest(terra_runtime::RuntimeEvent::Course {
+            Ok(brain.runtime.ingest(terra_robot::RuntimeEvent::Course {
                 sample: fix.into(),
                 received_at: now,
             })?)

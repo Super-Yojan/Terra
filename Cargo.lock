@@ -2904,7 +2904,7 @@ dependencies = [
  "serde_json",
  "terra-autonomy",
  "terra-mapping",
- "terra-runtime",
+ "terra-robot",
 ]
 
 [[package]]
@@ -2945,7 +2945,7 @@ dependencies = [
  "terra-mapping",
  "terra-navigation",
  "terra-observability",
- "terra-runtime",
+ "terra-robot",
  "terra-state",
  "terra-transport",
  "terra-types",
@@ -3003,7 +3003,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "terra-runtime"
+name = "terra-robot"
 version = "0.1.0"
 dependencies = [
  "serde",

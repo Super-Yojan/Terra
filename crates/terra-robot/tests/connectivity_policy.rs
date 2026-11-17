@@ -1,4 +1,4 @@
-use terra_runtime::connectivity::{ConnectivityPolicySettings, RouterLossPolicy};
+use terra_robot::connectivity::{ConnectivityPolicySettings, RouterLossPolicy};
 #[test]
 fn connectivity_policy_roundtrips_and_validates() {
     let p = ConnectivityPolicySettings::default();

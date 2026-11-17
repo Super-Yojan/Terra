@@ -1,4 +1,4 @@
-# terra-runtime
+# terra-robot
 
 > [!TIP]
 > **TL;DR**
@@ -6,7 +6,7 @@
 > Hosts feed `RuntimeEvent`s, call `step(now)` at 100 Hz, and publish what it returns.
 > TerraPhone (through `terra-mobile`) and each Zorvane rover run the same code.
 
-[API](https://super-yojan.dev/Terra/api/terra_runtime/index.html) · [source](https://github.com/Super-Yojan/Terra/blob/main/crates/terra-runtime/src/lib.rs)
+[API](https://super-yojan.dev/Terra/api/terra_robot/index.html) · [source](https://github.com/Super-Yojan/Terra/blob/main/crates/terra-robot/src/lib.rs)
 
 ```mermaid
 flowchart LR
@@ -56,7 +56,7 @@ Without a tracked pose nothing is measured at the origin. Arbiter queries that n
 
 ## Checks
 
-- `cargo test -p terra-runtime -p terra-mobile`: policy and phone replay.
+- `cargo test -p terra-robot -p terra-mobile`: policy and phone replay.
 - `node scripts/checks/check-runtime-parity.mjs`: the same trace natively and in WebAssembly. Discrete status hashes must match; effort and twist within 1e-5. Needs Node and the `wasm32-unknown-unknown` target.
 
 Zorvane's `terra-source.json` pins one Terra checkout for every Terra dependency. Update it only after the matching Terra revision is pushed.

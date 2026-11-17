@@ -97,7 +97,7 @@ impl MobileController {
             .lock()
             .map_err(|_| ControllerError::Internal)?
             .runtime
-            .ingest(terra_runtime::RuntimeEvent::Detector {
+            .ingest(terra_robot::RuntimeEvent::Detector {
                 classes,
                 version,
                 received_at: timestamp,
@@ -141,7 +141,7 @@ impl MobileController {
             .lock()
             .map_err(|_| ControllerError::Internal)?
             .runtime
-            .ingest(terra_runtime::RuntimeEvent::Target {
+            .ingest(terra_robot::RuntimeEvent::Target {
                 sample: terra_autonomy::TargetObservation {
                     run_id: o.run_id,
                     search_id: o.search_id,

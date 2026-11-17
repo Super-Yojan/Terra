@@ -1,6 +1,6 @@
 //! Adapter parity: replay through the actual UniFFI facade and the pure runtime.
 use super::*;
-use terra_runtime::{Runtime, RuntimeConfig, RuntimeEvent};
+use terra_robot::{Runtime, RuntimeConfig, RuntimeEvent};
 #[test]
 fn phone_facade_matches_pure_runtime_for_timestamped_sensor_and_manual_stream() {
     let phone = MobileController::new(default_control_settings()).unwrap();
@@ -130,7 +130,7 @@ fn reset_starts_a_new_clock_and_discards_queued_remote_commands() {
         let mut brain = phone.brain.lock().unwrap();
         brain
             .runtime
-            .ingest(terra_runtime::RuntimeEvent::Remote {
+            .ingest(terra_robot::RuntimeEvent::Remote {
                 kind: "safety".into(),
                 payload: br#"{"action":"stop","token":"old"}"#.to_vec(),
                 received_at: 10.0,
@@ -152,7 +152,7 @@ fn a_new_recording_does_not_execute_an_old_queued_stop() {
         let mut brain = phone.brain.lock().unwrap();
         brain
             .runtime
-            .ingest(terra_runtime::RuntimeEvent::Remote {
+            .ingest(terra_robot::RuntimeEvent::Remote {
                 kind: "safety".into(),
                 payload: br#"{"action":"stop","token":"old-run-stop"}"#.to_vec(),
                 received_at: 0.0,

@@ -1,6 +1,6 @@
 //! The dashboard sees when the rover backs up, and when its wheels push
 //! without the rover moving (stalling while backing up, 2026-11-06).
-use terra_runtime::*;
+use terra_robot::*;
 use terra_types::*;
 
 fn vio(r: &mut Runtime, t: f64, speed: f64) {

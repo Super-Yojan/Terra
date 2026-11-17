@@ -1,7 +1,7 @@
 //! Tilt and flip hold at L0 (Terra issue #112): a rover that climbs a board
 //! and flips must stop its wheels even under manual drive.
 use serde_json::json;
-use terra_runtime::*;
+use terra_robot::*;
 use terra_types::*;
 
 fn pitched(degrees: f64) -> Quaternion {

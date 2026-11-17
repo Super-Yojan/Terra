@@ -1,13 +1,13 @@
 //! The `control_tick` recording line, shared by every host that records runs.
 
 use serde_json::{Map, Value, json};
-use terra_runtime::RuntimeOutput;
+use terra_robot::RuntimeOutput;
 
 /// `kind` of a control-tick record.
 pub const CONTROL_TICK: &str = "control_tick";
 
 /// One control tick as recorded: what the runtime chose and why. Hosts build it
-/// from [`Runtime::step`](terra_runtime::Runtime::step)'s output and
+/// from [`Runtime::step`](terra_robot::Runtime::step)'s output and
 /// [`crate::summarize`] reads the recorded lines back.
 pub struct ControlTickRecord<'a> {
     /// Seconds from run start.

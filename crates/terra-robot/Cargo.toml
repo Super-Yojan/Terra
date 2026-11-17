@@ -1,5 +1,5 @@
 [package]
-name = "terra-runtime"
+name = "terra-robot"
 version.workspace = true
 edition.workspace = true
 [dependencies]

@@ -1,7 +1,7 @@
 //! The runtime measures observed clearance each tick and logs one near-miss
 //! event per episode edge, so every host records the same episodes.
 use terra_mapping::MapSnapshot;
-use terra_runtime::*;
+use terra_robot::*;
 use terra_types::*;
 
 fn pose(r: &mut Runtime, t: f64) {

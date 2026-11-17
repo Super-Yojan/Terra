@@ -13,5 +13,5 @@ fn main() {
                 .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
         })
         .unwrap_or_else(|| "unknown".into());
-    println!("cargo:rustc-env=TERRA_RUNTIME_REVISION={revision}");
+    println!("cargo:rustc-env=TERRA_ROBOT_REVISION={revision}");
 }

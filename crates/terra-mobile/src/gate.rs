@@ -45,7 +45,7 @@ pub struct AutonomyBrief {
 impl AutonomyBrief {
     /// The runtime's brief of the latest tick; before the first tick every
     /// field is empty and the pose counts as degraded.
-    pub(crate) fn from_runtime(brief: Option<&terra_runtime::Brief>) -> Self {
+    pub(crate) fn from_runtime(brief: Option<&terra_robot::Brief>) -> Self {
         let Some(b) = brief else {
             return Self {
                 pose_degraded: true,
@@ -92,7 +92,7 @@ impl AutonomyBrief {
                 .flatten()
                 .any(Level::uses_vio),
             pose_fresh: !pose_degraded
-                && pose_age_s.is_some_and(terra_runtime::pose_quality::fresh),
+                && pose_age_s.is_some_and(terra_robot::pose_quality::fresh),
             router_emergency_stop: safety == Some(Safety::EmergencyStop),
         }
     }
@@ -117,7 +117,7 @@ impl AutonomyBrief {
         self.router_emergency_stop
     }
 
-    /// Pose is not degraded and fresh (see [`terra_runtime::pose_quality::fresh`]).
+    /// Pose is not degraded and fresh (see [`terra_robot::pose_quality::fresh`]).
     pub fn vio_ready(&self) -> bool {
         self.pose_fresh
     }

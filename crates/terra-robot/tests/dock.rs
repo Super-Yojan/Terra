@@ -1,6 +1,6 @@
 //! The `dock` topic: object lookup, authority, and the gate servo mapping.
 use terra_autonomy::objects::ObjectSighting;
-use terra_runtime::*;
+use terra_robot::*;
 use terra_types::{ImuSample, Quaternion, Vector3, VioSample};
 
 fn pose_at(r: &mut Runtime, now: f64) {

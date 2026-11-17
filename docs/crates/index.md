@@ -18,7 +18,7 @@ flowchart LR
   Way --> Auto[terra-autonomy]
   Nav --> Auto
   Exp --> Auto
-  Auto --> Runtime[terra-runtime]
+  Auto --> Runtime[terra-robot]
   Control --> Runtime
   Runtime --> Record[terra-experiment]
   Runtime --> Mobile[terra-mobile]
@@ -27,7 +27,7 @@ flowchart LR
   Transport --> Mobile
 ```
 
-*Phone and Zorvane each run one `terra-runtime` per rover. PWM stays in `terra-motors`.*
+*Phone and Zorvane each run one `terra-robot` per rover. PWM stays in `terra-motors`.*
 
 ![Body axes shared by the crates](../assets/body-axes.svg)
 
@@ -46,7 +46,7 @@ flowchart LR
 | [terra-navigation](terra-navigation.md) | Local planner and Hybrid A* routes. |
 | [terra-exploration](terra-exploration.md) | Time-bounded autonomous exploration. |
 | [terra-autonomy](terra-autonomy.md) | Five levels and a safety hold. |
-| [terra-runtime](terra-runtime.md) | One rover's control loop, no I/O. |
+| [terra-robot](terra-robot.md) | One rover's control loop, no I/O. |
 | [terra-experiment](terra-experiment.md) | JSONL logs and summaries. |
 | [terra-motors](terra-motors.md) | PWM, enable, watchdog, coast. |
 | [terra-actuators](terra-actuators.md) | Layouts and Bluetooth frames. |

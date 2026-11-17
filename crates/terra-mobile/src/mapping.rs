@@ -178,7 +178,7 @@ impl From<MapError> for ControllerError {
 #[derive(uniffi::Object)]
 /// Rolling occupancy mapper exposed through UniFFI. The mapping state locks internally.
 pub struct MobileOccupancyMap {
-    map: terra_runtime::mapping::MappingState,
+    map: terra_robot::mapping::MappingState,
 }
 #[uniffi::export]
 impl MobileOccupancyMap {
@@ -189,7 +189,7 @@ impl MobileOccupancyMap {
     /// Returns `InvalidInput` for invalid dimensions, resolution, obstacle heights,
     /// range, or stride (at most one million cells; resolution 0.01..=10 m).
     pub fn new(settings: OccupancySettings) -> Result<Arc<Self>, ControllerError> {
-        let map = terra_runtime::mapping::MappingState::new(MapConfig {
+        let map = terra_robot::mapping::MappingState::new(MapConfig {
             width: settings.width,
             height: settings.height,
             resolution: settings.resolution,
@@ -456,7 +456,7 @@ impl MobileController {
 }
 #[derive(uniffi::Object)]
 pub struct MobileGroundPolicy {
-    state: Mutex<terra_runtime::ground::GroundPolicy>,
+    state: Mutex<terra_robot::ground::GroundPolicy>,
 }
 #[uniffi::export]
 impl MobileGroundPolicy {

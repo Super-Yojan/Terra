@@ -37,7 +37,7 @@ fn mission_outcomes_and_interventions_use_run_exposure() {
 #[test]
 fn control_tick_record_round_trips_through_summarize() {
     let mut runtime =
-        terra_runtime::Runtime::new(Default::default(), "run".into()).expect("default runtime");
+        terra_robot::Runtime::new(Default::default(), "run".into()).expect("default runtime");
     let output = runtime.step(2.).unwrap();
     let mut record = ControlTickRecord::new(&output, "run", 1, 12.);
     record.rover_id = Some(3);

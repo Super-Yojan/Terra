@@ -1,5 +1,5 @@
 use serde_json::json;
-use terra_runtime::*;
+use terra_robot::*;
 use terra_types::*;
 fn runtime(mode: ActuationMode) -> Runtime {
     Runtime::new(
@@ -411,7 +411,7 @@ fn changing_connectivity_policy_during_loss_pauses_the_accepted_mission() {
     .unwrap();
     let revision = r.connectivity_revision();
     let mut policy = r.connectivity().clone();
-    policy.autonomous_router_loss = terra_runtime::connectivity::RouterLossPolicy::Pause;
+    policy.autonomous_router_loss = terra_robot::connectivity::RouterLossPolicy::Pause;
     r.set_connectivity_policy(policy).unwrap();
     assert_eq!(r.connectivity_revision(), revision + 1);
     assert!(

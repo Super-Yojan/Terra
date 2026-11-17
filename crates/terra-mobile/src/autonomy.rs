@@ -196,7 +196,7 @@ impl MobileController {
         brain.map_gate = Default::default();
         capture::reset(&mut brain);
         let at = brain.last_tick;
-        brain.runtime.ingest(terra_runtime::RuntimeEvent::Link {
+        brain.runtime.ingest(terra_robot::RuntimeEvent::Link {
             connected: true,
             received_at: at,
         })?;
@@ -255,7 +255,7 @@ impl MobileController {
                 message: "connectivity policy too large".into(),
             });
         }
-        let policy: terra_runtime::connectivity::ConnectivityPolicySettings =
+        let policy: terra_robot::connectivity::ConnectivityPolicySettings =
             serde_json::from_str(&settings_json).map_err(|_| ControllerError::InvalidInput {
                 message: "invalid connectivity policy".into(),
             })?;
@@ -363,8 +363,8 @@ impl MobileController {
             })?;
         let mut b = self.brain.lock().map_err(|_| ControllerError::Internal)?;
         let received_at = b.imu_time().unwrap_or(b.last_tick).max(b.last_tick);
-        b.runtime.ingest(terra_runtime::RuntimeEvent::Hardware {
-            status: terra_runtime::HardwareStatus::from_json(&status),
+        b.runtime.ingest(terra_robot::RuntimeEvent::Hardware {
+            status: terra_robot::HardwareStatus::from_json(&status),
             received_at,
         })?;
         if let Some(d) = b.dashboard.as_ref() {
@@ -531,7 +531,7 @@ impl MobileController {
             .lock()
             .map_err(|_| ControllerError::Internal)?
             .runtime
-            .ingest(terra_runtime::RuntimeEvent::Map {
+            .ingest(terra_robot::RuntimeEvent::Map {
                 snapshot: terra_mapping::MapSnapshot {
                     width: grid.width,
                     height: grid.height,

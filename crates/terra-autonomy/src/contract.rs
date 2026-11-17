@@ -198,7 +198,7 @@ pub enum EventKind {
     GoalRejected,
     LocalFrameReset,
     MissionPaused,
-    /// Observed clearance fell below the near-miss threshold; see `terra_runtime::near_miss`.
+    /// Observed clearance fell below the near-miss threshold; see `terra_robot::near_miss`.
     NearMissStart,
     /// Observed clearance recovered above the near-miss exit threshold.
     NearMissEnd,

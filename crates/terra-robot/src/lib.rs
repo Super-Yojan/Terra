@@ -12,7 +12,7 @@ use terra_mapping::{MapConfig, MapSnapshot};
 use terra_navigation::{Pose, Twist};
 use terra_state::{EstimatorConfig, VelocityEstimator};
 use terra_types::*;
-pub const SOURCE_REVISION: &str = env!("TERRA_RUNTIME_REVISION");
+pub const SOURCE_REVISION: &str = env!("TERRA_ROBOT_REVISION");
 mod command;
 pub mod connectivity;
 mod dock;

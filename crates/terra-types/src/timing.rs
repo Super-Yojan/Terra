@@ -10,7 +10,7 @@
 //! rest are each used by one crate (autonomy planning, proposals and search,
 //! exploration, the state estimator, turning) and stay here so every timing
 //! default can be reviewed and tuned in one place. Ages that are not tuning
-//! knobs live with their crate (hardware status in terra-runtime, the remote
+//! knobs live with their crate (hardware status in terra-robot, the remote
 //! authority cache in terra-transport).
 //!
 //! Freshness checks use age < limit ([`fresh`]). Interval/expiry checks generally use >=.

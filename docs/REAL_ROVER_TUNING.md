@@ -17,7 +17,7 @@ and the rover motor adapter initially disabled.
 ## Rover profiles
 
 The phone picks a rover profile in **Settings → Rover setup → Rover**. The
-profile (`crates/terra-runtime/src/rover_profile.rs`) sets the planner footprint
+profile (`crates/terra-robot/src/rover_profile.rs`) sets the planner footprint
 (length, width, clearance), turning policy, speed limits and the velocity loop
 for that chassis. Feedforward is `1 / top_speed`. Feedback gains scale with it,
 so a slower rover keeps the loop dynamics tuned on Terra.

@@ -1,6 +1,6 @@
 # Shared vehicle runtime
 
-`terra-runtime` owns portable estimator/controller, occupancy-map, autonomy,
+`terra-robot` owns portable estimator/controller, occupancy-map, autonomy,
 command admission, navigation/search and connectivity policy. TerraPhone uses
 `terra-mobile` as its UniFFI/transport/recording adapter. Each Zorvane rover owns
 one runtime; simulated IMU/VIO feed it and returned motor efforts drive physics.
@@ -35,7 +35,7 @@ streamed every 50 ms. Its image and relay code do not need changes for this runt
 
 ## Verification
 
-- `cargo test -p terra-runtime -p terra-mobile`: portable policy and phone facade replay.
+- `cargo test -p terra-robot -p terra-mobile`: portable policy and phone facade replay.
 - Zorvane `cargo test -p zorvane simulator_sensor_adapter`: actual sensor adapter replay.
 - `node scripts/checks/check-runtime-parity.mjs`: run the same trace natively and in
   WebAssembly. Discrete status hashes must match exactly; effort/twist tolerance
