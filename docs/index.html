@@ -1,0 +1,683 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Terra — Vehicle Body & Onboard Autonomy</title>
+<style>
+  :root {
+    --bg: #0a0e14;
+    --surface: #121822;
+    --surface-light: #1a2030;
+    --border: #252e40;
+    --text: #d1d9f0;
+    --text-dim: #6e7a94;
+    --accent: #5b8cf8;
+    --accent-dim: #3d62b5;
+    --code-bg: #0d1220;
+    --success: #4ade80;
+    --warning: #fbbf24;
+    --danger: #ef4444;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.65;
+    padding-bottom: 80px;
+  }
+
+  /* ---- Header / Nav ----- */
+  .header {
+    background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 100%);
+    border-bottom: 1px solid var(--border);
+    padding: 24px 0;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    backdrop-filter: blur(12px);
+  }
+
+  .header-inner {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 0 32px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .header-brand {
+    font-size: 28px;
+    font-weight: 700;
+    letter-spacing: -0.5px;
+    color: #fff;
+  }
+
+  .header-brand span { color: var(--accent); }
+
+  nav ul {
+    list-style: none;
+    display: flex;
+    gap: 8px;
+  }
+
+  nav a {
+    color: var(--text-dim);
+    text-decoration: none;
+    font-size: 14px;
+    padding: 6px 12px;
+    border-radius: 8px;
+    transition: color 0.15s, background 0.15s;
+  }
+
+  nav a:hover { color: #fff; background: var(--surface-light); }
+  nav a.active { color: var(--accent); background: rgba(91,140,248,0.15); }
+
+  /* ---- Layout ----- */
+  main { max-width: 820px; margin: 40px auto; padding: 0 32px; }
+
+  h1 { font-size: 34px; letter-spacing: -0.8px; margin-bottom: 6px; color: #fff; }
+  .subtitle { color: var(--text-dim); font-size: 16px; margin-bottom: 32px; }
+
+  section { margin-top: 48px; }
+  h2 { font-size: 22px; margin-bottom: 16px; border-left: 3px solid var(--accent); padding-left: 12px; }
+  h3 { font-size: 16px; margin-bottom: 8px; color: #e2e8f0; }
+  p { margin-bottom: 14px; color: var(--text); }
+
+  /* ---- Code blocks ----- */
+  code { font-family: 'SFMono', Menlo, Consolas, monospace; color: var(--accent); }
+  pre { background: var(--code-bg); border-radius: 8px; padding: 16px; overflow-x: auto; margin-bottom: 14px; font-size: 13.5px; line-height: 1.6; }
+  pre code { color: var(--text); border: none; padding: 0; }
+  pre .k { color: #c678dd; }        /* keyword */
+  pre .s { color: #98c379; }        /* string */
+  pre .f { color: #61afef; }        /* function */
+  pre .c { color: #569cd6; font-style: italic; } /* comment */
+  pre .n { color: #ce9178; }        /* number */
+
+  /* ---- Tables ----- */
+  table { width: 100%; border-collapse: collapse; margin-bottom: 14px; }
+  th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--border); }
+  th { color: var(--text-dim); font-weight: 600; font-size: 13px; text-transform: uppercase; letter-spacing: 0.5px; }
+  td { font-size: 14px; }
+
+  /* ---- Callouts ----- */
+  .callout {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px 20px;
+    margin-bottom: 16px;
+  }
+
+  .callout-header {
+    display: flex; align-items: center; gap: 8px;
+    font-weight: 600; font-size: 14px; margin-bottom: 6px;
+  }
+
+  .callout-header.warning { color: var(--warning); }
+  .callout-header.danger  { color: var(--danger); }
+
+  /* ---- Badges ----- */
+  .badge { display:inline-block; font-size:12px; padding:2px 8px; border-radius:99px; font-weight:600; }
+  .badge-rust { background:#1a237e; color:#a5d6ff; }
+  .badge-ios { background:#4b1e3c; color:#d4a5f0; }
+  .badge-pi { background:#1e3a27; color:#8ae68a; }
+  .badge-tool { background:#2d1b4e; color:#c8b0ff; }
+  .badge-doc { background:#1a2e4a; color:#b0d8f7; }
+
+  /* ---- Footer ----- */
+  .footer {
+    text-align: center;
+    padding: 32px 0;
+    color: var(--text-dim);
+    font-size: 13px;
+    border-top: 1px solid var(--border);
+    margin-top: 40px;
+  }
+
+  /* ---- Architecture diagrams ----- */
+  .diagram {
+    width: min(1080px, calc(100vw - 32px));
+    margin: 20px 0 28px 50%;
+    transform: translateX(-50%);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px;
+  }
+  .diagram svg { display: block; width: 100%; height: auto; }
+  .diagram figcaption { color: var(--text-dim); font-size: 13px; margin-top: 12px; text-align: center; }
+  .diagram text { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; fill: var(--text); }
+  .diagram .mono { font-family: 'SFMono', Menlo, Consolas, monospace; }
+  .diagram .title { font-size: 13.5px; font-weight: 600; fill: #fff; }
+  .diagram .sub { font-size: 11px; fill: var(--text-dim); }
+  .diagram .label { font-size: 11px; fill: var(--text-dim); }
+  .diagram .region-label { font-size: 11px; font-weight: 700; letter-spacing: 1px; fill: var(--text-dim); }
+  .diagram .node { fill: var(--surface-light); stroke: var(--border); stroke-width: 1.2; }
+  .diagram .node-accent { fill: rgba(91,140,248,0.14); stroke: var(--accent); stroke-width: 1.5; }
+  .diagram .node-ext { fill: var(--code-bg); stroke: #3a4560; stroke-width: 1.2; }
+  .diagram .region { fill: none; stroke: var(--border); stroke-width: 1.2; stroke-dasharray: 5 4; }
+  .diagram .region-swift { fill: rgba(212,165,240,0.04); stroke: #4b1e3c; stroke-width: 1.2; }
+  .diagram .region-rust { fill: rgba(165,214,255,0.04); stroke: #1a237e; stroke-width: 1.2; }
+  .diagram .flow { fill: none; stroke: var(--accent); stroke-width: 1.6; }
+  .diagram .flow-dim { fill: none; stroke: #4a5674; stroke-width: 1.4; }
+  .diagram .flow-net { fill: none; stroke: var(--success); stroke-width: 1.6; stroke-dasharray: 6 4; }
+  .diagram .chip { fill: var(--code-bg); stroke: var(--border); stroke-width: 1; }
+  .diagram .chip-stub { fill: none; stroke: #3a4560; stroke-width: 1; stroke-dasharray: 3 3; }
+  .diagram .chip-text { font-size: 11px; }
+  .diagram .done { fill: var(--success); }
+  .diagram .stub { fill: none; stroke: var(--text-dim); stroke-width: 1.2; }
+
+  a.external { color: var(--accent); text-decoration: none; }
+  a.external:hover { text-decoration: underline; }
+
+  @media (max-width: 600px) {
+    main { padding: 0 16px; }
+    h1 { font-size: 24px; }
+    nav ul { flex-wrap: wrap; gap: 4px; }
+  }
+</style>
+</head>
+
+<body>
+
+<!-- ========== NAVIGATION ========== -->
+<header class="header">
+  <div class="header-inner">
+    <div class="header-brand"><span>T</span>erra</div>
+    <nav>
+      <ul>
+        <li><a href="#overview" class="active">Overview</a></li>
+        <li><a href="#architecture">Architecture</a></li>
+        <li><a href="#crates">Crates</a></li>
+        <li><a href="#hardware">Hardware</a></li>
+        <li><a href="#apps">Apps</a></li>
+        <li><a href="#tools">Tools</a></li>
+        <li><a href="#simulation">Simulation</a></li>
+        <li><a href="#getting-started">Getting Started</a></li>
+      </ul>
+    </nav>
+  </div>
+</header>
+
+<!-- ========== MAIN CONTENT ========== -->
+<main>
+
+<h1 id="overview">Terra</h1>
+<p class="subtitle">Vehicle body and onboard autonomy for autonomous rovers</p>
+
+<div class="callout">
+  <div class="callout-header warning">
+    ⚠️ Warning
+  </div>
+  <p>Terra is an <strong>active research system</strong>. Bluetooth actuator control,
+  radio sessions, and physical compatibility remain unverified. The optional bench
+  procedure requires separate authorization.</p>
+</div>
+
+<h2 id="architecture">Architecture</h2>
+
+<p>The phone is the whole rover brain. Swift reads the sensors and drives the motors;
+every decision in between happens in the Rust crate <code>terra-av</code>, linked into the app
+as a static library. Depth also streams to the base station over Zenoh.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 1040 545" role="img" aria-label="System architecture: TerraPhone Swift app, terra-av Rust library, rover over Bluetooth, base station over Zenoh">
+  <defs>
+    <marker id="a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#5b8cf8"/></marker>
+    <marker id="a1d" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#4a5674"/></marker>
+    <marker id="a1n" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#4ade80"/></marker>
+  </defs>
+
+  <!-- Phone -->
+  <rect class="region" x="20" y="20" width="720" height="500" rx="16"/>
+  <text class="title" x="40" y="46">iPhone · TerraPhone</text>
+
+  <!-- Swift region -->
+  <rect class="region-swift" x="40" y="60" width="680" height="270" rx="12"/>
+  <text class="region-label" x="56" y="84">SWIFT APP</text>
+  <text class="label" x="230" y="84">Planner loop · 20 Hz</text>
+  <text class="label" x="530" y="84">Velocity loop · 50 Hz</text>
+
+  <rect class="node" x="60" y="112" width="170" height="56" rx="10"/>
+  <text class="title" x="76" y="136">PhoneSensors</text>
+  <text class="sub" x="76" y="154">ARKit · LiDAR · Motion · GPS</text>
+
+  <rect class="node" x="60" y="184" width="170" height="48" rx="10"/>
+  <text class="title" x="76" y="213">Joystick · E-STOP</text>
+
+  <rect class="node" x="60" y="248" width="170" height="56" rx="10"/>
+  <text class="title" x="76" y="272">RouterPassword</text>
+  <text class="sub" x="76" y="290">Keychain</text>
+
+  <rect class="node-accent" x="290" y="160" width="170" height="70" rx="10"/>
+  <text class="title" x="306" y="184">TerraAv</text>
+  <text class="sub mono" x="306" y="202">new(config, password)</text>
+  <text class="sub mono" x="306" y="218">tick(frame, goal)</text>
+
+  <rect class="node" x="530" y="112" width="170" height="56" rx="10"/>
+  <text class="title" x="546" y="136">VelocityController</text>
+  <text class="sub" x="546" y="154">feedforward + P · skid mix</text>
+
+  <rect class="node" x="530" y="232" width="170" height="48" rx="10"/>
+  <text class="title" x="546" y="261">BluetoothLink</text>
+
+  <path class="flow" d="M230,140 C262,140 258,178 288,178" marker-end="url(#a1)"/>
+  <text class="label" x="238" y="130">SensorFrame</text>
+  <path class="flow" d="M230,208 L288,200" marker-end="url(#a1)"/>
+  <text class="label" x="240" y="226">Goal</text>
+  <path class="flow-dim" d="M230,276 C262,276 258,220 288,220" marker-end="url(#a1d)"/>
+  <text class="label" x="238" y="300">at start</text>
+  <path class="flow" d="M460,190 C496,190 494,140 528,140" marker-end="url(#a1)"/>
+  <text class="label" x="466" y="214">DriveCommand</text>
+  <path class="flow" d="M615,168 L615,230" marker-end="url(#a1)"/>
+  <text class="label" x="622" y="204">WheelCommand</text>
+
+  <!-- Rust region -->
+  <rect class="region-rust" x="40" y="360" width="680" height="140" rx="12"/>
+  <text class="region-label" x="56" y="384">RUST · libterra_av.a</text>
+
+  <rect class="node" x="60" y="410" width="170" height="64" rx="10"/>
+  <text class="title" x="76" y="436">PipelineConfig</text>
+  <text class="sub" x="76" y="456">config.rs ← terra-av.toml</text>
+
+  <rect class="node-accent" x="290" y="410" width="170" height="64" rx="10"/>
+  <text class="title" x="306" y="436">Pipeline</text>
+  <text class="sub" x="306" y="456">one trait per stage ↓</text>
+
+  <rect class="node" x="530" y="410" width="170" height="64" rx="10"/>
+  <text class="title" x="546" y="436">ZenohLink</text>
+  <text class="sub" x="546" y="456">background thread</text>
+
+  <path class="flow" d="M375,230 L375,408" marker-end="url(#a1)"/>
+  <text class="label" x="383" y="348">UniFFI</text>
+  <path class="flow-dim" d="M230,442 L288,442" marker-end="url(#a1d)"/>
+  <text class="label" x="242" y="434">build</text>
+  <path class="flow" d="M460,442 L528,442" marker-end="url(#a1)"/>
+  <text class="label" x="464" y="434">publish_depth</text>
+
+  <!-- Outside the phone -->
+  <rect class="node-ext" x="790" y="100" width="230" height="52" rx="10"/>
+  <text class="title" x="806" y="131">Motors</text>
+
+  <rect class="node-ext" x="790" y="228" width="230" height="56" rx="10"/>
+  <text class="title" x="806" y="252">Rover · Raspberry Pi</text>
+  <text class="sub" x="806" y="270">BLE peripheral</text>
+
+  <rect class="node-ext" x="790" y="372" width="230" height="72" rx="10"/>
+  <text class="title" x="806" y="395">Zenoh router · GCP</text>
+  <text class="sub mono" x="806" y="413">tls/argos…:7448</text>
+  <text class="sub mono" x="806" y="431">terra/{rover_id}/depth</text>
+
+  <rect class="node-ext" x="790" y="470" width="230" height="52" rx="10"/>
+  <text class="title" x="806" y="494">Base station</text>
+  <text class="sub" x="806" y="511">dashboard · subscribers</text>
+
+  <path class="flow" d="M700,256 L788,256" marker-end="url(#a1)"/>
+  <text class="label" x="732" y="248">BLE</text>
+  <path class="flow" d="M905,228 L905,154" marker-end="url(#a1)"/>
+  <text class="label" x="912" y="196">wheel effort</text>
+  <path class="flow-net" d="M700,442 C748,442 744,410 788,410" marker-end="url(#a1n)"/>
+  <text class="label" x="746" y="460">depth</text>
+  <path class="flow-net" d="M905,444 L905,468" marker-end="url(#a1n)"/>
+</svg>
+<figcaption>The two Swift loops share only the latest <code>DriveCommand</code>, so a slow tick never delays the motors. Depth is queued and sent off the control loop.</figcaption>
+</figure>
+
+<h3>Inside terra-av</h3>
+
+<p>Each stage is a trait; each algorithm is one implementation. <code>terra-av.toml</code> picks one
+implementation per stage, so swapping a planner or a vehicle is a configuration change.</p>
+
+<figure class="diagram">
+<svg viewBox="0 0 1040 440" role="img" aria-label="terra-av pipeline: sense, estimation, mapping, global planning, local planning, safety, with comms and shared geometry and vehicle model">
+  <defs>
+    <marker id="a2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#5b8cf8"/></marker>
+    <marker id="a2n" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#4ade80"/></marker>
+  </defs>
+
+  <!-- Legend -->
+  <circle class="done" cx="28" cy="24" r="5"/>
+  <text class="label" x="40" y="28">implemented</text>
+  <circle class="stub" cx="128" cy="24" r="5"/>
+  <text class="label" x="140" y="28">stub (todo!)</text>
+  <text class="label" x="1014" y="28" text-anchor="end">Pipeline::tick, once per control tick</text>
+
+  <!-- Stage boxes: x = 22 + 144·i, w = 128 -->
+  <g>
+    <rect class="node" x="22" y="50" width="128" height="180" rx="10"/>
+    <text class="title" x="36" y="74">Sense</text>
+    <text class="sub mono" x="36" y="92">sense.rs</text>
+    <rect class="chip" x="32" y="108" width="108" height="22" rx="6"/><text class="chip-text mono" x="42" y="123">SensorFrame</text>
+    <rect class="chip" x="32" y="136" width="108" height="22" rx="6"/><text class="chip-text mono" x="42" y="151">Mount</text>
+    <text class="sub" x="36" y="216">raw, sensor frame</text>
+  </g>
+
+  <g>
+    <rect class="node" x="166" y="50" width="128" height="180" rx="10"/>
+    <text class="title" x="180" y="74">Estimation</text>
+    <text class="sub mono" x="180" y="92">StateEstimator</text>
+    <rect class="chip-stub" x="176" y="108" width="108" height="22" rx="6"/><circle class="stub" cx="188" cy="119" r="4"/><text class="chip-text mono" x="198" y="123">Vio</text>
+    <rect class="chip-stub" x="176" y="136" width="108" height="22" rx="6"/><circle class="stub" cx="188" cy="147" r="4"/><text class="chip-text mono" x="198" y="151">Localization</text>
+    <text class="sub" x="180" y="198">None → stop</text>
+    <text class="sub mono" x="180" y="216">→ State</text>
+  </g>
+
+  <g>
+    <rect class="node" x="310" y="50" width="128" height="180" rx="10"/>
+    <text class="title" x="324" y="74">Mapping</text>
+    <text class="sub mono" x="324" y="92">Mapper</text>
+    <rect class="chip-stub" x="320" y="108" width="108" height="22" rx="6"/><circle class="stub" cx="332" cy="119" r="4"/><text class="chip-text mono" x="342" y="123">NoMap</text>
+    <rect class="chip-stub" x="320" y="136" width="108" height="22" rx="6"/><circle class="stub" cx="332" cy="147" r="4"/><text class="chip-text mono" x="342" y="151">OccupancyGrid</text>
+    <text class="sub mono" x="324" y="216">→ Map</text>
+  </g>
+
+  <g>
+    <rect class="node" x="454" y="50" width="128" height="180" rx="10"/>
+    <text class="title" x="468" y="74">Global plan</text>
+    <text class="sub mono" x="468" y="92">PathPlanner</text>
+    <rect class="chip-stub" x="464" y="108" width="108" height="22" rx="6"/><circle class="stub" cx="476" cy="119" r="4"/><text class="chip-text mono" x="486" y="123">StraightLine</text>
+    <rect class="chip-stub" x="464" y="136" width="108" height="22" rx="6"/><circle class="stub" cx="476" cy="147" r="4"/><text class="chip-text mono" x="486" y="151">HybridAStar</text>
+    <text class="sub" x="468" y="198">on goal/map change</text>
+    <text class="sub mono" x="468" y="216">→ Path</text>
+  </g>
+
+  <g>
+    <rect class="node" x="598" y="50" width="128" height="180" rx="10"/>
+    <text class="title" x="612" y="74">Local plan</text>
+    <text class="sub mono" x="612" y="92">LocalPlanner</text>
+    <rect class="chip-stub" x="608" y="108" width="108" height="22" rx="6"/><circle class="stub" cx="620" cy="119" r="4"/><text class="chip-text mono" x="630" y="123">Teleop</text>
+    <rect class="chip-stub" x="608" y="136" width="108" height="22" rx="6"/><circle class="stub" cx="620" cy="147" r="4"/><text class="chip-text mono" x="630" y="151">DrivePose</text>
+    <rect class="chip-stub" x="608" y="164" width="108" height="22" rx="6"/><circle class="stub" cx="620" cy="175" r="4"/><text class="chip-text mono" x="630" y="179">Dwa</text>
+    <text class="sub mono" x="612" y="216">→ Twist</text>
+  </g>
+
+  <g>
+    <rect class="node" x="742" y="50" width="128" height="180" rx="10"/>
+    <text class="title" x="756" y="74">Execution</text>
+    <text class="sub mono" x="756" y="92">execution/</text>
+    <rect class="chip" x="752" y="108" width="108" height="22" rx="6"/><circle class="done" cx="764" cy="119" r="4"/><text class="chip-text mono" x="774" y="123">clamp</text>
+    <rect class="chip-stub" x="752" y="136" width="108" height="22" rx="6"/><circle class="stub" cx="764" cy="147" r="4"/><text class="chip-text mono" x="774" y="151">SafetyGate</text>
+    <text class="sub" x="756" y="198">wheel limits, e-stop</text>
+    <text class="sub mono" x="756" y="216">→ Twist</text>
+  </g>
+
+  <g>
+    <rect class="node-accent" x="886" y="50" width="128" height="180" rx="10"/>
+    <text class="title" x="900" y="74">DriveCommand</text>
+    <text class="sub mono" x="900" y="92">to Swift</text>
+    <rect class="chip" x="896" y="108" width="108" height="22" rx="6"/><text class="chip-text mono" x="906" y="123">target</text>
+    <rect class="chip" x="896" y="136" width="108" height="22" rx="6"/><text class="chip-text mono" x="906" y="151">measured?</text>
+    <text class="sub" x="900" y="216">→ velocity loop</text>
+  </g>
+
+  <!-- Flow arrows between stages -->
+  <path class="flow" d="M150,140 L164,140" marker-end="url(#a2)"/>
+  <path class="flow" d="M294,140 L308,140" marker-end="url(#a2)"/>
+  <path class="flow" d="M438,140 L452,140" marker-end="url(#a2)"/>
+  <path class="flow" d="M582,140 L596,140" marker-end="url(#a2)"/>
+  <path class="flow" d="M726,140 L740,140" marker-end="url(#a2)"/>
+  <path class="flow" d="M870,140 L884,140" marker-end="url(#a2)"/>
+
+  <!-- Comms branch -->
+  <path class="flow-net" d="M86,230 L86,276" marker-end="url(#a2n)"/>
+  <text class="label mono" x="94" y="258">publish_depth</text>
+  <rect class="node" x="22" y="278" width="272" height="78" rx="10"/>
+  <text class="title" x="36" y="301">Comms</text>
+  <text class="sub mono" x="96" y="301">BaseStationLink</text>
+  <rect class="chip" x="32" y="318" width="100" height="22" rx="6"/><circle class="done" cx="44" cy="329" r="4"/><text class="chip-text mono" x="54" y="333">NoLink</text>
+  <rect class="chip" x="140" y="318" width="144" height="22" rx="6"/><circle class="done" cx="152" cy="329" r="4"/><text class="chip-text mono" x="162" y="333">ZenohLink</text>
+
+  <!-- Shared foundation -->
+  <rect class="node" x="310" y="278" width="704" height="78" rx="10"/>
+  <text class="title" x="324" y="301">Shared foundation</text>
+  <text class="sub" x="460" y="301">used by every stage</text>
+  <rect class="chip" x="320" y="318" width="138" height="22" rx="6"/><circle class="done" cx="332" cy="329" r="4"/><text class="chip-text mono" x="342" y="333">geometry.rs</text>
+  <rect class="chip" x="466" y="318" width="186" height="22" rx="6"/><circle class="done" cx="478" cy="329" r="4"/><text class="chip-text mono" x="488" y="333">DiffDrive::clamp</text>
+  <rect class="chip-stub" x="660" y="318" width="166" height="22" rx="6"/><circle class="stub" cx="672" cy="329" r="4"/><text class="chip-text mono" x="682" y="333">DiffDrive::step</text>
+  <rect class="chip-stub" x="834" y="318" width="170" height="22" rx="6"/><circle class="stub" cx="846" cy="329" r="4"/><text class="chip-text mono" x="856" y="333">DiffDrive::limits</text>
+
+  <!-- Wiring -->
+  <rect class="node-ext" x="22" y="376" width="992" height="48" rx="10"/>
+  <circle class="done" cx="42" cy="400" r="4"/>
+  <text class="title" x="54" y="405">config.rs</text>
+  <text class="sub" x="128" y="405">PipelineConfig: terra-av.toml → one implementation per stage</text>
+  <circle class="done" cx="560" cy="400" r="4"/>
+  <text class="title" x="572" y="405">ffi.rs</text>
+  <text class="sub" x="620" y="405">TerraAv: Swift records ⇄ Rust types, owns the Pipeline</text>
+</svg>
+<figcaption>Today <code>Pipeline::tick</code> publishes depth and returns a zero twist; the stage chain is the intended flow.</figcaption>
+</figure>
+
+<h2 id="crates">Shared Rust Crates</h2>
+
+Terra is built as a collection of modular <a href="https://doc.rust-lang.org/" class="badge badge-rust">Rust</a> crates.
+The core autonomy pipeline lives in <code>terra-av</code>, while the phone bridge and rover
+runtime have dedicated crates.
+
+<table>
+  <thead><tr><th>Crate</th><th>Description</th></tr></thead>
+  <tbody>
+    <tr><td><strong>terra-types</strong></td><td>Sensor samples, coordinate conventions, commands and motor outputs.</td></tr>
+    <tr><td><strong>terra-actuators</strong></td><td>Configurable actuator layouts, routing and Bluetooth framing. Editable examples require capability validation and explicit port selection for ESC/servo templates.</td></tr>
+    <tr><td><strong>terra-state</strong></td><td>VIO velocity anchors with bounded IMU prediction.</td></tr>
+    <tr><td><strong>terra-control</strong></td><td>Differential-drive velocity PI control, feedforward, anti-windup and freshness checks.</td></tr>
+    <tr><td><strong>terra-waypoint</strong></td><td>Lat/lon go-to-waypoint follower. The phone imports it through <code>terra-mobile</code> as <code>MobileWaypoint</code>. TerraPhone's Waypoint section selects the goal and runs that follower.</td></tr>
+    <tr><td><strong>terra-motors</strong></td><td>Signed wheel effort to PWM duty and direction, with a hardware enable gate and a command watchdog.</td></tr>
+    <tr><td><strong>terra-mapping</strong></td><td>Rolling local occupancy grids from depth and camera poses.</td></tr>
+    <tr><td><strong>terra-transport</strong></td><td>Leased Zenoh velocity publishing. Default prefix is <code>terra/rover</code>.</td></tr>
+    <tr><td><strong>terra-mobile</strong></td><td>UniFFI interface between the Swift app and Rust.</td></tr>
+  </tbody>
+</table>
+
+<h2 id="hardware">Hardware Stack</h2>
+
+Terra runs on two main hardware targets:
+
+<table>
+  <thead><tr><th>Component</th><th>Platform</th></tr></thead>
+  <tbody>
+    <tr><td><strong>TerraPhone</strong></td><td><span class="badge badge-ios">iOS</span> — Sensor head and motor link. Reads phone sensors and sends wheel commands to the rover.</td></tr>
+    <tr><td><strong>Raspberry Pi Rover</strong></td><td><span class="badge badge-pi">Pi</span> — Onboard autonomy running <code>terra-av</code>. Executes motor commands and runs the perception pipeline.</td></tr>
+    <tr><td><strong>Fusion HAT</strong></td><td>Add-on sensor board for camera + depth fusion.</td></tr>
+  </tbody>
+</table>
+
+<p>Configurable Bluetooth actuator control is implemented for TerraPhone and a standalone Raspberry Pi peripheral.</p>
+
+<h2 id="apps">Applications</h2>
+
+<h3>TerraPhone (iOS)</h3>
+
+The phone is Terra's sensor head and motor link. It does two things:
+read the phone's sensors, and send wheel commands to the rover. Every decision in between happens in the Rust crate <code>terra-av</code>.
+
+<p><strong>Two-loop architecture:</strong></p>
+
+<pre>
+<code>Floorplan:
+Planner loop, 20 Hz:   PhoneSensors ─► SensorFrame ─► TerraAv.tick ─► DriveCommand (target + measured twist)
+                                           ▲ e-stop        ▲ Goal (joystick)
+
+Velocity loop, 50 Hz:  latest DriveCommand ─► VelocityController ─► BluetoothLink ─► Pi
+
+The two loops share only the latest command, so a slow planner tick never
+delays the motors. The velocity loop stops if the target is older than 0.3 s.</code></pre>
+
+<table>
+  <thead><tr><th>Folder</th><th>Job</th></tr></thead>
+  <tbody>
+    <tr><td>Sense/</td><td>ARKit pose, gyro, GPS, thinned LiDAR depth. Raw, in each sensor's own frame.</td></tr>
+    <tr><td>TerraAV/</td><td>Phone helpers for the generated terra-av types (<code>Vec3</code>, <code>VioPose</code> from ARKit).</td></tr>
+    <tr><td>../Generated/</td><td>Built by the script, not committed: <code>TerraAV.swift</code> bindings + <code>TerraAV.xcframework</code>.</td></tr>
+    <tr><td>Drive/</td><td>Joystick → <code>Goal.velocity</code>.</td></tr>
+    <tr><td>Motors/</td><td><code>VelocityController</code> (twist → wheel effort, P + feedforward) and the Bluetooth link to the Pi.</td></tr>
+    <tr><td>App/</td><td><code>RoverLoop</code> (the two loops) and the one screen.</td></tr>
+    <tr><td>Resources/terra-av.toml</td><td>Which algorithm runs in each stage, plus the phone mount.</td></tr>
+  </tbody>
+</table>
+
+<p>The phone mount (rotation and camera offset) lives in <code>terra-av.toml</code>, not in the app.</p>
+
+<h3>Raspberry Pi Rover</h3>
+
+The Pi runs the full autonomy pipeline and motor control. Packaging includes:
+Dockerfile, installer, systemd units, USB relay configuration, and observability setup.
+
+<table>
+  <thead><tr><th>File</th><th>Purpose</th></tr></thead>
+  <tbody>
+    <tr><td>packaging/rover/Dockerfile</td><td>Container image for rover deployment.</td></tr>
+    <tr><td>packaging/rover/install.sh</td><td>Main installation script.</td></tr>
+    <tr><td>packaging/rover/terra-rover.service</td><td>Systemd unit for the rover process.</td></tr>
+    <tr><td>packaging/rover/install-observability.sh</td><td>Install and configure the observability stack.</td></tr>
+    <tr><td>packaging/rover/install-usb-relay.py</td><td>Set up USB mass-storage relay for the Pi.</td></tr>
+  </tbody>
+</table>
+
+<h2 id="tools">Developer Tools</h2>
+
+<table>
+  <thead><tr><th>Tool</th><th>Description</th></tr></thead>
+  <tbody>
+    <tr><td><strong>observability</strong></td><td>Replay/export tool for operational diagnostics. Uses Rerun SDK to export event journals and fetch scoped recordings from collectors.</td></tr>
+    <tr><td><strong>sensor_timing</strong></td><td>Sensor timing analysis tool.</td></tr>
+    <tr><td><strong>vlm-eval</strong></td><td>Offline Visual Language Model decision evaluator. Research tool — does not command live vehicles.</td></tr>
+  </tbody>
+</table>
+
+<div class="callout">
+  <div class="callout-header danger">⚠️ Research Tool</div>
+  <p>The offline VLM decision evaluator is a research tool and does not command live vehicles.</p>
+</div>
+
+<h3>Operational replay (<code>tools/observability</code>)</h3>
+
+<p>Install from that directory with <code>uv sync --frozen</code> (Python 3.12+). The lockfile pins the
+Rerun SDK and viewer to 0.39.0; review recordings with the matching viewer.</p>
+
+<pre><code><span class="c"># Export a source journal, or a directory with events.jsonl + attachments/&lt;sha256&gt;</span>
+uv run terra-replay export /path/to/events.db --rover 4 --session RUN_ID --output /tmp/run.rrd
+uv run rerun /tmp/run.rrd
+
+<span class="c"># Download a scoped recording from the collector (reader token file mode 0600)</span>
+uv run terra-replay fetch https://HOST/observability --token-file /private/reader.token \
+    --rover 4 --session RUN_ID --output-dir /tmp/rover-run
+uv run rerun /tmp/rover-run/recording.rrd
+
+<span class="c"># Synthetic demo fixture (not a physical run; regenerate with tests/make_demo.py)</span>
+uv run terra-replay export tests/fixtures/demo --output /tmp/demo.rrd
+uv run pytest tests</code></pre>
+
+<ul style="margin: 0 0 14px 20px;">
+  <li>Find session IDs with authenticated <code>GET /observability/v1/sessions</code> or from the source journal. Credentials go in the Authorization header, never in URLs or recordings; <code>fetch</code> does not follow redirects.</li>
+  <li>An export also writes <code>.events.jsonl</code>, <code>.index.json</code> and <code>.manifest.json</code>, keeping event identity, source/receipt time, gap count, revision and clock uncertainty. Late events create a new revision; source events are never renumbered and no drive commands are sent.</li>
+  <li>The default layout shows event text, motion curves, occupancy (unknown is gray), camera/depth and 3D ground/obstacle boundaries. Missing attachments stay explicitly missing, and stale channels are cleared so an old image never appears registered to new depth. Simulator RGB is shown separately from calibrated depth.</li>
+  <li><code>wall_clock_approx</code> is approximate across machines; <code>estimated_server_time</code> uses measured RTT offset where available (drift is not measured). Per-producer boot sequences are authoritative for ordering.</li>
+</ul>
+
+<h3>Sensor timing (<code>tools/sensor_timing</code>)</h3>
+
+<p>Splits the age of the newest IMU sample at each control tick into hops, to tell whether a
+<code>stale_imu</code> hold came from iOS or from Terra. A bare logger with its own
+<code>CMMotionManager</code> records what iOS delivers with none of Terra's code in the way.</p>
+
+<pre><code>CoreMotion sample ──iOS delivery──▶ motion handler ──Terra queue──▶ terra.control ──push──▶ Rust
+  t_sensor                            t_os                              t_queue                t_done
+
+<span class="c"># Fetch recordings from the phone, then analyse</span>
+xcrun devicectl device copy from --device &lt;id&gt; --domain-type appDataContainer \
+  --domain-identifier org.terra.robotics.phone --source Documents/SensorTiming \
+  --destination ~/terra-logs/sensor-timing
+python3 tools/sensor_timing/analyze_sensor_timing.py ~/terra-logs/sensor-timing/*.csv --json summary.json --plot plots/
+python3 -m unittest discover tools/sensor_timing</code></pre>
+
+<table>
+  <thead><tr><th>Cause</th><th>Meaning</th></tr></thead>
+  <tbody>
+    <tr><td><code>ios_sensor_gap</code></td><td>iOS produced no IMU sample in the window.</td></tr>
+    <tr><td><code>ios_delivery</code></td><td>The sample existed but iOS had not called the handler yet.</td></tr>
+    <tr><td><code>terra_queue</code></td><td>The handler had it, but <code>terra.control</code> was busy (blocker named).</td></tr>
+  </tbody>
+</table>
+
+<p>Conditions C0–C5 step from a still rover with only the bare IMU logger up to full tracking, YOLO and FPV
+while driving; run C2 and C4 in both Debug and Release. Recording needs the Sensor timing debug screen,
+which the slimmed TerraPhone no longer has.</p>
+
+<h3>Detector model (<code>models/yolo26n-rover</code>)</h3>
+
+<p>YOLO26n trained on <code>ball</code>, <code>blue bucket</code> and <code>orange bucket</code> (100 epochs, 640 px;
+val mAP50 0.95, precision 0.95, recall 0.93; see <code>results.csv</code>). It was used as
+<code>RoverDetector.mlpackage</code> for target search; the current TerraPhone does not bundle it.</p>
+
+<pre><code>pip install ultralytics coremltools
+yolo export model=weights/best.pt format=coreml nms=False half=True imgsz=640</code></pre>
+
+<p><code>nms=False</code> keeps YOLO26's end-to-end head: one <code>[1, 300, 6]</code> output, rows
+<code>[x1, y1, x2, y2, score, class]</code> in 640 px input coordinates, duplicates already removed.
+The package was exported with ultralytics 8.4.190, coremltools 9.0, torch 2.7.0 and numpy 2.5. That
+coremltools fails on numpy 2.5 with “only 0-dimensional arrays can be converted to Python scalars”;
+change <code>dtype(x.val)</code> to <code>dtype(x.val.item())</code> in <code>_cast</code> in
+<code>coremltools/converters/mil/frontend/torch/ops.py</code>.</p>
+
+<h2 id="simulation">Simulation with Zorvane</h2>
+
+World, cameras, physics, and the Zenoh bridge live in
+<a href="https://super-yojan.dev/Zorvane/" class="badge badge-doc">Zorvane</a>.
+
+<pre>
+<code># Start the simulator
+cargo run -p zorvane
+
+# The Zenoh prefix stays terra/rover (teleop, goal, cameras, fleet).
+# TERRA_* variables select the fleet, tiles, mission, and listen address.
+
+export TERRA_ZENOH_LISTEN=tcp/127.0.0.1:7447
+
+# Tile worlds and the go-to-waypoint contract are documented in:
+# simulator/WORLD.md and simulator/ZENOH.md</code></pre>
+
+<div class="callout">
+  <div class="callout-header warning">⚠️ Simulation</div>
+  <p>The Zenoh bridge prefix stays <code>terra/rover</code>. The <code>TERRA_*</code> environment variables still select the fleet, tiles, mission, and listen address. Tile worlds and the go-to-waypoint contract are documented in Zorvane.</p>
+</div>
+
+<h2 id="getting-started">Getting Started</h2>
+
+<table>
+  <thead><tr><th>Task</th><th>Command / Steps</th></tr></thead>
+  <tbody>
+    <tr><td>Clone &amp; build crates</td><td><code>$ cargo test --locked --workspace</code></tr>
+    <tr><td>Add iOS targets &amp; build app</td><td><code>$ rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios<br>  $ ./scripts/ios/build-ios.sh</code></tr>
+    <tr><td>Run the simulator</td><td><code>$ cargo run -p zorvane</code></tr>
+    <tr><td>Run observability tests</td><td><code>$ uv run terra-replay export tests/fixtures/demo --output /tmp/demo.rrd<br>  $ uv run rerun /tmp/demo.rrd</code></tr>
+    <tr><td>Open the iOS project</td><td>After build: open <code>apps/ios/TerraPhone.xcodeproj</code> in Xcode and run on an iPhone with LiDAR.</td></tr>
+  </tbody>
+</table>
+
+<div class="callout">
+  <div class="callout-header warning">⚠️ Build</div>
+  <p>The script generates the Swift bindings from <code>crates/terra-av/src/ffi.rs</code>,
+  builds the static library for device and simulator, bundles <code>apps/ios/Generated/TerraAV.xcframework</code>,
+  and regenerates the Xcode project. Re-run <code>./scripts/ios/build-ios.sh</code> after any Rust change.</p>
+</div>
+
+<p><strong>Status:</strong> The app calls the real Rust <code>TerraAv.tick</code>. It returns a zero twist until the pipeline stages are implemented. Bluetooth, sensors, joystick and e-stop are real.</p>
+
+</main>
+
+<!-- ========== FOOTER ========== -->
+<footer class="footer">
+  <p>Terra — Vehicle Body &amp; Onboard Autonomy</p>
+  <p style="margin-top:6px;">Documentation generated from project sources. See
+    <a href="https://super-yojan.dev/Terra/" class="external">Terra</a> &amp;
+    <a href="https://super-yojan.dev/Zorvane/" class="external">Zorvane</a> for full docs.</p>
+</footer>
+
+</body>
+</html>

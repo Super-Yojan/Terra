@@ -35,4 +35,3 @@ for i in range(20):
   add('mapping.evidence',at,manifest)
   add('motion.pause',at,{'reason':'heading_requires_spin_or_replan','fixture':True})
 (ROOT/'events.jsonl').write_text(''.join(json.dumps(e)+'\n' for e in events))
-(ROOT/'README.md').write_text('Synthetic floor/box and motion-pause evidence for software replay acceptance. Not physical rover data. Regenerate with tests/make_demo.py.\n')

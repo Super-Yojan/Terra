@@ -7,7 +7,7 @@ use crate::{sense::SensorFrame, vehicle::VehicleModel};
 pub struct Localization;
 
 impl StateEstimator for Localization {
-    fn update(&mut self, frame: &SensorFrame, vehicle: &dyn VehicleModel) -> State {
+    fn update(&mut self, frame: &SensorFrame, vehicle: &dyn VehicleModel) -> Option<State> {
         todo!()
     }
 }

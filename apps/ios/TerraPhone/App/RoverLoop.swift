@@ -12,7 +12,8 @@ import Foundation
 final class RoverLoop: ObservableObject {
     let sensors = PhoneSensors()
     let motors = BluetoothLink()
-    private let av: TerraAv
+    /// Replaced only on `plannerQueue` (see `setRouterPassword`).
+    private var av: TerraAv
     private var controller = VelocityController()
 
     private let plannerQueue = DispatchQueue(label: "terra.planner")
@@ -32,12 +33,24 @@ final class RoverLoop: ObservableObject {
     @Published private(set) var command = WheelCommand.stop
 
     /// Joystick full scale.
-    let maxSpeed = 0.5      // m/s
-    let maxTurn = 1.5       // rad/s
+    let maxSpeed = 0.5 // m/s
+    let maxTurn = 1.5 // rad/s
 
     init() {
+        av = Self.makeAv()
+    }
+
+    /// terra-av from the bundled terra-av.toml plus the Keychain router password.
+    private static func makeAv() -> TerraAv {
         let url = Bundle.main.url(forResource: "terra-av", withExtension: "toml")
-        av = TerraAv(configToml: url.flatMap { try? String(contentsOf: $0, encoding: .utf8) } ?? "")
+        let toml = url.flatMap { try? String(contentsOf: $0, encoding: .utf8) } ?? ""
+        return TerraAv(configToml: toml, routerPassword: RouterPassword.load())
+    }
+
+    /// Store the router password and reconnect with it (empty clears it).
+    func setRouterPassword(_ password: String) {
+        RouterPassword.save(password)
+        plannerQueue.async { self.av = Self.makeAv() }
     }
 
     func start() {
@@ -67,17 +80,20 @@ final class RoverLoop: ObservableObject {
 
     func setEstop(_ on: Bool) {
         plannerQueue.async { self.estop = on }
-        if on { lock.lock(); latest = nil; lock.unlock(); motors.send(.stop) }
+        if on {
+            lock.lock(); latest = nil; lock.unlock(); motors.send(.stop)
+        }
         estopped = on
     }
 
     private func plannerTick() {
-        print(goal)
         let out = av.tick(frame: sensors.frame(estop: estop), goal: goal)
+
+        // print(sensors.frame(estop: false).depth)
+
         lock.lock(); latest = (out, ProcessInfo.processInfo.systemUptime); lock.unlock()
     }
 
-    
     /// Joystick → wheel efforts (arcade drive).
     /// forward: +1 = full ahead, turn: +1 = full left. Both in [-1, 1].
     func joystickToMotors(forward: Double, turn: Double, maxEffort: Double = 0.5) -> WheelCommand {
@@ -89,26 +105,29 @@ final class RoverLoop: ObservableObject {
         right /= biggest
         return WheelCommand(left: left * maxEffort, right: right * maxEffort)
     }
-    
+
     private func velocityTick() {
         lock.lock(); let latest = self.latest; lock.unlock()
-        
+
         if case let .velocity(v, w) = goal {
             motors.send(joystickToMotors(forward: v, turn: w))
         } else {
             motors.send(.stop)
         }
-        
+
         let out: WheelCommand
         if let latest {
-            out = controller.command(target: latest.command.target, measured: latest.command.measured,
-                                     targetAge: ProcessInfo.processInfo.systemUptime - latest.at)
+            out = controller.command(target: latest.command.target, measured: latest.command.measured, targetAge: ProcessInfo.processInfo.systemUptime - latest.at)
         } else {
             out = .stop
         }
-        
-        //motors.send(out)
-        DispatchQueue.main.async { if self.command != out { self.command = out } }
+
+        motors.send(out)
+        DispatchQueue.main.async {
+            if self.command != out {
+                self.command = out
+            }
+        }
     }
 
     private func repeating(every interval: DispatchTimeInterval, on queue: DispatchQueue, _ body: @escaping () -> Void) -> DispatchSourceTimer {

@@ -10,6 +10,8 @@ struct TerraPhoneApp: App {
 struct ContentView: View {
     @ObservedObject var loop: RoverLoop
     @ObservedObject var motors: BluetoothLink
+    @State private var editingPassword = false
+    @State private var password = ""
 
     var body: some View {
         VStack(spacing: 16) {
@@ -28,8 +30,17 @@ struct ContentView: View {
                 .font(.title2.bold()).frame(maxWidth: .infinity, minHeight: 64)
                 .background(loop.estopped ? Color.gray : Color.red).foregroundStyle(.white)
                 .clipShape(RoundedRectangle(cornerRadius: 14))
+            Button("Router password") { password = ""; editingPassword = true }
+                .font(.footnote)
         }
         .padding()
+        .alert("Fleet router password", isPresented: $editingPassword) {
+            SecureField("Password", text: $password)
+            Button("Save") { loop.setRouterPassword(password) }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Stored in the Keychain and used to send depth to the base station. Save empty to clear.")
+        }
     }
 
     @ViewBuilder private var connection: some View {

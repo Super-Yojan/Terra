@@ -13,12 +13,13 @@
 pub mod geometry;
 pub mod vehicle;
 
-pub mod sense;
 pub mod estimation;
+pub mod execution;
 pub mod mapping;
 pub mod planning;
-pub mod execution;
+pub mod sense;
 
+pub mod comms;
 pub mod config;
 pub mod pipeline;
 
