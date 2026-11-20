@@ -2274,6 +2274,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "terra-comms"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "toml",
+ "zenoh",
+]
+
+[[package]]
 name = "textwrap"
 version = "0.16.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"

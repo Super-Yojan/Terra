@@ -1,0 +1,22 @@
+[package]
+name = "terra-comms"
+version.workspace = true
+edition.workspace = true
+description = "Wire contract between the rover (terra-av) and the base station over Zenoh: config, keys, messages, links."
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.9"
+# Same version and transports as terra-av: TCP and TLS only, with router login.
+zenoh = { version = "=1.10.1", default-features = false, features = ["auth_usrpwd", "transport_tcp", "transport_tls"], optional = true }
+
+[features]
+default = ["zenoh"]
+# Without it: only config, topics, messages, params and `validate` (tests,
+# replay tools, a smaller build with no link).
+zenoh = ["dep:zenoh"]
+
+[[example]]
+name = "demo"
+required-features = ["zenoh"]
