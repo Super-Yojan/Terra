@@ -5,16 +5,25 @@ use crate::geometry::{Rotation3, Vec3};
 
 pub struct SensorFrame {
     pub t: f64,
-    pub estop: bool,                   // phone e-stop pressed
-    pub vio: Option<VioPose>,          // ARKit camera pose
-    pub gyro: Option<Vec3>,            // Core Motion rotation rate, phone frame (rad/s)
-    pub gps: Option<GpsFix>,           // Core Location
-    pub depth: Vec<Vec3>,              // thinned LiDAR points, camera frame (m)
+    pub estop: bool,          // phone e-stop pressed
+    pub vio: Option<VioPose>, // ARKit camera pose
+    pub gyro: Option<Vec3>,   // Core Motion rotation rate, phone frame (rad/s)
+    pub gps: Option<GpsFix>,  // Core Location
+    pub depth: Vec<Vec3>,     // thinned LiDAR points, camera frame (m)
 }
 
 /// ARKit `camera.transform`: camera → ARKit world.
-pub struct VioPose { pub position: Vec3, pub rotation: Rotation3, pub tracked: bool }
-pub struct GpsFix { pub latitude: f64, pub longitude: f64, pub accuracy: f64 }
+#[derive(Debug)]
+pub struct VioPose {
+    pub position: Vec3,
+    pub rotation: Rotation3,
+    pub tracked: bool,
+}
+pub struct GpsFix {
+    pub latitude: f64,
+    pub longitude: f64,
+    pub accuracy: f64,
+}
 
 /// Where the phone sits on the rover. Set once in the config (TOML), not in
 /// the app. Used by estimation (VIO pose) and mapping (depth points).

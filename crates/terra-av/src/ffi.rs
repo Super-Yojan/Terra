@@ -69,13 +69,15 @@ pub struct TerraAv {
 #[uniffi::export]
 impl TerraAv {
     /// Build the pipeline from the app's terra-av.toml. `router_password`
-    /// (from the Keychain) replaces any `[comms] password` in the file.
-    /// An invalid config leaves no pipeline, so every tick stops the rover;
-    /// the parse error is printed to the console.
+    /// (from the Keychain) is the `[comms]` router password; the file never
+    /// holds one. An invalid config leaves no pipeline, so every tick stops
+    /// the rover; the error is printed to the console.
     #[uniffi::constructor]
     pub fn new(config_toml: String, router_password: Option<String>) -> Arc<Self> {
-        let pipeline = match PipelineConfig::from_toml(&config_toml) {
-            Ok(config) => Some(config.with_router_password(router_password).build()),
+        let built = PipelineConfig::from_toml(&config_toml)
+            .and_then(|config| config.with_router_password(router_password).build());
+        let pipeline = match built {
+            Ok(pipeline) => Some(pipeline),
             Err(e) => {
                 eprintln!("terra-av: invalid config, rover will not drive: {e}");
                 None
@@ -96,12 +98,41 @@ impl TerraAv {
         match pipeline.as_mut() {
             None => stop,
             Some(pipeline) => {
-                let out = pipeline.tick(&frame.into(), &goal.into());
+                let out = pipeline.tick(frame.into(), &goal.into());
                 DriveCommand {
                     target: out.target.into(),
                     measured: out.measured.map(Into::into),
                 }
             }
+        }
+    }
+
+    /// Publish a serialized ARKit `ARWorldMap` (`NSKeyedArchiver` bytes) plus its
+    /// `rawFeaturePoints` (in ARKit world frame `A`) to the base station over `terra-comms`.
+    pub fn publish_world_map(&self, t: f64, points: Vec<Vec3>, data: Vec<u8>) {
+        let mut pipeline = self.pipeline.lock().unwrap();
+        if let Some(pipeline) = pipeline.as_mut() {
+            let pts: Vec<geometry::Vec3> = points.into_iter().map(Into::into).collect();
+            pipeline.publish_world_map(t, &pts, data);
+        }
+    }
+
+    /// Publish one incremental ARKit `ARMeshAnchor` chunk (vertices in ARKit world `A`,
+    /// flat triangle vertex indices `[i0, i1, i2, ...]`, and 1-byte `ARMeshClassification`
+    /// per face) to the base station over `terra-comms`. Empty `vertices` + `indices`
+    /// signals that chunk `id` was removed.
+    pub fn publish_mesh_chunk(
+        &self,
+        t: f64,
+        id: String,
+        vertices: Vec<Vec3>,
+        indices: Vec<u32>,
+        classes: Vec<u8>,
+    ) {
+        let mut pipeline = self.pipeline.lock().unwrap();
+        if let Some(pipeline) = pipeline.as_mut() {
+            let verts: Vec<geometry::Vec3> = vertices.into_iter().map(Into::into).collect();
+            pipeline.publish_mesh_chunk(t, id, &verts, &indices, classes);
         }
     }
 }

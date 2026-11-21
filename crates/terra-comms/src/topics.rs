@@ -13,6 +13,8 @@ pub enum Topic {
     Pose,
     Status,
     Depth,
+    WorldMap,
+    Mesh,
     RemoteState,
     // base → rover
     Task,
@@ -29,13 +31,15 @@ pub enum Direction {
 }
 
 impl Topic {
-    pub const COUNT: usize = 11;
+    pub const COUNT: usize = 13;
     pub const ALL: [Topic; Self::COUNT] = [
         Self::Capabilities,
         Self::TaskStatus,
         Self::Pose,
         Self::Status,
         Self::Depth,
+        Self::WorldMap,
+        Self::Mesh,
         Self::RemoteState,
         Self::Task,
         Self::TaskCommand,
@@ -52,6 +56,8 @@ impl Topic {
             Self::Pose => "pose",
             Self::Status => "status",
             Self::Depth => "depth",
+            Self::WorldMap => "world_map",
+            Self::Mesh => "mesh",
             Self::RemoteState => "remote/state",
             Self::Task => "task",
             Self::TaskCommand => "task/cmd",
@@ -72,6 +78,8 @@ impl Topic {
             | Self::Pose
             | Self::Status
             | Self::Depth
+            | Self::WorldMap
+            | Self::Mesh
             | Self::RemoteState => Direction::RoverToBase,
             Self::Task | Self::TaskCommand | Self::Teleop | Self::RemoteCmd | Self::Estop => {
                 Direction::BaseToRover

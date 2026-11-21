@@ -21,6 +21,8 @@ use crate::topics::Topic;
 
 /// Task commands kept between ticks; the oldest is dropped beyond this.
 const MAX_QUEUED_COMMANDS: usize = 16;
+/// Incremental `ARMeshAnchor` chunks queued for sending; oldest dropped if full.
+const MAX_QUEUED_MESH_CHUNKS: usize = 64;
 /// How often the sender thread wakes to re-send and check the connection.
 const SENDER_TICK: Duration = Duration::from_millis(100);
 
@@ -101,7 +103,13 @@ impl RoverLink {
         if topic.repeat_period().is_some() {
             out.retained[topic.index()] = Some(Retained { msg: payload.clone(), last_sent: None });
         }
-        if out.pending[topic.index()].replace(payload).is_some() {
+        if topic == Topic::Mesh {
+            if out.mesh_queue.len() == MAX_QUEUED_MESH_CHUNKS {
+                out.mesh_queue.pop_front();
+                self.handle.0.counters.dropped(topic);
+            }
+            out.mesh_queue.push_back(payload);
+        } else if out.pending[topic.index()].replace(payload).is_some() {
             self.handle.0.counters.dropped(topic);
         }
         drop(out);
@@ -208,6 +216,8 @@ struct Outgoing {
 struct OutState {
     /// Waiting to go out, newest only.
     pending: [Option<Outgoing>; Topic::COUNT],
+    /// Incremental mesh chunks (FIFO so batched anchor updates don't clobber each other).
+    mesh_queue: VecDeque<Outgoing>,
     /// Last message of each repeating topic.
     retained: [Option<Retained>; Topic::COUNT],
     closed: bool,
@@ -226,7 +236,7 @@ impl Outbox {
 
 impl OutState {
     fn has_pending(&self) -> bool {
-        self.pending.iter().any(Option::is_some)
+        self.pending.iter().any(Option::is_some) || !self.mesh_queue.is_empty()
     }
 
     /// Everything to send now: pending messages, plus repeats that are due
@@ -234,6 +244,12 @@ impl OutState {
     fn take_due(&mut self, now: Instant, resend_all: bool) -> Vec<(Topic, Outgoing)> {
         let mut due = Vec::new();
         for topic in Topic::ALL {
+            if topic == Topic::Mesh {
+                while let Some(msg) = self.mesh_queue.pop_front() {
+                    due.push((Topic::Mesh, msg));
+                }
+                continue;
+            }
             let i = topic.index();
             let retained = &mut self.retained[i];
             if let Some(msg) = self.pending[i].take() {
@@ -280,10 +296,16 @@ fn send_loop(core: &Core, outbox: &Outbox, rover_id: u64) {
                 let publisher = match publishers.entry(topic) {
                     Entry::Occupied(e) => e.into_mut(),
                     Entry::Vacant(e) => {
-                        let priority = if topic == Topic::Depth { Priority::DataLow } else { Priority::Data };
+                        let (congestion, priority) = match topic {
+                            Topic::Depth => (CongestionControl::Drop, Priority::DataLow),
+                            Topic::WorldMap | Topic::Mesh => {
+                                (CongestionControl::Block, Priority::DataLow)
+                            }
+                            _ => (CongestionControl::Drop, Priority::Data),
+                        };
                         match session
                             .declare_publisher(core.topics.key(rover_id, topic))
-                            .congestion_control(CongestionControl::Drop)
+                            .congestion_control(congestion)
                             .priority(priority)
                             .wait()
                         {

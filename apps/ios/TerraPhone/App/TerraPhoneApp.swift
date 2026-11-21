@@ -3,63 +3,117 @@ import SwiftUI
 @main
 struct TerraPhoneApp: App {
     @StateObject private var loop = RoverLoop()
-    var body: some Scene { WindowGroup { ContentView(loop: loop, motors: loop.motors) } }
+    var body: some Scene { WindowGroup { HomeView(loop: loop, motors: loop.motors) } }
 }
 
-/// One screen: rover connection, start/stop, e-stop, joystick.
-struct ContentView: View {
+/// Home: a still orb and one action. "Mounted" means the phone is on the
+/// rover: the screen goes black, the orb animates and the rover runs.
+/// Setup (vehicle type, actuators, ports, base station) is behind the gear,
+/// and opens by itself the first time.
+struct HomeView: View {
     @ObservedObject var loop: RoverLoop
     @ObservedObject var motors: BluetoothLink
-    @State private var editingPassword = false
-    @State private var password = ""
+    @State private var showSetup = false
+    @State private var mounted = false
 
     var body: some View {
-        VStack(spacing: 16) {
-            connection
-            HStack {
-                Button(loop.running ? "Stop" : "Start") { loop.running ? loop.stop() : loop.start() }
-                    .buttonStyle(.borderedProminent)
-                Spacer()
-                Text(String(format: "L %+.2f  R %+.2f", loop.command.left, loop.command.right))
-                    .font(.footnote.monospacedDigit()).foregroundStyle(.secondary)
-            }
-            Joystick { forward, turn in loop.setStick(forward: forward, turn: turn) }
-                .disabled(!loop.running || loop.estopped)
-                .opacity(loop.running && !loop.estopped ? 1 : 0.4)
-            Button(loop.estopped ? "Release E-STOP" : "E-STOP") { loop.setEstop(!loop.estopped) }
-                .font(.title2.bold()).frame(maxWidth: .infinity, minHeight: 64)
-                .background(loop.estopped ? Color.gray : Color.red).foregroundStyle(.white)
-                .clipShape(RoundedRectangle(cornerRadius: 14))
-            Button("Router password") { password = ""; editingPassword = true }
-                .font(.footnote)
-        }
-        .padding()
-        .alert("Fleet router password", isPresented: $editingPassword) {
-            SecureField("Password", text: $password)
-            Button("Save") { loop.setRouterPassword(password) }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("Stored in the Keychain and used to send depth to the base station. Save empty to clear.")
-        }
-    }
-
-    @ViewBuilder private var connection: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Circle().fill(motors.ready ? Color.green : Color.orange).frame(width: 10, height: 10)
-                Text(motors.status).font(.headline)
-                Spacer()
-                if motors.connected != nil { Button("Disconnect") { motors.disconnect() } }
-                else { Button("Scan") { motors.scan() } }
-            }
-            if motors.connected == nil {
-                ForEach(motors.rovers) { rover in
-                    Button { motors.connect(rover.id) } label: {
-                        Label(rover.pairing ? "\(rover.name) · pair" : rover.name, systemImage: "antenna.radiowaves.left.and.right")
+        ZStack {
+            Color.black.ignoresSafeArea()
+            OrbView(animated: false).ignoresSafeArea()
+            VStack(spacing: 0) {
+                HStack {
+                    Text("Terra").font(.title2.weight(.semibold))
+                    Spacer()
+                    Button { showSetup = true } label: {
+                        Image(systemName: "gearshape").font(.title2)
                     }
+                    .accessibilityLabel("Set up the rover")
+                }
+                .padding(.horizontal, 24)
+                .padding(.top, 12)
+
+                Spacer()
+
+                Button { mounted = true } label: {
+                    Text("Mounted")
+                        .font(.headline)
+                        .frame(maxWidth: .infinity, minHeight: 56)
+                        .background(Theme.accent, in: Capsule())
+                }
+                .padding(.horizontal, 24)
+                .padding(.bottom, 24)
+            }
+        }
+        .foregroundStyle(.white)
+        .preferredColorScheme(.dark)
+        .sheet(isPresented: $showSetup) { SetupView(loop: loop, motors: motors) }
+        .fullScreenCover(isPresented: $mounted) { MountedView(loop: loop) }
+        .onAppear { if VehicleSetup.load() == nil { showSetup = true } }
+    }
+}
+
+/// The phone is on the rover: everything black except the animated orb.
+/// The rover loop runs and the screen stays on. Hold for two seconds to exit,
+/// which stops the rover.
+struct MountedView: View {
+    @ObservedObject var loop: RoverLoop
+    @Environment(\.dismiss) private var dismiss
+    @State private var hint = true
+
+    var body: some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+            OrbView(animated: true).ignoresSafeArea()
+            VStack {
+                HStack {
+                    if let status = loop.worldMapStatus {
+                        Text(status)
+                            .font(.caption)
+                            .foregroundStyle(.white.opacity(0.6))
+                    }
+                    Spacer()
+                    Button { loop.sendWorldMap() } label: {
+                        Label("Send Map", systemImage: "map")
+                            .font(.caption.weight(.medium))
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .background(.white.opacity(0.14), in: Capsule())
+                    }
+                }
+                .padding(.horizontal, 20)
+                .padding(.top, 16)
+                Spacer()
+                if hint {
+                    Text("Hold anywhere to exit")
+                        .font(.footnote)
+                        .foregroundStyle(.white.opacity(0.4))
+                        .padding(.bottom, 40)
+                        .transition(.opacity)
                 }
             }
         }
-        .padding().background(Color(uiColor: .secondarySystemGroupedBackground)).clipShape(RoundedRectangle(cornerRadius: 14))
+        .contentShape(Rectangle())
+        .onLongPressGesture(minimumDuration: 2) { dismiss() }
+        .statusBarHidden()
+        .persistentSystemOverlays(.hidden)
+        .onAppear {
+            UIApplication.shared.isIdleTimerDisabled = true
+            loop.start()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
+                withAnimation(.easeOut(duration: 1)) { hint = false }
+            }
+        }
+        .onDisappear {
+            loop.stop()
+            UIApplication.shared.isIdleTimerDisabled = false
+        }
     }
+}
+
+enum Theme {
+    static let accent = Color(red: 0.24, green: 0.42, blue: 0.88)
+    static let card = Color(white: 0.12)
+    static let line = Color(white: 0.22)
+    static let secondary = Color(white: 0.6)
+    static let warning = Color(red: 0.96, green: 0.65, blue: 0.14)
 }

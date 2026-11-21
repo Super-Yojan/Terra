@@ -20,3 +20,7 @@ zenoh = ["dep:zenoh"]
 [[example]]
 name = "demo"
 required-features = ["zenoh"]
+
+[[example]]
+name = "router"
+required-features = ["zenoh"]

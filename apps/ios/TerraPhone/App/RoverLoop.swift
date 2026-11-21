@@ -30,6 +30,7 @@ final class RoverLoop: ObservableObject {
 
     @Published private(set) var running = false
     @Published private(set) var estopped = false
+    @Published private(set) var worldMapStatus: String?
     @Published private(set) var command = WheelCommand.stop
 
     /// Joystick full scale.
@@ -38,19 +39,56 @@ final class RoverLoop: ObservableObject {
 
     init() {
         av = Self.makeAv()
+        sensors.onMeshChunk = { [weak self] id, vertices, indices, classes in
+            guard let self else { return }
+            let t = ProcessInfo.processInfo.systemUptime
+            self.plannerQueue.async {
+                self.av.publishMeshChunk(t: t, id: id, vertices: vertices, indices: indices, classes: classes)
+            }
+        }
     }
 
-    /// terra-av from the bundled terra-av.toml plus the Keychain router password.
+    /// terra-av from the bundled terra-av.toml, with the vehicle from the
+    /// app's setup (if any), plus the Keychain router password.
     private static func makeAv() -> TerraAv {
         let url = Bundle.main.url(forResource: "terra-av", withExtension: "toml")
-        let toml = url.flatMap { try? String(contentsOf: $0, encoding: .utf8) } ?? ""
+        var toml = url.flatMap { try? String(contentsOf: $0, encoding: .utf8) } ?? ""
+        if let setup = VehicleSetup.load() { toml = setup.applying(to: toml) }
         return TerraAv(configToml: toml, routerPassword: RouterPassword.load())
+    }
+
+    /// Save the vehicle setup and rebuild terra-av with it.
+    func setVehicle(_ setup: VehicleSetup) {
+        setup.save()
+        plannerQueue.async { self.av = Self.makeAv() }
     }
 
     /// Store the router password and reconnect with it (empty clears it).
     func setRouterPassword(_ password: String) {
         RouterPassword.save(password)
         plannerQueue.async { self.av = Self.makeAv() }
+    }
+
+    /// Capture the current ARKit `ARWorldMap` and publish it to the base station.
+    func sendWorldMap() {
+        DispatchQueue.main.async { self.worldMapStatus = "Capturing world map..." }
+        sensors.captureWorldMap { [weak self] result in
+            guard let self else { return }
+            switch result {
+            case .success(let snapshot):
+                let t = ProcessInfo.processInfo.systemUptime
+                self.plannerQueue.async {
+                    self.av.publishWorldMap(t: t, points: snapshot.points, data: snapshot.data)
+                }
+                let kb = Double(snapshot.data.count) / 1024.0
+                let size = kb >= 1024.0 ? String(format: "%.2f MB", kb / 1024.0) : String(format: "%.0f KB", kb)
+                print("[WorldMap] sent \(snapshot.points.count) pts, \(size) (\(snapshot.data.count) bytes)")
+                DispatchQueue.main.async { self.worldMapStatus = "Map sent (\(snapshot.points.count) pts · \(size))" }
+            case .failure(let error):
+                print("[WorldMap] capture failed: \(error.localizedDescription)")
+                DispatchQueue.main.async { self.worldMapStatus = "Map failed: \(error.localizedDescription)" }
+            }
+        }
     }
 
     func start() {
@@ -109,10 +147,15 @@ final class RoverLoop: ObservableObject {
     private func velocityTick() {
         lock.lock(); let latest = self.latest; lock.unlock()
 
+        // Test drive from the phone's joystick goes straight to the motors
+        // (terra-av's tick doesn't drive yet). Otherwise send only the
+        // controller's output: sending .stop first made every tick alternate
+        // stop / drive frames.
         if case let .velocity(v, w) = goal {
-            motors.send(joystickToMotors(forward: v, turn: w))
-        } else {
-            motors.send(.stop)
+            let out = joystickToMotors(forward: v, turn: w)
+            motors.send(out)
+            DispatchQueue.main.async { if self.command != out { self.command = out } }
+            return
         }
 
         let out: WheelCommand

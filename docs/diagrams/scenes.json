@@ -1,0 +1,21 @@
+{
+  "_comment": "Excalidraw+ scenes (workspace 'Masters Thesis', Private collection). `just diagrams` regenerates and pushes the ones with push = true. Scenes edited online (coordinate-frames, app-wireframes) have push = false: Excalidraw+ is their source of truth, never push over them.",
+  "pipeline": {
+    "scene": "2twS4Mv5BhQ",
+    "name": "Terra Pipeline",
+    "generator": "gen_pipeline.py",
+    "push": true
+  },
+  "app-wireframes": {
+    "scene": "6NbkTQHV6BC",
+    "name": "TerraPhone wireframes",
+    "generator": "gen_app_wireframes.py",
+    "push": false
+  },
+  "coordinate-frames": {
+    "scene": "58zYEqNteUZ",
+    "name": "coordinate-frames",
+    "generator": "gen_coordinate_frames.py",
+    "push": false
+  }
+}

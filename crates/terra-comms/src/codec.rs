@@ -154,6 +154,161 @@ impl Message for Depth {
 }
 impl Uplink for Depth {}
 
+#[derive(Serialize, serde::Deserialize)]
+struct WorldMapHeader {
+    t: f64,
+    sequence: u64,
+    #[serde(default)]
+    points: usize,
+    size: usize,
+}
+
+impl Message for WorldMap {
+    const TOPIC: Topic = Topic::WorldMap;
+
+    fn encode(&self) -> Vec<u8> {
+        let header = WorldMapHeader {
+            t: self.t,
+            sequence: self.sequence,
+            points: self.points.len(),
+            size: self.data.len(),
+        };
+        let mut out = encode_json(&header);
+        out.reserve(1 + self.points.len() * 12 + self.data.len());
+        out.push(b'\n');
+        for point in &self.points {
+            for c in point {
+                out.extend_from_slice(&c.to_le_bytes());
+            }
+        }
+        out.extend_from_slice(&self.data);
+        out
+    }
+
+    fn decode(bytes: &[u8]) -> Result<Self, DecodeError> {
+        let newline = bytes
+            .iter()
+            .position(|&b| b == b'\n')
+            .ok_or_else(|| malformed("no world_map header line"))?;
+        let header: WorldMapHeader = decode_json(&bytes[..newline])?;
+        let body = &bytes[newline + 1..];
+        let pts_bytes = header
+            .points
+            .checked_mul(12)
+            .ok_or_else(|| malformed("world_map points overflow"))?;
+        if Some(body.len()) != pts_bytes.checked_add(header.size) {
+            return Err(malformed(format!(
+                "world_map: {} bytes for {} points + {} data bytes",
+                body.len(),
+                header.points,
+                header.size
+            )));
+        }
+        let points = body[..pts_bytes]
+            .as_chunks::<12>()
+            .0
+            .iter()
+            .map(|p| {
+                let f = |i: usize| f32::from_le_bytes([p[i], p[i + 1], p[i + 2], p[i + 3]]);
+                [f(0), f(4), f(8)]
+            })
+            .collect();
+        let data = body[pts_bytes..].to_vec();
+        Ok(Self { t: header.t, sequence: header.sequence, points, data })
+    }
+}
+impl Uplink for WorldMap {}
+
+#[derive(Serialize, serde::Deserialize)]
+struct MeshChunkHeader {
+    t: f64,
+    id: String,
+    vertices: usize,
+    faces: usize,
+    #[serde(default)]
+    classes: usize,
+}
+
+impl Message for MeshChunk {
+    const TOPIC: Topic = Topic::Mesh;
+
+    fn encode(&self) -> Vec<u8> {
+        let header = MeshChunkHeader {
+            t: self.t,
+            id: self.id.clone(),
+            vertices: self.vertices.len(),
+            faces: self.indices.len(),
+            classes: self.classes.len(),
+        };
+        let mut out = encode_json(&header);
+        out.reserve(1 + self.vertices.len() * 12 + self.indices.len() * 12 + self.classes.len());
+        out.push(b'\n');
+        for v in &self.vertices {
+            for c in v {
+                out.extend_from_slice(&c.to_le_bytes());
+            }
+        }
+        for tri in &self.indices {
+            for idx in tri {
+                out.extend_from_slice(&idx.to_le_bytes());
+            }
+        }
+        out.extend_from_slice(&self.classes);
+        out
+    }
+
+    fn decode(bytes: &[u8]) -> Result<Self, DecodeError> {
+        let newline = bytes
+            .iter()
+            .position(|&b| b == b'\n')
+            .ok_or_else(|| malformed("no mesh header line"))?;
+        let header: MeshChunkHeader = decode_json(&bytes[..newline])?;
+        let body = &bytes[newline + 1..];
+        let v_bytes = header
+            .vertices
+            .checked_mul(12)
+            .ok_or_else(|| malformed("mesh vertices overflow"))?;
+        let f_bytes = header
+            .faces
+            .checked_mul(12)
+            .ok_or_else(|| malformed("mesh faces overflow"))?;
+        let expected = v_bytes
+            .checked_add(f_bytes)
+            .and_then(|n| n.checked_add(header.classes))
+            .ok_or_else(|| malformed("mesh size overflow"))?;
+        if body.len() != expected {
+            return Err(malformed(format!(
+                "mesh: {} bytes for {} verts + {} faces + {} classes",
+                body.len(),
+                header.vertices,
+                header.faces,
+                header.classes
+            )));
+        }
+        let vertices = body[..v_bytes]
+            .as_chunks::<12>()
+            .0
+            .iter()
+            .map(|p| {
+                let f = |i: usize| f32::from_le_bytes([p[i], p[i + 1], p[i + 2], p[i + 3]]);
+                [f(0), f(4), f(8)]
+            })
+            .collect();
+        let indices = body[v_bytes..v_bytes + f_bytes]
+            .as_chunks::<12>()
+            .0
+            .iter()
+            .map(|p| {
+                let u = |i: usize| u32::from_le_bytes([p[i], p[i + 1], p[i + 2], p[i + 3]]);
+                [u(0), u(4), u(8)]
+            })
+            .collect();
+        let classes = body[v_bytes + f_bytes..].to_vec();
+        Ok(Self { t: header.t, id: header.id, vertices, indices, classes })
+    }
+}
+impl Uplink for MeshChunk {}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -180,6 +335,8 @@ mod tests {
             uplink::<Pose>(),
             uplink::<Status>(),
             uplink::<Depth>(),
+            uplink::<WorldMap>(),
+            uplink::<MeshChunk>(),
             uplink::<RemoteState>(),
         ] {
             assert_eq!(t.direction(), Direction::RoverToBase, "{t}");
@@ -199,6 +356,24 @@ mod tests {
         [("horizon".to_string(), ParamValue::Float(2.0)), ("mode".to_string(), ParamValue::Choice("a".into()))]
             .into_iter()
             .collect()
+    }
+
+    #[test]
+    fn mesh_chunk_round_trip() {
+        round_trip(MeshChunk {
+            t: 12.5,
+            id: "A1B2-C3D4".into(),
+            vertices: vec![[1.0, 2.0, 0.0], [3.0, 4.0, 0.0], [1.0, 4.0, 0.0]],
+            indices: vec![[0, 1, 2]],
+            classes: vec![2],
+        });
+        round_trip(MeshChunk {
+            t: 13.0,
+            id: "A1B2-C3D4".into(),
+            vertices: vec![],
+            indices: vec![],
+            classes: vec![],
+        });
     }
 
     #[test]

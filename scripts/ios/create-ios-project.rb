@@ -5,12 +5,12 @@ project_path = File.join(root, 'apps/ios/TerraPhone.xcodeproj')
 project = Xcodeproj::Project.new(project_path)
 app = project.new_target(:application, 'TerraPhone', :ios, '17.0')
 sources = project.main_group.new_group('TerraPhone', 'TerraPhone')
-# One group per folder (App, Sense, TerraAV, Drive, Motors); Resources holds non-Swift files.
+# One group per folder (App, Orb, Setup, Sense, Drive, Motors); Swift and Metal sources. Resources holds the rest.
 Dir.glob(File.join(root, 'apps/ios/TerraPhone/*/')).sort.each do |dir|
   folder = File.basename(dir)
   next if folder == 'Resources'
   group = sources.new_group(folder, folder)
-  Dir.glob(File.join(dir, '*.swift')).sort.each do |path|
+  Dir.glob(File.join(dir, '*.{swift,metal}')).sort.each do |path|
     app.source_build_phase.add_file_reference(group.new_file(File.basename(path)))
   end
 end

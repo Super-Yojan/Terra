@@ -30,12 +30,12 @@ type = "teleop"
 # The velocity loop (twist → wheel effort) runs in the app:
 # Motors/VelocityController.swift.
 
-# Base station link: depth on terra/<rover_id>/depth via the fleet router.
-# The password is not here (this file ships inside the app): set it in the
-# app with "Router password"; it is kept in the Keychain. Remove this
+# Base station link (terra-comms): keys terra/<rover_id>/<topic> via the
+# fleet router; see crates/terra-comms/API.md. The password is not here
+# (this file ships inside the app, and a password key is an error): set it
+# in the app with "Router password"; it is kept in the Keychain. Remove this
 # section to send nothing.
 [comms]
-type = "zenoh"
-rover_id = "0"
-endpoint = "tls/argos.34.135.204.210.sslip.io:7448"
-user = "terra"
+rover_id = 1
+# endpoint = "tcp/192.168.8.100:7447"
+endpoint = "tcp/192.168.1.165:7447"

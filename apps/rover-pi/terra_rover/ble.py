@@ -309,8 +309,9 @@ class BlePeripheral:
             await props.call_set('org.bluez.Adapter1', 'Pairable', Variant('b', False))
             await props.call_set('org.bluez.Adapter1', 'Powered', Variant('b', True))
             self.chars = {}
-            for role, uuid in [('drive', DRIVE_UUID), ('control', CONTROL_UUID),
-                               ('reply', REPLY_UUID), ('status', STATUS_UUID)]:
+            # Register `status` first so its GATT handle stays aligned with pairing mode.
+            for role, uuid in [('status', STATUS_UUID), ('drive', DRIVE_UUID),
+                               ('control', CONTROL_UUID), ('reply', REPLY_UUID)]:
                 def read(options, role=role):
                     self.authorize(options)
                     return self.status_bytes if role == 'status' else self.reply_bytes

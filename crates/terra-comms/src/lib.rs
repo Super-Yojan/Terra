@@ -25,9 +25,9 @@ mod link;
 pub use codec::{DecodeError, Downlink, Message, Uplink, WIRE_VERSION};
 pub use config::{CommsConfig, ConfigError};
 pub use messages::{
-    Attention, Capabilities, Depth, Estop, Goal, GoalKind, GpsAnchor, Pose, Pose2, Rejection,
-    RemoteCmd, RemoteState, StageOption, Status, Task, TaskAction, TaskCommand, TaskState,
-    TaskStatus, Teleop, Twist,
+    Attention, Capabilities, Depth, Estop, Goal, GoalKind, GpsAnchor, MeshChunk, Pose, Pose2,
+    Rejection, RemoteCmd, RemoteState, StageOption, Status, Task, TaskAction, TaskCommand,
+    TaskState, TaskStatus, Teleop, Twist, WorldMap,
 };
 pub use params::{ParamError, ParamKind, ParamSpec, ParamValue, Params, check_specs, validate};
 pub use topics::{Direction, Topic, Topics};

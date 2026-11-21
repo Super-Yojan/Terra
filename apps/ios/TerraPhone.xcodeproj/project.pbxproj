@@ -7,202 +7,238 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		04533B0479AC131A7CFB0F6B /* TerraAV+Phone.swift in Sources */ = {isa = PBXBuildFile; fileRef = A524B935B353789C976F484C /* TerraAV+Phone.swift */; };
-		0C17FE3EFA4472D5DBE2708D /* BluetoothLink.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC9C5F84F8BB4CF06A9DA0F6 /* BluetoothLink.swift */; };
-		2EF771A47CD82E5C57070FFC /* CoreMotion.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 5359B4159E7F9956B5567DC5 /* CoreMotion.framework */; };
-		3B89F2CBC67EEDC6CD239AEA /* BluetoothProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1908D3B3D03804C4488813A /* BluetoothProtocol.swift */; };
-		3E4F75D5D8E23D5C56475112 /* Joystick.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C5885CFB107764D998D7753 /* Joystick.swift */; };
-		456DD8C2F1913FDF9C80922D /* TerraPhoneApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = F011A631992FDF33267F07A7 /* TerraPhoneApp.swift */; };
-		5B8857E279335F373F317EAA /* CoreBluetooth.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 946C5F6BE3F60B30350816C6 /* CoreBluetooth.framework */; };
-		5F6EDEF704634881C0E0EB1A /* TerraAV.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = B7BA4CBEB967DEB7C7C0F36A /* TerraAV.xcframework */; };
-		89D3A814B7072E70234F6823 /* CoreLocation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 237662B3609199A18DFA447D /* CoreLocation.framework */; };
-		A06DA447709F271EF702FAAB /* SwiftUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = BE8C3AE322512B1B0CF5D808 /* SwiftUI.framework */; };
-		A648B1272566DD7D289D8692 /* terra-av.toml in Resources */ = {isa = PBXBuildFile; fileRef = 7FC3C49E09D60BA6A95F1367 /* terra-av.toml */; };
-		AA792C1FACCAF48507817A8D /* TerraAV.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D481508E0C6E43DAE1A4DAB /* TerraAV.swift */; };
-		B8F4D1F63B0536ADAE52BAA6 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = C80257D6E5D8B50592985F40 /* Assets.xcassets */; };
-		DBACF42567287082EAEBDF2A /* ARKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = CA15D85F702CD49B65F8F518 /* ARKit.framework */; };
-		E291F617A154FC3CBAF6FB83 /* VelocityController.swift in Sources */ = {isa = PBXBuildFile; fileRef = E3BEE6E7C7925992FA868453 /* VelocityController.swift */; };
-		EA0DD8EB5DC03285E6ECE25C /* RoverLoop.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7296DB4B741C2F6827482F00 /* RoverLoop.swift */; };
-		EBF3C05FD665379B1B3BBDD4 /* PhoneSensors.swift in Sources */ = {isa = PBXBuildFile; fileRef = E341C30E4BACAB8177AB7CB9 /* PhoneSensors.swift */; };
-		F0BCAB63F19878266D8D499D /* RouterPassword.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D7A9E070E7A13F7850D8F25 /* RouterPassword.swift */; };
-		F16CC2DE8064FDC31103A37E /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 58628AC2FBCA74BD9B85B1F9 /* Foundation.framework */; };
+		1572147BA287B1F3C2B484AD /* Orb.metal in Sources */ = {isa = PBXBuildFile; fileRef = 27FA580DC02A60CBCD74A519 /* Orb.metal */; };
+		1B34E9542120FF0A1E7638F0 /* TerraAV.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 827632742A60FEC2B463755D /* TerraAV.xcframework */; };
+		23D103CE03CF634915FC0C03 /* TerraAV+Phone.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD4528C14206EF947FC9B67F /* TerraAV+Phone.swift */; };
+		3166ADE6CF6A50D566CFFC88 /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 963B5BC0C09D4AC27C5929A9 /* Foundation.framework */; };
+		3572472347B4DB8F692951C9 /* CoreLocation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = E23CCA81A59C0661EA25A09A /* CoreLocation.framework */; };
+		597BF93A1E78779BD3FF9E1C /* RoverModelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06DAB10E932528589AFCF144 /* RoverModelView.swift */; };
+		5A1220EABC7A5D0D26D1EF28 /* TerraAV.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB7A20BB9BC0E3401FB3CAC4 /* TerraAV.swift */; };
+		5B935BE8948B7FD856406D01 /* TerraPhoneApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 900C67A453970ECF13B614EA /* TerraPhoneApp.swift */; };
+		6F6BFE1DE3BA21C90719C3A9 /* BluetoothLink.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1C17A184F8B4DB26A00CA0B2 /* BluetoothLink.swift */; };
+		7264DEB282D7099B86ED05D2 /* SwiftUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 3F49C8EDF6CE5300C3ABB41D /* SwiftUI.framework */; };
+		77DFBDA0652D97F0E65D6CF1 /* VehicleSetup.swift in Sources */ = {isa = PBXBuildFile; fileRef = AFF3146DA6D769889F595DAA /* VehicleSetup.swift */; };
+		82081E2ED11E97EE4E7ABEEC /* TestDriveView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B57660A08E0AA1CD38BE0A4 /* TestDriveView.swift */; };
+		8385A563261D1C96E3A87281 /* RoverLoop.swift in Sources */ = {isa = PBXBuildFile; fileRef = 53580BB01FE267E34C929189 /* RoverLoop.swift */; };
+		89DFE69DEEC8C86A0AEA93BF /* ARKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 2057C72DDC641C54BC228FDB /* ARKit.framework */; };
+		9C2BE47BBF8EDBC8AF196C15 /* RouterPassword.swift in Sources */ = {isa = PBXBuildFile; fileRef = E16C1B8965A7018599C3E859 /* RouterPassword.swift */; };
+		A5F6CB6E6DA6C1554CFBFFB4 /* Joystick.swift in Sources */ = {isa = PBXBuildFile; fileRef = C602E7EE2AA6306841C9E9FD /* Joystick.swift */; };
+		AE82E71E572CD35D1C642C34 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 8F9224E5C7175F0855FA51B7 /* Assets.xcassets */; };
+		B032BF0EFEE88B28F195FBAF /* PhoneSensors.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5425978D214DD778AD37A4CE /* PhoneSensors.swift */; };
+		B3D65EF2FB17FF1B9AE4AA82 /* VelocityController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0DE952DD3167A60FD5434814 /* VelocityController.swift */; };
+		C32F1A2B434239C2295AED25 /* BluetoothProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = 517D309893F9B135206C55A1 /* BluetoothProtocol.swift */; };
+		CB9E6A5D833A37AC039AE0CD /* OrbView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F0F1BE21564A0ACEB59E001 /* OrbView.swift */; };
+		E4610075FB272E7B8A82C1AA /* CoreBluetooth.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 8C5FC00046BE08F5B0167D44 /* CoreBluetooth.framework */; };
+		F23F7B64403F34BBEEF8575A /* terra-av.toml in Resources */ = {isa = PBXBuildFile; fileRef = 54249D016963579FE9377B0F /* terra-av.toml */; };
+		F43373BCF93415B4722D46DB /* CoreMotion.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 7C63D0D5CB6B10CB34D78E86 /* CoreMotion.framework */; };
+		FC544A6FF180B8D2D50D2F09 /* SetupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D678134FF73B6C76FEF8581B /* SetupView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
-		1386D634081E2004C6AEA180 /* TerraPhone.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = TerraPhone.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		237662B3609199A18DFA447D /* CoreLocation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreLocation.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS18.0.sdk/System/Library/Frameworks/CoreLocation.framework; sourceTree = DEVELOPER_DIR; };
-		3D7A9E070E7A13F7850D8F25 /* RouterPassword.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = RouterPassword.swift; sourceTree = "<group>"; };
-		5359B4159E7F9956B5567DC5 /* CoreMotion.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreMotion.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS18.0.sdk/System/Library/Frameworks/CoreMotion.framework; sourceTree = DEVELOPER_DIR; };
-		58628AC2FBCA74BD9B85B1F9 /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS18.0.sdk/System/Library/Frameworks/Foundation.framework; sourceTree = DEVELOPER_DIR; };
-		7296DB4B741C2F6827482F00 /* RoverLoop.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = RoverLoop.swift; sourceTree = "<group>"; };
-		7C5885CFB107764D998D7753 /* Joystick.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Joystick.swift; sourceTree = "<group>"; };
-		7FC3C49E09D60BA6A95F1367 /* terra-av.toml */ = {isa = PBXFileReference; includeInIndex = 1; path = "terra-av.toml"; sourceTree = "<group>"; };
-		946C5F6BE3F60B30350816C6 /* CoreBluetooth.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreBluetooth.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS18.0.sdk/System/Library/Frameworks/CoreBluetooth.framework; sourceTree = DEVELOPER_DIR; };
-		9D481508E0C6E43DAE1A4DAB /* TerraAV.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TerraAV.swift; sourceTree = "<group>"; };
-		A1908D3B3D03804C4488813A /* BluetoothProtocol.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = BluetoothProtocol.swift; sourceTree = "<group>"; };
-		A524B935B353789C976F484C /* TerraAV+Phone.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = "TerraAV+Phone.swift"; sourceTree = "<group>"; };
-		B7BA4CBEB967DEB7C7C0F36A /* TerraAV.xcframework */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = wrapper.xcframework; path = TerraAV.xcframework; sourceTree = "<group>"; };
-		BE8C3AE322512B1B0CF5D808 /* SwiftUI.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SwiftUI.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS18.0.sdk/System/Library/Frameworks/SwiftUI.framework; sourceTree = DEVELOPER_DIR; };
-		C80257D6E5D8B50592985F40 /* Assets.xcassets */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
-		CA15D85F702CD49B65F8F518 /* ARKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = ARKit.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS18.0.sdk/System/Library/Frameworks/ARKit.framework; sourceTree = DEVELOPER_DIR; };
-		CC9C5F84F8BB4CF06A9DA0F6 /* BluetoothLink.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = BluetoothLink.swift; sourceTree = "<group>"; };
-		E341C30E4BACAB8177AB7CB9 /* PhoneSensors.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = PhoneSensors.swift; sourceTree = "<group>"; };
-		E3BEE6E7C7925992FA868453 /* VelocityController.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = VelocityController.swift; sourceTree = "<group>"; };
-		F011A631992FDF33267F07A7 /* TerraPhoneApp.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TerraPhoneApp.swift; sourceTree = "<group>"; };
-		F6D8230CD707C3561BD4AEFF /* Info.plist */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		06DAB10E932528589AFCF144 /* RoverModelView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = RoverModelView.swift; sourceTree = "<group>"; };
+		0DE952DD3167A60FD5434814 /* VelocityController.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = VelocityController.swift; sourceTree = "<group>"; };
+		1C17A184F8B4DB26A00CA0B2 /* BluetoothLink.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = BluetoothLink.swift; sourceTree = "<group>"; };
+		2057C72DDC641C54BC228FDB /* ARKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = ARKit.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS18.0.sdk/System/Library/Frameworks/ARKit.framework; sourceTree = DEVELOPER_DIR; };
+		27FA580DC02A60CBCD74A519 /* Orb.metal */ = {isa = PBXFileReference; includeInIndex = 1; path = Orb.metal; sourceTree = "<group>"; };
+		3F0F1BE21564A0ACEB59E001 /* OrbView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = OrbView.swift; sourceTree = "<group>"; };
+		3F49C8EDF6CE5300C3ABB41D /* SwiftUI.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SwiftUI.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS18.0.sdk/System/Library/Frameworks/SwiftUI.framework; sourceTree = DEVELOPER_DIR; };
+		517D309893F9B135206C55A1 /* BluetoothProtocol.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = BluetoothProtocol.swift; sourceTree = "<group>"; };
+		53580BB01FE267E34C929189 /* RoverLoop.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = RoverLoop.swift; sourceTree = "<group>"; };
+		54249D016963579FE9377B0F /* terra-av.toml */ = {isa = PBXFileReference; includeInIndex = 1; path = "terra-av.toml"; sourceTree = "<group>"; };
+		5425978D214DD778AD37A4CE /* PhoneSensors.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = PhoneSensors.swift; sourceTree = "<group>"; };
+		6B57660A08E0AA1CD38BE0A4 /* TestDriveView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TestDriveView.swift; sourceTree = "<group>"; };
+		7C63D0D5CB6B10CB34D78E86 /* CoreMotion.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreMotion.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS18.0.sdk/System/Library/Frameworks/CoreMotion.framework; sourceTree = DEVELOPER_DIR; };
+		827632742A60FEC2B463755D /* TerraAV.xcframework */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = wrapper.xcframework; path = TerraAV.xcframework; sourceTree = "<group>"; };
+		8C5FC00046BE08F5B0167D44 /* CoreBluetooth.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreBluetooth.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS18.0.sdk/System/Library/Frameworks/CoreBluetooth.framework; sourceTree = DEVELOPER_DIR; };
+		8F9224E5C7175F0855FA51B7 /* Assets.xcassets */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		900C67A453970ECF13B614EA /* TerraPhoneApp.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TerraPhoneApp.swift; sourceTree = "<group>"; };
+		963B5BC0C09D4AC27C5929A9 /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS18.0.sdk/System/Library/Frameworks/Foundation.framework; sourceTree = DEVELOPER_DIR; };
+		AB7A20BB9BC0E3401FB3CAC4 /* TerraAV.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TerraAV.swift; sourceTree = "<group>"; };
+		AFF3146DA6D769889F595DAA /* VehicleSetup.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = VehicleSetup.swift; sourceTree = "<group>"; };
+		BC59F3114A31657259D7FFB8 /* TerraPhone.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = TerraPhone.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		C602E7EE2AA6306841C9E9FD /* Joystick.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Joystick.swift; sourceTree = "<group>"; };
+		CD4528C14206EF947FC9B67F /* TerraAV+Phone.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = "TerraAV+Phone.swift"; sourceTree = "<group>"; };
+		D678134FF73B6C76FEF8581B /* SetupView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = SetupView.swift; sourceTree = "<group>"; };
+		E16C1B8965A7018599C3E859 /* RouterPassword.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = RouterPassword.swift; sourceTree = "<group>"; };
+		E23CCA81A59C0661EA25A09A /* CoreLocation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreLocation.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS18.0.sdk/System/Library/Frameworks/CoreLocation.framework; sourceTree = DEVELOPER_DIR; };
+		F51997F4AA4E14D8AF5ED32F /* Info.plist */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
-		F0FC243E5D9B9C73FF247E92 /* Frameworks */ = {
+		5AE99DA13AACF62A2F96AE5C /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				F16CC2DE8064FDC31103A37E /* Foundation.framework in Frameworks */,
-				5F6EDEF704634881C0E0EB1A /* TerraAV.xcframework in Frameworks */,
-				DBACF42567287082EAEBDF2A /* ARKit.framework in Frameworks */,
-				2EF771A47CD82E5C57070FFC /* CoreMotion.framework in Frameworks */,
-				89D3A814B7072E70234F6823 /* CoreLocation.framework in Frameworks */,
-				A06DA447709F271EF702FAAB /* SwiftUI.framework in Frameworks */,
-				5B8857E279335F373F317EAA /* CoreBluetooth.framework in Frameworks */,
+				3166ADE6CF6A50D566CFFC88 /* Foundation.framework in Frameworks */,
+				1B34E9542120FF0A1E7638F0 /* TerraAV.xcframework in Frameworks */,
+				89DFE69DEEC8C86A0AEA93BF /* ARKit.framework in Frameworks */,
+				F43373BCF93415B4722D46DB /* CoreMotion.framework in Frameworks */,
+				3572472347B4DB8F692951C9 /* CoreLocation.framework in Frameworks */,
+				7264DEB282D7099B86ED05D2 /* SwiftUI.framework in Frameworks */,
+				E4610075FB272E7B8A82C1AA /* CoreBluetooth.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
-		283DEC2FAB6F1A4B55BD6F9C /* App */ = {
+		095569AD81A64C8F5649A41D /* Resources */ = {
 			isa = PBXGroup;
 			children = (
-				3D7A9E070E7A13F7850D8F25 /* RouterPassword.swift */,
-				7296DB4B741C2F6827482F00 /* RoverLoop.swift */,
-				F011A631992FDF33267F07A7 /* TerraPhoneApp.swift */,
-			);
-			name = App;
-			path = App;
-			sourceTree = "<group>";
-		};
-		464A4A7583ED9A2E4A29EC87 /* Sense */ = {
-			isa = PBXGroup;
-			children = (
-				E341C30E4BACAB8177AB7CB9 /* PhoneSensors.swift */,
-			);
-			name = Sense;
-			path = Sense;
-			sourceTree = "<group>";
-		};
-		526B061396925053A3E288C1 /* TerraAV */ = {
-			isa = PBXGroup;
-			children = (
-				A524B935B353789C976F484C /* TerraAV+Phone.swift */,
-			);
-			name = TerraAV;
-			path = TerraAV;
-			sourceTree = "<group>";
-		};
-		6F2DBE3F2C2F88D5584A52BC /* Generated */ = {
-			isa = PBXGroup;
-			children = (
-				9D481508E0C6E43DAE1A4DAB /* TerraAV.swift */,
-				B7BA4CBEB967DEB7C7C0F36A /* TerraAV.xcframework */,
-			);
-			name = Generated;
-			path = Generated;
-			sourceTree = "<group>";
-		};
-		6F582695E42522C0E588527F /* Motors */ = {
-			isa = PBXGroup;
-			children = (
-				CC9C5F84F8BB4CF06A9DA0F6 /* BluetoothLink.swift */,
-				A1908D3B3D03804C4488813A /* BluetoothProtocol.swift */,
-				E3BEE6E7C7925992FA868453 /* VelocityController.swift */,
-			);
-			name = Motors;
-			path = Motors;
-			sourceTree = "<group>";
-		};
-		738C553258DC7A2F4128A5E0 /* Products */ = {
-			isa = PBXGroup;
-			children = (
-				1386D634081E2004C6AEA180 /* TerraPhone.app */,
-			);
-			name = Products;
-			sourceTree = "<group>";
-		};
-		74EEF2FDCA049D2D69191167 /* Frameworks */ = {
-			isa = PBXGroup;
-			children = (
-				8C5FD4AC0D282283E2EDD5CC /* iOS */,
-			);
-			name = Frameworks;
-			sourceTree = "<group>";
-		};
-		87FFEB969E2F878C95123265 /* Drive */ = {
-			isa = PBXGroup;
-			children = (
-				7C5885CFB107764D998D7753 /* Joystick.swift */,
-			);
-			name = Drive;
-			path = Drive;
-			sourceTree = "<group>";
-		};
-		8C5FD4AC0D282283E2EDD5CC /* iOS */ = {
-			isa = PBXGroup;
-			children = (
-				58628AC2FBCA74BD9B85B1F9 /* Foundation.framework */,
-				CA15D85F702CD49B65F8F518 /* ARKit.framework */,
-				5359B4159E7F9956B5567DC5 /* CoreMotion.framework */,
-				237662B3609199A18DFA447D /* CoreLocation.framework */,
-				BE8C3AE322512B1B0CF5D808 /* SwiftUI.framework */,
-				946C5F6BE3F60B30350816C6 /* CoreBluetooth.framework */,
-			);
-			name = iOS;
-			sourceTree = "<group>";
-		};
-		9DC3AB879BF9B17536E02487 /* Resources */ = {
-			isa = PBXGroup;
-			children = (
-				F6D8230CD707C3561BD4AEFF /* Info.plist */,
-				C80257D6E5D8B50592985F40 /* Assets.xcassets */,
-				7FC3C49E09D60BA6A95F1367 /* terra-av.toml */,
+				F51997F4AA4E14D8AF5ED32F /* Info.plist */,
+				8F9224E5C7175F0855FA51B7 /* Assets.xcassets */,
+				54249D016963579FE9377B0F /* terra-av.toml */,
 			);
 			name = Resources;
 			path = Resources;
 			sourceTree = "<group>";
 		};
-		AF2A9B9EB2C1674017C0D687 /* TerraPhone */ = {
+		119DCE6CC33DC239A1DB3114 /* Generated */ = {
 			isa = PBXGroup;
 			children = (
-				283DEC2FAB6F1A4B55BD6F9C /* App */,
-				87FFEB969E2F878C95123265 /* Drive */,
-				6F582695E42522C0E588527F /* Motors */,
-				464A4A7583ED9A2E4A29EC87 /* Sense */,
-				526B061396925053A3E288C1 /* TerraAV */,
-				9DC3AB879BF9B17536E02487 /* Resources */,
+				AB7A20BB9BC0E3401FB3CAC4 /* TerraAV.swift */,
+				827632742A60FEC2B463755D /* TerraAV.xcframework */,
+			);
+			name = Generated;
+			path = Generated;
+			sourceTree = "<group>";
+		};
+		1A8FB05A2A959818E1892D86 /* TerraPhone */ = {
+			isa = PBXGroup;
+			children = (
+				A6A26758C8334B86682969AB /* App */,
+				CC0FA03AB8084B5354385A23 /* Drive */,
+				356A9E62E756F693EBF207CB /* Motors */,
+				6E1F24BAF2A0C14D011C4B5E /* Orb */,
+				81117AEB2CDB08C96F182868 /* Sense */,
+				E9C91E20DEA066F5C12C4964 /* Setup */,
+				B5A356F9ECA61B810C5B20BA /* TerraAV */,
+				095569AD81A64C8F5649A41D /* Resources */,
 			);
 			name = TerraPhone;
 			path = TerraPhone;
 			sourceTree = "<group>";
 		};
-		E9C4BF7D3345785409C9F746 = {
+		1BA8A69B2C46F7385A603014 /* iOS */ = {
 			isa = PBXGroup;
 			children = (
-				738C553258DC7A2F4128A5E0 /* Products */,
-				74EEF2FDCA049D2D69191167 /* Frameworks */,
-				AF2A9B9EB2C1674017C0D687 /* TerraPhone */,
-				6F2DBE3F2C2F88D5584A52BC /* Generated */,
+				963B5BC0C09D4AC27C5929A9 /* Foundation.framework */,
+				2057C72DDC641C54BC228FDB /* ARKit.framework */,
+				7C63D0D5CB6B10CB34D78E86 /* CoreMotion.framework */,
+				E23CCA81A59C0661EA25A09A /* CoreLocation.framework */,
+				3F49C8EDF6CE5300C3ABB41D /* SwiftUI.framework */,
+				8C5FC00046BE08F5B0167D44 /* CoreBluetooth.framework */,
 			);
+			name = iOS;
+			sourceTree = "<group>";
+		};
+		2D8A88E2ACE32A992B1FAEE6 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				1BA8A69B2C46F7385A603014 /* iOS */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		2F9126C5B5AFAE738987689D = {
+			isa = PBXGroup;
+			children = (
+				E2D9654D6A8FC723B819560B /* Products */,
+				2D8A88E2ACE32A992B1FAEE6 /* Frameworks */,
+				1A8FB05A2A959818E1892D86 /* TerraPhone */,
+				119DCE6CC33DC239A1DB3114 /* Generated */,
+			);
+			sourceTree = "<group>";
+		};
+		356A9E62E756F693EBF207CB /* Motors */ = {
+			isa = PBXGroup;
+			children = (
+				1C17A184F8B4DB26A00CA0B2 /* BluetoothLink.swift */,
+				517D309893F9B135206C55A1 /* BluetoothProtocol.swift */,
+				0DE952DD3167A60FD5434814 /* VelocityController.swift */,
+			);
+			name = Motors;
+			path = Motors;
+			sourceTree = "<group>";
+		};
+		6E1F24BAF2A0C14D011C4B5E /* Orb */ = {
+			isa = PBXGroup;
+			children = (
+				27FA580DC02A60CBCD74A519 /* Orb.metal */,
+				3F0F1BE21564A0ACEB59E001 /* OrbView.swift */,
+			);
+			name = Orb;
+			path = Orb;
+			sourceTree = "<group>";
+		};
+		81117AEB2CDB08C96F182868 /* Sense */ = {
+			isa = PBXGroup;
+			children = (
+				5425978D214DD778AD37A4CE /* PhoneSensors.swift */,
+			);
+			name = Sense;
+			path = Sense;
+			sourceTree = "<group>";
+		};
+		A6A26758C8334B86682969AB /* App */ = {
+			isa = PBXGroup;
+			children = (
+				E16C1B8965A7018599C3E859 /* RouterPassword.swift */,
+				53580BB01FE267E34C929189 /* RoverLoop.swift */,
+				900C67A453970ECF13B614EA /* TerraPhoneApp.swift */,
+			);
+			name = App;
+			path = App;
+			sourceTree = "<group>";
+		};
+		B5A356F9ECA61B810C5B20BA /* TerraAV */ = {
+			isa = PBXGroup;
+			children = (
+				CD4528C14206EF947FC9B67F /* TerraAV+Phone.swift */,
+			);
+			name = TerraAV;
+			path = TerraAV;
+			sourceTree = "<group>";
+		};
+		CC0FA03AB8084B5354385A23 /* Drive */ = {
+			isa = PBXGroup;
+			children = (
+				C602E7EE2AA6306841C9E9FD /* Joystick.swift */,
+			);
+			name = Drive;
+			path = Drive;
+			sourceTree = "<group>";
+		};
+		E2D9654D6A8FC723B819560B /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				BC59F3114A31657259D7FFB8 /* TerraPhone.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		E9C91E20DEA066F5C12C4964 /* Setup */ = {
+			isa = PBXGroup;
+			children = (
+				06DAB10E932528589AFCF144 /* RoverModelView.swift */,
+				D678134FF73B6C76FEF8581B /* SetupView.swift */,
+				6B57660A08E0AA1CD38BE0A4 /* TestDriveView.swift */,
+				AFF3146DA6D769889F595DAA /* VehicleSetup.swift */,
+			);
+			name = Setup;
+			path = Setup;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		95D760DBE884330295849073 /* TerraPhone */ = {
+		09CD345B579CFE0B772471CD /* TerraPhone */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = 5AFC99DFC9EAA41193BC09AA /* Build configuration list for PBXNativeTarget "TerraPhone" */;
+			buildConfigurationList = 6DB8A8C11BFE713351D191C3 /* Build configuration list for PBXNativeTarget "TerraPhone" */;
 			buildPhases = (
-				5118764EAE2D288B291A43D4 /* Sources */,
-				F0FC243E5D9B9C73FF247E92 /* Frameworks */,
-				94CF2534F372D8EC6885732E /* Resources */,
+				FEF4C5F11278C01B63D8472D /* Sources */,
+				5AE99DA13AACF62A2F96AE5C /* Frameworks */,
+				5C64857590593E0B9E920EE9 /* Resources */,
 			);
 			buildRules = (
 			);
@@ -210,19 +246,19 @@
 			);
 			name = TerraPhone;
 			productName = TerraPhone;
-			productReference = 1386D634081E2004C6AEA180 /* TerraPhone.app */;
+			productReference = BC59F3114A31657259D7FFB8 /* TerraPhone.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
-		22E5A19BEFA545A85D6983CD /* Project object */ = {
+		3D7AAC9D81CCC5CF9133A688 /* Project object */ = {
 			isa = PBXProject;
 			attributes = {
 				LastSwiftUpdateCheck = 1600;
 				LastUpgradeCheck = 1600;
 			};
-			buildConfigurationList = E807FA732EF854BF5946EFDE /* Build configuration list for PBXProject "TerraPhone" */;
+			buildConfigurationList = 29A6272A717152EE9D1B85D8 /* Build configuration list for PBXProject "TerraPhone" */;
 			compatibilityVersion = "Xcode 3.2";
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
@@ -230,52 +266,157 @@
 				en,
 				Base,
 			);
-			mainGroup = E9C4BF7D3345785409C9F746;
+			mainGroup = 2F9126C5B5AFAE738987689D;
 			minimizedProjectReferenceProxies = 0;
 			preferredProjectObjectVersion = 77;
-			productRefGroup = 738C553258DC7A2F4128A5E0 /* Products */;
+			productRefGroup = E2D9654D6A8FC723B819560B /* Products */;
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				95D760DBE884330295849073 /* TerraPhone */,
+				09CD345B579CFE0B772471CD /* TerraPhone */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
-		94CF2534F372D8EC6885732E /* Resources */ = {
+		5C64857590593E0B9E920EE9 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				B8F4D1F63B0536ADAE52BAA6 /* Assets.xcassets in Resources */,
-				A648B1272566DD7D289D8692 /* terra-av.toml in Resources */,
+				AE82E71E572CD35D1C642C34 /* Assets.xcassets in Resources */,
+				F23F7B64403F34BBEEF8575A /* terra-av.toml in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
-		5118764EAE2D288B291A43D4 /* Sources */ = {
+		FEF4C5F11278C01B63D8472D /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				F0BCAB63F19878266D8D499D /* RouterPassword.swift in Sources */,
-				EA0DD8EB5DC03285E6ECE25C /* RoverLoop.swift in Sources */,
-				456DD8C2F1913FDF9C80922D /* TerraPhoneApp.swift in Sources */,
-				3E4F75D5D8E23D5C56475112 /* Joystick.swift in Sources */,
-				0C17FE3EFA4472D5DBE2708D /* BluetoothLink.swift in Sources */,
-				3B89F2CBC67EEDC6CD239AEA /* BluetoothProtocol.swift in Sources */,
-				E291F617A154FC3CBAF6FB83 /* VelocityController.swift in Sources */,
-				EBF3C05FD665379B1B3BBDD4 /* PhoneSensors.swift in Sources */,
-				04533B0479AC131A7CFB0F6B /* TerraAV+Phone.swift in Sources */,
-				AA792C1FACCAF48507817A8D /* TerraAV.swift in Sources */,
+				9C2BE47BBF8EDBC8AF196C15 /* RouterPassword.swift in Sources */,
+				8385A563261D1C96E3A87281 /* RoverLoop.swift in Sources */,
+				5B935BE8948B7FD856406D01 /* TerraPhoneApp.swift in Sources */,
+				A5F6CB6E6DA6C1554CFBFFB4 /* Joystick.swift in Sources */,
+				6F6BFE1DE3BA21C90719C3A9 /* BluetoothLink.swift in Sources */,
+				C32F1A2B434239C2295AED25 /* BluetoothProtocol.swift in Sources */,
+				B3D65EF2FB17FF1B9AE4AA82 /* VelocityController.swift in Sources */,
+				1572147BA287B1F3C2B484AD /* Orb.metal in Sources */,
+				CB9E6A5D833A37AC039AE0CD /* OrbView.swift in Sources */,
+				B032BF0EFEE88B28F195FBAF /* PhoneSensors.swift in Sources */,
+				597BF93A1E78779BD3FF9E1C /* RoverModelView.swift in Sources */,
+				FC544A6FF180B8D2D50D2F09 /* SetupView.swift in Sources */,
+				82081E2ED11E97EE4E7ABEEC /* TestDriveView.swift in Sources */,
+				77DFBDA0652D97F0E65D6CF1 /* VehicleSetup.swift in Sources */,
+				23D103CE03CF634915FC0C03 /* TerraAV+Phone.swift in Sources */,
+				5A1220EABC7A5D0D26D1EF28 /* TerraAV.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin XCBuildConfiguration section */
-		4AA9E2CEDE45A009E9639495 /* Debug */ = {
+		104CD198E28DEAF05509F34D /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		40D35B74FA93BB32E31532BE /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = GW3G7G5WGR;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = TerraPhone/Resources/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = org.terra.robotics.phone;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Debug;
+		};
+		940099CFC8529604955E712F /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = GW3G7G5WGR;
+				ENABLE_USER_SCRIPT_SANDBOXING = NO;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = TerraPhone/Resources/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = org.terra.robotics.phone;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		D01D9248F2FE27F953FA5622 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
@@ -336,127 +477,28 @@
 			};
 			name = Debug;
 		};
-		800A95905B3A98A86ADDB7D6 /* Debug */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CLANG_ENABLE_OBJC_WEAK = NO;
-				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = GW3G7G5WGR;
-				ENABLE_USER_SCRIPT_SANDBOXING = NO;
-				GENERATE_INFOPLIST_FILE = NO;
-				INFOPLIST_FILE = TerraPhone/Resources/Info.plist;
-				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
-				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
-				MARKETING_VERSION = 0.1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = org.terra.robotics.phone;
-				SDKROOT = iphoneos;
-				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = 1;
-			};
-			name = Debug;
-		};
-		9A9B71B06A87F7C210126236 /* Release */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
-				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CLANG_ENABLE_OBJC_WEAK = NO;
-				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = GW3G7G5WGR;
-				ENABLE_USER_SCRIPT_SANDBOXING = NO;
-				GENERATE_INFOPLIST_FILE = NO;
-				INFOPLIST_FILE = TerraPhone/Resources/Info.plist;
-				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
-				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
-				MARKETING_VERSION = 0.1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = org.terra.robotics.phone;
-				SDKROOT = iphoneos;
-				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = 1;
-				VALIDATE_PRODUCT = YES;
-			};
-			name = Release;
-		};
-		9E08299BA745BBDB67A019AA /* Release */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				ALWAYS_SEARCH_USER_PATHS = NO;
-				CLANG_ANALYZER_NONNULL = YES;
-				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
-				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
-				CLANG_CXX_LIBRARY = "libc++";
-				CLANG_ENABLE_MODULES = YES;
-				CLANG_ENABLE_OBJC_ARC = YES;
-				CLANG_ENABLE_OBJC_WEAK = YES;
-				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
-				CLANG_WARN_BOOL_CONVERSION = YES;
-				CLANG_WARN_COMMA = YES;
-				CLANG_WARN_CONSTANT_CONVERSION = YES;
-				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
-				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
-				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
-				CLANG_WARN_EMPTY_BODY = YES;
-				CLANG_WARN_ENUM_CONVERSION = YES;
-				CLANG_WARN_INFINITE_RECURSION = YES;
-				CLANG_WARN_INT_CONVERSION = YES;
-				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
-				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
-				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
-				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
-				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
-				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
-				CLANG_WARN_STRICT_PROTOTYPES = YES;
-				CLANG_WARN_SUSPICIOUS_MOVE = YES;
-				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
-				CLANG_WARN_UNREACHABLE_CODE = YES;
-				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
-				COPY_PHASE_STRIP = NO;
-				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
-				ENABLE_NS_ASSERTIONS = NO;
-				ENABLE_STRICT_OBJC_MSGSEND = YES;
-				GCC_C_LANGUAGE_STANDARD = gnu11;
-				GCC_NO_COMMON_BLOCKS = YES;
-				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
-				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
-				GCC_WARN_UNDECLARED_SELECTOR = YES;
-				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
-				GCC_WARN_UNUSED_FUNCTION = YES;
-				GCC_WARN_UNUSED_VARIABLE = YES;
-				MTL_ENABLE_DEBUG_INFO = NO;
-				MTL_FAST_MATH = YES;
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SWIFT_COMPILATION_MODE = wholemodule;
-				SWIFT_OPTIMIZATION_LEVEL = "-O";
-				SWIFT_VERSION = 5.0;
-			};
-			name = Release;
-		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		5AFC99DFC9EAA41193BC09AA /* Build configuration list for PBXNativeTarget "TerraPhone" */ = {
+		29A6272A717152EE9D1B85D8 /* Build configuration list for PBXProject "TerraPhone" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				9A9B71B06A87F7C210126236 /* Release */,
-				800A95905B3A98A86ADDB7D6 /* Debug */,
+				D01D9248F2FE27F953FA5622 /* Debug */,
+				104CD198E28DEAF05509F34D /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		E807FA732EF854BF5946EFDE /* Build configuration list for PBXProject "TerraPhone" */ = {
+		6DB8A8C11BFE713351D191C3 /* Build configuration list for PBXNativeTarget "TerraPhone" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				4AA9E2CEDE45A009E9639495 /* Debug */,
-				9E08299BA745BBDB67A019AA /* Release */,
+				940099CFC8529604955E712F /* Release */,
+				40D35B74FA93BB32E31532BE /* Debug */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
 	};
-	rootObject = 22E5A19BEFA545A85D6983CD /* Project object */;
+	rootObject = 3D7AAC9D81CCC5CF9133A688 /* Project object */;
 }

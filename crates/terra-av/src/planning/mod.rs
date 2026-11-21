@@ -10,6 +10,7 @@ pub mod local;
 use crate::geometry::Pose2;
 use crate::vehicle::Twist;
 
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Goal {
     None,
     /// Drive at this twist (a stick). No route needed.

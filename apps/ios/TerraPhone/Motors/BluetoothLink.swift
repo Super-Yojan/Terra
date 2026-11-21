@@ -13,6 +13,13 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
     @Published private(set) var connected: UUID?
     /// Layout read and relay connected: drive frames will be accepted.
     @Published private(set) var ready = false
+    /// Ports the rover advertises (`capabilities`), and pins already in use.
+    @Published private(set) var ports: [RoverPort] = []
+    @Published private(set) var occupied: Set<String> = []
+    /// Progress of `applyLayout`.
+    @Published private(set) var layoutApply: LayoutApply = .idle
+
+    enum LayoutApply: Equatable { case idle, working(String), failed(String), done(UInt32) }
 
     private static func uuid(_ suffix: String) -> CBUUID { CBUUID(string: "7e5a00\(suffix)-4c2b-4f91-9e3a-1d8c6b2a0f10") }
     private let serviceID = BluetoothLink.uuid("10"), driveID = BluetoothLink.uuid("11"), statusID = BluetoothLink.uuid("12"),
@@ -41,6 +48,17 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
     private var statusAssembly = FragmentAssembler()
     private var replyAssembly = FragmentAssembler(timeout: 2, limit: 4080)
 
+    // Layout edit transaction (begin → stage each → validate → commit).
+    private struct LayoutEdit {
+        var token = "", version: UInt32 = 0, base: UInt32 = 0
+        var remaining: [[String: Any]]
+        let names: [Int: String]
+        var committing = false
+    }
+    private var edit: LayoutEdit?
+    private static let layoutOperations: Set<String> = ["begin_layout_edit", "stage_actuator", "validate_layout_edit",
+                                                        "commit_layout_edit", "discard_layout_edit"]
+
     // Drive writes: one in flight, newest pending wins.
     private var writing = false
     private var pending: [Data] = []
@@ -66,6 +84,24 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
         UserDefaults.standard.removeObject(forKey: self.savedKey)
         self.close("Disconnected")
     } }
+
+    /// Replace the rover's actuator layout with `actuators` (rover-pi layout
+    /// entries). Progress and errors are published in `layoutApply`; the new
+    /// drive profiles are read automatically once the rover commits.
+    func applyLayout(_ actuators: [[String: Any]]) { queue.async {
+        guard self.peripheral != nil, self.authenticated, self.chars[self.controlID] != nil else {
+            self.setApply(.failed("Not connected to a rover")); return
+        }
+        let names = Dictionary(actuators.compactMap { a in (a["id"] as? Int).map { ($0, a["name"] as? String ?? "#\($0)") } },
+                               uniquingKeysWith: { a, _ in a })
+        self.edit = LayoutEdit(base: self.revision, remaining: actuators, names: names)
+        self.setApply(.working("Starting"))
+        self.request("begin_layout_edit", payload: ["expected_revision": self.revision, "mode": "replace"])
+    } }
+
+    func resetLayoutApply() { DispatchQueue.main.async { self.layoutApply = .idle } }
+
+    private func setApply(_ state: LayoutApply) { DispatchQueue.main.async { self.layoutApply = state } }
 
     /// Send one wheel command; `.stop` sends every actuator's safe value.
     func send(_ command: WheelCommand) { queue.async {
@@ -103,7 +139,8 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
         peripheral = nil; chars.removeAll(); pairingMode = false; authenticated = false
         relayConnected = false; revision = 0; profiles = nil; sync.clear(); waiting = nil
         writing = false; pending = []; queuedWrites = []; statusAssembly.clear(); replyAssembly.clear()
-        DispatchQueue.main.async { self.connected = nil; self.ready = false }
+        if edit != nil { edit = nil; setApply(.failed("Disconnected before the layout was saved")) }
+        DispatchQueue.main.async { self.connected = nil; self.ready = false; self.ports = []; self.occupied = [] }
         publish(reason)
         // Reconnect to the remembered rover when it shows up again.
         if wanted != nil { queue.asyncAfter(deadline: .now() + 2) { if self.peripheral == nil { self.startScan() } } }
@@ -124,26 +161,57 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
         connectWantedIfFound()
     }
 
+    private func describe(_ error: Error) -> String {
+        let ns = error as NSError
+        return "\(ns.localizedDescription) (\(ns.domain) \(ns.code))"
+    }
+
     func centralManager(_ central: CBCentralManager, didConnect p: CBPeripheral) {
         guard p === peripheral else { return }
         p.discoverServices([serviceID])
     }
     func centralManager(_ central: CBCentralManager, didFailToConnect p: CBPeripheral, error: Error?) {
         guard p === peripheral else { return }
-        close("Connection failed")
+        if let error { print("[Bluetooth] didFailToConnect: \(describe(error))") }
+        close(error.map { "Connection failed: \(describe($0))" } ?? "Connection failed")
     }
     func centralManager(_ central: CBCentralManager, didDisconnectPeripheral p: CBPeripheral, error: Error?) {
         guard p === peripheral else { return }
+        if let error { print("[Bluetooth] didDisconnect: \(describe(error))") }
         close("Disconnected · reconnecting")
     }
 
+    func peripheral(_ p: CBPeripheral, didModifyServices invalidatedServices: [CBService]) {
+        guard p === peripheral else { return }
+        guard invalidatedServices.contains(where: { $0.uuid == serviceID }) else { return }
+        print("[Bluetooth] didModifyServices: Terra service invalidated, re-discovering")
+        chars.removeAll(); pairingMode = false; authenticated = false
+        relayConnected = false; revision = 0; profiles = nil; sync.clear(); waiting = nil
+        writing = false; pending = []; queuedWrites = []; statusAssembly.clear(); replyAssembly.clear()
+        if edit != nil { edit = nil; setApply(.failed("Rover restarted before the layout was saved")) }
+        DispatchQueue.main.async { self.ready = false; self.ports = []; self.occupied = [] }
+        publish("Refreshing Bluetooth services")
+        p.discoverServices([serviceID])
+    }
+
     func peripheral(_ p: CBPeripheral, didDiscoverServices error: Error?) {
-        guard p === peripheral, let service = p.services?.first(where: { $0.uuid == serviceID }) else { close("Terra service unavailable"); return }
+        guard p === peripheral else { return }
+        if let error {
+            print("[Bluetooth] didDiscoverServices: \(describe(error))")
+            close("Service discovery failed: \(describe(error))")
+            return
+        }
+        guard let service = p.services?.first(where: { $0.uuid == serviceID }) else { close("Terra service unavailable"); return }
         p.discoverCharacteristics([driveID, statusID, controlID, repliesID], for: service)
     }
 
     func peripheral(_ p: CBPeripheral, didDiscoverCharacteristicsFor service: CBService, error: Error?) {
-        guard p === peripheral, error == nil else { close("Characteristic discovery failed"); return }
+        guard p === peripheral else { return }
+        if let error {
+            print("[Bluetooth] didDiscoverCharacteristics: \(describe(error))")
+            close("Characteristic discovery failed: \(describe(error))")
+            return
+        }
         for c in service.characteristics ?? [] { chars[c.uuid] = c }
         guard let status = chars[statusID] else { close("Status unavailable"); return }
         // A rover in pairing mode exposes only status; reading it triggers the iOS pairing prompt.
@@ -155,7 +223,22 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
     // MARK: Messages
 
     func peripheral(_ p: CBPeripheral, didUpdateValueFor c: CBCharacteristic, error: Error?) {
-        guard p === peripheral, error == nil, let bytes = c.value else { close("Bluetooth read failed"); return }
+        guard p === peripheral else { return }
+        if let error {
+            let detail = describe(error)
+            print("[Bluetooth] didUpdateValueFor \(c.uuid): \(detail)")
+            if (error as? CBATTError)?.code == .invalidHandle {
+                close("Stale Bluetooth cache (handle is invalid) · toggle Bluetooth off/on in Settings")
+            } else {
+                close("Bluetooth read failed: \(detail)")
+            }
+            return
+        }
+        guard let bytes = c.value else {
+            print("[Bluetooth] didUpdateValueFor \(c.uuid): empty value")
+            close("Bluetooth read failed: empty value")
+            return
+        }
         let now = ProcessInfo.processInfo.systemUptime
         do {
             let document: Data?
@@ -183,7 +266,13 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
         let firstStatus = !authenticated
         authenticated = true
         relayConnected = connected && !(object["fault"] is String)
-        if revision != self.revision { self.revision = revision; profiles = nil; if !firstStatus { request("layout_index") } }
+        if revision != self.revision {
+            self.revision = revision; profiles = nil
+            // The status can overtake the commit reply: a new revision while
+            // committing means the rover saved the layout.
+            if edit?.committing == true { edit = nil; setApply(.done(revision)) }
+            if !firstStatus { request("layout_index") }
+        }
         let ready = relayConnected && profiles != nil
         DispatchQueue.main.async { self.connected = p.identifier; self.ready = ready }
         if let fault = object["fault"] as? String { publish("Rover fault: \(fault)") }
@@ -197,11 +286,19 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
     private func handleReply(_ object: [String: Any]) throws {
         guard let id = object["request_id"] as? UInt32, let w = waiting, id == w.id else { return }
         waiting = nil
+        if Self.layoutOperations.contains(w.operation) { handleLayoutReply(w.operation, object); return }
         guard object["result"] as? String == "ok", let payload = object["payload"] as? [String: Any] else {
             publish("Rover rejected \(w.operation)"); return
         }
         switch w.operation {
         case "capabilities":
+            let advertised = (payload["ports"] as? [String: Any] ?? [:]).compactMap { name, value -> RoverPort? in
+                guard let port = value as? [String: Any], let kinds = port["kinds"] as? [String],
+                      let resources = port["resources"] as? [String] else { return nil }
+                return RoverPort(name: name, kinds: kinds, resources: resources)
+            }.sorted { VehicleSetup.portOrder($0.name) < VehicleSetup.portOrder($1.name) }
+            let occupied = Set(payload["occupied_resources"] as? [String] ?? [])
+            DispatchQueue.main.async { self.ports = advertised; self.occupied = occupied }
             request("layout_index")
         case "layout_index":
             guard let rev = payload["revision"] as? UInt32, let entries = payload["actuators"] as? [[String: Any]] else { throw BluetoothPolicyError.malformed }
@@ -214,6 +311,45 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
             try nextProfile()
         default: break
         }
+    }
+
+    private func handleLayoutReply(_ operation: String, _ object: [String: Any]) {
+        guard var e = edit, operation != "discard_layout_edit" else { return }
+        guard object["result"] as? String == "ok", let payload = object["payload"] as? [String: Any] else {
+            let errors = (object["errors"] as? [[String: Any]] ?? []).map { error -> String in
+                let message = error["message"] as? String ?? "rejected"
+                guard let id = error["actuator_id"] as? Int else { return message }
+                return "\(e.names[id] ?? "#\(id)"): \(message)"
+            }
+            edit = nil
+            setApply(.failed(errors.isEmpty ? "Rover rejected \(operation)" : errors.joined(separator: "\n")))
+            if !e.token.isEmpty { request("discard_layout_edit", payload: ["edit_token": e.token]) }
+            return
+        }
+        if let token = payload["edit_token"] as? String { e.token = token }
+        if let version = payload["edit_version"] as? UInt32 { e.version = version }
+        if let base = payload["base_revision"] as? UInt32 { e.base = base }
+        switch operation {
+        case "begin_layout_edit", "stage_actuator":
+            if e.remaining.isEmpty {
+                setApply(.working("Checking the layout"))
+                request("validate_layout_edit", payload: ["edit_token": e.token, "edit_version": e.version])
+            } else {
+                let actuator = e.remaining.removeFirst()
+                setApply(.working("Sending \(actuator["name"] as? String ?? "actuator")"))
+                request("stage_actuator", payload: ["edit_token": e.token, "edit_version": e.version, "actuator": actuator])
+            }
+        case "validate_layout_edit":
+            e.committing = true
+            setApply(.working("Saving on the rover"))
+            request("commit_layout_edit", payload: ["edit_token": e.token, "edit_version": e.version, "base_revision": e.base])
+        case "commit_layout_edit":
+            edit = nil
+            setApply(.done(payload["revision"] as? UInt32 ?? revision))
+            return
+        default: break
+        }
+        edit = e
     }
 
     private func nextProfile() throws {
@@ -260,7 +396,12 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
     func peripheral(_ p: CBPeripheral, didWriteValueFor c: CBCharacteristic, error: Error?) {
         guard p === peripheral else { return }
         writing = false
-        if error != nil { close("Bluetooth write failed · reconnecting"); return }
+        if let error {
+            let detail = describe(error)
+            print("[Bluetooth] didWriteValueFor \(c.uuid): \(detail)")
+            close("Bluetooth write failed: \(detail)")
+            return
+        }
         pump()
     }
 }

@@ -22,6 +22,8 @@
 	<string>Terra connects to your paired rover to drive its motors.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>Terra uses the rear camera and LiDAR for visual tracking and obstacle sensing.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Terra connects to a base station router on your local network to send telemetry and receive commands.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>Terra uses GPS for outdoor localization. Local tracking works without it.</string>
 	<key>NSMotionUsageDescription</key>

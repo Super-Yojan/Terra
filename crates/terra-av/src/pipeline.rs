@@ -1,6 +1,6 @@
 //! Wires the stages together. One call per control tick.
 use crate::estimation::StateEstimator;
-use crate::comms::BaseStationLink;
+use crate::comms::Link;
 use crate::execution::SafetyGate;
 use crate::mapping::Mapper;
 use crate::planning::{Goal, global::PathPlanner, local::LocalPlanner};
@@ -14,8 +14,8 @@ pub struct Pipeline {
     pub path_planner: Box<dyn PathPlanner>,
     pub local_planner: Box<dyn LocalPlanner>,
     pub safety: SafetyGate,
-    /// Base station; `NoLink` when there is none.
-    pub link: Box<dyn BaseStationLink>,
+    /// Base station; `Link::none()` when there is none.
+    pub link: Link,
 }
 
 /// What the platform's velocity loop needs: where to go, and how fast the
@@ -26,21 +26,55 @@ pub struct DriveCommand {
 }
 
 impl Pipeline {
-    /// sense → estimate → map → global plan → local plan → safety.
-    /// The global planner re-runs only when the goal or map changed.
-    pub fn tick(&mut self, frame: &SensorFrame, goal: &Goal) -> DriveCommand {
-        self.link.publish_depth(frame.t, &frame.depth);
+    /// base-station commands → estimate → map → global plan → local plan →
+    /// safety → publish. The global planner re-runs only when the goal or map
+    /// changed.
+    pub fn tick(&mut self, mut frame: SensorFrame, goal: &Goal) -> DriveCommand {
+        // The remote e-stop joins the phone's; SafetyGate reads `frame.estop`.
+        // Base-station teleop drives only when the phone gives no goal.
+        let remote = self.link.commands(frame.t);
+        frame.estop |= remote.estop;
+        let goal = match (goal, remote.teleop) {
+            (Goal::None, Some(t)) => Goal::Velocity(Twist { v: t.v, w: t.w }),
+            _ => *goal,
+        };
+
+        let state = self.estimator.update(&frame, self.vehicle.as_ref());
+
+        // TODO: map → plan → follow(goal) → clamp → SafetyGate. Those stages
+        // are still todo!(), so the rover holds still for now.
+
+        self.link.publish(frame.t, state.as_ref(), &frame.depth, frame.estop);
         DriveCommand {
             target: Twist { v: 0.0, w: 0.0 },
             measured: None,
         }
+    }
+
+    /// Publish a serialized ARKit `ARWorldMap` and its ARKit-world feature points
+    /// to the base station.
+    pub fn publish_world_map(&mut self, t: f64, points_arkit: &[crate::geometry::Vec3], data: Vec<u8>) {
+        self.link.publish_world_map(t, points_arkit, data);
+    }
+
+    /// Publish one incremental ARKit `ARMeshAnchor` chunk (vertices in ARKit world `A`,
+    /// flat triangle indices, and per-face `ARMeshClassification` bytes) to the base station.
+    pub fn publish_mesh_chunk(
+        &mut self,
+        t: f64,
+        id: String,
+        vertices_arkit: &[crate::geometry::Vec3],
+        indices: &[u32],
+        classes: Vec<u8>,
+    ) {
+        self.link.publish_mesh_chunk(t, id, vertices_arkit, indices, classes);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::comms::NoLink;
+    use crate::comms::Link;
     use crate::estimation::Vio;
     use crate::geometry::{Rotation3, Vec3};
     use crate::mapping::NoMap;
@@ -67,17 +101,15 @@ mod tests {
                     max_yaw_accel: 2.0,
                 },
             }),
-            estimator: Box::new(Vio {
-                mount: Mount {
-                    camera_to_body: identity(),
-                    camera_offset: v(0.10, 0.0, 0.23),
-                },
-            }),
+            estimator: Box::new(Vio::new(Mount {
+                camera_to_body: identity(),
+                camera_offset: v(0.10, 0.0, 0.23),
+            })),
             mapper: Box::new(NoMap),
             path_planner: Box::new(StraightLine),
             local_planner: Box::new(Teleop),
             safety: SafetyGate,
-            link: Box::new(NoLink),
+            link: Link::none(),
         };
         let frame = SensorFrame {
             t: 48213.512,
@@ -96,7 +128,7 @@ mod tests {
             depth: vec![v(0.0, -0.30, -1.50), v(0.25, -0.10, -1.20)],
         };
 
-        let out = pipeline.tick(&frame, &Goal::Velocity(Twist { v: 0.5, w: 0.2 }));
+        let out = pipeline.tick(frame, &Goal::Velocity(Twist { v: 0.5, w: 0.2 }));
 
         assert_eq!((out.target.v, out.target.w), (0.0, 0.0));
     }

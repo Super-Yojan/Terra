@@ -66,7 +66,8 @@ struct ActuatorDriveProfileSet {
     var neutral: [(id: Int, value: Double)] { actuators.map { ($0.id, $0.safeValue) } }
 
     /// Route a wheel command onto the rover's actuators: left/right motors
-    /// take their side, mixed motors take forward ± turn, servos stay put.
+    /// take their side, mixed motors take forward ± turn, a steering servo
+    /// (Ackermann) takes the turn.
     func values(for command: WheelCommand) -> [(id: Int, value: Double)] {
         let forward = (command.left + command.right) / 2, turn = (command.right - command.left) / 2
         return actuators.map { a in
@@ -75,6 +76,7 @@ struct ActuatorDriveProfileSet {
             case "left_effort": raw = command.left
             case "right_effort": raw = command.right
             case "manual": raw = (a.route.forward_coefficient ?? 0) * forward + (a.route.turn_coefficient ?? 0) * turn
+            case "servo": raw = turn
             default: raw = a.safeValue
             }
             return (a.id, Swift.min(a.limits.max, Swift.max(a.limits.min, raw)))

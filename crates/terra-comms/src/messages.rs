@@ -160,6 +160,33 @@ pub struct Depth {
     pub points: Vec<[f32; 3]>,
 }
 
+/// Serialized ARKit `ARWorldMap` (`NSKeyedArchiver` bytes) plus its 3D feature
+/// point cloud in Terra world coordinates (metres) for rendering on the base station.
+#[derive(Clone, Debug, PartialEq)]
+pub struct WorldMap {
+    pub t: f64,
+    pub sequence: u64,
+    pub points: Vec<[f32; 3]>,
+    pub data: Vec<u8>,
+}
+
+/// One incremental ARKit `ARMeshAnchor` chunk in Terra world coordinates (Z-up, metres).
+///
+/// Sent when an anchor is added, updated, or removed (`vertices` and `indices` empty
+/// means the anchor `id` was removed).
+///
+/// `classes` has one `ARMeshClassification` byte per face (same length as `indices`, or
+/// empty if classification is unavailable):
+/// `0 = none, 1 = wall, 2 = floor, 3 = ceiling, 4 = table, 5 = seat, 6 = window, 7 = door`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MeshChunk {
+    pub t: f64,
+    pub id: String,
+    pub vertices: Vec<[f32; 3]>,
+    pub indices: Vec<[u32; 3]>,
+    pub classes: Vec<u8>,
+}
+
 /// What the `remote` controller sees each tick, world frame.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RemoteState {
