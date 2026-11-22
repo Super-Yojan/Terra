@@ -156,7 +156,11 @@ class BlePeripheral:
         self.unsubscribed_since.pop(peer, None)
         if peer != self.peer: return
         self.peer = None; self.generation += 1; self.clear()
-        for char in self.chars.values(): char.notifying = False
+        # Do not clear `notifying` here. BlueZ keeps a bonded device's CCC
+        # state across disconnects and silently accepts an identical CCC write
+        # on reconnect without calling StartNotify again. Clearing it here
+        # would mute every status/reply notification after the first session.
+        # BlueZ calls StopNotify itself when the CCC is really cleared.
         with self.lock:
             self.drive = None
             self.invalid_drive = None
@@ -249,7 +253,12 @@ class BlePeripheral:
                 invalid_drive, self.invalid_drive = self.invalid_drive, None
             for generation, kind, value, received in events:
                 if generation != self.generation: continue
-                if kind == 'connect': self.store.begin_connection()
+                if kind == 'connect':
+                    self.store.begin_connection()
+                    # A bonded owner's subscription survives reconnects (see disconnect()).
+                    status_char = self.chars.get('status')
+                    if status_char is not None and status_char.notifying:
+                        self.relay.set_status_subscribed(True)
                 elif kind == 'disconnect': self.store.end_connection()
                 elif kind == 'subscribe': self.relay.set_status_subscribed(value)
             if invalid_drive == self.generation:

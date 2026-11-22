@@ -3,7 +3,9 @@ import SwiftUI
 @main
 struct TerraPhoneApp: App {
     @StateObject private var loop = RoverLoop()
-    var body: some Scene { WindowGroup { HomeView(loop: loop, motors: loop.motors) } }
+    var body: some Scene {
+        WindowGroup { HomeView(loop: loop, motors: loop.motors) }
+    }
 }
 
 /// Home: a still orb and one action. "Mounted" means the phone is on the
@@ -23,32 +25,35 @@ struct HomeView: View {
             VStack(spacing: 0) {
                 HStack {
                     Text("Terra").font(.title2.weight(.semibold))
-                    Spacer()
-                    Button { showSetup = true } label: {
-                        Image(systemName: "gearshape").font(.title2)
+
+                    Button { mounted = true } label: {
+                        Text("Mounted")
+                            .font(.headline)
+                            .frame(maxWidth: .infinity, minHeight: 56)
+                            .background(Theme.accent, in: Capsule())
                     }
-                    .accessibilityLabel("Set up the rover")
+                    // Spacer()
                 }
                 .padding(.horizontal, 24)
                 .padding(.top, 12)
+                Spacer()
+                Button { showSetup = true } label: {
+                    Image(systemName: "gearshape").font(.title2)
+                }
+                .accessibilityLabel("Set up the rover")
 
                 Spacer()
-
-                Button { mounted = true } label: {
-                    Text("Mounted")
-                        .font(.headline)
-                        .frame(maxWidth: .infinity, minHeight: 56)
-                        .background(Theme.accent, in: Capsule())
-                }
-                .padding(.horizontal, 24)
-                .padding(.bottom, 24)
             }
         }
         .foregroundStyle(.white)
         .preferredColorScheme(.dark)
         .sheet(isPresented: $showSetup) { SetupView(loop: loop, motors: motors) }
         .fullScreenCover(isPresented: $mounted) { MountedView(loop: loop) }
-        .onAppear { if VehicleSetup.load() == nil { showSetup = true } }
+        .onAppear {
+            if VehicleSetup.load() == nil {
+                showSetup = true
+            }
+        }
     }
 }
 

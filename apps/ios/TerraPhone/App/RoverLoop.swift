@@ -53,7 +53,9 @@ final class RoverLoop: ObservableObject {
     private static func makeAv() -> TerraAv {
         let url = Bundle.main.url(forResource: "terra-av", withExtension: "toml")
         var toml = url.flatMap { try? String(contentsOf: $0, encoding: .utf8) } ?? ""
-        if let setup = VehicleSetup.load() { toml = setup.applying(to: toml) }
+        if let setup = VehicleSetup.load() {
+            toml = setup.applying(to: toml)
+        }
         return TerraAv(configToml: toml, routerPassword: RouterPassword.load())
     }
 
@@ -75,7 +77,7 @@ final class RoverLoop: ObservableObject {
         sensors.captureWorldMap { [weak self] result in
             guard let self else { return }
             switch result {
-            case .success(let snapshot):
+            case let .success(snapshot):
                 let t = ProcessInfo.processInfo.systemUptime
                 self.plannerQueue.async {
                     self.av.publishWorldMap(t: t, points: snapshot.points, data: snapshot.data)
@@ -84,7 +86,7 @@ final class RoverLoop: ObservableObject {
                 let size = kb >= 1024.0 ? String(format: "%.2f MB", kb / 1024.0) : String(format: "%.0f KB", kb)
                 print("[WorldMap] sent \(snapshot.points.count) pts, \(size) (\(snapshot.data.count) bytes)")
                 DispatchQueue.main.async { self.worldMapStatus = "Map sent (\(snapshot.points.count) pts · \(size))" }
-            case .failure(let error):
+            case let .failure(error):
                 print("[WorldMap] capture failed: \(error.localizedDescription)")
                 DispatchQueue.main.async { self.worldMapStatus = "Map failed: \(error.localizedDescription)" }
             }
@@ -154,7 +156,11 @@ final class RoverLoop: ObservableObject {
         if case let .velocity(v, w) = goal {
             let out = joystickToMotors(forward: v, turn: w)
             motors.send(out)
-            DispatchQueue.main.async { if self.command != out { self.command = out } }
+            DispatchQueue.main.async {
+                if self.command != out {
+                    self.command = out
+                }
+            }
             return
         }
 
@@ -164,6 +170,7 @@ final class RoverLoop: ObservableObject {
         } else {
             out = .stop
         }
+        print("Motor output ", out)
 
         motors.send(out)
         DispatchQueue.main.async {

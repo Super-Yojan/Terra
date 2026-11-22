@@ -36,6 +36,6 @@ type = "teleop"
 # in the app with "Router password"; it is kept in the Keychain. Remove this
 # section to send nothing.
 [comms]
-rover_id = 1
+rover_id = 0
 # endpoint = "tcp/192.168.8.100:7447"
 endpoint = "tcp/192.168.1.165:7447"

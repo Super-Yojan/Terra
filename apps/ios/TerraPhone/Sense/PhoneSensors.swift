@@ -168,15 +168,18 @@ final class PhoneSensors: NSObject, ARSessionDelegate, CLLocationManagerDelegate
             let geom = mesh.geometry
             let transform = mesh.transform
 
-            // 1. Vertices: local SIMD3<Float> → ARKit world A via `anchor.transform`.
+            // 1. Vertices: local (x, y, z) Float32s → ARKit world A via `anchor.transform`.
+            // Note: `stride` is 12 bytes (4-byte aligned), while `SIMD3<Float>` requires
+            // 16-byte alignment, so read three `Float`s instead of `.load(as: SIMD3<Float>.self)`.
             let vSource = geom.vertices
             let vBase = vSource.buffer.contents()
             var vertices: [Vec3] = []
             vertices.reserveCapacity(vSource.count)
             for i in 0 ..< vSource.count {
-                let local = vBase
+                let ptr = vBase
                     .advanced(by: vSource.offset + i * vSource.stride)
-                    .load(as: SIMD3<Float>.self)
+                    .assumingMemoryBound(to: Float.self)
+                let local = SIMD3<Float>(ptr[0], ptr[1], ptr[2])
                 let world = transform * SIMD4<Float>(local, 1.0)
                 vertices.append(Vec3(SIMD3(world.x, world.y, world.z)))
             }

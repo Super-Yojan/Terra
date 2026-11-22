@@ -6,5 +6,11 @@ pub struct SafetyGate;
 
 impl SafetyGate {
     /// `frame.estop` set → zero twist; otherwise `target` unchanged.
-    pub fn check(&mut self, target: Twist, frame: &SensorFrame) -> Twist { todo!() }
+    pub fn check(&mut self, target: Twist, frame: &SensorFrame) -> Twist {
+        if frame.estop {
+            Twist { v: 0.0, w: 0.0 }
+        } else {
+            target
+        }
+    }
 }

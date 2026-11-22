@@ -1,6 +1,6 @@
 //! Wires the stages together. One call per control tick.
-use crate::estimation::StateEstimator;
 use crate::comms::Link;
+use crate::estimation::StateEstimator;
 use crate::execution::SafetyGate;
 use crate::mapping::Mapper;
 use crate::planning::{Goal, global::PathPlanner, local::LocalPlanner};
@@ -44,16 +44,33 @@ impl Pipeline {
         // TODO: map → plan → follow(goal) → clamp → SafetyGate. Those stages
         // are still todo!(), so the rover holds still for now.
 
-        self.link.publish(frame.t, state.as_ref(), &frame.depth, frame.estop);
+        self.link
+            .publish(frame.t, state.as_ref(), &frame.depth, frame.estop);
+
+        // Only a velocity goal (phone or base-station teleop) drives for now.
+        // It runs even without a tracked pose: a human is in the loop, and
+        // with `measured: None` the platform's velocity loop is feedforward
+        // only. Every other goal holds still until planning lands.
+        let target = match goal {
+            Goal::Velocity(twist) => twist,
+            _ => Twist { v: 0.0, w: 0.0 },
+        };
         DriveCommand {
-            target: Twist { v: 0.0, w: 0.0 },
-            measured: None,
+            target: self.safety.check(target, &frame),
+            // Feedback for the velocity loop: the estimator's body twist,
+            // `None` while untracked.
+            measured: state.as_ref().map(|s| s.twist),
         }
     }
 
     /// Publish a serialized ARKit `ARWorldMap` and its ARKit-world feature points
     /// to the base station.
-    pub fn publish_world_map(&mut self, t: f64, points_arkit: &[crate::geometry::Vec3], data: Vec<u8>) {
+    pub fn publish_world_map(
+        &mut self,
+        t: f64,
+        points_arkit: &[crate::geometry::Vec3],
+        data: Vec<u8>,
+    ) {
         self.link.publish_world_map(t, points_arkit, data);
     }
 
@@ -67,7 +84,8 @@ impl Pipeline {
         indices: &[u32],
         classes: Vec<u8>,
     ) {
-        self.link.publish_mesh_chunk(t, id, vertices_arkit, indices, classes);
+        self.link
+            .publish_mesh_chunk(t, id, vertices_arkit, indices, classes);
     }
 }
 

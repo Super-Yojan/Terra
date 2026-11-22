@@ -106,6 +106,9 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
     /// Send one wheel command; `.stop` sends every actuator's safe value.
     func send(_ command: WheelCommand) { queue.async {
         guard let profiles = self.profiles, self.relayConnected, let p = self.peripheral else { return }
+        // The rover rejects drive writes while it handles a control request
+        // (and stops its outputs anyway); a rejected write would drop the link.
+        guard !self.controlBusy else { self.pending = []; return }
         let values = command == .stop ? profiles.neutral : profiles.values(for: command)
         guard let bytes = try? profiles.encode(values) else { return }
         let capacity = p.maximumWriteValueLength(for: .withResponse) / 2 * 2
@@ -283,6 +286,20 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
         }
     }
 
+    func peripheral(_ p: CBPeripheral, didUpdateNotificationStateFor c: CBCharacteristic, error: Error?) {
+        guard p === peripheral else { return }
+        if let error {
+            let detail = describe(error)
+            print("[Bluetooth] didUpdateNotificationState \(c.uuid): \(detail)")
+            close("Bluetooth subscribe failed: \(detail)")
+            return
+        }
+        // The rover marks the relay connected right after our first read,
+        // before this subscription exists, so that change is never notified.
+        // Read status again now that later changes will reach us.
+        if c.uuid == statusID, c.isNotifying { p.readValue(for: c) }
+    }
+
     private func handleReply(_ object: [String: Any]) throws {
         guard let id = object["request_id"] as? UInt32, let w = waiting, id == w.id else { return }
         waiting = nil
@@ -381,11 +398,16 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
 
     // MARK: Writes
 
-    /// Control messages go first; then the newest drive frame.
+    /// A layout edit or control request is in progress on the rover.
+    private var controlBusy: Bool { edit != nil || waiting != nil }
+
+    /// Control messages go first; then the newest drive frame, unless a
+    /// control request is still being handled by the rover.
     private func pump() {
         guard !writing, let p = peripheral else { return }
         let next: (Data, CBUUID)
         if !queuedWrites.isEmpty { next = queuedWrites.removeFirst() }
+        else if controlBusy { pending = []; return }
         else if !pending.isEmpty { next = (pending.removeFirst(), driveID) }
         else { return }
         guard let c = chars[next.1] else { return }
