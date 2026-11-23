@@ -13,6 +13,11 @@ pub struct Twist {
     pub w: f64,
 }
 
+impl Twist {
+    /// Hold still.
+    pub const STOP: Twist = Twist { v: 0.0, w: 0.0 };
+}
+
 pub trait VehicleModel: Send {
     /// Scale `twist` down so every wheel stays within `max_wheel_speed`,
     /// keeping the ratio `w / v` (the turn radius). A reachable twist comes
@@ -34,10 +39,21 @@ pub trait VehicleModel: Send {
     /// accelerations to bound which twists are reachable in one tick. The
     /// Swift velocity loop has its own settings and does not read these.
     fn limits(&self) -> Limits;
+    /// Radius (m) of the circle around the body origin that contains the
+    /// whole rover. The planners keep this far from every obstacle.
+    fn radius(&self) -> f64;
+
+    /// Fastest straight-line speed (m/s), i.e. the largest `v` that
+    /// [`clamp`](Self::clamp) leaves unchanged when `w == 0`.
+    fn max_speed(&self) -> f64;
+    /// Fastest turn on the spot (rad/s), i.e. the largest `w` that
+    /// [`clamp`](Self::clamp) leaves unchanged when `v == 0`.
+    fn max_yaw_rate(&self) -> f64;
 }
 
 /// Physical limits of a vehicle, built from the `[vehicle]` section of
 /// `terra-av.toml`. All values are positive magnitudes.
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Limits {
     /// Top ground speed of any one wheel side (m/s). Caps both forward speed
     /// and turn rate, since turning speeds up the outer side.
@@ -55,6 +71,8 @@ pub struct Limits {
 /// from this model are optimistic until a skid correction is added.
 pub struct DiffDrive {
     pub track: f64,
+    /// See [`VehicleModel::radius`].
+    pub radius: f64,
     pub limits: Limits,
 }
 
@@ -71,10 +89,45 @@ impl VehicleModel for DiffDrive {
         Twist { v: twist.v * scale, w: twist.w * scale }
     }
     fn step(&self, pose: Pose2, twist: Twist, dt: f64) -> Pose2 {
-        todo!()
+        let Twist { v, w } = twist;
+        let yaw = pose.yaw;
+        let new_yaw = yaw + w * dt;
+
+        // Straight line. Also used for a very small `w`, where the arc
+        // formula below would divide by (almost) zero.
+        if w.abs() < 1e-9 {
+            return Pose2 {
+                x: pose.x + v * dt * yaw.cos(),
+                y: pose.y + v * dt * yaw.sin(),
+                yaw: new_yaw,
+            };
+        }
+
+        // Circular arc of radius r = v / w. Integrating the velocity
+        // (v·cos yaw(t), v·sin yaw(t)) with yaw(t) = yaw + w·t gives:
+        //   Δx = r · ( sin(new_yaw) − sin(yaw))
+        //   Δy = r · (−cos(new_yaw) + cos(yaw))
+        // A turn on the spot (v = 0) has r = 0, so only the yaw changes.
+        let r = v / w;
+        Pose2 {
+            x: pose.x + r * (new_yaw.sin() - yaw.sin()),
+            y: pose.y + r * (yaw.cos() - new_yaw.cos()),
+            yaw: new_yaw,
+        }
     }
     fn limits(&self) -> Limits {
-        todo!()
+        self.limits
+    }
+    fn radius(&self) -> f64 {
+        self.radius
+    }
+    fn max_speed(&self) -> f64 {
+        // Straight ahead both sides run at v.
+        self.limits.max_wheel_speed
+    }
+    fn max_yaw_rate(&self) -> f64 {
+        // On the spot the sides run at ±w·track/2.
+        self.limits.max_wheel_speed / (self.track / 2.0)
     }
 }
 
@@ -85,6 +138,7 @@ mod tests {
     fn terra() -> DiffDrive {
         DiffDrive {
             track: 0.5,
+            radius: 0.4,
             limits: Limits { max_wheel_speed: 0.8, max_accel: 1.0, max_yaw_accel: 2.0 },
         }
     }

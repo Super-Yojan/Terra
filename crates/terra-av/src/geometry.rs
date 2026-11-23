@@ -27,6 +27,26 @@ pub struct Vec3 {
     pub z: f64,
 }
 
+impl Vec2 {
+    /// Straight-line distance to `other`.
+    pub fn distance(self, other: Vec2) -> f64 {
+        (self.x - other.x).hypot(self.y - other.y)
+    }
+}
+
+/// Wrap an angle (or an angle difference) into `(-π, π]`, so a heading error
+/// across `±π` reads as the short way round.
+pub fn wrap_angle(mut a: f64) -> f64 {
+    use std::f64::consts::PI;
+    while a > PI {
+        a -= 2.0 * PI;
+    }
+    while a <= -PI {
+        a += 2.0 * PI;
+    }
+    a
+}
+
 /// 2×2 orthonormal rotation matrix stored row-major (`m[row][col]`).
 pub struct Rotation2 {
     m: [[f64; 2]; 2],
@@ -34,7 +54,7 @@ pub struct Rotation2 {
 
 /// 3×3 orthonormal rotation matrix stored row-major (`m[row][col]`),
 /// used for 3D frame changes such as camera → body (phone mount) and ARKit → world.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Rotation3 {
     m: [[f64; 3]; 3],
 }
@@ -132,6 +152,14 @@ impl Rotation3 {
 }
 
 impl Pose2 {
+    /// The pose's origin `(x, y)`, without the heading.
+    pub fn position(&self) -> Vec2 {
+        Vec2 {
+            x: self.x,
+            y: self.y,
+        }
+    }
+
     /// Transform a point from the rover's body frame (`+X` forward, `+Y` left) into the world frame:
     /// `p^W = R(yaw) · p^B + t`.
     pub fn to_world(&self, p: Vec2) -> Vec2 {

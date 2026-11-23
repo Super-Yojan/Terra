@@ -16,14 +16,33 @@ pub use none::NoMap;
 pub use occupancy::OccupancyGrid;
 
 use crate::estimation::State;
-use crate::geometry::Vec2;
+use crate::geometry::{Vec2, Vec3};
 use crate::sense::SensorFrame;
 
 /// What the planner sees: occupied points in the world frame.
+#[derive(Default)]
 pub struct Map {
+    /// The centre of every occupied grid cell.
     pub obstacles: Vec<Vec2>,
+    /// Side of one grid cell (m). Zero for a mapper without a grid.
+    pub resolution: f64,
+    /// Goes up by one every time `obstacles` changes, so a planner can tell
+    /// "same map as last time" without comparing the points.
+    pub revision: u64,
 }
 
 pub trait Mapper: Send {
     fn update(&mut self, frame: &SensorFrame, state: &State) -> &Map;
+
+    /// Ingest one incremental ARKit `ARMeshAnchor` chunk (vertices in Terra
+    /// world frame `W`, Z-up; flat triangle `indices`; per-face
+    /// `ARMeshClassification` bytes). Empty `indices` removes the chunk.
+    fn update_mesh(
+        &mut self,
+        _id: &str,
+        _vertices_world: &[Vec3],
+        _indices: &[u32],
+        _classes: &[u8],
+    ) {
+    }
 }

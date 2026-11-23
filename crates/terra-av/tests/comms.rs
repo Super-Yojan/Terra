@@ -56,7 +56,7 @@ fn rover_pipeline(port: u16) -> Pipeline {
         rover_id = {ROVER_ID}
         "#
     );
-    PipelineConfig::from_toml(&toml).unwrap().build().unwrap()
+    PipelineConfig::from_toml(&toml).unwrap().build(None).unwrap()
 }
 
 fn base(port: u16) -> BaseLink {
@@ -85,7 +85,7 @@ fn tick_until<T>(pipeline: &mut Pipeline, what: &str, mut f: impl FnMut() -> Opt
     let start = Instant::now();
     loop {
         let out = pipeline.tick(frame(start.elapsed().as_secs_f64()), &Goal::None);
-        assert_eq!((out.target.v, out.target.w), (0.0, 0.0), "the stub pipeline holds still");
+        assert_eq!((out.target.v, out.target.w), (0.0, 0.0), "with no goal and no task the rover holds still");
         if let Some(v) = f() {
             return v;
         }
@@ -124,7 +124,8 @@ fn pipeline_talks_to_the_base_station() {
     base.send(ROVER_ID, &Estop { t: 0.0, engaged: false });
     tick_until(&mut rover, "released", || base.latest::<Status>(ROVER_ID).filter(|(s, _)| !s.estopped));
 
-    // Tasks are refused with a reason until there is a controller registry.
+    // A task its controller can't run is refused with a reason: `teleop`
+    // is driven by a stick and takes no goal.
     base.send(
         ROVER_ID,
         &Task {
@@ -142,7 +143,7 @@ fn pipeline_talks_to_the_base_station() {
     assert_eq!(status.state, TaskState::Idle);
     let rejected = status.last_rejected.unwrap();
     assert_eq!(rejected.task_id, 9);
-    assert!(rejected.reason.contains("can't run tasks yet"), "{}", rejected.reason);
+    assert!(rejected.reason.contains("takes no goal"), "{}", rejected.reason);
 }
 
 #[test]

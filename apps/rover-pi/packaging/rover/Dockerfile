@@ -5,7 +5,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /src
 COPY apps/rover-pi/ apps/rover-pi/
 COPY scripts/rover/build-rover.sh scripts/rover/build-rover.sh
-COPY docs/hardware/INSTALL.md docs/hardware/INSTALL.md
 RUN sh scripts/rover/build-rover.sh /release
 
 # Prove the executable and staged install work without a Python installation.

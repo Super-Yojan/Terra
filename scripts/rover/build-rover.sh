@@ -78,14 +78,18 @@ install -m 0755 "$root/apps/rover-pi/packaging/rover/install.sh" "$release/insta
 install -m 0644 "$root/apps/rover-pi/packaging/terra-rover.service" "$release/terra-rover.service"
 install -m 0644 "$root/apps/rover-pi/packaging/rover/terra-rover.env" "$release/terra-rover.env"
 install -m 0644 "$root/apps/rover-pi/packaging/rover/terra-rover.conf" "$release/terra-rover.conf"
-install -m 0644 "$root/docs/hardware/INSTALL.md" "$release/INSTALL.md"
+if [ -f "$root/docs/hardware/INSTALL.md" ]; then
+    install -m 0644 "$root/docs/hardware/INSTALL.md" "$release/INSTALL.md"
+fi
 install -m 0644 "$build/compilation-report.xml" "$release/compilation-report.xml"
 mkdir -p "$release/sources"
 cp "$fusion_archive" "$release/sources/"
 # Retain the exact rover source, build recipe and GPL vendor source/license.
+src_extras=
+[ -f "$root/docs/hardware/INSTALL.md" ] && src_extras="docs/hardware/INSTALL.md"
 tar --exclude=.venv --exclude=.build --exclude=dist --exclude='*.egg-info' \
     --exclude=__pycache__ -czf "$release/sources/terra-rover-source.tar.gz" \
-    -C "$root" apps/rover-pi scripts/rover/build-rover.sh docs/hardware/INSTALL.md
+    -C "$root" apps/rover-pi scripts/rover/build-rover.sh $src_extras
 cp "$vendor/LICENSE" "$release/sources/FUSION-HAT-LICENSE"
 "$python" - "$release/build-info.json" "$fusion_commit" <<'PY'
 import json, platform, sys
@@ -101,8 +105,9 @@ Path(sys.argv[1]).write_text(json.dumps({
 }, indent=2) + '\n')
 PY
 cd "$release"
-sha256sum terra-rover install.sh terra-rover.service terra-rover.env terra-rover.conf \
-    INSTALL.md build-info.json compilation-report.xml sources/* > SHA256SUMS
+checksum_files="terra-rover install.sh terra-rover.service terra-rover.env terra-rover.conf build-info.json compilation-report.xml"
+[ -f INSTALL.md ] && checksum_files="$checksum_files INSTALL.md"
+sha256sum $checksum_files sources/* > SHA256SUMS
 cd "$output"
 tar -czf "$name.tar.gz" "$name"
 sha256sum "$name.tar.gz" > "$name.tar.gz.sha256"

@@ -94,6 +94,7 @@ them; callers never format keys by hand.
 | `pose`         | rover → base  | `Pose`         | 20 Hz                                 |
 | `status`       | rover → base  | `Status`       | 1 Hz and on change                    |
 | `depth`        | rover → base  | `Depth`        | up to 20 Hz, dropped when busy        |
+| `occupancy`    | rover → base  | `Occupancy`    | on change; repeated every 2 s         |
 | `remote/state` | rover → base  | `RemoteState`  | 20 Hz, only while `remote` is running |
 | `task`         | base → rover  | `Task`         | on change; persists until replaced    |
 | `task/cmd`     | base → rover  | `TaskCommand`  | on demand (resume, pause, clear)      |
@@ -420,6 +421,9 @@ pub struct GpsAnchor {
     pub accuracy: f64,                       // m, 1σ
 }
 pub struct Depth  { pub t: f64, pub sequence: u64, pub points: Vec<[f32; 3]> } // camera frame, m
+/// The rover's obstacle map: every occupied cell of its occupancy grid,
+/// world frame. The base draws it; the planners on the rover use the same cells.
+pub struct Occupancy { pub t: f64, pub resolution: f64, pub cells: Vec<[f32; 2]> } // cell centres, m
 pub struct Teleop { pub t: f64, pub v: f64, pub w: f64 }                     // body twist
 pub struct Estop  { pub t: f64, pub engaged: bool }
 ```
@@ -437,6 +441,8 @@ pub trait Message: Sized {
 - Small messages are JSON, so you can read them with `z_sub`.
 - `Depth` is a one-line JSON header (`t`, `sequence`, `count`) followed by
   `count × 3` little-endian `f32`s. That's roughly 4× smaller than JSON points.
+- `Occupancy` is encoded the same way: a header (`t`, `resolution`,
+  `count`) followed by `count × 2` little-endian `f32`s.
 - Each payload starts with a `version` field. A decoder rejects a version it
   doesn't know instead of guessing.
 - Rover → base samples carry a Zenoh attachment: the message's age when it

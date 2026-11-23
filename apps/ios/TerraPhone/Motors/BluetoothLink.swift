@@ -16,6 +16,10 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
     /// Ports the rover advertises (`capabilities`), and pins already in use.
     @Published private(set) var ports: [RoverPort] = []
     @Published private(set) var occupied: Set<String> = []
+    /// Vehicle geometry, wiring, and phone mount stored on the connected Pi.
+    @Published private(set) var vehicleSetup: VehicleSetup?
+    /// Whether the phone remembers a rover to auto-reconnect to.
+    @Published private(set) var hasRememberedRover: Bool
     /// Progress of `applyLayout`.
     @Published private(set) var layoutApply: LayoutApply = .idle
 
@@ -40,6 +44,7 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
     private var revision: UInt32 = 0
     private var profiles: ActuatorDriveProfileSet?
     private var sync = ActuatorProfileSync()
+    private var piSupportsVehicleSetup = false
 
     // Request/reply exchange for layout reads (one at a time).
     private var requestID = UInt32(clamping: max(0x8000_0000, UserDefaults.standard.integer(forKey: "terra.rover.requestID")))
@@ -48,16 +53,19 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
     private var statusAssembly = FragmentAssembler()
     private var replyAssembly = FragmentAssembler(timeout: 2, limit: 4080)
 
-    // Layout edit transaction (begin → stage each → validate → commit).
+    // Layout edit transaction (begin → stage actuators → stage vehicle setup → validate → commit).
     private struct LayoutEdit {
         var token = "", version: UInt32 = 0, base: UInt32 = 0
         var remaining: [[String: Any]]
         let names: [Int: String]
+        let vehicle: [String: Any]?
+        let setup: VehicleSetup?
+        var vehicleStaged = false
         var committing = false
     }
     private var edit: LayoutEdit?
-    private static let layoutOperations: Set<String> = ["begin_layout_edit", "stage_actuator", "validate_layout_edit",
-                                                        "commit_layout_edit", "discard_layout_edit"]
+    private static let layoutOperations: Set<String> = ["begin_layout_edit", "stage_actuator", "stage_vehicle_setup",
+                                                        "validate_layout_edit", "commit_layout_edit", "discard_layout_edit"]
 
     // Drive writes: one in flight, newest pending wins.
     private var writing = false
@@ -65,6 +73,7 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
     private var queuedWrites: [(Data, CBUUID)] = []
 
     override init() {
+        hasRememberedRover = UserDefaults.standard.string(forKey: savedKey) != nil
         super.init()
         central = CBCentralManager(delegate: self, queue: queue)
     }
@@ -76,25 +85,28 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
     func connect(_ id: UUID) { queue.async {
         self.wanted = id
         UserDefaults.standard.set(id.uuidString, forKey: self.savedKey)
+        DispatchQueue.main.async { self.hasRememberedRover = true }
         self.connectWantedIfFound()
     } }
 
     func disconnect() { queue.async {
         self.wanted = nil
         UserDefaults.standard.removeObject(forKey: self.savedKey)
+        DispatchQueue.main.async { self.hasRememberedRover = false }
         self.close("Disconnected")
     } }
 
-    /// Replace the rover's actuator layout with `actuators` (rover-pi layout
-    /// entries). Progress and errors are published in `layoutApply`; the new
-    /// drive profiles are read automatically once the rover commits.
-    func applyLayout(_ actuators: [[String: Any]]) { queue.async {
+    /// Replace the rover's actuator layout and saved vehicle setup on the Pi.
+    /// Progress and errors are published in `layoutApply`; the new drive
+    /// profiles and vehicle setup are read automatically once the rover commits.
+    func applyLayout(_ actuators: [[String: Any]], vehicleSetup: VehicleSetup? = nil) { queue.async {
         guard self.peripheral != nil, self.authenticated, self.chars[self.controlID] != nil else {
             self.setApply(.failed("Not connected to a rover")); return
         }
         let names = Dictionary(actuators.compactMap { a in (a["id"] as? Int).map { ($0, a["name"] as? String ?? "#\($0)") } },
                                uniquingKeysWith: { a, _ in a })
-        self.edit = LayoutEdit(base: self.revision, remaining: actuators, names: names)
+        self.edit = LayoutEdit(base: self.revision, remaining: actuators, names: names,
+                               vehicle: vehicleSetup?.jsonObject(), setup: vehicleSetup)
         self.setApply(.working("Starting"))
         self.request("begin_layout_edit", payload: ["expected_revision": self.revision, "mode": "replace"])
     } }
@@ -140,10 +152,10 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
     private func close(_ reason: String) {
         if let p = peripheral { central.cancelPeripheralConnection(p) }
         peripheral = nil; chars.removeAll(); pairingMode = false; authenticated = false
-        relayConnected = false; revision = 0; profiles = nil; sync.clear(); waiting = nil
+        relayConnected = false; revision = 0; profiles = nil; sync.clear(); piSupportsVehicleSetup = false; waiting = nil
         writing = false; pending = []; queuedWrites = []; statusAssembly.clear(); replyAssembly.clear()
         if edit != nil { edit = nil; setApply(.failed("Disconnected before the layout was saved")) }
-        DispatchQueue.main.async { self.connected = nil; self.ready = false; self.ports = []; self.occupied = [] }
+        DispatchQueue.main.async { self.connected = nil; self.ready = false; self.ports = []; self.occupied = []; self.vehicleSetup = nil }
         publish(reason)
         // Reconnect to the remembered rover when it shows up again.
         if wanted != nil { queue.asyncAfter(deadline: .now() + 2) { if self.peripheral == nil { self.startScan() } } }
@@ -189,10 +201,10 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
         guard invalidatedServices.contains(where: { $0.uuid == serviceID }) else { return }
         print("[Bluetooth] didModifyServices: Terra service invalidated, re-discovering")
         chars.removeAll(); pairingMode = false; authenticated = false
-        relayConnected = false; revision = 0; profiles = nil; sync.clear(); waiting = nil
+        relayConnected = false; revision = 0; profiles = nil; sync.clear(); piSupportsVehicleSetup = false; waiting = nil
         writing = false; pending = []; queuedWrites = []; statusAssembly.clear(); replyAssembly.clear()
         if edit != nil { edit = nil; setApply(.failed("Rover restarted before the layout was saved")) }
-        DispatchQueue.main.async { self.ready = false; self.ports = []; self.occupied = [] }
+        DispatchQueue.main.async { self.ready = false; self.ports = []; self.occupied = []; self.vehicleSetup = nil }
         publish("Refreshing Bluetooth services")
         p.discoverServices([serviceID])
     }
@@ -273,7 +285,11 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
             self.revision = revision; profiles = nil
             // The status can overtake the commit reply: a new revision while
             // committing means the rover saved the layout.
-            if edit?.committing == true { edit = nil; setApply(.done(revision)) }
+            if let committed = edit, committed.committing {
+                edit = nil
+                if let setup = committed.setup { DispatchQueue.main.async { self.vehicleSetup = setup } }
+                setApply(.done(revision))
+            }
             if !firstStatus { request("layout_index") }
         }
         let ready = relayConnected && profiles != nil
@@ -315,17 +331,30 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
                 return RoverPort(name: name, kinds: kinds, resources: resources)
             }.sorted { VehicleSetup.portOrder($0.name) < VehicleSetup.portOrder($1.name) }
             let occupied = Set(payload["occupied_resources"] as? [String] ?? [])
+            let features = Set(payload["features"] as? [String] ?? [])
+            piSupportsVehicleSetup = features.contains("vehicle_setup_v1")
             DispatchQueue.main.async { self.ports = advertised; self.occupied = occupied }
             request("layout_index")
         case "layout_index":
             guard let rev = payload["revision"] as? UInt32, let entries = payload["actuators"] as? [[String: Any]] else { throw BluetoothPolicyError.malformed }
             sync.begin(revision: rev, ids: entries.compactMap { $0["id"] as? Int })
-            if payload["layout_available"] as? Bool == true { try nextProfile() } else { publish("No actuator layout on the rover") }
+            if payload["layout_available"] as? Bool == true { try nextProfile() }
+            else {
+                DispatchQueue.main.async { self.vehicleSetup = nil }
+                publish("No actuator layout on the rover")
+            }
         case "read_drive_profile":
             guard let rev = payload["revision"] as? UInt32, let entry = payload["actuator"] else { throw BluetoothPolicyError.malformed }
             let actuator = try JSONDecoder().decode(ActuatorDriveProfile.self, from: JSONSerialization.data(withJSONObject: entry))
             try sync.accept(revision: rev, actuator: actuator)
             try nextProfile()
+        case "read_vehicle_setup":
+            let decoded: VehicleSetup? = if let raw = payload["vehicle"], !(raw is NSNull) {
+                VehicleSetup.from(jsonObject: raw)
+            } else {
+                nil
+            }
+            DispatchQueue.main.async { self.vehicleSetup = decoded }
         default: break
         }
     }
@@ -347,21 +376,27 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
         if let version = payload["edit_version"] as? UInt32 { e.version = version }
         if let base = payload["base_revision"] as? UInt32 { e.base = base }
         switch operation {
-        case "begin_layout_edit", "stage_actuator":
-            if e.remaining.isEmpty {
-                setApply(.working("Checking the layout"))
-                request("validate_layout_edit", payload: ["edit_token": e.token, "edit_version": e.version])
-            } else {
+        case "begin_layout_edit", "stage_actuator", "stage_vehicle_setup":
+            if !e.remaining.isEmpty {
                 let actuator = e.remaining.removeFirst()
                 setApply(.working("Sending \(actuator["name"] as? String ?? "actuator")"))
                 request("stage_actuator", payload: ["edit_token": e.token, "edit_version": e.version, "actuator": actuator])
+            } else if piSupportsVehicleSetup, !e.vehicleStaged, let vehicle = e.vehicle {
+                e.vehicleStaged = true
+                setApply(.working("Saving vehicle setup"))
+                request("stage_vehicle_setup", payload: ["edit_token": e.token, "edit_version": e.version, "vehicle": vehicle])
+            } else {
+                setApply(.working("Checking the layout"))
+                request("validate_layout_edit", payload: ["edit_token": e.token, "edit_version": e.version])
             }
         case "validate_layout_edit":
             e.committing = true
             setApply(.working("Saving on the rover"))
             request("commit_layout_edit", payload: ["edit_token": e.token, "edit_version": e.version, "base_revision": e.base])
         case "commit_layout_edit":
+            let committedSetup = e.setup
             edit = nil
+            if let committedSetup { DispatchQueue.main.async { self.vehicleSetup = committedSetup } }
             setApply(.done(payload["revision"] as? UInt32 ?? revision))
             return
         default: break
@@ -378,6 +413,7 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
             let ready = relayConnected
             DispatchQueue.main.async { self.ready = ready }
             publish(ready ? "Ready" : "Waiting for motor relay")
+            if piSupportsVehicleSetup { request("read_vehicle_setup") }
         } else {
             request("layout_index")
         }
@@ -390,7 +426,17 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
         let envelope: [String: Any] = ["schema_version": 1, "request_id": requestID, "operation": operation, "payload": payload]
         guard let data = try? JSONSerialization.data(withJSONObject: envelope) else { return }
         messageID &+= 1
-        guard let chunks = try? fragmentMessage(data, id: messageID, writeSize: p.maximumWriteValueLength(for: .withResponse)) else { return }
+        // Cap each fragment to <= 180 bytes (and <= ATT_MTU - 3) so every
+        // chunk fits in a single ATT Write Request well below BlueZ's 512-byte
+        // attribute limit and never triggers a BLE Long Write.
+        let mtuWrite = min(p.maximumWriteValueLength(for: .withResponse),
+                           p.maximumWriteValueLength(for: .withoutResponse))
+        let writeSize = max(20, min(180, mtuWrite))
+        guard let chunks = try? fragmentMessage(data, id: messageID, writeSize: writeSize) else {
+            print("[Bluetooth] failed to fragment \(operation) (\(data.count)B, writeSize=\(writeSize))")
+            return
+        }
+        print("[Bluetooth] -> \(operation) (\(data.count)B, \(chunks.count) chunk(s), writeSize=\(writeSize), mtuWrite=\(mtuWrite))")
         waiting = (requestID, operation, payload)
         queuedWrites += chunks.map { ($0, controlID) }
         pump()
@@ -420,7 +466,7 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
         writing = false
         if let error {
             let detail = describe(error)
-            print("[Bluetooth] didWriteValueFor \(c.uuid): \(detail)")
+            print("[Bluetooth] didWriteValueFor \(c.uuid) (op=\(waiting?.operation ?? "none"), remainingChunks=\(queuedWrites.count)): \(detail)")
             close("Bluetooth write failed: \(detail)")
             return
         }

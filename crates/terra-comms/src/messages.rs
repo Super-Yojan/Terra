@@ -187,6 +187,30 @@ pub struct MeshChunk {
     pub classes: Vec<u8>,
 }
 
+/// The rover's obstacle map: the cells of its occupancy grid that it counts
+/// as occupied, in the world frame. This is the map its planners use.
+///
+/// Sent whole whenever it changes. Encoded as a JSON header plus
+/// little-endian `f32`s.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Occupancy {
+    pub t: f64,
+    /// Side of one cell, m.
+    pub resolution: f64,
+    /// Centre `[x, y]` of every occupied cell, m.
+    pub cells: Vec<[f32; 2]>,
+}
+
+/// The rover's current global-planner route in the world frame.
+///
+/// Sent when the route changes (and repeated by the link so late-joining
+/// base stations see it). Empty `poses` means no active route.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PlannedPath {
+    pub t: f64,
+    pub poses: Vec<Pose2>,
+}
+
 /// What the `remote` controller sees each tick, world frame.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RemoteState {

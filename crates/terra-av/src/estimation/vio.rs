@@ -15,11 +15,9 @@
 //!
 //! p_B^W = R_{W←A} · vio.position  −  R_{W←B} · mount.camera_offset
 //! ```
-use std::f64::consts::PI;
-
 use super::{State, StateEstimator};
 use crate::{
-    geometry::{Pose2, Vec3},
+    geometry::{Pose2, Vec3, wrap_angle},
     sense::{Mount, SensorFrame},
     vehicle::{Twist, VehicleModel},
 };
@@ -47,24 +45,12 @@ impl Vio {
 /// [ -1   0   0 ] [ y_A ] = [ -x_A ]   (ARKit -X left    → Terra +Y left)
 /// [  0   1   0 ] [ z_A ]   [ +y_A ]   (ARKit +Y up      → Terra +Z up)
 /// ```
-fn arkit_to_world(v: Vec3) -> Vec3 {
+pub(crate) fn arkit_to_world(v: Vec3) -> Vec3 {
     Vec3 {
         x: -v.z,
         y: -v.x,
         z: v.y,
     }
-}
-
-/// Wrap an angle difference into `(-π, π]` so yaw-rate finite differences don't
-/// spike when heading crosses `±π`.
-fn wrap_angle(mut a: f64) -> f64 {
-    while a > PI {
-        a -= 2.0 * PI;
-    }
-    while a <= -PI {
-        a += 2.0 * PI;
-    }
-    a
 }
 
 impl StateEstimator for Vio {
@@ -107,6 +93,13 @@ impl StateEstimator for Vio {
             y: cam_world.y - offset_world.y,
             yaw,
         };
+
+        // A pose that is not a number is no pose (and must not reach the
+        // planners, whose arithmetic would spread it).
+        if !(pose.x.is_finite() && pose.y.is_finite() && pose.yaw.is_finite()) {
+            self.prev = None;
+            return None;
+        }
 
         // 3. Body twist (v, w): finite-difference consecutive tracked poses.
         //    On the first frame (or non-increasing timestamps), report zero twist.

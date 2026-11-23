@@ -50,7 +50,7 @@ struct HomeView: View {
         .sheet(isPresented: $showSetup) { SetupView(loop: loop, motors: motors) }
         .fullScreenCover(isPresented: $mounted) { MountedView(loop: loop) }
         .onAppear {
-            if VehicleSetup.load() == nil {
+            if !motors.hasRememberedRover {
                 showSetup = true
             }
         }
@@ -71,11 +71,15 @@ struct MountedView: View {
             OrbView(animated: true).ignoresSafeArea()
             VStack {
                 HStack {
-                    if let status = loop.worldMapStatus {
-                        Text(status)
-                            .font(.caption)
-                            .foregroundStyle(.white.opacity(0.6))
+                    VStack(alignment: .leading, spacing: 4) {
+                        // What terra-av is doing: pose, base station, task.
+                        Text(loop.status?.line ?? "No pipeline: check terra-av.toml (see the console)")
+                        if let status = loop.worldMapStatus {
+                            Text(status)
+                        }
                     }
+                    .font(.caption)
+                    .foregroundStyle(.white.opacity(0.6))
                     Spacer()
                     Button { loop.sendWorldMap() } label: {
                         Label("Send Map", systemImage: "map")
@@ -98,7 +102,8 @@ struct MountedView: View {
             }
         }
         .contentShape(Rectangle())
-        .onLongPressGesture(minimumDuration: 2) { dismiss() }
+        .onTapGesture { dismiss() }
+        // .onLongPressGesture(minimumDuration: 2) { dismiss() }
         .statusBarHidden()
         .persistentSystemOverlays(.hidden)
         .onAppear {

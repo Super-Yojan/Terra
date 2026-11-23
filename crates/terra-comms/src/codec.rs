@@ -5,6 +5,9 @@
 //! - `Depth` is a one-line JSON header (`version`, `t`, `sequence`, `count`),
 //!   a `\n`, then `count × 3` little-endian `f32`s.
 //!
+//! - `Occupancy` is the same shape: a header (`version`, `t`, `resolution`,
+//!   `count`), a `\n`, then `count × 2` little-endian `f32`s.
+//!
 //! A decoder rejects a version it doesn't know instead of guessing.
 use std::fmt;
 
@@ -102,6 +105,7 @@ json_message! {
     TaskStatus => TaskStatus, Uplink;
     Pose => Pose, Uplink;
     Status => Status, Uplink;
+    PlannedPath => PlannedPath, Uplink;
     RemoteState => RemoteState, Uplink;
     Task => Task, Downlink;
     TaskCommand => TaskCommand, Downlink;
@@ -309,6 +313,50 @@ impl Message for MeshChunk {
 }
 impl Uplink for MeshChunk {}
 
+#[derive(Serialize, serde::Deserialize)]
+struct OccupancyHeader {
+    t: f64,
+    resolution: f64,
+    count: usize,
+}
+
+impl Message for Occupancy {
+    const TOPIC: Topic = Topic::Occupancy;
+
+    fn encode(&self) -> Vec<u8> {
+        let header = OccupancyHeader { t: self.t, resolution: self.resolution, count: self.cells.len() };
+        let mut out = encode_json(&header);
+        out.reserve(1 + self.cells.len() * 8);
+        out.push(b'\n');
+        for cell in &self.cells {
+            for c in cell {
+                out.extend_from_slice(&c.to_le_bytes());
+            }
+        }
+        out
+    }
+
+    fn decode(bytes: &[u8]) -> Result<Self, DecodeError> {
+        let newline = bytes.iter().position(|&b| b == b'\n').ok_or_else(|| malformed("no occupancy header line"))?;
+        let header: OccupancyHeader = decode_json(&bytes[..newline])?;
+        let body = &bytes[newline + 1..];
+        if Some(body.len()) != header.count.checked_mul(8) {
+            return Err(malformed(format!("occupancy: {} bytes for {} cells", body.len(), header.count)));
+        }
+        let cells = body
+            .as_chunks::<8>()
+            .0
+            .iter()
+            .map(|p| {
+                let f = |i: usize| f32::from_le_bytes([p[i], p[i + 1], p[i + 2], p[i + 3]]);
+                [f(0), f(4)]
+            })
+            .collect();
+        Ok(Self { t: header.t, resolution: header.resolution, cells })
+    }
+}
+impl Uplink for Occupancy {}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -337,6 +385,7 @@ mod tests {
             uplink::<Depth>(),
             uplink::<WorldMap>(),
             uplink::<MeshChunk>(),
+            uplink::<Occupancy>(),
             uplink::<RemoteState>(),
         ] {
             assert_eq!(t.direction(), Direction::RoverToBase, "{t}");
@@ -356,6 +405,17 @@ mod tests {
         [("horizon".to_string(), ParamValue::Float(2.0)), ("mode".to_string(), ParamValue::Choice("a".into()))]
             .into_iter()
             .collect()
+    }
+
+    #[test]
+    fn occupancy_round_trip() {
+        round_trip(Occupancy { t: 4.5, resolution: 0.1, cells: vec![[0.05, -0.15], [1.25, 2.35]] });
+        round_trip(Occupancy { t: 5.0, resolution: 0.1, cells: vec![] });
+
+        // A body that doesn't match the header's count is rejected.
+        let mut bytes = Occupancy { t: 1.0, resolution: 0.1, cells: vec![[0.0, 0.0]] }.encode();
+        bytes.pop();
+        assert!(Occupancy::decode(&bytes).is_err());
     }
 
     #[test]
@@ -426,6 +486,13 @@ mod tests {
             link_ok: true,
             detail: "ok".into(),
             gps_anchor: Some(GpsAnchor { latitude: 51.5, longitude: -0.1, heading: 1.0, accuracy: 2.5 }),
+        });
+        round_trip(PlannedPath {
+            t: 1.5,
+            poses: vec![
+                Pose2 { x: 0.0, y: 0.0, yaw: 0.0 },
+                Pose2 { x: 1.0, y: 0.5, yaw: 0.46 },
+            ],
         });
         round_trip(RemoteState {
             t: 0.0,

@@ -361,8 +361,8 @@ implementation per stage, so swapping a planner or a vehicle is a configuration 
     <rect class="node" x="166" y="50" width="128" height="180" rx="10"/>
     <text class="title" x="180" y="74">Estimation</text>
     <text class="sub mono" x="180" y="92">StateEstimator</text>
-    <rect class="chip-stub" x="176" y="108" width="108" height="22" rx="6"/><circle class="stub" cx="188" cy="119" r="4"/><text class="chip-text mono" x="198" y="123">Vio</text>
-    <rect class="chip-stub" x="176" y="136" width="108" height="22" rx="6"/><circle class="stub" cx="188" cy="147" r="4"/><text class="chip-text mono" x="198" y="151">Localization</text>
+    <rect class="chip" x="176" y="108" width="108" height="22" rx="6"/><circle class="done" cx="188" cy="119" r="4"/><text class="chip-text mono" x="198" y="123">Vio</text>
+    <rect class="chip" x="176" y="136" width="108" height="22" rx="6"/><circle class="done" cx="188" cy="147" r="4"/><text class="chip-text mono" x="198" y="151">Localization</text>
     <text class="sub" x="180" y="198">None → stop</text>
     <text class="sub mono" x="180" y="216">→ State</text>
   </g>
@@ -371,8 +371,8 @@ implementation per stage, so swapping a planner or a vehicle is a configuration 
     <rect class="node" x="310" y="50" width="128" height="180" rx="10"/>
     <text class="title" x="324" y="74">Mapping</text>
     <text class="sub mono" x="324" y="92">Mapper</text>
-    <rect class="chip-stub" x="320" y="108" width="108" height="22" rx="6"/><circle class="stub" cx="332" cy="119" r="4"/><text class="chip-text mono" x="342" y="123">NoMap</text>
-    <rect class="chip-stub" x="320" y="136" width="108" height="22" rx="6"/><circle class="stub" cx="332" cy="147" r="4"/><text class="chip-text mono" x="342" y="151">OccupancyGrid</text>
+    <rect class="chip" x="320" y="108" width="108" height="22" rx="6"/><circle class="done" cx="332" cy="119" r="4"/><text class="chip-text mono" x="342" y="123">NoMap</text>
+    <rect class="chip" x="320" y="136" width="108" height="22" rx="6"/><circle class="done" cx="332" cy="147" r="4"/><text class="chip-text mono" x="342" y="151">OccupancyGrid</text>
     <text class="sub mono" x="324" y="216">→ Map</text>
   </g>
 
@@ -380,8 +380,8 @@ implementation per stage, so swapping a planner or a vehicle is a configuration 
     <rect class="node" x="454" y="50" width="128" height="180" rx="10"/>
     <text class="title" x="468" y="74">Global plan</text>
     <text class="sub mono" x="468" y="92">PathPlanner</text>
-    <rect class="chip-stub" x="464" y="108" width="108" height="22" rx="6"/><circle class="stub" cx="476" cy="119" r="4"/><text class="chip-text mono" x="486" y="123">StraightLine</text>
-    <rect class="chip-stub" x="464" y="136" width="108" height="22" rx="6"/><circle class="stub" cx="476" cy="147" r="4"/><text class="chip-text mono" x="486" y="151">HybridAStar</text>
+    <rect class="chip" x="464" y="108" width="108" height="22" rx="6"/><circle class="done" cx="476" cy="119" r="4"/><text class="chip-text mono" x="486" y="123">StraightLine</text>
+    <rect class="chip" x="464" y="136" width="108" height="22" rx="6"/><circle class="done" cx="476" cy="147" r="4"/><text class="chip-text mono" x="486" y="151">HybridAStar</text>
     <text class="sub" x="468" y="198">on goal/map change</text>
     <text class="sub mono" x="468" y="216">→ Path</text>
   </g>
@@ -390,9 +390,9 @@ implementation per stage, so swapping a planner or a vehicle is a configuration 
     <rect class="node" x="598" y="50" width="128" height="180" rx="10"/>
     <text class="title" x="612" y="74">Local plan</text>
     <text class="sub mono" x="612" y="92">LocalPlanner</text>
-    <rect class="chip-stub" x="608" y="108" width="108" height="22" rx="6"/><circle class="stub" cx="620" cy="119" r="4"/><text class="chip-text mono" x="630" y="123">Teleop</text>
-    <rect class="chip-stub" x="608" y="136" width="108" height="22" rx="6"/><circle class="stub" cx="620" cy="147" r="4"/><text class="chip-text mono" x="630" y="151">DrivePose</text>
-    <rect class="chip-stub" x="608" y="164" width="108" height="22" rx="6"/><circle class="stub" cx="620" cy="175" r="4"/><text class="chip-text mono" x="630" y="179">Dwa</text>
+    <rect class="chip" x="608" y="108" width="108" height="22" rx="6"/><circle class="done" cx="620" cy="119" r="4"/><text class="chip-text mono" x="630" y="123">Teleop</text>
+    <rect class="chip" x="608" y="136" width="108" height="22" rx="6"/><circle class="done" cx="620" cy="147" r="4"/><text class="chip-text mono" x="630" y="151">DrivePose</text>
+    <rect class="chip" x="608" y="164" width="108" height="22" rx="6"/><circle class="done" cx="620" cy="175" r="4"/><text class="chip-text mono" x="630" y="179">Dwa</text>
     <text class="sub mono" x="612" y="216">→ Twist</text>
   </g>
 
@@ -401,7 +401,7 @@ implementation per stage, so swapping a planner or a vehicle is a configuration 
     <text class="title" x="756" y="74">Execution</text>
     <text class="sub mono" x="756" y="92">execution/</text>
     <rect class="chip" x="752" y="108" width="108" height="22" rx="6"/><circle class="done" cx="764" cy="119" r="4"/><text class="chip-text mono" x="774" y="123">clamp</text>
-    <rect class="chip-stub" x="752" y="136" width="108" height="22" rx="6"/><circle class="stub" cx="764" cy="147" r="4"/><text class="chip-text mono" x="774" y="151">SafetyGate</text>
+    <rect class="chip" x="752" y="136" width="108" height="22" rx="6"/><circle class="done" cx="764" cy="147" r="4"/><text class="chip-text mono" x="774" y="151">SafetyGate</text>
     <text class="sub" x="756" y="198">wheel limits, e-stop</text>
     <text class="sub mono" x="756" y="216">→ Twist</text>
   </g>
@@ -438,8 +438,8 @@ implementation per stage, so swapping a planner or a vehicle is a configuration 
   <text class="sub" x="460" y="301">used by every stage</text>
   <rect class="chip" x="320" y="318" width="138" height="22" rx="6"/><circle class="done" cx="332" cy="329" r="4"/><text class="chip-text mono" x="342" y="333">geometry.rs</text>
   <rect class="chip" x="466" y="318" width="186" height="22" rx="6"/><circle class="done" cx="478" cy="329" r="4"/><text class="chip-text mono" x="488" y="333">DiffDrive::clamp</text>
-  <rect class="chip-stub" x="660" y="318" width="166" height="22" rx="6"/><circle class="stub" cx="672" cy="329" r="4"/><text class="chip-text mono" x="682" y="333">DiffDrive::step</text>
-  <rect class="chip-stub" x="834" y="318" width="170" height="22" rx="6"/><circle class="stub" cx="846" cy="329" r="4"/><text class="chip-text mono" x="856" y="333">DiffDrive::limits</text>
+  <rect class="chip" x="660" y="318" width="166" height="22" rx="6"/><circle class="done" cx="672" cy="329" r="4"/><text class="chip-text mono" x="682" y="333">DiffDrive::step</text>
+  <rect class="chip" x="834" y="318" width="170" height="22" rx="6"/><circle class="done" cx="846" cy="329" r="4"/><text class="chip-text mono" x="856" y="333">DiffDrive::limits</text>
 
   <!-- Wiring -->
   <rect class="node-ext" x="22" y="376" width="992" height="48" rx="10"/>

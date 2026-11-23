@@ -12,7 +12,8 @@ use zenoh::qos::{CongestionControl, Priority};
 use super::{Core, Handle, RawCallback, Received, Stats};
 use crate::codec::{Downlink, Uplink};
 use crate::messages::{
-    Capabilities, Depth, Estop, MeshChunk, Pose, RemoteState, Status, TaskStatus, WorldMap,
+    Capabilities, Depth, Estop, MeshChunk, Occupancy, PlannedPath, Pose, RemoteState, Status,
+    TaskStatus, WorldMap,
 };
 use crate::topics::{Topic, Topics};
 use crate::{ESTOP_REPEAT, ROVER_SEEN_WINDOW};
@@ -35,6 +36,8 @@ impl BaseLink {
         watch::<Status>(core, &state);
         watch::<WorldMap>(core, &state);
         watch::<MeshChunk>(core, &state);
+        watch::<Occupancy>(core, &state);
+        watch::<PlannedPath>(core, &state);
         watch::<RemoteState>(core, &state);
 
         let commands = Arc::new(Commands::default());

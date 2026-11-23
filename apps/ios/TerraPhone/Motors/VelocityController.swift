@@ -17,17 +17,20 @@ struct WheelCommand: Equatable {
 struct VelocityController {
     /// Terra (CrabTrapBot). top_speed is the measured ground speed at full
     /// effort (~1.0 m/s, thesis Ch7), not the old assumed 3.
-    var trackWidth = 0.5        // m
-    var topSpeed = 1.0          // m/s at effort 1
-    var skidFactor = 2.4        // yaw effort multiplier for wheel scrub
-    var kpLinear = 0.3          // effort per m/s of error
-    var kpYaw = 0.1             // effort per rad/s of error
+    var trackWidth = 0.5 // m
+    var topSpeed = 1.0 // m/s at effort 1
+    var skidFactor = 2.4 // yaw effort multiplier for wheel scrub
+    // NOTE: The gains aren't really tuned
+    var kpLinear = 0.1 // effort per m/s of error
+    var kpYaw = 0.1 // effort per rad/s of error
     /// Stop if the planner's target is older than this.
-    var targetTimeout = 0.3     // s
+    var targetTimeout = 0.3 // s
 
     func command(target: Twist, measured: Twist?, targetAge: TimeInterval) -> WheelCommand {
         guard targetAge.isFinite, targetAge < targetTimeout else { return .stop }
-        if target.v == 0 && target.w == 0 { return .stop }
+        if target.v == 0 && target.w == 0 {
+            return .stop
+        }
 
         var forward = target.v / topSpeed
         var yaw = skidFactor * trackWidth / 2 * target.w / topSpeed
@@ -36,7 +39,9 @@ struct VelocityController {
             forward += kpLinear * (target.v - measured.v)
             yaw += kpYaw * (target.w - measured.w)
         }
-        let clamp = { (x: Double) in min(1, max(-1, x)) }
+        // NOTE: Setting to to be 0.3 when testing on the terra rover,
+        // this needs to be configurable depending on the motor
+        let clamp = { (x: Double) in min(0.3, max(-0.3, x)) }
         return WheelCommand(left: clamp(forward - yaw), right: clamp(forward + yaw))
     }
 }

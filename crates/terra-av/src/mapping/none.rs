@@ -2,8 +2,14 @@
 use super::{Map, Mapper};
 use crate::{estimation::State, sense::SensorFrame};
 
-pub struct NoMap;
+#[derive(Default)]
+pub struct NoMap {
+    /// Always empty, and its `revision` never changes.
+    empty: Map,
+}
 
 impl Mapper for NoMap {
-    fn update(&mut self, frame: &SensorFrame, state: &State) -> &Map { todo!() }
+    fn update(&mut self, _frame: &SensorFrame, _state: &State) -> &Map {
+        &self.empty
+    }
 }

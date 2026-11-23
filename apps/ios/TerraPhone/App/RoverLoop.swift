@@ -9,36 +9,58 @@ import Foundation
 ///
 /// A slow terra-av tick only delays the target; the velocity loop keeps its
 /// fixed rate and stops on its own if the target goes stale.
+///
+/// Everything that moves the rover goes through both loops: the phone's
+/// joystick, the base station's stick and the base station's tasks all
+/// become a `DriveCommand` in `TerraAv.tick`, where the e-stops (the
+/// phone's and the base station's) have the last word.
 final class RoverLoop: ObservableObject {
     let sensors = PhoneSensors()
     let motors = BluetoothLink()
     /// Replaced only on `plannerQueue` (see `setRouterPassword`).
     private var av: TerraAv
+    /// Used only on `velocityQueue`.
     private var controller = VelocityController()
 
     private let plannerQueue = DispatchQueue(label: "terra.planner")
     private let velocityQueue = DispatchQueue(label: "terra.velocity", qos: .userInteractive)
     private var plannerTimer: DispatchSourceTimer?
     private var velocityTimer: DispatchSourceTimer?
+    private var setupSubscription: AnyCancellable?
 
     // Planner-queue state.
+    private var activeSetup: VehicleSetup?
+    private var activeBaseStation: BaseStationConfig
     private var goal = Goal.none
     private var estop = false
+    private var ticksSinceStatus = 0
     // Shared between the loops.
     private let lock = NSLock()
     private var latest: (command: DriveCommand, at: TimeInterval)?
 
+    @Published private(set) var baseStation: BaseStationConfig
     @Published private(set) var running = false
     @Published private(set) var estopped = false
     @Published private(set) var worldMapStatus: String?
     @Published private(set) var command = WheelCommand.stop
+    /// What terra-av's last tick saw, refreshed twice a second while running.
+    @Published private(set) var status: RoverStatus?
 
     /// Joystick full scale.
     let maxSpeed = 0.5 // m/s
     let maxTurn = 1.5 // rad/s
 
     init() {
-        av = Self.makeAv()
+        let loadedBaseStation = BaseStationConfig.load()
+        baseStation = loadedBaseStation
+        activeBaseStation = loadedBaseStation
+        av = Self.makeAv(setup: nil, baseStation: loadedBaseStation)
+        setupSubscription = motors.$vehicleSetup
+            .dropFirst()
+            .removeDuplicates()
+            .sink { [weak self] setup in
+                self?.applyVehicle(setup)
+            }
         sensors.onMeshChunk = { [weak self] id, vertices, indices, classes in
             guard let self else { return }
             let t = ProcessInfo.processInfo.systemUptime
@@ -48,27 +70,50 @@ final class RoverLoop: ObservableObject {
         }
     }
 
-    /// terra-av from the bundled terra-av.toml, with the vehicle from the
-    /// app's setup (if any), plus the Keychain router password.
-    private static func makeAv() -> TerraAv {
+    /// terra-av from the bundled terra-av.toml, overridden with the connected
+    /// rover's setup from the Raspberry Pi (if loaded), the UI base-station
+    /// settings, and the Keychain router password. No rover-specific state is
+    /// persisted on the phone so the same iPhone can move freely between
+    /// different rovers.
+    private static func makeAv(setup: VehicleSetup?, baseStation: BaseStationConfig) -> TerraAv {
         let url = Bundle.main.url(forResource: "terra-av", withExtension: "toml")
         var toml = url.flatMap { try? String(contentsOf: $0, encoding: .utf8) } ?? ""
-        if let setup = VehicleSetup.load() {
+        if let setup {
             toml = setup.applying(to: toml)
         }
-        return TerraAv(configToml: toml, routerPassword: RouterPassword.load())
+        toml = baseStation.applying(to: toml, roverIdOverride: setup?.roverId)
+        return TerraAv(configToml: toml, routerPassword: RouterPassword.load(), stateDir: nil)
     }
 
-    /// Save the vehicle setup and rebuild terra-av with it.
+    private func applyVehicle(_ setup: VehicleSetup?) {
+        plannerQueue.async {
+            self.activeSetup = setup
+            self.av = Self.makeAv(setup: setup, baseStation: self.activeBaseStation)
+        }
+        let trackWidth = setup?.trackWidth ?? VehicleSetup().trackWidth
+        velocityQueue.async { self.controller.trackWidth = trackWidth }
+    }
+
+    /// Rebuild terra-av and the velocity loop with `setup` (persisted on the
+    /// Raspberry Pi via `BluetoothLink.applyLayout`, never on the phone).
     func setVehicle(_ setup: VehicleSetup) {
-        setup.save()
-        plannerQueue.async { self.av = Self.makeAv() }
+        applyVehicle(setup)
+    }
+
+    /// Save base station connection settings and reconnect terra-av immediately.
+    func setBaseStation(_ config: BaseStationConfig) {
+        config.save()
+        DispatchQueue.main.async { self.baseStation = config }
+        plannerQueue.async {
+            self.activeBaseStation = config
+            self.av = Self.makeAv(setup: self.activeSetup, baseStation: config)
+        }
     }
 
     /// Store the router password and reconnect with it (empty clears it).
     func setRouterPassword(_ password: String) {
         RouterPassword.save(password)
-        plannerQueue.async { self.av = Self.makeAv() }
+        plannerQueue.async { self.av = Self.makeAv(setup: self.activeSetup, baseStation: self.activeBaseStation) }
     }
 
     /// Capture the current ARKit `ARWorldMap` and publish it to the base station.
@@ -96,6 +141,8 @@ final class RoverLoop: ObservableObject {
     func start() {
         guard plannerTimer == nil else { return }
         sensors.start()
+        // Show the status line from the first tick on.
+        plannerQueue.async { self.ticksSinceStatus = 10 }
         plannerTimer = repeating(every: .milliseconds(50), on: plannerQueue) { [weak self] in self?.plannerTick() }
         velocityTimer = repeating(every: .milliseconds(20), on: velocityQueue) { [weak self] in self?.velocityTick() }
         running = true
@@ -109,6 +156,7 @@ final class RoverLoop: ObservableObject {
         motors.send(.stop)
         running = false
         command = .stop
+        status = nil
     }
 
     /// Stick in [-1, 1] → Goal.velocity.
@@ -126,51 +174,38 @@ final class RoverLoop: ObservableObject {
         estopped = on
     }
 
+    /// Planner loop: one terra-av tick, and its result becomes the latest
+    /// drive command.
     private func plannerTick() {
         let out = av.tick(frame: sensors.frame(estop: estop), goal: goal)
-
-        // print(sensors.frame(estop: false).depth)
-
         lock.lock(); latest = (out, ProcessInfo.processInfo.systemUptime); lock.unlock()
+
+        // The status line, every 10th tick (2 Hz).
+        ticksSinceStatus += 1
+        if ticksSinceStatus >= 10 {
+            ticksSinceStatus = 0
+            let status = av.status()
+            DispatchQueue.main.async {
+                if self.status != status {
+                    self.status = status
+                }
+            }
+        }
     }
 
-    /// Joystick → wheel efforts (arcade drive).
-    /// forward: +1 = full ahead, turn: +1 = full left. Both in [-1, 1].
-    func joystickToMotors(forward: Double, turn: Double, maxEffort: Double = 0.5) -> WheelCommand {
-        var left = forward - turn
-        var right = forward + turn
-        // Keep the ratio between the wheels if either side would exceed 1.
-        let biggest = max(1, abs(left), abs(right))
-        left /= biggest
-        right /= biggest
-        return WheelCommand(left: left * maxEffort, right: right * maxEffort)
-    }
-
+    /// Velocity loop: the latest drive command → wheel efforts → Bluetooth.
+    /// With no command (not started, or the e-stop just cleared it) or a
+    /// stale one, the wheels stop.
     private func velocityTick() {
         lock.lock(); let latest = self.latest; lock.unlock()
 
-        // Test drive from the phone's joystick goes straight to the motors
-        // (terra-av's tick doesn't drive yet). Otherwise send only the
-        // controller's output: sending .stop first made every tick alternate
-        // stop / drive frames.
-        if case let .velocity(v, w) = goal {
-            let out = joystickToMotors(forward: v, turn: w)
-            motors.send(out)
-            DispatchQueue.main.async {
-                if self.command != out {
-                    self.command = out
-                }
-            }
-            return
-        }
-
         let out: WheelCommand
         if let latest {
-            out = controller.command(target: latest.command.target, measured: latest.command.measured, targetAge: ProcessInfo.processInfo.systemUptime - latest.at)
+            let age = ProcessInfo.processInfo.systemUptime - latest.at
+            out = controller.command(target: latest.command.target, measured: latest.command.measured, targetAge: age)
         } else {
             out = .stop
         }
-        print("Motor output ", out)
 
         motors.send(out)
         DispatchQueue.main.async {

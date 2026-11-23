@@ -19,6 +19,9 @@ pub struct VioPose {
     pub rotation: Rotation3,
     pub tracked: bool,
 }
+
+/// Core Location fix: WGS84 degrees, horizontal accuracy in metres (1σ).
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GpsFix {
     pub latitude: f64,
     pub longitude: f64,
@@ -27,6 +30,7 @@ pub struct GpsFix {
 
 /// Where the phone sits on the rover. Set once in the config (TOML), not in
 /// the app. Used by estimation (VIO pose) and mapping (depth points).
+#[derive(Clone, Debug)]
 pub struct Mount {
     /// Camera axes → body axes (+X forward, +Y left, +Z up).
     pub camera_to_body: Rotation3,

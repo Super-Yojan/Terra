@@ -1,10 +1,14 @@
 # terra-av pipeline for Terra. One implementation per stage; see
 # crates/terra-av/src/config.rs.
 
+# The app's setup screen replaces this table with the rover it describes.
+# radius: the circle around the rover's centre that holds the whole body
+# (half the diagonal of a 0.6 × 0.45 m body); planners keep obstacles outside it.
 [vehicle]
 type = "diff_drive"
 track = 0.5
 max_wheel_speed = 0.8
+radius = 0.375
 
 # Phone landscape on the rover, screen facing the rover, rear camera out,
 # camera 0.23 m above the ground. Roll sign untested.
@@ -21,6 +25,10 @@ type = "vio"
 type = "occupancy_grid"
 resolution = 0.1
 
+# The planner and controller for a pose goal from the phone, and the
+# defaults offered to the base station. A task from the base station names
+# its own controller (teleop, drive_pose, dwa, remote) and, optionally,
+# planner (straight_line, hybrid_astar); see planning/registry.rs.
 [path_planner]
 type = "straight_line"
 
@@ -38,4 +46,4 @@ type = "teleop"
 [comms]
 rover_id = 0
 # endpoint = "tcp/192.168.8.100:7447"
-endpoint = "tcp/192.168.1.165:7447"
+endpoint = "tcp/192.168.1.150:7447"

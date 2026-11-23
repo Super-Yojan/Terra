@@ -73,6 +73,8 @@ struct PortAssignment: Codable, Hashable {
 }
 
 struct VehicleSetup: Codable, Equatable {
+    /// Fleet rover ID for `[comms] rover_id` (Zenoh key prefix `terra/<id>/...`).
+    var roverId = 0
     var steering: Steering = .differential
     var wheelCount = 4
     var driveKind: DriveKind = .dcMotor
@@ -102,6 +104,7 @@ struct VehicleSetup: Codable, Equatable {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         let d = VehicleSetup()
+        roverId = try c.decodeIfPresent(Int.self, forKey: .roverId) ?? d.roverId
         steering = try c.decodeIfPresent(Steering.self, forKey: .steering) ?? d.steering
         wheelCount = try c.decodeIfPresent(Int.self, forKey: .wheelCount) ?? d.wheelCount
         driveKind = try c.decodeIfPresent(DriveKind.self, forKey: .driveKind) ?? d.driveKind
@@ -224,6 +227,7 @@ struct VehicleSetup: Codable, Equatable {
     /// Why the setup can't be applied yet; empty when it can.
     var problems: [String] {
         var out: [String] = []
+        if roverId < 0 { out.append("Rover ID must be zero or positive") }
         for o in outputs where assignments[o.id]?.port == nil { out.append("\(o.name) has no port") }
         let used = outputs.compactMap { assignments[$0.id]?.port }
         if Set(used).count != used.count { out.append("Two outputs share a port") }
@@ -284,7 +288,16 @@ struct VehicleSetup: Codable, Equatable {
         type = "diff_drive"
         track = \(trackWidth)
         max_wheel_speed = \(maxWheelSpeed)
+        radius = \(bodyRadius)
         """
+    }
+
+    /// Radius of the circle around the rover's centre that holds the whole
+    /// body: half its diagonal (m). terra-av's planners keep obstacles
+    /// outside this circle.
+    var bodyRadius: Double {
+        let halfDiagonal = (bodyLength * bodyLength + bodyWidth * bodyWidth).squareRoot() / 2
+        return (halfDiagonal * 1000).rounded() / 1000
     }
 
     /// The phone's position in the body frame, for `[mount] offset`.
@@ -349,15 +362,17 @@ struct VehicleSetup: Codable, Equatable {
         return out.joined(separator: "\n")
     }
 
-    // MARK: Persistence
+    // MARK: Pi serialization (stored on the Raspberry Pi, never on the phone)
 
-    private static let key = "terra.vehicle.setup"
-
-    static func load() -> VehicleSetup? {
-        UserDefaults.standard.data(forKey: key).flatMap { try? JSONDecoder().decode(VehicleSetup.self, from: $0) }
+    func jsonObject() -> [String: Any]? {
+        guard let data = try? JSONEncoder().encode(self),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        return object
     }
 
-    func save() {
-        if let data = try? JSONEncoder().encode(self) { UserDefaults.standard.set(data, forKey: Self.key) }
+    static func from(jsonObject: Any) -> VehicleSetup? {
+        guard JSONSerialization.isValidJSONObject(jsonObject),
+              let data = try? JSONSerialization.data(withJSONObject: jsonObject) else { return nil }
+        return try? JSONDecoder().decode(VehicleSetup.self, from: data)
     }
 }

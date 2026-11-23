@@ -121,3 +121,35 @@ class PaginationTests(unittest.TestCase):
         self.assertEqual(result,data)
         assembler.push(fragments[0],10)
         with self.assertRaises(ProtocolError): assembler.push(fragments[1],12.01)
+    def test_vehicle_setup_round_trip_and_persistence(self):
+        self.assertIn('vehicle_setup_v1', self.call('capabilities')['payload']['features'])
+        self.assertEqual(self.call('read_vehicle_setup')['payload'], {'revision': 0, 'vehicle': None})
+        vehicle = dict(roverId=2, steering='differential', wheelCount=4, driveKind='dc_motor', grouping='shared',
+                       assignments={'L': {'port': 'P0', 'inverted': False}}, trackWidth=0.52, wheelbase=0.4,
+                       maxWheelSpeed=0.8, bodyLength=0.6, bodyWidth=0.45, phoneForward=0.25, phoneHeight=0.23,
+                       phoneTurn=0, phoneTilt=10.0, phonePan=0.0)
+        draft = self.stage(self.begin(), actuator())
+        staged = self.call('stage_vehicle_setup', edit_token=draft['edit_token'], edit_version=draft['edit_version'], vehicle=vehicle)
+        self.assertEqual(staged['result'], 'ok', staged)
+        draft.update(staged['payload'])
+        reply = self.commit(draft)
+        self.assertEqual(reply['result'], 'ok', reply)
+        self.assertEqual(self.call('read_vehicle_setup')['payload'], {'revision': 1, 'vehicle': vehicle})
+        # Survives a full Pi restart (reload from layout.json).
+        reloaded_relay = DriveRelay(self.backend.capabilities())
+        reloaded = ConfigurationStore(self.store.path, reloaded_relay, self.backend)
+        reloaded.load()
+        reloaded.begin_connection()
+        after = reloaded.handle(dict(schema_version=1, request_id=99, operation='read_vehicle_setup', payload={}))
+        self.assertEqual(after['payload'], {'revision': 1, 'vehicle': vehicle})
+    def test_vehicle_setup_invalidates_validation_and_rejects_oversized(self):
+        draft = self.stage(self.begin(), actuator())
+        self.assertEqual(self.call('validate_layout_edit', edit_token=draft['edit_token'], edit_version=draft['edit_version'])['result'], 'ok')
+        staged = self.call('stage_vehicle_setup', edit_token=draft['edit_token'], edit_version=draft['edit_version'], vehicle={'trackWidth': 0.5})
+        self.assertEqual(staged['result'], 'ok')
+        draft.update(staged['payload'])
+        unvalidated = self.call('commit_layout_edit', **{key: draft[key] for key in ('edit_token', 'edit_version', 'base_revision')})
+        self.assertEqual(unvalidated['errors'][0]['code'], 'edit_not_validated')
+        with self.assertRaises(ProtocolError):
+            encode_control(dict(schema_version=1, request_id=1, operation='stage_vehicle_setup',
+                                payload=dict(edit_token='x', edit_version=0, vehicle={'pad': 'a' * 2048})))

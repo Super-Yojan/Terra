@@ -1,6 +1,7 @@
 //! The phone boundary (UniFFI). Plain records that mirror `sense`, `planning`
 //! and `pipeline`, plus one object that owns the pipeline. Swift sees only
 //! what is in this file.
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use crate::config::PipelineConfig;
@@ -39,12 +40,20 @@ pub struct SensorFrame {
     pub depth: Vec<Vec3>,
 }
 
+/// The phone's own goal. It comes before anything from the base station.
 #[derive(uniffi::Enum)]
 pub enum Goal {
+    /// Nothing from the phone: the base station's stick or task drives.
     None,
+    /// A stick: forward m/s, yaw rad/s (+ = left).
     Velocity { v: f64, w: f64 },
+    /// Drive to a world-frame pose (m, rad) with the configured planner
+    /// and controller; reached within [`PHONE_GOAL_TOLERANCE_M`].
     Pose { x: f64, y: f64, yaw: f64 },
 }
+
+/// Position tolerance of a `Goal::Pose` from the phone (m).
+const PHONE_GOAL_TOLERANCE_M: f64 = 0.2;
 
 /// Body velocity: forward m/s, yaw rad/s (+ = left).
 #[derive(uniffi::Record)]
@@ -61,6 +70,22 @@ pub struct DriveCommand {
     pub measured: Option<Twist>,
 }
 
+/// The last tick in a few words, for a status line on the phone.
+#[derive(uniffi::Record)]
+pub struct RoverStatus {
+    /// ARKit has a tracked pose.
+    pub tracked: bool,
+    /// Any e-stop is engaged (the phone's, or a base station's).
+    pub estopped: bool,
+    /// The base station's router is connected.
+    pub base_connected: bool,
+    /// E.g. `task 7 · dwa · running, 3.2 m to go`, or `no task`.
+    pub task: String,
+}
+
+/// File name of the saved task inside the app's `state_dir`.
+const TASK_FILE: &str = "terra-av-task.json";
+
 #[derive(uniffi::Object)]
 pub struct TerraAv {
     pipeline: Mutex<Option<Pipeline>>,
@@ -70,12 +95,19 @@ pub struct TerraAv {
 impl TerraAv {
     /// Build the pipeline from the app's terra-av.toml. `router_password`
     /// (from the Keychain) is the `[comms]` router password; the file never
-    /// holds one. An invalid config leaves no pipeline, so every tick stops
-    /// the rover; the error is printed to the console.
+    /// holds one. `state_dir` is a directory the app can write to; the
+    /// base station's current task is kept there across restarts (`None`:
+    /// it is not kept). An invalid config leaves no pipeline, so every tick
+    /// stops the rover; the error is printed to the console.
     #[uniffi::constructor]
-    pub fn new(config_toml: String, router_password: Option<String>) -> Arc<Self> {
+    pub fn new(
+        config_toml: String,
+        router_password: Option<String>,
+        state_dir: Option<String>,
+    ) -> Arc<Self> {
+        let task_file = state_dir.map(|dir| PathBuf::from(dir).join(TASK_FILE));
         let built = PipelineConfig::from_toml(&config_toml)
-            .and_then(|config| config.with_router_password(router_password).build());
+            .and_then(|config| config.with_router_password(router_password).build(task_file));
         let pipeline = match built {
             Ok(pipeline) => Some(pipeline),
             Err(e) => {
@@ -105,6 +137,19 @@ impl TerraAv {
                 }
             }
         }
+    }
+
+    /// What the last tick saw. `None` when there is no pipeline (invalid
+    /// config).
+    pub fn status(&self) -> Option<RoverStatus> {
+        let pipeline = self.pipeline.lock().unwrap();
+        let summary = &pipeline.as_ref()?.summary;
+        Some(RoverStatus {
+            tracked: summary.tracked,
+            estopped: summary.estopped,
+            base_connected: summary.base_connected,
+            task: summary.task.clone(),
+        })
     }
 
     /// Publish a serialized ARKit `ARWorldMap` (`NSKeyedArchiver` bytes) plus its
@@ -186,7 +231,12 @@ impl From<Goal> for planning::Goal {
         match g {
             Goal::None => Self::None,
             Goal::Velocity { v, w } => Self::Velocity(vehicle::Twist { v, w }),
-            Goal::Pose { x, y, yaw } => Self::Pose(geometry::Pose2 { x, y, yaw }),
+            Goal::Pose { x, y, yaw } => Self::Pose(planning::PoseGoal {
+                x,
+                y,
+                yaw: Some(yaw),
+                tolerance: PHONE_GOAL_TOLERANCE_M,
+            }),
         }
     }
 }
@@ -203,7 +253,7 @@ mod tests {
 
     #[test]
     fn without_a_pipeline_tick_stops() {
-        let av = TerraAv::new(String::new(), None);
+        let av = TerraAv::new(String::new(), None, None);
         let frame = SensorFrame {
             t: 0.0,
             estop: false,

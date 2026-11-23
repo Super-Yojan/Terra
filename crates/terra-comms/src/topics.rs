@@ -15,6 +15,8 @@ pub enum Topic {
     Depth,
     WorldMap,
     Mesh,
+    Occupancy,
+    PlannedPath,
     RemoteState,
     // base → rover
     Task,
@@ -31,7 +33,7 @@ pub enum Direction {
 }
 
 impl Topic {
-    pub const COUNT: usize = 13;
+    pub const COUNT: usize = 15;
     pub const ALL: [Topic; Self::COUNT] = [
         Self::Capabilities,
         Self::TaskStatus,
@@ -40,6 +42,8 @@ impl Topic {
         Self::Depth,
         Self::WorldMap,
         Self::Mesh,
+        Self::Occupancy,
+        Self::PlannedPath,
         Self::RemoteState,
         Self::Task,
         Self::TaskCommand,
@@ -58,6 +62,8 @@ impl Topic {
             Self::Depth => "depth",
             Self::WorldMap => "world_map",
             Self::Mesh => "mesh",
+            Self::Occupancy => "occupancy",
+            Self::PlannedPath => "planned_path",
             Self::RemoteState => "remote/state",
             Self::Task => "task",
             Self::TaskCommand => "task/cmd",
@@ -80,6 +86,8 @@ impl Topic {
             | Self::Depth
             | Self::WorldMap
             | Self::Mesh
+            | Self::Occupancy
+            | Self::PlannedPath
             | Self::RemoteState => Direction::RoverToBase,
             Self::Task | Self::TaskCommand | Self::Teleop | Self::RemoteCmd | Self::Estop => {
                 Direction::BaseToRover
@@ -93,6 +101,9 @@ impl Topic {
         match self {
             Self::Capabilities => Some(Duration::from_secs(5)),
             Self::TaskStatus | Self::Status => Some(Duration::from_secs(1)),
+            // Sent on change; repeated so a base station that starts later
+            // still gets the map and planned route.
+            Self::Occupancy | Self::PlannedPath => Some(Duration::from_secs(2)),
             _ => None,
         }
     }

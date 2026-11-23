@@ -16,6 +16,11 @@ struct TestDriveView: View {
                     .multilineTextAlignment(.center)
                 Text(String(format: "L %+.2f   R %+.2f", loop.command.left, loop.command.right))
                     .font(.title3.monospacedDigit())
+                // The stick drives through terra-av: without a pose it still
+                // drives, with the velocity loop on feedforward only.
+                Text(loop.status?.line ?? "")
+                    .font(.caption)
+                    .foregroundStyle(Theme.secondary)
                 Joystick { forward, turn in loop.setStick(forward: forward, turn: turn) }
                     .disabled(!motors.ready || loop.estopped)
                     .opacity(motors.ready && !loop.estopped ? 1 : 0.4)

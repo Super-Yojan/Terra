@@ -1,6 +1,8 @@
 """Generate pipeline.excalidraw: how the terra-av pipeline should run on TerraPhone,
 with run-time controller selection from the base station (crates/terra-comms/API.md),
 marked with what the code does today (LIVE / NOT WIRED / TODO).
+Since the pipeline was completed every stage is LIVE; the tags stay so the
+next unfinished stage has a place to say so.
 
     python3 docs/diagrams/gen_pipeline.py docs/diagrams/pipeline.excalidraw
 """
@@ -17,7 +19,7 @@ PURPLE_BG = "#f3d9fa"
 # ═════════════════════ A · runtime: loops, rates, hand-offs ═════════════════════
 F = S.frame(0, 0, 1720, 620, "A · Runtime: loops, rates & the base station")
 text(30, 24, "Runtime  ·  two loops on the phone, one lease on the rover, one link to the base", F, size=26)
-text(30, 62, "The loops share only the latest DriveCommand. Every hop has its own timeout, so any stall ends in a stop.   Red dashed = what the code does today instead.",
+text(30, 62, "The loops share only the latest DriveCommand. Every hop has its own timeout, so any stall ends in a stop.",
      F, size=17, color=GREY)
 
 box(30, 140, 220, 150, "Phone sensors\n\nARKit VIO pose\nLiDAR depth\nCore Motion gyro\nCore Location GPS", F,
@@ -26,7 +28,7 @@ box(30, 140, 220, 150, "Phone sensors\n\nARKit VIO pose\nLiDAR depth\nCore Motio
 rect(290, 105, 540, 225, F, strokeStyle="dashed", strokeColor=BLUE)
 text(305, 112, "Planner loop · 20 Hz · plannerQueue", F, size=16, color=BLUE)
 box(310, 165, 210, 90, "PhoneSensors\n.frame(estop)\n→ SensorFrame", F, backgroundColor=BLUE_BG, color=BLUE)
-box(580, 155, 230, 110, "TerraAv.tick(frame, goal)\nPipeline::tick (Rust)\n→ DriveCommand\n(today: always 0)", F, backgroundColor=BLUE_BG,
+box(580, 155, 230, 110, "TerraAv.tick(frame, goal)\nPipeline::tick (Rust)\n→ DriveCommand", F, backgroundColor=BLUE_BG,
     color=BLUE, size=17)
 arrow((250, 215), (310, 210), F)
 arrow((520, 210), (580, 210), F)
@@ -54,24 +56,20 @@ text(423, 318, "frame.estop", F, size=13, color=RED)
 box(545, 400, 225, 80, "Phone joystick (Test drive)\n→ Goal.velocity", F, backgroundColor="#fff", size=15)
 arrow((645, 400), (680, 265), F)
 text(668, 318, "goal", F, size=13, color=GREY)
-# today: the stick skips terra-av and goes straight to BLE
-elbow([(645, 480), (645, 575), (1705, 575), (1705, 260), (1690, 260)], F, color=RED, strokeStyle="dashed")
-text(665, 583, "TODAY · velocityTick sees Goal.velocity → joystickToMotors() → BLE.\n"
-     "Skips terra-av, VelocityController and the remote e-stop (the phone e-stop only disables the stick).", F, size=13, color=RED)
 box(30, 400, 230, 80, "Send world map (button)\nARWorldMap + feature pts\n→ link.publish_world_map", F,
     backgroundColor=PURPLE_BG, color=PURPLE, size=14)
 
 # link to the base station
-box(800, 395, 270, 125, "RoverLink  (terra-comms) · LIVE\n\ncommands(): estop · teleop\ntasks + task/cmd → rejected\npublish pose · depth · status\n+ world_map", F,
+box(800, 395, 270, 125, "RoverLink  (terra-comms) · LIVE\n\ncommands(): estop · teleop · remote\ntasks + task/cmd → Tasks\npublish pose · depth · status\n+ world_map · remote/state", F,
     backgroundColor=PURPLE_BG, color=PURPLE, size=15)
 arrow((870, 395), (790, 265), F, color=PURPLE, both=True)
 text(845, 318, "once per tick", F, size=13, color=PURPLE)
 box(1270, 385, 420, 140, "Base station UI  (BaseLink) · NOT IN REPO\nterra-comms examples/demo.rs stands in\n\nplanned: controller dropdown + form\nfrom Capabilities, click goal → send(Task)", F,
     backgroundColor="#fff", size=15, strokeStyle="dashed")
 arrow((1270, 425), (1070, 425), F, color=PURPLE)
-text(1090, 388, "estop · teleop (used)\ntask · cmd (rejected)", F, size=13, color=PURPLE)
+text(1090, 388, "estop · teleop · remote/cmd\ntask · task/cmd", F, size=13, color=PURPLE)
 arrow((1070, 480), (1270, 480), F, color=GREY)
-text(1090, 488, "capabilities (once) · pose\ndepth · status · world_map\ntask/status (Idle + reject)", F, size=13, color=GREY)
+text(1090, 488, "capabilities (once) · pose\ndepth · status · world_map\ntask/status · remote/state", F, size=13, color=GREY)
 
 # ═════════════════════ B · one Pipeline::tick ═════════════════════
 OY = 670
@@ -113,55 +111,53 @@ def down(y0, y1, label=None, color=INK):
 
 
 y = OY + 120
-stage(y, "SensorFrame + phone Goal, then link.commands()\nestop |= remote · no phone goal → base teleop", bg=GREY_BG)
+stage(y, "SensorFrame + phone Goal, then link.commands()\nestop |= remote · sticks · tasks · task commands", bg=GREY_BG)
 tag(y, "LIVE")
 down(y + BH, y + 130)
 
 y += 130
 task_y = y
-stage(y, "0 · take_task / take_task_command → set_task\nvalidate, build, swap BETWEEN ticks (even moving)",
+stage(y, "0 · Tasks.set_task / command  (tasks.rs)\nvalidate, build, swap BETWEEN ticks (even moving)",
       bg=PURPLE_BG, color=PURPLE)
-tag(y, "TODO", "tasks rejected")
+tag(y, "LIVE", "runs after 1")
 box(X + W + 35, y - 20, 300, 120,
-    "Controller registry · controllers()\n\nteleop · drive_pose · dwa · remote\neach: id · version · params[] · build()\nalso published as Capabilities",
+    "planning/registry.rs · controllers()\n\nteleop · drive_pose · dwa · remote\neach: id · version · params[] · make()\nalso published as Capabilities",
     F, backgroundColor="#fff", color=PURPLE, size=14, strokeStyle="dashed")
 arrow((X + W + 35, y + 40), (X + W, y + 40), F, color=PURPLE)
 down(y + BH, y + 130)
 
 y += 130
 stage(y, "1 · StateEstimator.update(frame, vehicle)\nVIO pose: camera → body via Mount",
-      "Vio  |  Localization (todo)   (toml only)", bg=BLUE_BG, color=BLUE)
-tag(y, "LIVE", "Vio")
+      "Vio  |  Localization   (toml only)", bg=BLUE_BG, color=BLUE)
+tag(y, "LIVE")
 down(y + BH, y + 130, "Option<State>")
 
 y += 130
 S.box(CX - 110, y, 220, 90, "tracked\nstate?", F, shape="diamond", size=16, backgroundColor=YELLOW_BG)
 none_y = y + 45
-box(X + W + 35, y - 5, 320, 100, "TODAY tick stops here:\ncommands → 1 → 7, then returns\ntarget 0, measured None.\nStages 2–6 are never called.", F,
-    backgroundColor=RED_BG, color=RED, size=14, strokeStyle="dashed")
 down(y + 90, y + 140, "Some(state)")
-box(25, none_y - 40, 180, 80, "None →\ntarget = 0\nmeasured = None", F, backgroundColor=RED_BG, color=RED, size=15)
+box(25, none_y - 40, 180, 80, "None → target = 0\n(a stick still drives)\nmeasured = None", F, backgroundColor=RED_BG, color=RED, size=15)
 arrow((CX - 110, none_y), (205, none_y), F, color=RED)
 NONE_X = 115
 
 y += 140
 stage(y, "2 · Mapper.update(frame, state) → &Map\ndepth: camera → body (Mount) → world (pose)",
-      "NoMap (todo)  |  OccupancyGrid", bg=GREEN_BG, color=GREEN)
-tag(y, "NOT WIRED", "OccupancyGrid")
+      "NoMap  |  OccupancyGrid", bg=GREEN_BG, color=GREEN)
+tag(y, "LIVE")
 down(y + BH, y + 130, "Map   obstacles, world frame")
 
 y += 130
 plan_y = y
 stage(y, "3 · PathPlanner.plan(state, map, task.goal, vehicle)\ntask.planner, else the toml one · re-run on new goal/map",
       "StraightLine  |  HybridAStar", bg=PURPLE_BG, color=PURPLE, size=15)
-tag(y, "TODO", "both todo!()")
+tag(y, "LIVE", "Navigator:\ngoal change, or\nmap change ≤ 1 Hz")
 down(y + BH, y + 130, "Path   poses, world frame (cached)")
 
 y += 130
 ctrl_y = y
 stage(y, "4 · active controller.follow(state, map, goal, path, vehicle)\nthe LocalPlanner named in the task, with its params",
       "Teleop | DrivePose | Dwa | Remote", bg=PURPLE_BG, color=PURPLE, size=15)
-tag(y, "TODO", "all todo!(),\nno Remote")
+tag(y, "LIVE", "a stick skips\n3–4, not 5–6")
 # registry feeds both purple stages
 elbow([(X + W + 185, task_y + 100), (X + W + 185, task_y + 118), (X + W + 18, task_y + 118),
        (X + W + 18, ctrl_y + 40), (X + W, ctrl_y + 40)], F, color=PURPLE, strokeStyle="dashed")
@@ -172,13 +168,13 @@ y += 130
 chain_top = y
 stage(y, "5 · vehicle.clamp(twist) + acceleration limits\nwheel ≤ max_wheel_speed · Δv, Δw per tick bounded",
       bg=RED_BG, color=RED)
-tag(y, "NOT WIRED", "clamp only;\nno accel limit")
+tag(y, "LIVE", "braking is\nnot limited")
 down(y + BH, y + 130, "Twist   reachable, smooth")
 
 y += 130
 safety_y = y
 stage(y, "6 · SafetyGate.check(twist, frame)\nestop → zero twist.  Runs on every path.", bg=RED_BG, color=RED)
-tag(y, "TODO", "todo!()", top=True)
+tag(y, "LIVE", top=True)
 elbow([(NONE_X, none_y + 40), (NONE_X, safety_y + 40), (X, safety_y + 40)], F, color=RED)
 chain_bot = y + BH
 # bracket for the fixed chain
@@ -189,7 +185,7 @@ down(y + BH, y + 130)
 
 y += 130
 stage(y, "DriveCommand { target, measured: Some(state.twist) }\n→ latest, read by the 50 Hz velocity loop", bg=YELLOW_BG)
-tag(y, "TODO", "always 0,\nmeasured None")
+tag(y, "LIVE")
 down(y + BH, y + 130)
 
 y += 130
@@ -204,7 +200,7 @@ box(X + W + 35, OY + BHT - 150, 300, 110,
 # ═════════════════════ C · tasks, research workflow, fail-safes, gaps ═════════════════════
 OX = 1100
 F = S.frame(OX, OY, 620, BHT, "C · Tasks, research workflow, fail-safes")
-text(OX + 30, OY + 24, "A task = where + how   (design, not built)", F, size=24)
+text(OX + 30, OY + 24, "A task = where + how   (tasks.rs)", F, size=24)
 mono(OX + 30, OY + 75,
      "Task {\n"
      "  id,\n"
@@ -258,24 +254,23 @@ mono(OX + 30, OY + 895,
 
 text(OX + 30, OY + 1190, "Gaps today (code ≠ this design)", F, size=24, color=RED)
 mono(OX + 30, OY + 1240,
-     "• tick runs commands → Vio → publish only;\n"
-     "  stages 2–6 never called → target 0\n"
-     "• todo!(): SafetyGate, Teleop, DrivePose,\n"
-     "  Dwa, StraightLine, HybridAStar, NoMap,\n"
-     "  Localization, DiffDrive step()/limits()\n"
-     "• Built, unused: OccupancyGrid, clamp()\n"
-     "• No registry / Task / set_task: tasks and\n"
-     "  task cmds rejected, TaskStatus = Idle;\n"
-     "  Capabilities = the toml's 1 controller\n"
-     "• No acceleration limiter after clamp\n"
-     "• Stick → joystickToMotors() → BLE, skips\n"
-     "  terra-av, VelocityController, remote\n"
-     "  e-stop (only the 0.25 s BLE lease holds)\n"
+     "• Nothing here has driven the real rover\n"
+     "  yet: gains, weights and limits are\n"
+     "  untuned defaults\n"
+     "• Gps goals: always converted to Pose;\n"
+     "  no controller takes raw [Gps] goals\n"
+     "• Localization is a least-squares fit of\n"
+     "  the GPS anchor, not an EKF; the pose\n"
+     "  itself is plain VIO\n"
+     "• HybridAStar: forward arcs only\n"
+     "• Stuck rule is the same for every\n"
+     "  controller (10 cm or 0.1 rad)\n"
+     "• DiffDrive only (no Ackermann model)\n"
      "• No base station app (demo.rs only)\n"
      "• [mount] roll sign untested", F, size=14, color=RED)
 
 text(OX + 30, OY + BHT - 80, "Design: crates/terra-comms/API.md\n"
-                             "Code: crates/terra-av/src/pipeline.rs, comms.rs,\n"
+                             "Code: crates/terra-av/src/pipeline.rs, tasks.rs,\n"
                              "apps/ios/TerraPhone/App/RoverLoop.swift", F, size=13, color=GREY)
 
 S.save(sys.argv[1] if len(sys.argv) > 1 else "pipeline.excalidraw")

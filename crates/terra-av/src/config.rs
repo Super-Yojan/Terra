@@ -6,8 +6,9 @@
 //! type = "diff_drive"            # diff_drive
 //! track = 0.5                    # m
 //! max_wheel_speed = 0.8          # m/s
+//! radius = 0.4                   # m, optional: circle that holds the whole rover
 //! max_accel = 2.0                # m/s², optional
-//! max_yaw_accel = 0.5            # rad/s², optional
+//! max_yaw_accel = 4.0            # rad/s², optional
 //!
 //! [mount]                        # phone on the rover; degrees, metres
 //! roll = -90
@@ -47,9 +48,16 @@
 //! ```
 //!
 //! `[comms]` is `terra_comms::CommsConfig`; see `crates/terra-comms/API.md`.
+//!
+//! `[path_planner]` and `[local_planner]` pick the planner and controller
+//! for a pose goal from the phone, and the defaults for a task from the
+//! base station. They are built through `planning::registry`, so the file's
+//! values get the same range checks as values sent by an operator.
+use std::path::PathBuf;
+
 use serde::Deserialize;
 
-use terra_comms::{Capabilities, GoalKind, StageOption};
+use terra_comms::{Capabilities, ParamValue, Params};
 
 use crate::{
     comms::Link,
@@ -57,12 +65,10 @@ use crate::{
     execution::SafetyGate,
     geometry::{Rotation3, Vec3},
     mapping::{Mapper, NoMap, OccupancyGrid},
-    pipeline::Pipeline,
-    planning::{
-        global::{HybridAStar, PathPlanner, StraightLine},
-        local::{DrivePose, Dwa, DwaWeights, LocalPlanner, Teleop},
-    },
+    pipeline::{Pipeline, Summary},
+    planning::{Navigator, registry},
     sense::Mount,
+    tasks::{Choice, Tasks},
     vehicle::{DiffDrive, Limits, VehicleModel},
 };
 
@@ -86,6 +92,11 @@ pub enum VehicleConfig {
     DiffDrive {
         track: f64,
         max_wheel_speed: f64,
+        /// Radius of the circle around the body origin that holds the whole
+        /// rover (m). Absent: `track`, which covers a rover about as long
+        /// as it is wide.
+        #[serde(default)]
+        radius: Option<f64>,
         #[serde(default = "default_max_accel")]
         max_accel: f64,
         #[serde(default = "default_max_yaw_accel")]
@@ -97,7 +108,7 @@ fn default_max_accel() -> f64 {
     2.0
 }
 fn default_max_yaw_accel() -> f64 {
-    0.5
+    4.0
 }
 
 /// Phone mount: Z-Y-X Euler angles in degrees, camera offset in the body
@@ -166,7 +177,31 @@ impl PipelineConfig {
                 return Err("[comms] rover_id is required on the rover".into());
             }
         }
+        config.check_numbers()?;
         Ok(config)
+    }
+
+    /// Sizes, speeds and accelerations must be positive numbers: the
+    /// stages divide by them. (Planner and controller values are checked
+    /// against their parameter ranges in [`build`](Self::build).)
+    fn check_numbers(&self) -> Result<(), String> {
+        let positive = |name: &str, value: f64| {
+            if value.is_finite() && value > 0.0 {
+                Ok(())
+            } else {
+                Err(format!("{name} must be a positive number, not {value}"))
+            }
+        };
+        let VehicleConfig::DiffDrive { track, max_wheel_speed, radius, max_accel, max_yaw_accel } = self.vehicle;
+        positive("[vehicle] track", track)?;
+        positive("[vehicle] max_wheel_speed", max_wheel_speed)?;
+        positive("[vehicle] radius", radius.unwrap_or(track))?;
+        positive("[vehicle] max_accel", max_accel)?;
+        positive("[vehicle] max_yaw_accel", max_yaw_accel)?;
+        if let MapperConfig::OccupancyGrid { resolution } = self.mapper {
+            positive("[mapper] resolution", resolution)?;
+        }
+        Ok(())
     }
 
     /// Use this router password instead of the one in the file, so the real
@@ -177,17 +212,27 @@ impl PipelineConfig {
     }
 
     /// Build the pipeline and, with `[comms]`, start the base-station link
-    /// (in the background; this returns at once). Fails only on a bad
-    /// `[comms]`.
-    pub fn build(&self) -> Result<Pipeline, String> {
+    /// (in the background; this returns at once). Fails on a planner or
+    /// controller value out of range, or a bad `[comms]`.
+    ///
+    /// `task_file` is where the base station's current task is kept across
+    /// restarts (`None`: it is not kept).
+    pub fn build(&self, task_file: Option<PathBuf>) -> Result<Pipeline, String> {
+        let path_planner = self.path_planner.choice();
+        let controller = self.local_planner.choice();
+        let (_, planner) = registry::planner(&path_planner.id)?.build(&path_planner.params)?;
+        let (_, local_planner) = registry::controller(&controller.id)?.build(&controller.params)?;
+
         Ok(Pipeline {
             vehicle: self.vehicle.build(),
             estimator: self.estimator.build(&self.mount),
             mapper: self.mapper.build(&self.mount),
-            path_planner: self.path_planner.build(),
-            local_planner: self.local_planner.build(),
+            navigator: Navigator::new(planner, local_planner),
+            tasks: Tasks::new(path_planner, task_file),
             safety: SafetyGate,
             link: self.link()?,
+            last_target: None,
+            summary: Summary::default(),
         })
     }
 
@@ -201,39 +246,14 @@ impl PipelineConfig {
         }
     }
 
-    /// What this rover can run, for the base station. Until there is a
-    /// controller registry, that's just the configured controller and
-    /// planner, with no run-time parameters.
+    /// What this rover can run, for the base station: everything in the
+    /// registry. The default controller is the configured one.
     pub fn capabilities(&self) -> Capabilities {
-        let option = |id: &str, description: &str, goals: Vec<GoalKind>| StageOption {
-            id: id.into(),
-            version: env!("CARGO_PKG_VERSION").into(),
-            description: description.into(),
-            params: vec![],
-            goals,
-        };
-        let controller = match self.local_planner {
-            LocalPlannerConfig::Teleop => option("teleop", "Drive from a stick", vec![]),
-            LocalPlannerConfig::DrivePose { .. } => {
-                option("drive_pose", "Steer onto the next path pose", vec![GoalKind::Local])
-            }
-            LocalPlannerConfig::Dwa { .. } => {
-                option("dwa", "Dynamic window approach", vec![GoalKind::Local])
-            }
-        };
-        let planner = match self.path_planner {
-            PathPlannerConfig::StraightLine => {
-                option("straight_line", "The goal itself, no search", vec![GoalKind::Local])
-            }
-            PathPlannerConfig::HybridAstar { .. } => {
-                option("hybrid_astar", "A* over drivable arcs", vec![GoalKind::Local])
-            }
-        };
         Capabilities {
             t: 0.0,
-            default_controller: controller.id.clone(),
-            controllers: vec![controller],
-            planners: vec![planner],
+            controllers: registry::controllers().iter().map(|spec| spec.option()).collect(),
+            planners: registry::planners().iter().map(|spec| spec.option()).collect(),
+            default_controller: self.local_planner.choice().id,
             software: env!("CARGO_PKG_VERSION").into(),
         }
     }
@@ -242,9 +262,10 @@ impl PipelineConfig {
 impl VehicleConfig {
     fn build(&self) -> Box<dyn VehicleModel> {
         match *self {
-            Self::DiffDrive { track, max_wheel_speed, max_accel, max_yaw_accel } => {
+            Self::DiffDrive { track, max_wheel_speed, radius, max_accel, max_yaw_accel } => {
                 Box::new(DiffDrive {
                     track,
+                    radius: radius.unwrap_or(track),
                     limits: Limits { max_wheel_speed, max_accel, max_yaw_accel },
                 })
             }
@@ -270,7 +291,7 @@ impl EstimatorConfig {
     fn build(&self, mount: &MountConfig) -> Box<dyn StateEstimator> {
         match self {
             Self::Vio => Box::new(Vio::new(mount.build())),
-            Self::Localization => Box::new(Localization),
+            Self::Localization => Box::new(Localization::new(mount.build())),
         }
     }
 }
@@ -278,7 +299,7 @@ impl EstimatorConfig {
 impl MapperConfig {
     fn build(&self, mount: &MountConfig) -> Box<dyn Mapper> {
         match *self {
-            Self::None => Box::new(NoMap),
+            Self::None => Box::new(NoMap::default()),
             Self::OccupancyGrid { resolution } => {
                 Box::new(OccupancyGrid::new(mount.build(), resolution))
             }
@@ -287,34 +308,53 @@ impl MapperConfig {
 }
 
 impl PathPlannerConfig {
-    fn build(&self) -> Box<dyn PathPlanner> {
-        match *self {
-            Self::StraightLine => Box::new(StraightLine),
-            Self::HybridAstar { resolution, yaw_bins, step, heuristic_weight } => {
-                Box::new(HybridAStar { resolution, yaw_bins, step, heuristic_weight })
-            }
-        }
+    /// The registry id and parameter values this table stands for.
+    fn choice(&self) -> Choice {
+        let float = ParamValue::Float;
+        let (id, params) = match *self {
+            Self::StraightLine => ("straight_line", vec![]),
+            Self::HybridAstar { resolution, yaw_bins, step, heuristic_weight } => (
+                "hybrid_astar",
+                vec![
+                    ("resolution", float(resolution)),
+                    ("yaw_bins", ParamValue::Int(yaw_bins as i64)),
+                    ("step", float(step)),
+                    ("heuristic_weight", float(heuristic_weight)),
+                ],
+            ),
+        };
+        choice(id, params)
     }
 }
 
 impl LocalPlannerConfig {
-    fn build(&self) -> Box<dyn LocalPlanner> {
-        match self {
-            Self::Teleop => Box::new(Teleop),
-            &Self::DrivePose { k_rho, k_alpha, k_beta } => {
-                Box::new(DrivePose { k_rho, k_alpha, k_beta })
-            }
-            Self::Dwa { horizon, samples, weights } => Box::new(Dwa {
-                horizon: *horizon,
-                samples: *samples,
-                weights: DwaWeights {
-                    heading: weights.heading,
-                    clearance: weights.clearance,
-                    speed: weights.speed,
-                },
-            }),
-        }
+    /// The registry id and parameter values this table stands for.
+    fn choice(&self) -> Choice {
+        let float = ParamValue::Float;
+        let (id, params) = match self {
+            Self::Teleop => ("teleop", vec![]),
+            &Self::DrivePose { k_rho, k_alpha, k_beta } => (
+                "drive_pose",
+                vec![("k_rho", float(k_rho)), ("k_alpha", float(k_alpha)), ("k_beta", float(k_beta))],
+            ),
+            Self::Dwa { horizon, samples, weights } => (
+                "dwa",
+                vec![
+                    ("horizon", float(*horizon)),
+                    ("samples", ParamValue::Int(*samples as i64)),
+                    ("heading_weight", float(weights.heading)),
+                    ("clearance_weight", float(weights.clearance)),
+                    ("speed_weight", float(weights.speed)),
+                ],
+            ),
+        };
+        choice(id, params)
     }
+}
+
+fn choice(id: &str, params: Vec<(&str, ParamValue)>) -> Choice {
+    let params: Params = params.into_iter().map(|(name, value)| (name.to_string(), value)).collect();
+    Choice { id: id.into(), params }
 }
 
 #[cfg(test)]
@@ -366,11 +406,16 @@ mod tests {
     }
 
     #[test]
-    fn capabilities_list_the_configured_stages() {
+    fn capabilities_list_the_registry() {
         let without_comms = APP_CONFIG.split("[comms]").next().unwrap();
         let caps = PipelineConfig::from_toml(without_comms).unwrap().capabilities();
         assert_eq!(caps.default_controller, "teleop");
-        assert_eq!(caps.controllers.len(), 1);
-        assert_eq!(caps.planners[0].id, "straight_line");
+        // Every controller and planner in the registry is offered.
+        for id in ["teleop", "drive_pose", "dwa", "remote"] {
+            assert!(caps.controller(id).is_some(), "{id}");
+        }
+        for id in ["straight_line", "hybrid_astar"] {
+            assert!(caps.planner(id).is_some(), "{id}");
+        }
     }
 }

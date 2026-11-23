@@ -8,7 +8,8 @@ MAX_ACTUATORS = 16
 DRIVE_LIMIT = 2 * MAX_ACTUATORS  # Actuator ID / signed effort pairs.
 JSON_LIMIT = 16 * 1024
 PAGINATED_LIMIT = 4080  # 255 fragments at conservative 20-byte ATT capacity
-PAGINATED_OPERATIONS = frozenset(('layout_index', 'read_actuator', 'read_drive_profile', 'begin_layout_edit', 'stage_actuator', 'remove_actuator', 'validate_layout_edit', 'commit_layout_edit', 'discard_layout_edit'))
+PAGINATED_OPERATIONS = frozenset(('layout_index', 'read_actuator', 'read_drive_profile', 'read_vehicle_setup', 'begin_layout_edit', 'stage_actuator', 'stage_vehicle_setup', 'remove_actuator', 'validate_layout_edit', 'commit_layout_edit', 'discard_layout_edit'))
+VEHICLE_SETUP_LIMIT = 2048
 
 class ProtocolError(ValueError):
     pass
@@ -160,7 +161,7 @@ def decode_control(data: bytes) -> dict:
     operation, payload = envelope['operation'], envelope['payload']
     if type(operation) is not str:
         raise ProtocolError("operation must be string")
-    if operation in ('capabilities', 'read_layout', 'layout_index', 'reset_fault'):
+    if operation in ('capabilities', 'read_layout', 'layout_index', 'read_vehicle_setup', 'reset_fault'):
         _keys(payload, ())
     elif operation in ('read_actuator', 'read_drive_profile'):
         _keys(payload, ('expected_revision', 'actuator_id'))
@@ -168,10 +169,11 @@ def decode_control(data: bytes) -> dict:
     elif operation == 'begin_layout_edit':
         _keys(payload, ('expected_revision', 'mode')); _uint(payload['expected_revision'], 32)
         if payload['mode'] not in ('existing', 'replace'): raise ProtocolError('invalid edit mode')
-    elif operation in ('stage_actuator', 'remove_actuator', 'validate_layout_edit', 'commit_layout_edit', 'discard_layout_edit'):
+    elif operation in ('stage_actuator', 'stage_vehicle_setup', 'remove_actuator', 'validate_layout_edit', 'commit_layout_edit', 'discard_layout_edit'):
         fields = ['edit_token']
         if operation != 'discard_layout_edit': fields.append('edit_version')
         if operation == 'stage_actuator': fields.append('actuator')
+        if operation == 'stage_vehicle_setup': fields.append('vehicle')
         if operation == 'remove_actuator': fields.append('actuator_id')
         if operation == 'commit_layout_edit': fields.append('base_revision')
         _keys(payload, fields)
@@ -180,6 +182,7 @@ def decode_control(data: bytes) -> dict:
         if 'base_revision' in payload: _uint(payload['base_revision'], 32)
         if 'actuator_id' in payload: _uint(payload['actuator_id'], 8)
         if 'actuator' in payload: _validate_layout_shape(dict(schema_version=1, revision=0, actuators=[payload['actuator']]))
+        if 'vehicle' in payload: _validate_vehicle_shape(payload['vehicle'])
     elif operation == 'commit_layout':
         _keys(payload, ('staged_revision', 'staged_request_id'))
         _uint(payload['staged_revision'], 32)
@@ -192,9 +195,47 @@ def decode_control(data: bytes) -> dict:
     if operation in PAGINATED_OPERATIONS and len(data) > PAGINATED_LIMIT: raise ProtocolError('paginated request too large')
     return envelope
 
+def _validate_vehicle_value(value, depth=0):
+    if depth > 4:
+        raise ProtocolError("vehicle setup nested too deeply")
+    if value is None or type(value) is bool or type(value) is str:
+        return
+    if type(value) in (int, float):
+        _number(value)
+        return
+    if type(value) is list:
+        for item in value:
+            _validate_vehicle_value(item, depth + 1)
+        return
+    if type(value) is dict:
+        for key, item in value.items():
+            if type(key) is not str:
+                raise ProtocolError("vehicle setup keys must be strings")
+            _validate_vehicle_value(item, depth + 1)
+        return
+    raise ProtocolError("invalid vehicle setup value")
+
+def _validate_vehicle_shape(vehicle):
+    if type(vehicle) is not dict:
+        raise ProtocolError("vehicle setup must be an object")
+    _validate_vehicle_value(vehicle)
+    try:
+        encoded = json.dumps(vehicle, ensure_ascii=False, separators=(',', ':'), allow_nan=False).encode('utf-8')
+    except (ValueError, TypeError) as exc:
+        raise ProtocolError(str(exc)) from exc
+    if len(encoded) > VEHICLE_SETUP_LIMIT:
+        raise ProtocolError("vehicle setup exceeds size limit")
+
 def _validate_layout_shape(layout):
     """Wire shape only; task 3 must validate resources and calibration safety."""
-    _keys(layout, ('schema_version', 'revision', 'actuators'))
+    if type(layout) is not dict:
+        raise ProtocolError("missing or unknown JSON fields")
+    allowed = {'schema_version', 'revision', 'actuators'}
+    if 'vehicle' in layout:
+        allowed.add('vehicle')
+    _keys(layout, allowed)
+    if 'vehicle' in layout and layout['vehicle'] is not None:
+        _validate_vehicle_shape(layout['vehicle'])
     _uint(layout['schema_version'], 8); _uint(layout['revision'], 32)
     if type(layout['actuators']) is not list:
         raise ProtocolError("actuators must be array")

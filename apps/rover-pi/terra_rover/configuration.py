@@ -170,7 +170,7 @@ class ConfigurationStore:
         request_id, operation, payload = envelope['request_id'], envelope['operation'], envelope['payload']
         if operation == 'capabilities':
             caps = self.backend.capabilities()
-            caps['features'] = list(dict.fromkeys(caps.get('features', []) + ['actuator_pagination_v1']))
+            caps['features'] = list(dict.fromkeys(caps.get('features', []) + ['actuator_pagination_v1', 'vehicle_setup_v1']))
             return self._reply(request_id, payload=caps)
         if operation == 'read_layout':
             return self._reply(request_id, self.errors, self.read())
@@ -218,6 +218,9 @@ class ConfigurationStore:
             entries = active['actuators'] if active else []
             return self._reply(request_id, payload=dict(revision=self.active_revision, layout_available=active is not None,
                 actuator_count=len(entries), actuators=[{key:a[key] for key in ('id','name','kind')} for a in entries]))
+        if operation == 'read_vehicle_setup':
+            vehicle = active.get('vehicle') if active else None
+            return self._reply(request_id, payload=dict(revision=self.active_revision, vehicle=vehicle))
         if 'expected_revision' in payload and payload['expected_revision'] != self.active_revision:
             return reject('stale_revision', 'active revision changed')
         if operation in ('read_actuator', 'read_drive_profile'):
@@ -243,6 +246,12 @@ class ConfigurationStore:
             self._draft = None
             return self._reply(request_id)
         if payload['edit_version'] != draft['edit_version']: return reject('edit_version', 'draft version changed')
+        if operation == 'stage_vehicle_setup':
+            if draft['edit_version'] == 0xffffffff: return reject('edit_version', 'draft version exhausted')
+            updated = dict(draft['layout'], vehicle=deepcopy(payload['vehicle']))
+            if len(self._serialize(updated)) > JSON_LIMIT: return reject('configuration_size', 'draft exceeds persisted layout limit')
+            draft['layout'] = updated; draft['edit_version'] += 1; draft['validated'] = None
+            return self._reply(request_id, payload=self._draft_payload())
         if operation in ('stage_actuator', 'remove_actuator'):
             if draft['edit_version'] == 0xffffffff: return reject('edit_version', 'draft version exhausted')
             entries = deepcopy(draft['layout']['actuators'])

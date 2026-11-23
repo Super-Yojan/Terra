@@ -8,17 +8,26 @@ struct SetupView: View {
     @ObservedObject var loop: RoverLoop
     @ObservedObject var motors: BluetoothLink
     @Environment(\.dismiss) private var dismiss
-    @State private var setup = VehicleSetup.load() ?? VehicleSetup()
+    @State private var setup: VehicleSetup
     @State private var editing: Output?
     @State private var testing = false
     @State private var view3D = RoverViewMode.ports
+
+    init(loop: RoverLoop, motors: BluetoothLink) {
+        self.loop = loop
+        self.motors = motors
+        _setup = State(initialValue: motors.vehicleSetup ?? VehicleSetup())
+    }
 
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
                     SectionTitle("Connection")
-                    RoverCard(motors: motors, loop: loop)
+                    RoverCard(motors: motors)
+
+                    SectionTitle("Base station")
+                    BaseStationCard(loop: loop, motors: motors, setup: $setup)
 
                     SectionTitle("Vehicle")
                     VehicleCard(setup: $setup, ports: motors.ports)
@@ -68,13 +77,19 @@ struct SetupView: View {
         }
         .preferredColorScheme(.dark)
         .tint(Theme.accent)
+        .onChange(of: motors.vehicleSetup) { _, loaded in
+            if let loaded, loaded != setup { setup = loaded }
+        }
         .onChange(of: setup) { _, value in
             var normalized = value
             normalized.normalize()
             if normalized != value { setup = normalized; return }
             if saved { motors.resetLayoutApply() } // edited after saving: apply again
         }
-        .onAppear { if !working { motors.resetLayoutApply() } }
+        .onAppear {
+            if let loaded = motors.vehicleSetup { setup = loaded }
+            if !working { motors.resetLayoutApply() }
+        }
     }
 
     // MARK: Bottom bar
@@ -115,7 +130,7 @@ struct SetupView: View {
 
     private func apply() {
         loop.setVehicle(setup)
-        motors.applyLayout(setup.actuators())
+        motors.applyLayout(setup.actuators(), vehicleSetup: setup)
     }
 }
 
@@ -123,9 +138,6 @@ struct SetupView: View {
 
 private struct RoverCard: View {
     @ObservedObject var motors: BluetoothLink
-    let loop: RoverLoop
-    @State private var editingPassword = false
-    @State private var password = ""
 
     var body: some View {
         Card {
@@ -153,14 +165,136 @@ private struct RoverCard: View {
                     }
                 }
             }
-            Divider().overlay(Theme.line)
-            Button { password = ""; editingPassword = true } label: {
-                Row(title: "Router password", value: RouterPassword.load() == nil ? "Not set" : "Saved")
+        }
+    }
+}
+
+private struct BaseStationCard: View {
+    @ObservedObject var loop: RoverLoop
+    @ObservedObject var motors: BluetoothLink
+    @Binding var setup: VehicleSetup
+
+    @State private var draft: BaseStationConfig
+    @State private var editingPassword = false
+    @State private var password = ""
+    @State private var hasPassword = RouterPassword.load() != nil
+    @State private var savedBanner = false
+
+    init(loop: RoverLoop, motors: BluetoothLink, setup: Binding<VehicleSetup>) {
+        self.loop = loop
+        self.motors = motors
+        _setup = setup
+        _draft = State(initialValue: loop.baseStation)
+    }
+
+    private var roverIdBinding: Binding<Int> {
+        Binding(
+            get: { motors.connected != nil ? setup.roverId : draft.roverId },
+            set: { newValue in
+                draft.roverId = newValue
+                if motors.connected != nil {
+                    setup.roverId = newValue
+                }
             }
+        )
+    }
+
+    private var hasUnsavedChanges: Bool {
+        draft != loop.baseStation
+    }
+
+    var body: some View {
+        Card {
+            Toggle("Connect to base station", isOn: $draft.enabled)
+
+            if draft.enabled {
+                Divider().overlay(Theme.line)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Endpoint").font(.footnote).foregroundStyle(Theme.secondary)
+                    TextField("tcp/192.168.1.165:7447", text: $draft.endpoint)
+                        .keyboardType(.URL)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .font(.system(.body, design: .monospaced))
+                }
+
+                Divider().overlay(Theme.line)
+                Stepper(value: roverIdBinding, in: 0...99) {
+                    HStack {
+                        Text("Rover ID")
+                        Spacer()
+                        Text("\(roverIdBinding.wrappedValue)")
+                            .foregroundStyle(Theme.secondary)
+                            .monospacedDigit()
+                    }
+                }
+                Text(motors.connected != nil
+                     ? "Saved on the Raspberry Pi when you tap Apply to rover."
+                     : "Local fallback while no rover is connected.")
+                    .font(.footnote).foregroundStyle(Theme.secondary)
+
+                Divider().overlay(Theme.line)
+                HStack {
+                    Text("Prefix")
+                    Spacer()
+                    TextField("terra", text: $draft.prefix)
+                        .multilineTextAlignment(.trailing)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .foregroundStyle(Theme.secondary)
+                }
+
+                Divider().overlay(Theme.line)
+                HStack {
+                    Text("User")
+                    Spacer()
+                    TextField("Optional", text: $draft.user)
+                        .multilineTextAlignment(.trailing)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .foregroundStyle(Theme.secondary)
+                }
+
+                Divider().overlay(Theme.line)
+                Button { password = ""; editingPassword = true } label: {
+                    Row(title: "Router password", value: hasPassword ? "Saved" : "Not set")
+                }
+            }
+
+            Divider().overlay(Theme.line)
+            HStack {
+                if savedBanner && !hasUnsavedChanges {
+                    Text("Reconnected").font(.footnote).foregroundStyle(.green)
+                } else if hasUnsavedChanges {
+                    Text("Unsaved changes").font(.footnote).foregroundStyle(Theme.warning)
+                } else {
+                    Text("Keys: \(draft.prefix.isEmpty ? "terra" : draft.prefix)/\(roverIdBinding.wrappedValue)/…")
+                        .font(.footnote).foregroundStyle(Theme.secondary)
+                }
+                Spacer()
+                Button("Save & reconnect") {
+                    loop.setBaseStation(draft)
+                    if motors.connected != nil {
+                        loop.setVehicle(setup)
+                    }
+                    savedBanner = true
+                }
+                .font(.subheadline.weight(.semibold))
+                .disabled(!hasUnsavedChanges && motors.connected == nil)
+            }
+        }
+        .onChange(of: loop.baseStation) { _, updated in
+            if updated != draft { draft = updated }
+        }
+        .onChange(of: draft) { _, _ in
+            savedBanner = false
         }
         .alert("Fleet router password", isPresented: $editingPassword) {
             SecureField("Password", text: $password)
-            Button("Save") { loop.setRouterPassword(password) }
+            Button("Save") {
+                loop.setRouterPassword(password)
+                hasPassword = RouterPassword.load() != nil
+            }
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("Stored in the Keychain. Save empty to clear.")
