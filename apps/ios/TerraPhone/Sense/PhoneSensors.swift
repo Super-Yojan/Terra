@@ -42,14 +42,7 @@ final class PhoneSensors: NSObject, ARSessionDelegate, CLLocationManagerDelegate
     /// Called on `terra.sensors.ar` with each rear-camera pixel buffer for WebRTC FPV.
     var onCameraFrame: ((CVPixelBuffer, TimeInterval) -> Void)?
 
-    /// Called on `terra.sensors.ar` once ARKit finishes relocalizing to a loaded
-    /// shared `ARWorldMap` and reaches `.normal` tracking state.
-    var onRelocalized: (() -> Void)?
-
-    /// True after `loadWorldMap` restarts the session until tracking reaches `.normal`.
-    private var awaitingRelocalization = false
-
-    private func makeTrackingConfiguration(initialWorldMap: ARWorldMap? = nil) -> ARWorldTrackingConfiguration {
+    func start() {
         // ARWorldTrackingConfiguration tracks 6-DoF camera pose using camera + IMU.
         let config = ARWorldTrackingConfiguration()
         // `.gravity` aligns ARKit's +Y axis straight up (opposite gravity),
@@ -62,21 +55,12 @@ final class PhoneSensors: NSObject, ARSessionDelegate, CLLocationManagerDelegate
         if ARWorldTrackingConfiguration.supportsSceneReconstruction(.meshWithClassification) {
             config.sceneReconstruction.insert(.meshWithClassification)
         }
-        config.initialWorldMap = initialWorldMap
-        return config
-    }
-
-    func start() {
-        let config = makeTrackingConfiguration()
 
         session.delegate = self
         // Run ARKit callbacks on a dedicated serial background queue instead of
         // the main UI thread so depth processing never stutters SwiftUI.
         session.delegateQueue = arQueue
-        arQueue.async { [weak self] in
-            self?.vertexColorCache.removeAll()
-            self?.awaitingRelocalization = false
-        }
+        arQueue.async { [weak self] in self?.vertexColorCache.removeAll() }
         // Start fresh: discard any previous tracking origin or anchors.
         session.run(config, options: [.resetTracking, .removeExistingAnchors])
 
@@ -134,14 +118,6 @@ final class PhoneSensors: NSObject, ARSessionDelegate, CLLocationManagerDelegate
             // Plain 3D coordinates of ARKit's visual landmarks (ARKit world A, metres),
             // used for rendering on macOS/Rust since the archive below is Apple-private.
             let points = worldMap.rawFeaturePoints.points.map { Vec3($0) }
-            if points.count < 100 {
-                completion(.failure(NSError(
-                    domain: "terra.worldmap",
-                    code: 3,
-                    userInfo: [NSLocalizedDescriptionKey: "Map too sparse (\(points.count) pts) — scan more of the room first"]
-                )))
-                return
-            }
             do {
                 // Serialize the full `ARWorldMap` (including visual descriptors) into a
                 // binary `Data` blob so another iPhone can unarchive it into `initialWorldMap`.
@@ -153,40 +129,6 @@ final class PhoneSensors: NSObject, ARSessionDelegate, CLLocationManagerDelegate
         }
     }
 
-    /// Load a saved `ARWorldMap` (`NSKeyedArchiver` bytes) from the base station
-    /// and restart ARKit with `initialWorldMap` so this rover relocalizes into
-    /// the fleet's shared world coordinate origin.
-    func loadWorldMap(_ data: Data) -> Result<Int, Error> {
-        do {
-            guard let worldMap = try NSKeyedUnarchiver.unarchivedObject(ofClass: ARWorldMap.self, from: data) else {
-                return .failure(NSError(domain: "terra.worldmap", code: 2,
-                                        userInfo: [NSLocalizedDescriptionKey: "Archive did not contain an ARWorldMap"]))
-            }
-            let pointsCount = worldMap.rawFeaturePoints.points.count
-            let config = makeTrackingConfiguration(initialWorldMap: worldMap)
-            arQueue.async { [weak self] in
-                guard let self else { return }
-                self.vertexColorCache.removeAll()
-                self.awaitingRelocalization = true
-                self.session.run(config, options: [.resetTracking, .removeExistingAnchors])
-            }
-            return .success(pointsCount)
-        } catch {
-            return .failure(error)
-        }
-    }
-
-    /// Discard any pending relocalization and restart ARKit with a clean local origin.
-    func resetTracking() {
-        let config = makeTrackingConfiguration()
-        arQueue.async { [weak self] in
-            guard let self else { return }
-            self.vertexColorCache.removeAll()
-            self.awaitingRelocalization = false
-            self.session.run(config, options: [.resetTracking, .removeExistingAnchors])
-        }
-    }
-
     // MARK: ARKit
 
     /// Called by ARKit at ~60 Hz on `terra.sensors.ar` with each new camera frame.
@@ -194,13 +136,7 @@ final class PhoneSensors: NSObject, ARSessionDelegate, CLLocationManagerDelegate
         // Swift pattern matching: only mark `tracked = true` when ARKit is in `.normal`
         // state (not `.notAvailable` or `.limited(.initializing / .relocalizing / ...)`).
         var tracked = false
-        if case .normal = frame.camera.trackingState {
-            tracked = true
-            if awaitingRelocalization {
-                awaitingRelocalization = false
-                onRelocalized?()
-            }
-        }
+        if case .normal = frame.camera.trackingState { tracked = true }
         // `frame.camera.transform` is a 4×4 column-major matrix (camera → ARKit world).
         let pose = VioPose(arkit: frame.camera.transform, tracked: tracked)
         // `Optional.map` runs `depthPoints(...)` only when `sceneDepth` is non-nil;

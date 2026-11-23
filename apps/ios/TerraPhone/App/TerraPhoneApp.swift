@@ -108,22 +108,6 @@ struct MountedView: View {
                                 .background((loop.gateOpen ? Color.orange : Color.white).opacity(0.22), in: Capsule())
                         }
                     }
-                    if loop.relocalizing {
-                        Button { loop.cancelRelocalization() } label: {
-                            Label("Cancel Sync", systemImage: "xmark.circle")
-                                .font(.caption.weight(.medium))
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 8)
-                                .background(.orange.opacity(0.25), in: Capsule())
-                        }
-                    }
-                    Button { loop.requestWorldMap() } label: {
-                        Label("Load Map", systemImage: "arrow.down.circle")
-                            .font(.caption.weight(.medium))
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 8)
-                            .background(.white.opacity(0.14), in: Capsule())
-                    }
                     Button { loop.sendWorldMap() } label: {
                         Label("Send Map", systemImage: "map")
                             .font(.caption.weight(.medium))

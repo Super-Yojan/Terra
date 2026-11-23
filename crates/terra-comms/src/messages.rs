@@ -178,33 +178,6 @@ pub struct WorldMap {
     pub data: Vec<u8>,
 }
 
-/// Rover request asking the base station to send back the saved shared `ARWorldMap`
-/// so this rover can relocalize into the fleet's shared world coordinate frame.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct WorldMapRequest {
-    pub t: f64,
-    /// `true` when triggered automatically on connect (so the base station skips
-    /// sending a rover's own map back to it).
-    #[serde(default)]
-    pub auto: bool,
-}
-
-/// Base-to-rover command asking the rover to capture its current `ARWorldMap`
-/// and upload it on [`Topic::WorldMap`].
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct CaptureWorldMap {
-    pub t: f64,
-}
-
-/// Base-to-rover command delivering a saved `ARWorldMap` (`NSKeyedArchiver` bytes)
-/// for ARKit relocalization so multiple rovers share one world coordinate origin.
-#[derive(Clone, Debug, PartialEq)]
-pub struct LoadWorldMap {
-    pub t: f64,
-    pub sequence: u64,
-    pub data: Vec<u8>,
-}
-
 /// One incremental ARKit `ARMeshAnchor` chunk in Terra world coordinates (Z-up, metres).
 ///
 /// Sent when an anchor is added, updated, or removed (`vertices` and `indices` empty

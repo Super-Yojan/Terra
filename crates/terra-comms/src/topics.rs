@@ -14,7 +14,6 @@ pub enum Topic {
     Status,
     Depth,
     WorldMap,
-    WorldMapRequest,
     Mesh,
     Occupancy,
     PlannedPath,
@@ -29,8 +28,6 @@ pub enum Topic {
     RemoteCmd,
     Estop,
     Gate,
-    LoadWorldMap,
-    CaptureWorldMap,
     WebrtcRequest,
     WebrtcAnswer,
     WebrtcIceDashboard,
@@ -43,7 +40,7 @@ pub enum Direction {
 }
 
 impl Topic {
-    pub const COUNT: usize = 25;
+    pub const COUNT: usize = 22;
     pub const ALL: [Topic; Self::COUNT] = [
         Self::Capabilities,
         Self::TaskStatus,
@@ -51,7 +48,6 @@ impl Topic {
         Self::Status,
         Self::Depth,
         Self::WorldMap,
-        Self::WorldMapRequest,
         Self::Mesh,
         Self::Occupancy,
         Self::PlannedPath,
@@ -65,8 +61,6 @@ impl Topic {
         Self::RemoteCmd,
         Self::Estop,
         Self::Gate,
-        Self::LoadWorldMap,
-        Self::CaptureWorldMap,
         Self::WebrtcRequest,
         Self::WebrtcAnswer,
         Self::WebrtcIceDashboard,
@@ -81,7 +75,6 @@ impl Topic {
             Self::Status => "status",
             Self::Depth => "depth",
             Self::WorldMap => "world_map",
-            Self::WorldMapRequest => "world_map/request",
             Self::Mesh => "mesh",
             Self::Occupancy => "occupancy",
             Self::PlannedPath => "planned_path",
@@ -95,8 +88,6 @@ impl Topic {
             Self::RemoteCmd => "remote/cmd",
             Self::Estop => "estop",
             Self::Gate => "gate",
-            Self::LoadWorldMap => "world_map/load",
-            Self::CaptureWorldMap => "world_map/capture",
             Self::WebrtcRequest => "webrtc/request",
             Self::WebrtcAnswer => "webrtc/answer",
             Self::WebrtcIceDashboard => "webrtc/ice/dashboard",
@@ -115,7 +106,6 @@ impl Topic {
             | Self::Status
             | Self::Depth
             | Self::WorldMap
-            | Self::WorldMapRequest
             | Self::Mesh
             | Self::Occupancy
             | Self::PlannedPath
@@ -129,8 +119,6 @@ impl Topic {
             | Self::RemoteCmd
             | Self::Estop
             | Self::Gate
-            | Self::LoadWorldMap
-            | Self::CaptureWorldMap
             | Self::WebrtcRequest
             | Self::WebrtcAnswer
             | Self::WebrtcIceDashboard => Direction::BaseToRover,

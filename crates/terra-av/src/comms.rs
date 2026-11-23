@@ -16,9 +16,8 @@
 //! [`Link::none`] (no `[comms]` table, or a build without the `zenoh`
 //! feature) sends nothing and receives nothing.
 use terra_comms::{
-    Depth, LoadWorldMap, MeshChunk, Occupancy, PlannedPath, Pose, RemoteState, Status, Task,
-    TaskCommand, TaskStatus, Uplink, WebrtcIcePhone, WebrtcOffer, WebrtcState, WorldMap,
-    WorldMapRequest,
+    Depth, MeshChunk, Occupancy, PlannedPath, Pose, RemoteState, Status, Task, TaskCommand,
+    TaskStatus, Uplink, WebrtcIcePhone, WebrtcOffer, WebrtcState, WorldMap,
 };
 
 use crate::estimation::{GpsAnchor, State};
@@ -211,33 +210,6 @@ impl Link {
             self.send(&TaskStatus { t, ..task_status.clone() });
             self.last_task_status = Some(task_status);
         }
-    }
-
-    /// Ask the base station to send back its saved shared `ARWorldMap`.
-    pub fn request_world_map(&mut self, t: f64, auto: bool) {
-        if !self.is_connected_link() {
-            return;
-        }
-        self.send(&WorldMapRequest { t, auto });
-    }
-
-    /// Take the latest shared `ARWorldMap` pushed by the base station, if any.
-    pub fn take_load_world_map(&self) -> Option<LoadWorldMap> {
-        #[cfg(feature = "zenoh")]
-        if let Some(rover) = &self.rover {
-            return rover.take_load_world_map();
-        }
-        None
-    }
-
-    /// Returns `true` if the base station asked this rover to capture and
-    /// upload its current `ARWorldMap`.
-    pub fn take_capture_world_map(&self) -> bool {
-        #[cfg(feature = "zenoh")]
-        if let Some(rover) = &self.rover {
-            return rover.take_capture_world_map().is_some();
-        }
-        false
     }
 
     /// Publish a serialized ARKit `ARWorldMap` blob plus its feature points

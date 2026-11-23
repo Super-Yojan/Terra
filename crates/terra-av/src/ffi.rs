@@ -268,29 +268,6 @@ impl TerraAv {
         })
     }
 
-    /// Ask the base station to send back its saved shared `ARWorldMap` so this
-    /// rover can relocalize into the fleet's shared world coordinate frame.
-    pub fn request_world_map(&self, t: f64, is_auto: bool) {
-        let mut pipeline = self.pipeline.lock().unwrap();
-        if let Some(pipeline) = pipeline.as_mut() {
-            pipeline.request_world_map(t, is_auto);
-        }
-    }
-
-    /// Take the latest shared `ARWorldMap` (`NSKeyedArchiver` bytes) pushed by
-    /// the base station, if any.
-    pub fn take_load_world_map(&self) -> Option<Vec<u8>> {
-        let pipeline = self.pipeline.lock().unwrap();
-        pipeline.as_ref()?.take_load_world_map()
-    }
-
-    /// Returns `true` if the base station asked this rover to capture and
-    /// upload its current `ARWorldMap`.
-    pub fn take_capture_world_map(&self) -> bool {
-        let pipeline = self.pipeline.lock().unwrap();
-        pipeline.as_ref().is_some_and(|p| p.take_capture_world_map())
-    }
-
     /// Publish a serialized ARKit `ARWorldMap` (`NSKeyedArchiver` bytes) plus its
     /// `rawFeaturePoints` (in ARKit world frame `A`) to the base station over `terra-comms`.
     pub fn publish_world_map(&self, t: f64, points: Vec<Vec3>, data: Vec<u8>) {

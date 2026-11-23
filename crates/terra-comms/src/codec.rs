@@ -107,14 +107,12 @@ json_message! {
     Status => Status, Uplink;
     PlannedPath => PlannedPath, Uplink;
     RemoteState => RemoteState, Uplink;
-    WorldMapRequest => WorldMapRequest, Uplink;
     Task => Task, Downlink;
     TaskCommand => TaskCommand, Downlink;
     Teleop => Teleop, Downlink;
     RemoteCmd => RemoteCmd, Downlink;
     Estop => Estop, Downlink;
     GateCommand => Gate, Downlink;
-    CaptureWorldMap => CaptureWorldMap, Downlink;
 }
 
 #[derive(Serialize, serde::Deserialize)]
@@ -225,36 +223,6 @@ impl Message for WorldMap {
     }
 }
 impl Uplink for WorldMap {}
-
-#[derive(Serialize, serde::Deserialize)]
-struct LoadWorldMapHeader {
-    t: f64,
-    sequence: u64,
-}
-
-impl Message for LoadWorldMap {
-    const TOPIC: Topic = Topic::LoadWorldMap;
-
-    fn encode(&self) -> Vec<u8> {
-        let header = LoadWorldMapHeader { t: self.t, sequence: self.sequence };
-        let mut out = encode_json(&header);
-        out.reserve(1 + self.data.len());
-        out.push(b'\n');
-        out.extend_from_slice(&self.data);
-        out
-    }
-
-    fn decode(bytes: &[u8]) -> Result<Self, DecodeError> {
-        let newline = bytes
-            .iter()
-            .position(|&b| b == b'\n')
-            .ok_or_else(|| malformed("no load_world_map header line"))?;
-        let header: LoadWorldMapHeader = decode_json(&bytes[..newline])?;
-        let data = bytes[newline + 1..].to_vec();
-        Ok(Self { t: header.t, sequence: header.sequence, data })
-    }
-}
-impl Downlink for LoadWorldMap {}
 
 #[derive(Serialize, serde::Deserialize)]
 struct MeshChunkHeader {
@@ -619,9 +587,6 @@ mod tests {
                 last_rejected: Some(Rejection { task_id: 5, reason: "no GPS anchor".into(), t: 8.0 }),
             });
         }
-        round_trip(WorldMapRequest { t: 3.25, auto: true });
-        round_trip(CaptureWorldMap { t: 3.3 });
-        round_trip(LoadWorldMap { t: 3.5, sequence: 7, data: vec![0xDE, 0xAD, 0xBE, 0xEF] });
         round_trip(Pose { t: 0.1, x: 1.0, y: 2.0, yaw: 0.5, tracked: true });
         round_trip(Status {
             t: 0.0,

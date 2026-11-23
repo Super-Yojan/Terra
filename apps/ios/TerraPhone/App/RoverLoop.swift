@@ -38,9 +38,6 @@ final class RoverLoop: ObservableObject {
     private var goal = Goal.none
     private var estop = false
     private var ticksSinceStatus = 0
-    /// Auto-request the base station's saved world map once per session when
-    /// the base link first connects, so joining rovers align automatically.
-    private var didAutoRequestWorldMap = false
     // Shared between the loops.
     private let lock = NSLock()
     private var latest: (command: DriveCommand, at: TimeInterval)?
@@ -56,7 +53,6 @@ final class RoverLoop: ObservableObject {
     @Published private(set) var hasDumpGate = false
     @Published private(set) var gateOpen = false
     @Published private(set) var worldMapStatus: String?
-    @Published private(set) var relocalizing = false
     @Published private(set) var command = WheelCommand.stop
     /// What terra-av's last tick saw, refreshed twice a second while running.
     @Published private(set) var status: RoverStatus?
@@ -79,13 +75,6 @@ final class RoverLoop: ObservableObject {
             .sink { [weak self] setup in
                 self?.applyVehicle(setup)
             }
-        sensors.onRelocalized = { [weak self] in
-            print("[WorldMap] ARKit relocalized to shared world map")
-            DispatchQueue.main.async {
-                self?.relocalizing = false
-                self?.worldMapStatus = "Aligned to shared map"
-            }
-        }
         sensors.onMeshChunk = { [weak self] id, vertices, indices, classes, colors in
             guard let self else { return }
             let t = ProcessInfo.processInfo.systemUptime
@@ -158,48 +147,8 @@ final class RoverLoop: ObservableObject {
         }
     }
 
-    /// Ask the base station to send back its saved shared `ARWorldMap` so this
-    /// rover relocalizes into the same world coordinates as the rest of the fleet.
-    func requestWorldMap() {
-        let t = ProcessInfo.processInfo.systemUptime
-        DispatchQueue.main.async { self.worldMapStatus = "Requesting saved map..." }
-        plannerQueue.async {
-            self.didAutoRequestWorldMap = true
-            self.av.requestWorldMap(t: t, isAuto: false)
-        }
-    }
-
-    /// Cancel a stuck relocalization and restart ARKit with a clean local origin.
-    func cancelRelocalization() {
-        sensors.resetTracking()
-        DispatchQueue.main.async {
-            self.relocalizing = false
-            self.worldMapStatus = "Tracking reset (local origin)"
-        }
-    }
-
-    private func applySharedWorldMap(_ data: Data) {
-        let kb = Double(data.count) / 1024.0
-        let size = kb >= 1024.0 ? String(format: "%.2f MB", kb / 1024.0) : String(format: "%.0f KB", kb)
-        switch sensors.loadWorldMap(data) {
-        case let .success(pointsCount):
-            print("[WorldMap] loaded shared map (\(pointsCount) pts, \(size)); relocalizing...")
-            DispatchQueue.main.async {
-                self.relocalizing = true
-                self.worldMapStatus = "Relocalizing (\(pointsCount) pts · \(size)) — look around"
-            }
-        case let .failure(error):
-            print("[WorldMap] load failed: \(error.localizedDescription)")
-            DispatchQueue.main.async {
-                self.relocalizing = false
-                self.worldMapStatus = "Load map failed: \(error.localizedDescription)"
-            }
-        }
-    }
-
     /// Capture the current ARKit `ARWorldMap` and publish it to the base station.
     func sendWorldMap() {
-        plannerQueue.async { self.didAutoRequestWorldMap = true }
         DispatchQueue.main.async { self.worldMapStatus = "Capturing world map..." }
         sensors.captureWorldMap { [weak self] result in
             guard let self else { return }
@@ -272,18 +221,6 @@ final class RoverLoop: ObservableObject {
         let out = av.tick(frame: sensors.frame(estop: estop), goal: goal)
         lock.lock(); latest = (out, ProcessInfo.processInfo.systemUptime); lock.unlock()
         pollFpvLocked()
-        if !didAutoRequestWorldMap && av.baseConnected() {
-            didAutoRequestWorldMap = true
-            av.requestWorldMap(t: ProcessInfo.processInfo.systemUptime, isAuto: true)
-            print("[WorldMap] connected to base — auto-requesting saved world map")
-        }
-        if av.takeCaptureWorldMap() {
-            print("[WorldMap] base station requested world map capture")
-            sendWorldMap()
-        }
-        if let mapData = av.takeLoadWorldMap() {
-            applySharedWorldMap(mapData)
-        }
         DispatchQueue.main.async {
             if self.gateOpen != out.gateOpen {
                 self.gateOpen = out.gateOpen

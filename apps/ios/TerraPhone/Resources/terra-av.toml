@@ -19,7 +19,7 @@ yaw = 0
 offset = [0.0, 0.0, 0.23]
 
 [estimator]
-type = "vio"
+type = "localization"
 
 [mapper]
 type = "occupancy_grid"

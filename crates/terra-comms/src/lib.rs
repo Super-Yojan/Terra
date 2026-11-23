@@ -25,11 +25,10 @@ mod link;
 pub use codec::{DecodeError, Downlink, Message, Uplink, WIRE_VERSION};
 pub use config::{CommsConfig, ConfigError};
 pub use messages::{
-    Attention, Capabilities, CaptureWorldMap, Depth, Estop, GateCommand, Goal, GoalKind, GpsAnchor,
-    LoadWorldMap, MeshChunk, Occupancy, PlannedPath, Pose, Pose2, Rejection, RemoteCmd,
-    RemoteState, StageOption, Status, Task, TaskAction, TaskCommand, TaskState, TaskStatus, Teleop,
-    Twist, WebrtcAnswer, WebrtcIceDashboard, WebrtcIcePhone, WebrtcOffer, WebrtcRequest,
-    WebrtcState, WorldMap, WorldMapRequest,
+    Attention, Capabilities, Depth, Estop, GateCommand, Goal, GoalKind, GpsAnchor, MeshChunk,
+    Occupancy, PlannedPath, Pose, Pose2, Rejection, RemoteCmd, RemoteState, StageOption, Status,
+    Task, TaskAction, TaskCommand, TaskState, TaskStatus, Teleop, Twist, WebrtcAnswer,
+    WebrtcIceDashboard, WebrtcIcePhone, WebrtcOffer, WebrtcRequest, WebrtcState, WorldMap,
 };
 pub use params::{ParamError, ParamKind, ParamSpec, ParamValue, Params, check_specs, validate};
 pub use topics::{Direction, Topic, Topics};

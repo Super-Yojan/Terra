@@ -17,8 +17,8 @@ use super::{Core, Counters, Handle, Received, Stats, age_attachment};
 use crate::COMMAND_LEASE;
 use crate::codec::{Downlink, Uplink};
 use crate::messages::{
-    CaptureWorldMap, Estop, GateCommand, LoadWorldMap, RemoteCmd, Task, TaskCommand, Teleop,
-    WebrtcAnswer, WebrtcIceDashboard, WebrtcRequest,
+    Estop, GateCommand, RemoteCmd, Task, TaskCommand, Teleop, WebrtcAnswer, WebrtcIceDashboard,
+    WebrtcRequest,
 };
 use crate::topics::Topic;
 
@@ -50,8 +50,6 @@ impl RoverLink {
             remote: Mutex::default(),
             estop: AtomicBool::new(false),
             gate: Mutex::default(),
-            load_world_map: Mutex::default(),
-            capture_world_map: Mutex::default(),
             fpv: Mutex::default(),
         });
         // Newest wins: a task replaced before the tick took it is counted as
@@ -82,14 +80,6 @@ impl RoverLink {
         // Dump gate command: newest wins.
         listen::<GateCommand>(core, rover_id, &inbox, |inbox, cmd| {
             *lock(&inbox.gate) = Some(cmd);
-        });
-        // Shared ARWorldMap from the base station for relocalization: newest wins.
-        listen::<LoadWorldMap>(core, rover_id, &inbox, |inbox, map| {
-            *lock(&inbox.load_world_map) = Some(map);
-        });
-        // Base station asking this rover to capture & upload its ARWorldMap.
-        listen::<CaptureWorldMap>(core, rover_id, &inbox, |inbox, cmd| {
-            *lock(&inbox.capture_world_map) = Some(cmd);
         });
         // WebRTC FPV signaling: separate FIFO queue so SDP/ICE never competes with control.
         listen::<WebrtcRequest>(core, rover_id, &inbox, |inbox, WebrtcRequest(payload)| {
@@ -189,16 +179,6 @@ impl RoverLink {
         lock(&self.inbox.gate).take()
     }
 
-    /// The newest shared `ARWorldMap` pushed by the base station, if any.
-    pub fn take_load_world_map(&self) -> Option<LoadWorldMap> {
-        lock(&self.inbox.load_world_map).take()
-    }
-
-    /// The newest base-station request to capture & upload an `ARWorldMap`, if any.
-    pub fn take_capture_world_map(&self) -> Option<CaptureWorldMap> {
-        lock(&self.inbox.capture_world_map).take()
-    }
-
     /// Drain all queued inbound WebRTC FPV signaling messages in arrival order.
     pub fn take_fpv(&self) -> Vec<(Topic, String)> {
         lock(&self.inbox.fpv).drain(..).collect()
@@ -241,8 +221,6 @@ struct Inbox {
     remote: Mutex<Option<(Teleop, Instant)>>,
     estop: AtomicBool,
     gate: Mutex<Option<GateCommand>>,
-    load_world_map: Mutex<Option<LoadWorldMap>>,
-    capture_world_map: Mutex<Option<CaptureWorldMap>>,
     fpv: Mutex<VecDeque<(Topic, String)>>,
 }
 
@@ -375,7 +353,7 @@ fn send_loop(core: &Core, outbox: &Outbox, rover_id: u64) {
                     Entry::Vacant(e) => {
                         let (congestion, priority) = match topic {
                             Topic::Depth => (CongestionControl::Drop, Priority::DataLow),
-                            Topic::WorldMap | Topic::WorldMapRequest | Topic::Mesh => {
+                            Topic::WorldMap | Topic::Mesh => {
                                 (CongestionControl::Block, Priority::DataLow)
                             }
                             t if t.is_webrtc() => (CongestionControl::Block, Priority::DataLow),

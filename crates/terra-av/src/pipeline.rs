@@ -192,23 +192,6 @@ impl Pipeline {
         self.gate_open = open;
     }
 
-    /// Ask the base station to send back its saved shared `ARWorldMap`.
-    pub fn request_world_map(&mut self, t: f64, auto: bool) {
-        self.link.request_world_map(t, auto);
-    }
-
-    /// Take the latest shared `ARWorldMap` (`NSKeyedArchiver` bytes) pushed by
-    /// the base station for ARKit relocalization, if any.
-    pub fn take_load_world_map(&self) -> Option<Vec<u8>> {
-        self.link.take_load_world_map().map(|m| m.data)
-    }
-
-    /// Returns `true` if the base station asked this rover to capture and
-    /// upload its current `ARWorldMap`.
-    pub fn take_capture_world_map(&self) -> bool {
-        self.link.take_capture_world_map()
-    }
-
     /// Publish a serialized ARKit `ARWorldMap` and its ARKit-world feature points
     /// to the base station.
     pub fn publish_world_map(

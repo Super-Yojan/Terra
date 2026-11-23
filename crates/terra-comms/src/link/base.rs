@@ -13,7 +13,7 @@ use super::{Core, Handle, RawCallback, Received, Stats};
 use crate::codec::{Downlink, Uplink};
 use crate::messages::{
     Capabilities, Depth, Estop, MeshChunk, Occupancy, PlannedPath, Pose, RemoteState, Status,
-    TaskStatus, WorldMap, WorldMapRequest,
+    TaskStatus, WorldMap,
 };
 use crate::topics::{Topic, Topics};
 use crate::{ESTOP_REPEAT, ROVER_SEEN_WINDOW};
@@ -35,7 +35,6 @@ impl BaseLink {
         watch::<Pose>(core, &state);
         watch::<Status>(core, &state);
         watch::<WorldMap>(core, &state);
-        watch::<WorldMapRequest>(core, &state);
         watch::<MeshChunk>(core, &state);
         watch::<Occupancy>(core, &state);
         watch::<PlannedPath>(core, &state);
@@ -182,11 +181,8 @@ impl Drop for Subscription {
 fn qos(topic: Topic) -> (CongestionControl, Priority) {
     match topic {
         Topic::Estop => (CongestionControl::Block, Priority::RealTime),
-        Topic::Task | Topic::TaskCommand | Topic::CaptureWorldMap => {
-            (CongestionControl::Block, Priority::Data)
-        }
-        Topic::LoadWorldMap
-        | Topic::WebrtcRequest
+        Topic::Task | Topic::TaskCommand => (CongestionControl::Block, Priority::Data),
+        Topic::WebrtcRequest
         | Topic::WebrtcAnswer
         | Topic::WebrtcIceDashboard => (CongestionControl::Block, Priority::DataLow),
         _ => (CongestionControl::Drop, Priority::Data),
