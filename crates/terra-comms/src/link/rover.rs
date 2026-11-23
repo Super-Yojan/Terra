@@ -16,13 +16,18 @@ use zenoh::qos::{CongestionControl, Priority};
 use super::{Core, Counters, Handle, Received, Stats, age_attachment};
 use crate::COMMAND_LEASE;
 use crate::codec::{Downlink, Uplink};
-use crate::messages::{Estop, RemoteCmd, Task, TaskCommand, Teleop};
+use crate::messages::{
+    CaptureWorldMap, Estop, GateCommand, LoadWorldMap, RemoteCmd, Task, TaskCommand, Teleop,
+    WebrtcAnswer, WebrtcIceDashboard, WebrtcRequest,
+};
 use crate::topics::Topic;
 
 /// Task commands kept between ticks; the oldest is dropped beyond this.
 const MAX_QUEUED_COMMANDS: usize = 16;
 /// Incremental `ARMeshAnchor` chunks queued for sending; oldest dropped if full.
 const MAX_QUEUED_MESH_CHUNKS: usize = 64;
+/// WebRTC FPV signaling messages queued inbound or outbound; oldest dropped if full.
+const MAX_QUEUED_FPV: usize = 64;
 /// How often the sender thread wakes to re-send and check the connection.
 const SENDER_TICK: Duration = Duration::from_millis(100);
 
@@ -44,6 +49,10 @@ impl RoverLink {
             teleop: Mutex::default(),
             remote: Mutex::default(),
             estop: AtomicBool::new(false),
+            gate: Mutex::default(),
+            load_world_map: Mutex::default(),
+            capture_world_map: Mutex::default(),
+            fpv: Mutex::default(),
         });
         // Newest wins: a task replaced before the tick took it is counted as
         // dropped (the base sees it never became current in `TaskStatus`).
@@ -69,6 +78,28 @@ impl RoverLink {
         // Latched: engaged sets it, only an explicit `engaged: false` clears it.
         listen::<Estop>(core, rover_id, &inbox, |inbox, estop| {
             inbox.estop.store(estop.engaged, Ordering::Release);
+        });
+        // Dump gate command: newest wins.
+        listen::<GateCommand>(core, rover_id, &inbox, |inbox, cmd| {
+            *lock(&inbox.gate) = Some(cmd);
+        });
+        // Shared ARWorldMap from the base station for relocalization: newest wins.
+        listen::<LoadWorldMap>(core, rover_id, &inbox, |inbox, map| {
+            *lock(&inbox.load_world_map) = Some(map);
+        });
+        // Base station asking this rover to capture & upload its ARWorldMap.
+        listen::<CaptureWorldMap>(core, rover_id, &inbox, |inbox, cmd| {
+            *lock(&inbox.capture_world_map) = Some(cmd);
+        });
+        // WebRTC FPV signaling: separate FIFO queue so SDP/ICE never competes with control.
+        listen::<WebrtcRequest>(core, rover_id, &inbox, |inbox, WebrtcRequest(payload)| {
+            push_fpv(inbox, Topic::WebrtcRequest, payload);
+        });
+        listen::<WebrtcAnswer>(core, rover_id, &inbox, |inbox, WebrtcAnswer(payload)| {
+            push_fpv(inbox, Topic::WebrtcAnswer, payload);
+        });
+        listen::<WebrtcIceDashboard>(core, rover_id, &inbox, |inbox, WebrtcIceDashboard(payload)| {
+            push_fpv(inbox, Topic::WebrtcIceDashboard, payload);
         });
 
         let outbox = Arc::new(Outbox::default());
@@ -109,6 +140,12 @@ impl RoverLink {
                 self.handle.0.counters.dropped(topic);
             }
             out.mesh_queue.push_back(payload);
+        } else if topic.is_webrtc() {
+            if out.fpv_queue.len() == MAX_QUEUED_FPV {
+                out.fpv_queue.pop_front();
+                self.handle.0.counters.dropped(topic);
+            }
+            out.fpv_queue.push_back((topic, payload));
         } else if out.pending[topic.index()].replace(payload).is_some() {
             self.handle.0.counters.dropped(topic);
         }
@@ -147,6 +184,26 @@ impl RoverLink {
         self.inbox.estop.load(Ordering::Acquire)
     }
 
+    /// The newest dump-gate command received since the last call, if any.
+    pub fn take_gate(&self) -> Option<GateCommand> {
+        lock(&self.inbox.gate).take()
+    }
+
+    /// The newest shared `ARWorldMap` pushed by the base station, if any.
+    pub fn take_load_world_map(&self) -> Option<LoadWorldMap> {
+        lock(&self.inbox.load_world_map).take()
+    }
+
+    /// The newest base-station request to capture & upload an `ARWorldMap`, if any.
+    pub fn take_capture_world_map(&self) -> Option<CaptureWorldMap> {
+        lock(&self.inbox.capture_world_map).take()
+    }
+
+    /// Drain all queued inbound WebRTC FPV signaling messages in arrival order.
+    pub fn take_fpv(&self) -> Vec<(Topic, String)> {
+        lock(&self.inbox.fpv).drain(..).collect()
+    }
+
     /// Whether a router is connected. For a status light, not for control.
     pub fn connected(&self) -> bool {
         self.handle.0.connected()
@@ -183,6 +240,19 @@ struct Inbox {
     teleop: Mutex<Option<(Teleop, Instant)>>,
     remote: Mutex<Option<(Teleop, Instant)>>,
     estop: AtomicBool,
+    gate: Mutex<Option<GateCommand>>,
+    load_world_map: Mutex<Option<LoadWorldMap>>,
+    capture_world_map: Mutex<Option<CaptureWorldMap>>,
+    fpv: Mutex<VecDeque<(Topic, String)>>,
+}
+
+fn push_fpv(inbox: &Inbox, topic: Topic, payload: String) {
+    let mut queue = lock(&inbox.fpv);
+    if queue.len() == MAX_QUEUED_FPV {
+        queue.pop_front();
+        inbox.counters.dropped(topic);
+    }
+    queue.push_back((topic, payload));
 }
 
 /// Subscribe to one base → rover topic for this rover.
@@ -218,6 +288,8 @@ struct OutState {
     pending: [Option<Outgoing>; Topic::COUNT],
     /// Incremental mesh chunks (FIFO so batched anchor updates don't clobber each other).
     mesh_queue: VecDeque<Outgoing>,
+    /// Outbound WebRTC FPV signaling messages (FIFO so trickle ICE candidates never clobber).
+    fpv_queue: VecDeque<(Topic, Outgoing)>,
     /// Last message of each repeating topic.
     retained: [Option<Retained>; Topic::COUNT],
     closed: bool,
@@ -236,13 +308,18 @@ impl Outbox {
 
 impl OutState {
     fn has_pending(&self) -> bool {
-        self.pending.iter().any(Option::is_some) || !self.mesh_queue.is_empty()
+        self.pending.iter().any(Option::is_some)
+            || !self.mesh_queue.is_empty()
+            || !self.fpv_queue.is_empty()
     }
 
     /// Everything to send now: pending messages, plus repeats that are due
     /// (all of them when `resend_all`, after a reconnect).
     fn take_due(&mut self, now: Instant, resend_all: bool) -> Vec<(Topic, Outgoing)> {
         let mut due = Vec::new();
+        while let Some(item) = self.fpv_queue.pop_front() {
+            due.push(item);
+        }
         for topic in Topic::ALL {
             if topic == Topic::Mesh {
                 while let Some(msg) = self.mesh_queue.pop_front() {
@@ -298,9 +375,10 @@ fn send_loop(core: &Core, outbox: &Outbox, rover_id: u64) {
                     Entry::Vacant(e) => {
                         let (congestion, priority) = match topic {
                             Topic::Depth => (CongestionControl::Drop, Priority::DataLow),
-                            Topic::WorldMap | Topic::Mesh => {
+                            Topic::WorldMap | Topic::WorldMapRequest | Topic::Mesh => {
                                 (CongestionControl::Block, Priority::DataLow)
                             }
+                            t if t.is_webrtc() => (CongestionControl::Block, Priority::DataLow),
                             _ => (CongestionControl::Drop, Priority::Data),
                         };
                         match session

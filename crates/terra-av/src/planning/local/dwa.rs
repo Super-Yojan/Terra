@@ -85,7 +85,7 @@ impl Dwa {
             id: "dwa",
             version: "2",
             description: "Dynamic window approach: follows the path, avoids obstacles, and can back out",
-            goals: vec![GoalKind::Local],
+            goals: vec![GoalKind::Local, GoalKind::Explore],
             params: vec![
                 float_param("horizon", 2.0, 0.5, 10.0, "s", "How far ahead each candidate twist is simulated"),
                 int_param("samples", 20, 2, 60, "Candidate twists per axis (speeds × yaw rates)"),
@@ -121,6 +121,7 @@ impl Dwa {
         obstacles: &[Vec2],
         vehicle: &dyn VehicleModel,
     ) -> Option<(Pose2, f64)> {
+        let footprint = vehicle.footprint();
         let steps = (self.horizon / ROLLOUT_STEP_S).ceil() as usize;
         let preview_step = (STEER_PREVIEW_S / ROLLOUT_STEP_S).round() as usize;
         let mut pose = start;
@@ -131,8 +132,8 @@ impl Dwa {
             if step == preview_step {
                 preview = pose;
             }
-            for obstacle in obstacles {
-                let gap = obstacle.distance(pose.position()) - vehicle.radius();
+            for &obstacle in obstacles {
+                let gap = footprint.clearance(pose, obstacle);
                 smallest_gap = smallest_gap.min(gap);
             }
             if smallest_gap <= 0.0 {
@@ -254,12 +255,12 @@ mod tests {
     use super::*;
     use crate::planning::PoseGoal;
     use crate::planning::global::{HybridAStar, PathPlanner};
-    use crate::vehicle::{DiffDrive, Limits};
+    use crate::vehicle::{DiffDrive, Footprint, Limits};
 
     fn test_vehicle() -> DiffDrive {
         DiffDrive {
             track: 0.30,
-            radius: 0.25,
+            footprint: Footprint::from_radius(0.25),
             limits: Limits { max_wheel_speed: 1.0, max_accel: 1.0, max_yaw_accel: 2.0 },
         }
     }
@@ -319,7 +320,7 @@ mod tests {
             obstacles.push(Vec2 { x: i as f64 * 0.1, y: 0.65 });
             obstacles.push(Vec2 { x: i as f64 * 0.1, y: -0.65 });
         }
-        let map = Map { obstacles, resolution: 0.1, revision: 1 };
+        let map = Map { obstacles, free: Vec::new(), resolution: 0.1, revision: 1 };
         let state = State {
             t: 0.0,
             pose: Pose2 { x: 0.0, y: 0.0, yaw: 0.0 },
@@ -340,5 +341,36 @@ mod tests {
         let mut dwa = default_dwa(0.25);
         let twist = dwa.follow(&state, &map, &goal, &path, &vehicle);
         assert!(twist.v < 0.0, "expected DWA to back out (v < 0), got {twist:?}");
+    }
+
+    #[test]
+    fn fits_narrow_corridor_with_rectangular_footprint() {
+        // 0.60 m long × 0.30 m wide rover: bounding circle is 0.67 m wide,
+        // so it could NEVER fit a 0.50 m corridor under a circle check —
+        // but its 0.30 m width fits cleanly with 10 cm clearance per side.
+        let vehicle = DiffDrive {
+            track: 0.28,
+            footprint: Footprint { length: 0.60, width: 0.30 },
+            limits: Limits { max_wheel_speed: 1.0, max_accel: 1.0, max_yaw_accel: 2.0 },
+        };
+        let mut obstacles = Vec::new();
+        for i in 0..=20 {
+            let x = i as f64 * 0.1;
+            obstacles.push(Vec2 { x, y: 0.25 });
+            obstacles.push(Vec2 { x, y: -0.25 });
+        }
+        let map = Map { obstacles, free: Vec::new(), resolution: 0.1, revision: 1 };
+        let state = State {
+            t: 0.0,
+            pose: Pose2 { x: 0.0, y: 0.0, yaw: 0.0 },
+            twist: Twist::STOP,
+        };
+        let goal = Goal::Pose(PoseGoal { x: 2.0, y: 0.0, yaw: None, tolerance: 0.2 });
+        let path = Path {
+            poses: vec![Pose2 { x: 0.0, y: 0.0, yaw: 0.0 }, Pose2 { x: 2.0, y: 0.0, yaw: 0.0 }],
+        };
+        let mut dwa = default_dwa(0.25);
+        let twist = dwa.follow(&state, &map, &goal, &path, &vehicle);
+        assert!(twist.v > 0.0, "expected DWA to drive through narrow corridor, got {twist:?}");
     }
 }

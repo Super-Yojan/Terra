@@ -21,6 +21,8 @@ toml = "0.9"
 serde_json = "1"
 # Base-station link: the wire contract shared with the base station.
 terra-comms = { path = "../terra-comms", default-features = false }
+# WebRTC FPV signaling state machine (no media, no Zenoh).
+fpv-signaling = { path = "../fpv-signaling" }
 
 [dev-dependencies]
 # Only to start a local router in tests/comms.rs. Same version as terra-comms.

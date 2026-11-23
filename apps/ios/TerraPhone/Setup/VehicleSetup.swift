@@ -50,7 +50,7 @@ enum Grouping: String, Codable, CaseIterable, Identifiable {
 
 /// One output to wire: a wheel, a side, the rear drive or the steering servo.
 struct Output: Identifiable, Hashable {
-    enum Role: Hashable { case left, right, drive, steering }
+    enum Role: Hashable { case left, right, drive, steering, dumpGate }
     let id: String          // stable key, e.g. "L0", "R", "drive", "steer"
     let name: String        // shown in the app and stored on the rover
     let role: Role
@@ -86,6 +86,11 @@ struct VehicleSetup: Codable, Equatable {
     var maxWheelSpeed = 0.8     // m/s
     // Steering servo pulses (µs).
     var servoMinUs = 1000, servoCenterUs = 1500, servoMaxUs = 2000
+    // Optional dump gate positional servo (Fusion HAT servo header P0–P11).
+    var dumpGatePort: String? = nil
+    var dumpGateOpen = 1.0       // normalized servo position in [-1, 1]
+    var dumpGateClosed = -1.0    // normalized servo position in [-1, 1]
+    var dumpGateMinUs = 1000, dumpGateCenterUs = 1500, dumpGateMaxUs = 2000
     // Body and phone mount (m), in the rover's body frame: origin at the
     // rover's centre on the ground, +X forward, +Z up (terra-av `[mount]`).
     var bodyLength = 0.6
@@ -116,6 +121,12 @@ struct VehicleSetup: Codable, Equatable {
         servoMinUs = try c.decodeIfPresent(Int.self, forKey: .servoMinUs) ?? d.servoMinUs
         servoCenterUs = try c.decodeIfPresent(Int.self, forKey: .servoCenterUs) ?? d.servoCenterUs
         servoMaxUs = try c.decodeIfPresent(Int.self, forKey: .servoMaxUs) ?? d.servoMaxUs
+        dumpGatePort = try c.decodeIfPresent(String.self, forKey: .dumpGatePort)
+        dumpGateOpen = try c.decodeIfPresent(Double.self, forKey: .dumpGateOpen) ?? d.dumpGateOpen
+        dumpGateClosed = try c.decodeIfPresent(Double.self, forKey: .dumpGateClosed) ?? d.dumpGateClosed
+        dumpGateMinUs = try c.decodeIfPresent(Int.self, forKey: .dumpGateMinUs) ?? d.dumpGateMinUs
+        dumpGateCenterUs = try c.decodeIfPresent(Int.self, forKey: .dumpGateCenterUs) ?? d.dumpGateCenterUs
+        dumpGateMaxUs = try c.decodeIfPresent(Int.self, forKey: .dumpGateMaxUs) ?? d.dumpGateMaxUs
         bodyLength = try c.decodeIfPresent(Double.self, forKey: .bodyLength) ?? d.bodyLength
         bodyWidth = try c.decodeIfPresent(Double.self, forKey: .bodyWidth) ?? d.bodyWidth
         phoneForward = try c.decodeIfPresent(Double.self, forKey: .phoneForward) ?? d.phoneForward
@@ -137,25 +148,39 @@ struct VehicleSetup: Codable, Equatable {
     /// The outputs to wire, in id order.
     var outputs: [Output] {
         let kind = driveKind.rawValue
+        var list: [Output]
         switch (steering, grouping) {
         case (.differential, .perWheel) where wheelCount > 2:
-            return wheels.map { w in
+            list = wheels.map { w in
                 let left = w.hasPrefix("L")
                 return Output(id: w, name: "\(position(w)) \(left ? "left" : "right")", role: left ? .left : .right,
                               kind: kind, wheels: [w])
             }
         case (.differential, _):
             let l = wheels.filter { $0.hasPrefix("L") }, r = wheels.filter { $0.hasPrefix("R") }
-            return [Output(id: "L", name: "Left side", role: .left, kind: kind, wheels: l),
+            list = [Output(id: "L", name: "Left side", role: .left, kind: kind, wheels: l),
                     Output(id: "R", name: "Right side", role: .right, kind: kind, wheels: r)]
         case (.ackermann, .perWheel):
-            return [Output(id: "RL", name: "Rear left", role: .drive, kind: kind, wheels: ["L1"]),
+            list = [Output(id: "RL", name: "Rear left", role: .drive, kind: kind, wheels: ["L1"]),
                     Output(id: "RR", name: "Rear right", role: .drive, kind: kind, wheels: ["R1"]),
                     steeringOutput]
         case (.ackermann, .shared):
-            return [Output(id: "drive", name: "Rear drive", role: .drive, kind: kind, wheels: ["L1", "R1"]),
+            list = [Output(id: "drive", name: "Rear drive", role: .drive, kind: kind, wheels: ["L1", "R1"]),
                     steeringOutput]
         }
+        if dumpGatePort != nil {
+            list.append(dumpGateOutput)
+        }
+        return list
+    }
+
+    /// Actuator ID of the dump gate servo in `actuators()`, or `nil` if unconfigured.
+    var dumpGateActuatorId: Int? {
+        outputs.firstIndex { $0.role == .dumpGate }
+    }
+
+    var dumpGateOutput: Output {
+        Output(id: "dump_gate", name: "Dump gate", role: .dumpGate, kind: "positional_servo", wheels: [])
     }
 
     private var steeringOutput: Output {
@@ -188,6 +213,9 @@ struct VehicleSetup: Codable, Equatable {
         var taken = Set<String>()
         for (key, a) in assignments where key != except {
             if let name = a.port, let port = ports.first(where: { $0.name == name }) { taken.formUnion(port.resources) }
+        }
+        if except != "dump_gate", let name = dumpGatePort, let port = ports.first(where: { $0.name == name }) {
+            taken.formUnion(port.resources)
         }
         return taken
     }
@@ -228,14 +256,17 @@ struct VehicleSetup: Codable, Equatable {
     var problems: [String] {
         var out: [String] = []
         if roverId < 0 { out.append("Rover ID must be zero or positive") }
-        for o in outputs where assignments[o.id]?.port == nil { out.append("\(o.name) has no port") }
-        let used = outputs.compactMap { assignments[$0.id]?.port }
+        for o in outputs where o.role != .dumpGate && assignments[o.id]?.port == nil { out.append("\(o.name) has no port") }
+        let used = outputs.compactMap { $0.role == .dumpGate ? dumpGatePort : assignments[$0.id]?.port }
         if Set(used).count != used.count { out.append("Two outputs share a port") }
         if trackWidth <= 0 || maxWheelSpeed <= 0 { out.append("Size and speed must be positive") }
         if bodyLength <= 0 || bodyWidth <= 0 { out.append("Rover length and width must be positive") }
         if phoneHeight <= 0 { out.append("Phone height must be above the ground") }
         if steering == .ackermann && !(servoMinUs < servoCenterUs && servoCenterUs < servoMaxUs) {
             out.append("Steering pulses must be min < center < max")
+        }
+        if dumpGatePort != nil && !(dumpGateMinUs < dumpGateCenterUs && dumpGateCenterUs < dumpGateMaxUs) {
+            out.append("Dump gate pulses must be min < center < max")
         }
         return out
     }
@@ -246,8 +277,9 @@ struct VehicleSetup: Codable, Equatable {
     func actuators() -> [[String: Any]] {
         outputs.enumerated().map { index, output in
             let a = assignments[output.id] ?? PortAssignment()
+            let port = output.role == .dumpGate ? (dumpGatePort ?? "") : (a.port ?? "")
             var entry: [String: Any] = [
-                "id": index, "name": output.name, "port": a.port ?? "", "kind": output.kind,
+                "id": index, "name": output.name, "port": port, "kind": output.kind,
                 "inverted": output.kind == DriveKind.unidirectionalESC.rawValue ? false : a.inverted,
             ]
             switch output.kind {
@@ -261,17 +293,24 @@ struct VehicleSetup: Codable, Equatable {
                 entry["calibration"] = ["type": "unidirectional_esc", "stop_us": 1000, "full_power_us": 2000]
                 entry["limits"] = ["min": 0.0, "max": 1.0]
             default: // positional_servo
-                entry["calibration"] = ["type": "positional_servo", "min_us": servoMinUs,
-                                        "center_us": servoCenterUs, "max_us": servoMaxUs]
+                let (lo, mid, hi) = output.role == .dumpGate
+                    ? (dumpGateMinUs, dumpGateCenterUs, dumpGateMaxUs)
+                    : (servoMinUs, servoCenterUs, servoMaxUs)
+                entry["calibration"] = ["type": "positional_servo", "min_us": lo,
+                                        "center_us": mid, "max_us": hi]
                 entry["limits"] = ["min": -1.0, "max": 1.0]
             }
             switch output.role {
             case .left: entry["route"] = ["type": "left_effort"]
             case .right: entry["route"] = ["type": "right_effort"]
             case .drive: entry["route"] = ["type": "manual", "forward_coefficient": 1.0, "turn_coefficient": 0.0]
-            case .steering: entry["route"] = ["type": "servo"]
+            case .steering, .dumpGate: entry["route"] = ["type": "servo"]
             }
-            entry["safe"] = output.role == .steering ? ["type": "position", "value": 0.0] : ["type": "zero"]
+            switch output.role {
+            case .steering: entry["safe"] = ["type": "position", "value": 0.0]
+            case .dumpGate: entry["safe"] = ["type": "position", "value": min(1.0, max(-1.0, dumpGateClosed))]
+            default: entry["safe"] = ["type": "zero"]
+            }
             return entry
         }
     }
@@ -279,16 +318,17 @@ struct VehicleSetup: Codable, Equatable {
     // MARK: terra-av
 
     /// The `[vehicle]` table for terra-av.toml. terra-av only has a
-    /// differential-drive model so far, so Ackermann returns nil and the
-    /// bundled table is kept.
-    var terraAvVehicle: String? {
-        guard steering == .differential else { return nil }
-        return """
+    /// differential-drive model so far, so even Ackermann rovers pass their
+    /// real track, speed, and body `length × width` rather than falling back
+    /// to the bundled defaults.
+    var terraAvVehicle: String {
+        """
         [vehicle]
         type = "diff_drive"
         track = \(trackWidth)
         max_wheel_speed = \(maxWheelSpeed)
-        radius = \(bodyRadius)
+        length = \(bodyLength)
+        width = \(bodyWidth)
         """
     }
 
@@ -344,8 +384,8 @@ struct VehicleSetup: Codable, Equatable {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             if trimmed.hasPrefix("[") {
                 table = trimmed
-                if table == "[vehicle]", let vehicle = terraAvVehicle {
-                    out.append(vehicle); replacedVehicle = true; continue
+                if table == "[vehicle]" {
+                    out.append(terraAvVehicle); replacedVehicle = true; continue
                 }
             }
             if table == "[vehicle]" && replacedVehicle { continue }
@@ -358,7 +398,7 @@ struct VehicleSetup: Codable, Equatable {
             }
             out.append(line)
         }
-        if !replacedVehicle, let vehicle = terraAvVehicle { out.insert(vehicle, at: 0) }
+        if !replacedVehicle { out.insert(terraAvVehicle, at: 0) }
         return out.joined(separator: "\n")
     }
 

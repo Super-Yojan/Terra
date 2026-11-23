@@ -115,13 +115,13 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
 
     private func setApply(_ state: LayoutApply) { DispatchQueue.main.async { self.layoutApply = state } }
 
-    /// Send one wheel command; `.stop` sends every actuator's safe value.
-    func send(_ command: WheelCommand) { queue.async {
+    /// Send one wheel command; `.stop` with no overrides sends every actuator's safe value.
+    func send(_ command: WheelCommand, overrides: [Int: Double] = [:]) { queue.async {
         guard let profiles = self.profiles, self.relayConnected, let p = self.peripheral else { return }
         // The rover rejects drive writes while it handles a control request
         // (and stops its outputs anyway); a rejected write would drop the link.
         guard !self.controlBusy else { self.pending = []; return }
-        let values = command == .stop ? profiles.neutral : profiles.values(for: command)
+        let values = (command == .stop && overrides.isEmpty) ? profiles.neutral : profiles.values(for: command, overrides: overrides)
         guard let bytes = try? profiles.encode(values) else { return }
         let capacity = p.maximumWriteValueLength(for: .withResponse) / 2 * 2
         guard capacity >= 2 else { return }
@@ -349,10 +349,17 @@ final class BluetoothLink: NSObject, ObservableObject, CBCentralManagerDelegate,
             try sync.accept(revision: rev, actuator: actuator)
             try nextProfile()
         case "read_vehicle_setup":
-            let decoded: VehicleSetup? = if let raw = payload["vehicle"], !(raw is NSNull) {
-                VehicleSetup.from(jsonObject: raw)
+            let decoded: VehicleSetup?
+            if let raw = payload["vehicle"], !(raw is NSNull) {
+                decoded = VehicleSetup.from(jsonObject: raw)
+                if let d = decoded {
+                    print("[Bluetooth] read_vehicle_setup: \(d.bodyLength)x\(d.bodyWidth)m track=\(d.trackWidth)m maxSpeed=\(d.maxWheelSpeed)m/s steering=\(d.steering.rawValue) roverId=\(d.roverId)")
+                } else {
+                    print("[Bluetooth] read_vehicle_setup: FAILED to decode vehicle payload: \(raw)")
+                }
             } else {
-                nil
+                decoded = nil
+                print("[Bluetooth] read_vehicle_setup: no vehicle setup saved on Pi (using bundled defaults)")
             }
             DispatchQueue.main.async { self.vehicleSetup = decoded }
         default: break

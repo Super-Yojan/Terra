@@ -14,16 +14,26 @@ pub enum Topic {
     Status,
     Depth,
     WorldMap,
+    WorldMapRequest,
     Mesh,
     Occupancy,
     PlannedPath,
     RemoteState,
+    WebrtcOffer,
+    WebrtcIcePhone,
+    WebrtcState,
     // base → rover
     Task,
     TaskCommand,
     Teleop,
     RemoteCmd,
     Estop,
+    Gate,
+    LoadWorldMap,
+    CaptureWorldMap,
+    WebrtcRequest,
+    WebrtcAnswer,
+    WebrtcIceDashboard,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -33,7 +43,7 @@ pub enum Direction {
 }
 
 impl Topic {
-    pub const COUNT: usize = 15;
+    pub const COUNT: usize = 25;
     pub const ALL: [Topic; Self::COUNT] = [
         Self::Capabilities,
         Self::TaskStatus,
@@ -41,15 +51,25 @@ impl Topic {
         Self::Status,
         Self::Depth,
         Self::WorldMap,
+        Self::WorldMapRequest,
         Self::Mesh,
         Self::Occupancy,
         Self::PlannedPath,
         Self::RemoteState,
+        Self::WebrtcOffer,
+        Self::WebrtcIcePhone,
+        Self::WebrtcState,
         Self::Task,
         Self::TaskCommand,
         Self::Teleop,
         Self::RemoteCmd,
         Self::Estop,
+        Self::Gate,
+        Self::LoadWorldMap,
+        Self::CaptureWorldMap,
+        Self::WebrtcRequest,
+        Self::WebrtcAnswer,
+        Self::WebrtcIceDashboard,
     ];
 
     /// The last part of the key.
@@ -61,15 +81,25 @@ impl Topic {
             Self::Status => "status",
             Self::Depth => "depth",
             Self::WorldMap => "world_map",
+            Self::WorldMapRequest => "world_map/request",
             Self::Mesh => "mesh",
             Self::Occupancy => "occupancy",
             Self::PlannedPath => "planned_path",
             Self::RemoteState => "remote/state",
+            Self::WebrtcOffer => "webrtc/offer",
+            Self::WebrtcIcePhone => "webrtc/ice/phone",
+            Self::WebrtcState => "webrtc/state",
             Self::Task => "task",
             Self::TaskCommand => "task/cmd",
             Self::Teleop => "teleop",
             Self::RemoteCmd => "remote/cmd",
             Self::Estop => "estop",
+            Self::Gate => "gate",
+            Self::LoadWorldMap => "world_map/load",
+            Self::CaptureWorldMap => "world_map/capture",
+            Self::WebrtcRequest => "webrtc/request",
+            Self::WebrtcAnswer => "webrtc/answer",
+            Self::WebrtcIceDashboard => "webrtc/ice/dashboard",
         }
     }
 
@@ -85,14 +115,39 @@ impl Topic {
             | Self::Status
             | Self::Depth
             | Self::WorldMap
+            | Self::WorldMapRequest
             | Self::Mesh
             | Self::Occupancy
             | Self::PlannedPath
-            | Self::RemoteState => Direction::RoverToBase,
-            Self::Task | Self::TaskCommand | Self::Teleop | Self::RemoteCmd | Self::Estop => {
-                Direction::BaseToRover
-            }
+            | Self::RemoteState
+            | Self::WebrtcOffer
+            | Self::WebrtcIcePhone
+            | Self::WebrtcState => Direction::RoverToBase,
+            Self::Task
+            | Self::TaskCommand
+            | Self::Teleop
+            | Self::RemoteCmd
+            | Self::Estop
+            | Self::Gate
+            | Self::LoadWorldMap
+            | Self::CaptureWorldMap
+            | Self::WebrtcRequest
+            | Self::WebrtcAnswer
+            | Self::WebrtcIceDashboard => Direction::BaseToRover,
         }
+    }
+
+    /// True for any of the six WebRTC FPV signaling topics.
+    pub const fn is_webrtc(self) -> bool {
+        matches!(
+            self,
+            Self::WebrtcOffer
+                | Self::WebrtcIcePhone
+                | Self::WebrtcState
+                | Self::WebrtcRequest
+                | Self::WebrtcAnswer
+                | Self::WebrtcIceDashboard
+        )
     }
 
     /// Rover-side topics the link re-sends on its own: the latest published

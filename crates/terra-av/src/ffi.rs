@@ -68,6 +68,8 @@ pub struct Twist {
 pub struct DriveCommand {
     pub target: Twist,
     pub measured: Option<Twist>,
+    /// True when the dump gate servo should be held open.
+    pub gate_open: bool,
 }
 
 /// The last tick in a few words, for a status line on the phone.
@@ -79,8 +81,100 @@ pub struct RoverStatus {
     pub estopped: bool,
     /// The base station's router is connected.
     pub base_connected: bool,
+    /// True when the dump gate is currently commanded open.
+    pub gate_open: bool,
     /// E.g. `task 7 · dwa · running, 3.2 m to go`, or `no task`.
     pub task: String,
+}
+
+/// One inbound WebRTC FPV signaling message from the base station.
+#[derive(uniffi::Record)]
+pub struct FpvSignal {
+    /// Topic suffix: `webrtc/request`, `webrtc/answer`, or `webrtc/ice/dashboard`.
+    pub kind: String,
+    pub payload: String,
+}
+
+/// One transition effect produced by `fpv-signaling`.
+#[derive(uniffi::Record)]
+pub struct FpvEffect {
+    /// `publish`, `create_offer`, `apply_answer`, `add_ice`, `end_of_candidates`,
+    /// `stop_media`, or `show`.
+    pub kind: String,
+    pub topic: String,
+    pub payload: String,
+    pub session: String,
+    pub sdp: String,
+    pub candidate: String,
+    pub sdp_mid: String,
+    pub sdp_m_line_index: i32,
+    pub state: String,
+    pub detail: String,
+}
+
+impl From<fpv_signaling::Effect> for FpvEffect {
+    fn from(effect: fpv_signaling::Effect) -> Self {
+        let mut out = Self {
+            kind: String::new(),
+            topic: String::new(),
+            payload: String::new(),
+            session: String::new(),
+            sdp: String::new(),
+            candidate: String::new(),
+            sdp_mid: String::new(),
+            sdp_m_line_index: 0,
+            state: String::new(),
+            detail: String::new(),
+        };
+        match effect {
+            fpv_signaling::Effect::Publish { topic, payload } => {
+                out.kind = "publish".into();
+                out.topic = topic.suffix().into();
+                out.payload = payload;
+            }
+            fpv_signaling::Effect::CreateOffer { session } => {
+                out.kind = "create_offer".into();
+                out.session = session;
+            }
+            fpv_signaling::Effect::AcceptOffer { session, sdp } => {
+                out.kind = "accept_offer".into();
+                out.session = session;
+                out.sdp = sdp;
+            }
+            fpv_signaling::Effect::ApplyAnswer { session, sdp } => {
+                out.kind = "apply_answer".into();
+                out.session = session;
+                out.sdp = sdp;
+            }
+            fpv_signaling::Effect::AddIce {
+                session,
+                candidate,
+                sdp_mid,
+                sdp_m_line_index,
+            } => {
+                out.kind = "add_ice".into();
+                out.session = session;
+                out.candidate = candidate;
+                out.sdp_mid = sdp_mid;
+                out.sdp_m_line_index = sdp_m_line_index;
+            }
+            fpv_signaling::Effect::EndOfCandidates { session } => {
+                out.kind = "end_of_candidates".into();
+                out.session = session;
+            }
+            fpv_signaling::Effect::StopMedia { session } => {
+                out.kind = "stop_media".into();
+                out.session = session;
+            }
+            fpv_signaling::Effect::Show { session, state, detail } => {
+                out.kind = "show".into();
+                out.session = session;
+                out.state = state.as_str().into();
+                out.detail = detail.into();
+            }
+        }
+        out
+    }
 }
 
 /// File name of the saved task inside the app's `state_dir`.
@@ -89,6 +183,7 @@ const TASK_FILE: &str = "terra-av-task.json";
 #[derive(uniffi::Object)]
 pub struct TerraAv {
     pipeline: Mutex<Option<Pipeline>>,
+    fpv: Mutex<fpv_signaling::SignalingSession>,
 }
 
 #[uniffi::export]
@@ -109,7 +204,16 @@ impl TerraAv {
         let built = PipelineConfig::from_toml(&config_toml)
             .and_then(|config| config.with_router_password(router_password).build(task_file));
         let pipeline = match built {
-            Ok(pipeline) => Some(pipeline),
+            Ok(pipeline) => {
+                let fp = pipeline.vehicle.footprint();
+                eprintln!(
+                    "terra-av: pipeline ready (footprint {:.2}x{:.2}m, r={:.2}m)",
+                    fp.length,
+                    fp.width,
+                    fp.radius()
+                );
+                Some(pipeline)
+            }
             Err(e) => {
                 eprintln!("terra-av: invalid config, rover will not drive: {e}");
                 None
@@ -117,6 +221,7 @@ impl TerraAv {
         };
         Arc::new(Self {
             pipeline: Mutex::new(pipeline),
+            fpv: Mutex::new(fpv_signaling::SignalingSession::phone()),
         })
     }
 
@@ -125,6 +230,7 @@ impl TerraAv {
         let stop = DriveCommand {
             target: Twist { v: 0.0, w: 0.0 },
             measured: None,
+            gate_open: false,
         };
         let mut pipeline = self.pipeline.lock().unwrap();
         match pipeline.as_mut() {
@@ -134,8 +240,17 @@ impl TerraAv {
                 DriveCommand {
                     target: out.target.into(),
                     measured: out.measured.map(Into::into),
+                    gate_open: out.gate_open,
                 }
             }
+        }
+    }
+
+    /// Command the dump gate open (`true`) or closed (`false`) from the phone UI.
+    pub fn set_gate_open(&self, open: bool) {
+        let mut pipeline = self.pipeline.lock().unwrap();
+        if let Some(pipeline) = pipeline.as_mut() {
+            pipeline.set_gate_open(open);
         }
     }
 
@@ -148,8 +263,32 @@ impl TerraAv {
             tracked: summary.tracked,
             estopped: summary.estopped,
             base_connected: summary.base_connected,
+            gate_open: summary.gate_open,
             task: summary.task.clone(),
         })
+    }
+
+    /// Ask the base station to send back its saved shared `ARWorldMap` so this
+    /// rover can relocalize into the fleet's shared world coordinate frame.
+    pub fn request_world_map(&self, t: f64, is_auto: bool) {
+        let mut pipeline = self.pipeline.lock().unwrap();
+        if let Some(pipeline) = pipeline.as_mut() {
+            pipeline.request_world_map(t, is_auto);
+        }
+    }
+
+    /// Take the latest shared `ARWorldMap` (`NSKeyedArchiver` bytes) pushed by
+    /// the base station, if any.
+    pub fn take_load_world_map(&self) -> Option<Vec<u8>> {
+        let pipeline = self.pipeline.lock().unwrap();
+        pipeline.as_ref()?.take_load_world_map()
+    }
+
+    /// Returns `true` if the base station asked this rover to capture and
+    /// upload its current `ARWorldMap`.
+    pub fn take_capture_world_map(&self) -> bool {
+        let pipeline = self.pipeline.lock().unwrap();
+        pipeline.as_ref().is_some_and(|p| p.take_capture_world_map())
     }
 
     /// Publish a serialized ARKit `ARWorldMap` (`NSKeyedArchiver` bytes) plus its
@@ -163,9 +302,9 @@ impl TerraAv {
     }
 
     /// Publish one incremental ARKit `ARMeshAnchor` chunk (vertices in ARKit world `A`,
-    /// flat triangle vertex indices `[i0, i1, i2, ...]`, and 1-byte `ARMeshClassification`
-    /// per face) to the base station over `terra-comms`. Empty `vertices` + `indices`
-    /// signals that chunk `id` was removed.
+    /// flat triangle vertex indices `[i0, i1, i2, ...]`, 1-byte `ARMeshClassification`
+    /// per face, and flat `[r, g, b, ...]` sRGB bytes per vertex) to the base station
+    /// over `terra-comms`. Empty `vertices` + `indices` signals that chunk `id` was removed.
     pub fn publish_mesh_chunk(
         &self,
         t: f64,
@@ -173,12 +312,113 @@ impl TerraAv {
         vertices: Vec<Vec3>,
         indices: Vec<u32>,
         classes: Vec<u8>,
+        colors: Vec<u8>,
     ) {
         let mut pipeline = self.pipeline.lock().unwrap();
         if let Some(pipeline) = pipeline.as_mut() {
             let verts: Vec<geometry::Vec3> = vertices.into_iter().map(Into::into).collect();
-            pipeline.publish_mesh_chunk(t, id, &verts, &indices, classes);
+            pipeline.publish_mesh_chunk(t, id, &verts, &indices, classes, colors);
         }
+    }
+
+    // MARK: WebRTC FPV signaling (phone role)
+
+    pub fn base_connected(&self) -> bool {
+        let pipeline = self.pipeline.lock().unwrap();
+        pipeline.as_ref().is_some_and(Pipeline::base_connected)
+    }
+
+    pub fn take_fpv_signals(&self) -> Vec<FpvSignal> {
+        let pipeline = self.pipeline.lock().unwrap();
+        let Some(pipeline) = pipeline.as_ref() else {
+            return Vec::new();
+        };
+        pipeline
+            .take_fpv_signals()
+            .into_iter()
+            .map(|(kind, payload)| FpvSignal { kind, payload })
+            .collect()
+    }
+
+    pub fn publish_fpv_signal(&self, topic: String, payload: String) {
+        let pipeline = self.pipeline.lock().unwrap();
+        if let Some(pipeline) = pipeline.as_ref() {
+            pipeline.publish_fpv_signal(&topic, payload);
+        }
+    }
+
+    pub fn fpv_has_session(&self) -> bool {
+        self.fpv.lock().unwrap().has_session()
+    }
+
+    pub fn fpv_receive(&self, kind: String, payload: String, now_ms: u64) -> Vec<FpvEffect> {
+        self.fpv
+            .lock()
+            .unwrap()
+            .receive(&kind, &payload, now_ms)
+            .into_iter()
+            .map(Into::into)
+            .collect()
+    }
+
+    pub fn fpv_note_offer(&self, session: String, sdp: String, now_ms: u64) -> Vec<FpvEffect> {
+        self.fpv
+            .lock()
+            .unwrap()
+            .note_local_description(&session, &sdp, now_ms)
+            .into_iter()
+            .map(Into::into)
+            .collect()
+    }
+
+    pub fn fpv_note_ice(
+        &self,
+        session: String,
+        candidate: String,
+        sdp_mid: String,
+        sdp_m_line_index: i32,
+        now_ms: u64,
+    ) -> Vec<FpvEffect> {
+        self.fpv
+            .lock()
+            .unwrap()
+            .note_local_ice(&session, &candidate, &sdp_mid, sdp_m_line_index, now_ms)
+            .into_iter()
+            .map(Into::into)
+            .collect()
+    }
+
+    pub fn fpv_note_media(&self, session: String, state: String, now_ms: u64) -> Vec<FpvEffect> {
+        let Some(call_state) = fpv_signaling::CallState::parse(&state) else {
+            return Vec::new();
+        };
+        self.fpv
+            .lock()
+            .unwrap()
+            .note_media(&session, call_state, now_ms)
+            .into_iter()
+            .map(Into::into)
+            .collect()
+    }
+
+    pub fn fpv_tick(&self, now_ms: u64) -> Vec<FpvEffect> {
+        self.fpv
+            .lock()
+            .unwrap()
+            .tick(now_ms)
+            .into_iter()
+            .map(Into::into)
+            .collect()
+    }
+
+    pub fn fpv_stop(&self, publish: bool) -> Vec<FpvEffect> {
+        self.fpv
+            .lock()
+            .unwrap()
+            .stop(publish)
+            .into_iter()
+            .map(Into::into)
+            .collect()
     }
 }
 

@@ -25,6 +25,18 @@ framework = generated.new_file('TerraAV.xcframework')
 framework.last_known_file_type = 'wrapper.xcframework'
 app.frameworks_build_phase.add_file_reference(framework)
 %w[ARKit CoreMotion CoreLocation SwiftUI CoreBluetooth].each { |name| app.add_system_framework(name) }
+# WebRTC SPM package (stasel/WebRTC) for rear-camera FPV video streaming.
+webrtc_pkg = project.new(Xcodeproj::Project::Object::XCRemoteSwiftPackageReference)
+webrtc_pkg.repositoryURL = 'https://github.com/stasel/WebRTC.git'
+webrtc_pkg.requirement = { 'kind' => 'upToNextMajorVersion', 'minimumVersion' => '155.0.0' }
+project.root_object.package_references << webrtc_pkg
+webrtc_dep = project.new(Xcodeproj::Project::Object::XCSwiftPackageProductDependency)
+webrtc_dep.package = webrtc_pkg
+webrtc_dep.product_name = 'WebRTC'
+app.package_product_dependencies << webrtc_dep
+webrtc_build_file = project.new(Xcodeproj::Project::Object::PBXBuildFile)
+webrtc_build_file.product_ref = webrtc_dep
+app.frameworks_build_phase.files << webrtc_build_file
 app.build_configurations.each do |config|
   config.build_settings['PRODUCT_BUNDLE_IDENTIFIER'] = 'org.terra.robotics.phone'
   config.build_settings['INFOPLIST_FILE'] = 'TerraPhone/Resources/Info.plist'

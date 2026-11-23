@@ -30,7 +30,7 @@ use terra_comms::{
 use crate::estimation::{GpsAnchor, State};
 use crate::mapping::Map;
 use crate::planning::registry::{self, ControllerSpec};
-use crate::planning::{Goal, Navigator, Path, PoseGoal};
+use crate::planning::{ExploreStep, Explorer, Goal, Navigator, Path, PoseGoal};
 use crate::vehicle::{Twist, VehicleModel};
 
 /// A `Running` task without a tracked pose for this long (s) asks for
@@ -73,6 +73,8 @@ struct ActiveTask {
     stick_driven: bool,
     /// The task's planner and controller.
     navigator: Navigator,
+    /// Present only for `TaskGoal::Explore`: picks frontiers and scans in place.
+    explorer: Option<Explorer>,
     phase: Phase,
     /// The goal in the world frame, as last given to the controller.
     /// `None` for `Goal::Stop`, and for a GPS goal not yet converted.
@@ -223,11 +225,16 @@ impl Tasks {
             _ => Phase::Running,
         };
 
+        let explorer = match task.goal {
+            TaskGoal::Explore { budget_s } => Some(Explorer::new(budget_s)),
+            _ => None,
+        };
         Ok(ActiveTask {
             task: Task { params, ..task },
             controller_version: controller_spec.version,
             stick_driven: controller_spec.goals.is_empty(),
             navigator: Navigator::new(path_planner, controller),
+            explorer,
             phase,
             goal: None,
             distance_to_goal: 0.0,
@@ -275,11 +282,33 @@ impl Tasks {
         };
         active.untracked_since = None;
 
+        // Frontier exploration manages its own sequence of frontier poses.
+        if let Some(explorer) = &mut active.explorer {
+            if active.phase != Phase::Running {
+                return Step::HOLD;
+            }
+            active.run.get_or_insert(Run::without_limits(t));
+            match explorer.step(t, state, map, &mut active.navigator, tick.vehicle) {
+                ExploreStep::Drive { twist, goal } => {
+                    active.goal = goal;
+                    active.distance_to_goal = goal.map_or(0.0, |g| g.distance(&state.pose));
+                    return Step { twist, remote_state: None };
+                }
+                ExploreStep::Done => {
+                    active.phase = Phase::Reached;
+                    active.run = None;
+                    active.goal = None;
+                    active.distance_to_goal = 0.0;
+                    return Step::HOLD;
+                }
+            }
+        }
+
         // The goal in the world frame. A GPS goal is converted with the
         // newest anchor on every tick, so a refined anchor moves the goal
         // (and the navigator re-plans, because the goal changed).
         active.goal = match &active.task.goal {
-            TaskGoal::Stop => None,
+            TaskGoal::Stop | TaskGoal::Explore { .. } => None,
             &TaskGoal::Pose { x, y, yaw, tolerance } => Some(PoseGoal { x, y, yaw, tolerance }),
             &TaskGoal::Gps { latitude, longitude, heading, tolerance } => {
                 let Some(anchor) = tick.gps_anchor else {
@@ -433,12 +462,12 @@ impl Tasks {
                 TaskState::NeedsAttention { reason: reason.clone(), since: *since }
             }
         };
-        // The goal as the controller received it: in the world frame, with
-        // the final tolerance. Before a GPS goal's first conversion (or for
-        // `Stop`) that is the goal as sent.
-        let goal = match active.goal {
-            Some(PoseGoal { x, y, yaw, tolerance }) => TaskGoal::Pose { x, y, yaw, tolerance },
-            None => active.task.goal.clone(),
+        // Keep `Goal::Explore` on `TaskStatus.goal` so the base station knows
+        // the task is exploring (the active frontier route is on `PlannedPath`).
+        let goal = match (&active.task.goal, active.goal) {
+            (TaskGoal::Explore { .. }, _) => active.task.goal.clone(),
+            (_, Some(PoseGoal { x, y, yaw, tolerance })) => TaskGoal::Pose { x, y, yaw, tolerance },
+            (_, None) => active.task.goal.clone(),
         };
         TaskStatus {
             t,
@@ -511,6 +540,9 @@ impl ActiveTask {
         self.phase = Phase::Running;
         self.run = None;
         self.navigator.reset();
+        if let Some(explorer) = &mut self.explorer {
+            explorer.reset_for_resume();
+        }
     }
 
     /// Stop and wait for a human. The goal is kept.
@@ -536,6 +568,17 @@ impl Run {
 fn check_goal(goal: &TaskGoal, controller: &ControllerSpec) -> Result<(), String> {
     let tolerance = match goal {
         TaskGoal::Stop => return Ok(()),
+        TaskGoal::Explore { budget_s } => {
+            if !controller.goals.contains(&GoalKind::Explore) {
+                return Err(format!("controller {:?} does not support exploration", controller.id));
+            }
+            if let Some(b) = budget_s
+                && (!b.is_finite() || *b <= 0.0)
+            {
+                return Err("the exploration budget must be positive".into());
+            }
+            return Ok(());
+        }
         TaskGoal::Pose { tolerance, .. } | TaskGoal::Gps { tolerance, .. } => *tolerance,
     };
     if !controller.goals.contains(&GoalKind::Local) {

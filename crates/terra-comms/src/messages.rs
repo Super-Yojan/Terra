@@ -16,6 +16,9 @@ pub struct Capabilities {
     pub default_controller: String,
     /// `git describe` of the rover build.
     pub software: String,
+    /// Physical rover body `[length, width]` in metres (`None` on older rovers).
+    #[serde(default)]
+    pub footprint: Option<[f64; 2]>,
 }
 
 impl Capabilities {
@@ -53,6 +56,8 @@ pub enum GoalKind {
     Local,
     /// Raw `Goal::Gps`.
     Gps,
+    /// Autonomous frontier exploration (`Goal::Explore`).
+    Explore,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -137,6 +142,9 @@ pub struct Status {
     pub detail: String,
     /// `None` until the estimator has one.
     pub gps_anchor: Option<GpsAnchor>,
+    /// True when the dump gate is currently commanded open.
+    #[serde(default)]
+    pub gate_open: bool,
 }
 
 /// Where the world frame sits on Earth.
@@ -170,6 +178,33 @@ pub struct WorldMap {
     pub data: Vec<u8>,
 }
 
+/// Rover request asking the base station to send back the saved shared `ARWorldMap`
+/// so this rover can relocalize into the fleet's shared world coordinate frame.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct WorldMapRequest {
+    pub t: f64,
+    /// `true` when triggered automatically on connect (so the base station skips
+    /// sending a rover's own map back to it).
+    #[serde(default)]
+    pub auto: bool,
+}
+
+/// Base-to-rover command asking the rover to capture its current `ARWorldMap`
+/// and upload it on [`Topic::WorldMap`].
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CaptureWorldMap {
+    pub t: f64,
+}
+
+/// Base-to-rover command delivering a saved `ARWorldMap` (`NSKeyedArchiver` bytes)
+/// for ARKit relocalization so multiple rovers share one world coordinate origin.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LoadWorldMap {
+    pub t: f64,
+    pub sequence: u64,
+    pub data: Vec<u8>,
+}
+
 /// One incremental ARKit `ARMeshAnchor` chunk in Terra world coordinates (Z-up, metres).
 ///
 /// Sent when an anchor is added, updated, or removed (`vertices` and `indices` empty
@@ -178,6 +213,9 @@ pub struct WorldMap {
 /// `classes` has one `ARMeshClassification` byte per face (same length as `indices`, or
 /// empty if classification is unavailable):
 /// `0 = none, 1 = wall, 2 = floor, 3 = ceiling, 4 = table, 5 = seat, 6 = window, 7 = door`.
+///
+/// `colors` has one `[r, g, b]` sRGB triple per vertex (same length as `vertices`, or
+/// empty if vertex colors are unavailable).
 #[derive(Clone, Debug, PartialEq)]
 pub struct MeshChunk {
     pub t: f64,
@@ -185,13 +223,13 @@ pub struct MeshChunk {
     pub vertices: Vec<[f32; 3]>,
     pub indices: Vec<[u32; 3]>,
     pub classes: Vec<u8>,
+    pub colors: Vec<[u8; 3]>,
 }
 
-/// The rover's obstacle map: the cells of its occupancy grid that it counts
-/// as occupied, in the world frame. This is the map its planners use.
+/// The rover's occupancy map: occupied cells and observed-free cells in the
+/// world frame. This is the map its planners and frontier explorer use.
 ///
-/// Sent whole whenever it changes. Encoded as a JSON header plus
-/// little-endian `f32`s.
+/// Sent when it changes. Encoded as a JSON header plus little-endian `f32`s.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Occupancy {
     pub t: f64,
@@ -199,6 +237,8 @@ pub struct Occupancy {
     pub resolution: f64,
     /// Centre `[x, y]` of every occupied cell, m.
     pub cells: Vec<[f32; 2]>,
+    /// Centre `[x, y]` of every observed-free cell, m (empty on older rovers).
+    pub free: Vec<[f32; 2]>,
 }
 
 /// The rover's current global-planner route in the world frame.
@@ -294,6 +334,13 @@ pub enum Goal {
         /// m; at least the fix accuracy.
         tolerance: f64,
     },
+    /// Autonomous frontier exploration: pick reachable frontiers on the
+    /// occupancy map until none remain (or `budget_s` elapses).
+    Explore {
+        /// Optional time budget in seconds; `None` = until no frontiers remain.
+        #[serde(default)]
+        budget_s: Option<f64>,
+    },
 }
 
 impl Goal {
@@ -303,6 +350,7 @@ impl Goal {
             Self::Stop => None,
             Self::Pose { .. } => Some(GoalKind::Local),
             Self::Gps { .. } => Some(GoalKind::Gps),
+            Self::Explore { .. } => Some(GoalKind::Explore),
         }
     }
 }
@@ -327,3 +375,25 @@ pub struct Estop {
     pub t: f64,
     pub engaged: bool,
 }
+
+/// Command the rover's dump gate servo open (`true`) or closed (`false`).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct GateCommand {
+    pub t: f64,
+    pub open: bool,
+}
+
+/// Raw JSON WebRTC FPV signaling payloads (`fpv-signaling` owns the schema).
+/// Each is capped at 65 536 bytes on the wire and never enters the control inbox.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WebrtcOffer(pub String);
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WebrtcIcePhone(pub String);
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WebrtcState(pub String);
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WebrtcRequest(pub String);
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WebrtcAnswer(pub String);
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WebrtcIceDashboard(pub String);

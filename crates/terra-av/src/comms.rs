@@ -16,8 +16,9 @@
 //! [`Link::none`] (no `[comms]` table, or a build without the `zenoh`
 //! feature) sends nothing and receives nothing.
 use terra_comms::{
-    Depth, MeshChunk, Occupancy, PlannedPath, Pose, RemoteState, Status, Task, TaskCommand,
-    TaskStatus, Uplink, WorldMap,
+    Depth, LoadWorldMap, MeshChunk, Occupancy, PlannedPath, Pose, RemoteState, Status, Task,
+    TaskCommand, TaskStatus, Uplink, WebrtcIcePhone, WebrtcOffer, WebrtcState, WorldMap,
+    WorldMapRequest,
 };
 
 use crate::estimation::{GpsAnchor, State};
@@ -38,6 +39,8 @@ pub struct Commands {
     pub task: Option<Task>,
     /// Task commands (resume, pause, clear), in arrival order.
     pub task_commands: Vec<TaskCommand>,
+    /// Dump-gate open/close command received since the last tick, if any.
+    pub gate: Option<bool>,
 }
 
 /// What the rover reports after a tick.
@@ -54,6 +57,8 @@ pub struct Report<'a> {
     pub planned_path: &'a [Pose2],
     /// Any e-stop engaged (the phone's, or a base station's).
     pub estopped: bool,
+    /// True when the dump gate is currently commanded open.
+    pub gate_open: bool,
     pub gps_anchor: Option<GpsAnchor>,
     pub task: TaskStatus,
     /// Only while the `remote` controller runs.
@@ -67,6 +72,9 @@ pub struct Link {
     world_map_sequence: u64,
     /// `Map::revision` of the obstacle map last sent, to send it on change only.
     last_map_revision: Option<u64>,
+    /// Number of observed-free cells last sent, plus timestamp for throttling.
+    last_free_count: usize,
+    last_free_sent_t: f64,
     /// Last planned route sent, to send it on change only.
     last_planned_path: Option<Vec<terra_comms::Pose2>>,
     /// Last pose, re-sent as untracked while the estimator has none.
@@ -86,6 +94,8 @@ impl Link {
             depth_sequence: 0,
             world_map_sequence: 0,
             last_map_revision: None,
+            last_free_count: 0,
+            last_free_sent_t: f64::NEG_INFINITY,
             last_planned_path: None,
             last_pose: Pose { t: 0.0, x: 0.0, y: 0.0, yaw: 0.0, tracked: false },
             last_status: None,
@@ -116,6 +126,7 @@ impl Link {
                 remote: rover.remote_cmd().map(twist),
                 task: rover.take_task(),
                 task_commands: std::iter::from_fn(|| rover.take_task_command()).collect(),
+                gate: rover.take_gate().map(|g| g.open),
             };
         }
         Commands::default()
@@ -141,15 +152,23 @@ impl Link {
             self.send(&Depth { t, sequence: self.depth_sequence, points });
         }
 
-        // The obstacle map, when it changed. A mapper without a grid
+        // The occupancy map, immediately when obstacles change and at up to 2 Hz
+        // as new free-floor cells are discovered. A mapper without a grid
         // (`NoMap`, resolution 0) has nothing to show.
         if let Some(map) = report.map
             && map.resolution > 0.0
-            && self.last_map_revision != Some(map.revision)
         {
-            let cells = map.obstacles.iter().map(|cell| [cell.x as f32, cell.y as f32]).collect();
-            self.send(&Occupancy { t, resolution: map.resolution, cells });
-            self.last_map_revision = Some(map.revision);
+            let obstacles_dirty = self.last_map_revision != Some(map.revision);
+            let free_dirty = map.free.len() != self.last_free_count
+                && (t - self.last_free_sent_t >= 0.5 || !self.last_free_sent_t.is_finite());
+            if obstacles_dirty || free_dirty {
+                let cells = map.obstacles.iter().map(|cell| [cell.x as f32, cell.y as f32]).collect();
+                let free = map.free.iter().map(|cell| [cell.x as f32, cell.y as f32]).collect();
+                self.send(&Occupancy { t, resolution: map.resolution, cells, free });
+                self.last_map_revision = Some(map.revision);
+                self.last_free_count = map.free.len();
+                self.last_free_sent_t = t;
+            }
         }
 
         // The global planner's route, when it changed.
@@ -181,6 +200,7 @@ impl Link {
                 heading: anchor.heading,
                 accuracy: anchor.accuracy,
             }),
+            gate_open: report.gate_open,
         };
         if self.last_status.as_ref() != Some(&status) {
             self.send(&Status { t, ..status.clone() });
@@ -191,6 +211,33 @@ impl Link {
             self.send(&TaskStatus { t, ..task_status.clone() });
             self.last_task_status = Some(task_status);
         }
+    }
+
+    /// Ask the base station to send back its saved shared `ARWorldMap`.
+    pub fn request_world_map(&mut self, t: f64, auto: bool) {
+        if !self.is_connected_link() {
+            return;
+        }
+        self.send(&WorldMapRequest { t, auto });
+    }
+
+    /// Take the latest shared `ARWorldMap` pushed by the base station, if any.
+    pub fn take_load_world_map(&self) -> Option<LoadWorldMap> {
+        #[cfg(feature = "zenoh")]
+        if let Some(rover) = &self.rover {
+            return rover.take_load_world_map();
+        }
+        None
+    }
+
+    /// Returns `true` if the base station asked this rover to capture and
+    /// upload its current `ARWorldMap`.
+    pub fn take_capture_world_map(&self) -> bool {
+        #[cfg(feature = "zenoh")]
+        if let Some(rover) = &self.rover {
+            return rover.take_capture_world_map().is_some();
+        }
+        false
     }
 
     /// Publish a serialized ARKit `ARWorldMap` blob plus its feature points
@@ -216,6 +263,7 @@ impl Link {
 
     /// Publish one incremental ARKit `ARMeshAnchor` chunk to the base station.
     /// Converts vertices from ARKit world `A` (Y-up) to Terra world `W` (Z-up).
+    /// `colors_rgb` is flat `[r, g, b, ...]` (3 bytes per vertex, or empty).
     /// Empty `vertices_arkit` + `indices` tells the base station that chunk `id` was removed.
     pub fn publish_mesh_chunk(
         &mut self,
@@ -224,6 +272,7 @@ impl Link {
         vertices_arkit: &[Vec3],
         indices: &[u32],
         classes: Vec<u8>,
+        colors_rgb: Vec<u8>,
     ) {
         if !self.is_connected_link() || id.is_empty() {
             return;
@@ -237,7 +286,35 @@ impl Link {
             .chunks_exact(3)
             .map(|tri| [tri[0], tri[1], tri[2]])
             .collect();
-        self.send(&MeshChunk { t, id, vertices, indices: faces, classes });
+        let colors = colors_rgb
+            .chunks_exact(3)
+            .map(|rgb| [rgb[0], rgb[1], rgb[2]])
+            .collect();
+        self.send(&MeshChunk { t, id, vertices, indices: faces, classes, colors });
+    }
+
+    /// Drain queued inbound WebRTC FPV signaling messages `(topic_suffix, payload)`.
+    pub fn take_fpv(&self) -> Vec<(String, String)> {
+        #[cfg(feature = "zenoh")]
+        if let Some(rover) = &self.rover {
+            return rover
+                .take_fpv()
+                .into_iter()
+                .map(|(topic, payload)| (topic.as_str().to_owned(), payload))
+                .collect();
+        }
+        Vec::new()
+    }
+
+    /// Publish one outbound WebRTC FPV signaling message (`webrtc/offer`,
+    /// `webrtc/ice/phone`, or `webrtc/state`).
+    pub fn publish_fpv(&self, topic: &str, payload: String) {
+        match topic {
+            "webrtc/offer" => self.send(&WebrtcOffer(payload)),
+            "webrtc/ice/phone" => self.send(&WebrtcIcePhone(payload)),
+            "webrtc/state" => self.send(&WebrtcState(payload)),
+            _ => {}
+        }
     }
 
     /// Whether the router is connected. For a status light, not for control.

@@ -29,6 +29,9 @@ struct SetupView: View {
                     SectionTitle("Base station")
                     BaseStationCard(loop: loop, motors: motors, setup: $setup)
 
+                    SectionTitle("FPV video")
+                    FpvIceCard(loop: loop)
+
                     SectionTitle("Vehicle")
                     VehicleCard(setup: $setup, ports: motors.ports)
 
@@ -46,6 +49,9 @@ struct SetupView: View {
 
                     SectionTitle("Driving")
                     SizeCard(setup: $setup)
+
+                    SectionTitle("Dump gate")
+                    DumpGateCard(setup: $setup, motors: motors)
 
                     ApplyStatus(state: motors.layoutApply, problems: setup.problems, connected: motors.connected != nil)
                 }
@@ -489,6 +495,136 @@ private struct SizeCard: View {
         if setup.steering == .ackermann {
             Text("Autonomy only has a differential-drive model so far. An Ackermann rover can be driven by hand; the autonomy settings stay as they are.")
                 .font(.footnote).foregroundStyle(Theme.warning)
+        }
+    }
+}
+
+private struct FpvIceCard: View {
+    @ObservedObject var loop: RoverLoop
+    @State private var settings: FpvIceSettings
+    @State private var savedNotice = false
+
+    init(loop: RoverLoop) {
+        self.loop = loop
+        _settings = State(initialValue: loop.fpvIce)
+    }
+
+    var body: some View {
+        Card {
+            FpvStatusRow(loop: loop)
+            Divider().overlay(Theme.line)
+            VStack(alignment: .leading, spacing: 6) {
+                Text("STUN URL")
+                    .font(.caption).foregroundStyle(Theme.secondary)
+                TextField(FpvIceSettings.defaultStunURL, text: $settings.stunURL)
+                    .font(.footnote.monospaced())
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+            }
+            Divider().overlay(Theme.line)
+            VStack(alignment: .leading, spacing: 6) {
+                Text("TURN URL (optional, for NAT traversal)")
+                    .font(.caption).foregroundStyle(Theme.secondary)
+                TextField("turn:turn.example.com:3478", text: $settings.turnURL)
+                    .font(.footnote.monospaced())
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+            }
+            if !settings.turnURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                Divider().overlay(Theme.line)
+                TextField("TURN username", text: $settings.turnUsername)
+                    .font(.footnote.monospaced())
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                Divider().overlay(Theme.line)
+                SecureField("TURN credential", text: $settings.turnCredential)
+                    .font(.footnote.monospaced())
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+            }
+            Divider().overlay(Theme.line)
+            HStack {
+                Button("Save FPV ICE") {
+                    loop.updateFpvIce(settings)
+                    savedNotice = true
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                if savedNotice {
+                    Text("Saved").font(.caption).foregroundStyle(.green)
+                }
+            }
+        }
+        .onChange(of: settings) { _, _ in savedNotice = false }
+    }
+}
+
+private struct DumpGateCard: View {
+    @Binding var setup: VehicleSetup
+    @ObservedObject var motors: BluetoothLink
+
+    var body: some View {
+        let available = setup.availablePorts(for: setup.dumpGateOutput, ports: motors.ports, occupied: motors.occupied)
+        Card {
+            HStack {
+                Text("Servo port").foregroundStyle(Theme.secondary)
+                Spacer()
+                Picker("Servo port", selection: Binding(
+                    get: { setup.dumpGatePort ?? "" },
+                    set: { setup.dumpGatePort = $0.isEmpty ? nil : $0 }
+                )) {
+                    Text("None").tag("")
+                    if let current = setup.dumpGatePort, !available.contains(where: { $0.name == current }) {
+                        Text(current).tag(current)
+                    }
+                    ForEach(available) { port in
+                        Text(port.name).tag(port.name)
+                    }
+                }
+                .pickerStyle(.menu)
+            }
+            if setup.dumpGatePort != nil {
+                Divider().overlay(Theme.line)
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Text("Open position").foregroundStyle(Theme.secondary)
+                        Spacer()
+                        Text(String(format: "%.2f", setup.dumpGateOpen)).font(.footnote.monospaced())
+                    }
+                    Slider(value: $setup.dumpGateOpen, in: -1.0...1.0, step: 0.05)
+                }
+                Divider().overlay(Theme.line)
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Text("Closed position").foregroundStyle(Theme.secondary)
+                        Spacer()
+                        Text(String(format: "%.2f", setup.dumpGateClosed)).font(.footnote.monospaced())
+                    }
+                    Slider(value: $setup.dumpGateClosed, in: -1.0...1.0, step: 0.05)
+                }
+                if let gateId = setup.dumpGateActuatorId {
+                    Divider().overlay(Theme.line)
+                    HStack(spacing: 10) {
+                        Button("Test open") {
+                            motors.send(.stop, overrides: [gateId: setup.dumpGateOpen])
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                        .disabled(!motors.ready)
+
+                        Button("Test close") {
+                            motors.send(.stop, overrides: [gateId: setup.dumpGateClosed])
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .disabled(!motors.ready)
+                    }
+                    if !motors.ready {
+                        Text("Apply layout to rover before testing the gate.")
+                            .font(.caption).foregroundStyle(Theme.secondary)
+                    }
+                }
+            }
         }
     }
 }

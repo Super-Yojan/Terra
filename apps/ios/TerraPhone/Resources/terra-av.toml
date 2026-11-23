@@ -2,13 +2,13 @@
 # crates/terra-av/src/config.rs.
 
 # The app's setup screen replaces this table with the rover it describes.
-# radius: the circle around the rover's centre that holds the whole body
-# (half the diagonal of a 0.6 × 0.45 m body); planners keep obstacles outside it.
+# length × width: exact rectangular footprint (m) used by the planners.
 [vehicle]
 type = "diff_drive"
 track = 0.5
 max_wheel_speed = 0.8
-radius = 0.375
+length = 0.6
+width = 0.45
 
 # Phone landscape on the rover, screen facing the rover, rear camera out,
 # camera 0.23 m above the ground. Roll sign untested.

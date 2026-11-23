@@ -69,7 +69,7 @@ use crate::{
     planning::{Navigator, registry},
     sense::Mount,
     tasks::{Choice, Tasks},
-    vehicle::{DiffDrive, Limits, VehicleModel},
+    vehicle::{DiffDrive, Footprint, Limits, VehicleModel},
 };
 
 #[derive(Debug, Deserialize)]
@@ -92,9 +92,15 @@ pub enum VehicleConfig {
     DiffDrive {
         track: f64,
         max_wheel_speed: f64,
-        /// Radius of the circle around the body origin that holds the whole
-        /// rover (m). Absent: `track`, which covers a rover about as long
-        /// as it is wide.
+        /// Front-to-back body length (m). Preferred over `radius` so planners
+        /// use the exact oriented rectangle instead of a bounding circle.
+        #[serde(default)]
+        length: Option<f64>,
+        /// Left-to-right body width (m).
+        #[serde(default)]
+        width: Option<f64>,
+        /// Legacy bounding-circle radius (m), used only when `length`/`width`
+        /// are absent. Absent: `track`.
         #[serde(default)]
         radius: Option<f64>,
         #[serde(default = "default_max_accel")]
@@ -192,10 +198,26 @@ impl PipelineConfig {
                 Err(format!("{name} must be a positive number, not {value}"))
             }
         };
-        let VehicleConfig::DiffDrive { track, max_wheel_speed, radius, max_accel, max_yaw_accel } = self.vehicle;
+        let VehicleConfig::DiffDrive {
+            track,
+            max_wheel_speed,
+            length,
+            width,
+            radius,
+            max_accel,
+            max_yaw_accel,
+        } = self.vehicle;
         positive("[vehicle] track", track)?;
         positive("[vehicle] max_wheel_speed", max_wheel_speed)?;
-        positive("[vehicle] radius", radius.unwrap_or(track))?;
+        if let Some(l) = length {
+            positive("[vehicle] length", l)?;
+        }
+        if let Some(w) = width {
+            positive("[vehicle] width", w)?;
+        }
+        if let Some(r) = radius {
+            positive("[vehicle] radius", r)?;
+        }
         positive("[vehicle] max_accel", max_accel)?;
         positive("[vehicle] max_yaw_accel", max_yaw_accel)?;
         if let MapperConfig::OccupancyGrid { resolution } = self.mapper {
@@ -232,6 +254,7 @@ impl PipelineConfig {
             safety: SafetyGate,
             link: self.link()?,
             last_target: None,
+            gate_open: false,
             summary: Summary::default(),
         })
     }
@@ -249,12 +272,14 @@ impl PipelineConfig {
     /// What this rover can run, for the base station: everything in the
     /// registry. The default controller is the configured one.
     pub fn capabilities(&self) -> Capabilities {
+        let fp = self.vehicle.build().footprint();
         Capabilities {
             t: 0.0,
             controllers: registry::controllers().iter().map(|spec| spec.option()).collect(),
             planners: registry::planners().iter().map(|spec| spec.option()).collect(),
             default_controller: self.local_planner.choice().id,
             software: env!("CARGO_PKG_VERSION").into(),
+            footprint: Some([fp.length, fp.width]),
         }
     }
 }
@@ -262,10 +287,24 @@ impl PipelineConfig {
 impl VehicleConfig {
     fn build(&self) -> Box<dyn VehicleModel> {
         match *self {
-            Self::DiffDrive { track, max_wheel_speed, radius, max_accel, max_yaw_accel } => {
+            Self::DiffDrive {
+                track,
+                max_wheel_speed,
+                length,
+                width,
+                radius,
+                max_accel,
+                max_yaw_accel,
+            } => {
+                let footprint = match (length, width) {
+                    (Some(l), Some(w)) => Footprint { length: l, width: w },
+                    (Some(l), None) => Footprint { length: l, width: track },
+                    (None, Some(w)) => Footprint { length: w, width: w },
+                    (None, None) => Footprint::from_radius(radius.unwrap_or(track)),
+                };
                 Box::new(DiffDrive {
                     track,
-                    radius: radius.unwrap_or(track),
+                    footprint,
                     limits: Limits { max_wheel_speed, max_accel, max_yaw_accel },
                 })
             }

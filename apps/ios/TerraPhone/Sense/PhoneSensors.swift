@@ -13,6 +13,11 @@ import simd
 final class PhoneSensors: NSObject, ARSessionDelegate, CLLocationManagerDelegate {
     /// ARKit visual-inertial odometry (camera pose + LiDAR depth + ARWorldMap).
     private let session = ARSession()
+    /// Dedicated serial queue for ARKit callbacks and `vertexColorCache`.
+    private let arQueue = DispatchQueue(label: "terra.sensors.ar")
+    /// Spatial 5 cm voxel cache of packed `0xRRGGBB` vertex colors so vertices outside
+    /// the current camera frustum keep their observed color across mesh updates.
+    private var vertexColorCache: [Int64: UInt32] = [:]
     /// Core Motion IMU manager (gyroscope / accelerometer).
     private let motion = CMMotionManager()
     /// Core Location GPS manager.
@@ -31,9 +36,20 @@ final class PhoneSensors: NSObject, ARSessionDelegate, CLLocationManagerDelegate
 
     /// Called on `terra.sensors.ar` whenever ARKit adds, updates, or removes an
     /// `ARMeshAnchor`. Empty `vertices`/`indices` means the chunk `id` was removed.
-    var onMeshChunk: ((_ id: String, _ vertices: [Vec3], _ indices: [UInt32], _ classes: Data) -> Void)?
+    /// `colors` holds flat `[r, g, b, ...]` sRGB bytes (3 per vertex, or empty).
+    var onMeshChunk: ((_ id: String, _ vertices: [Vec3], _ indices: [UInt32], _ classes: Data, _ colors: Data) -> Void)?
 
-    func start() {
+    /// Called on `terra.sensors.ar` with each rear-camera pixel buffer for WebRTC FPV.
+    var onCameraFrame: ((CVPixelBuffer, TimeInterval) -> Void)?
+
+    /// Called on `terra.sensors.ar` once ARKit finishes relocalizing to a loaded
+    /// shared `ARWorldMap` and reaches `.normal` tracking state.
+    var onRelocalized: (() -> Void)?
+
+    /// True after `loadWorldMap` restarts the session until tracking reaches `.normal`.
+    private var awaitingRelocalization = false
+
+    private func makeTrackingConfiguration(initialWorldMap: ARWorldMap? = nil) -> ARWorldTrackingConfiguration {
         // ARWorldTrackingConfiguration tracks 6-DoF camera pose using camera + IMU.
         let config = ARWorldTrackingConfiguration()
         // `.gravity` aligns ARKit's +Y axis straight up (opposite gravity),
@@ -43,15 +59,24 @@ final class PhoneSensors: NSObject, ARSessionDelegate, CLLocationManagerDelegate
         if ARWorldTrackingConfiguration.supportsFrameSemantics(.sceneDepth) {
             config.frameSemantics.insert(.sceneDepth)
         }
-
         if ARWorldTrackingConfiguration.supportsSceneReconstruction(.meshWithClassification) {
             config.sceneReconstruction.insert(.meshWithClassification)
         }
+        config.initialWorldMap = initialWorldMap
+        return config
+    }
+
+    func start() {
+        let config = makeTrackingConfiguration()
 
         session.delegate = self
         // Run ARKit callbacks on a dedicated serial background queue instead of
         // the main UI thread so depth processing never stutters SwiftUI.
-        session.delegateQueue = DispatchQueue(label: "terra.sensors.ar")
+        session.delegateQueue = arQueue
+        arQueue.async { [weak self] in
+            self?.vertexColorCache.removeAll()
+            self?.awaitingRelocalization = false
+        }
         // Start fresh: discard any previous tracking origin or anchors.
         session.run(config, options: [.resetTracking, .removeExistingAnchors])
 
@@ -74,6 +99,7 @@ final class PhoneSensors: NSObject, ARSessionDelegate, CLLocationManagerDelegate
         session.pause()
         motion.stopDeviceMotionUpdates()
         location.stopUpdatingLocation()
+        arQueue.async { [weak self] in self?.vertexColorCache.removeAll() }
         store { $0.vio = nil; $0.gyro = nil; $0.gps = nil; $0.depth = [] }
     }
 
@@ -108,6 +134,14 @@ final class PhoneSensors: NSObject, ARSessionDelegate, CLLocationManagerDelegate
             // Plain 3D coordinates of ARKit's visual landmarks (ARKit world A, metres),
             // used for rendering on macOS/Rust since the archive below is Apple-private.
             let points = worldMap.rawFeaturePoints.points.map { Vec3($0) }
+            if points.count < 100 {
+                completion(.failure(NSError(
+                    domain: "terra.worldmap",
+                    code: 3,
+                    userInfo: [NSLocalizedDescriptionKey: "Map too sparse (\(points.count) pts) — scan more of the room first"]
+                )))
+                return
+            }
             do {
                 // Serialize the full `ARWorldMap` (including visual descriptors) into a
                 // binary `Data` blob so another iPhone can unarchive it into `initialWorldMap`.
@@ -116,6 +150,40 @@ final class PhoneSensors: NSObject, ARSessionDelegate, CLLocationManagerDelegate
             } catch {
                 completion(.failure(error))
             }
+        }
+    }
+
+    /// Load a saved `ARWorldMap` (`NSKeyedArchiver` bytes) from the base station
+    /// and restart ARKit with `initialWorldMap` so this rover relocalizes into
+    /// the fleet's shared world coordinate origin.
+    func loadWorldMap(_ data: Data) -> Result<Int, Error> {
+        do {
+            guard let worldMap = try NSKeyedUnarchiver.unarchivedObject(ofClass: ARWorldMap.self, from: data) else {
+                return .failure(NSError(domain: "terra.worldmap", code: 2,
+                                        userInfo: [NSLocalizedDescriptionKey: "Archive did not contain an ARWorldMap"]))
+            }
+            let pointsCount = worldMap.rawFeaturePoints.points.count
+            let config = makeTrackingConfiguration(initialWorldMap: worldMap)
+            arQueue.async { [weak self] in
+                guard let self else { return }
+                self.vertexColorCache.removeAll()
+                self.awaitingRelocalization = true
+                self.session.run(config, options: [.resetTracking, .removeExistingAnchors])
+            }
+            return .success(pointsCount)
+        } catch {
+            return .failure(error)
+        }
+    }
+
+    /// Discard any pending relocalization and restart ARKit with a clean local origin.
+    func resetTracking() {
+        let config = makeTrackingConfiguration()
+        arQueue.async { [weak self] in
+            guard let self else { return }
+            self.vertexColorCache.removeAll()
+            self.awaitingRelocalization = false
+            self.session.run(config, options: [.resetTracking, .removeExistingAnchors])
         }
     }
 
@@ -128,6 +196,10 @@ final class PhoneSensors: NSObject, ARSessionDelegate, CLLocationManagerDelegate
         var tracked = false
         if case .normal = frame.camera.trackingState {
             tracked = true
+            if awaitingRelocalization {
+                awaitingRelocalization = false
+                onRelocalized?()
+            }
         }
         // `frame.camera.transform` is a 4×4 column-major matrix (camera → ARKit world).
         let pose = VioPose(arkit: frame.camera.transform, tracked: tracked)
@@ -139,6 +211,7 @@ final class PhoneSensors: NSObject, ARSessionDelegate, CLLocationManagerDelegate
             $0.vio = pose
             $0.depth = points
         }
+        onCameraFrame?(frame.capturedImage, frame.timestamp)
     }
 
     /// Called by ARKit when new mesh chunks are first created.
@@ -156,15 +229,23 @@ final class PhoneSensors: NSObject, ARSessionDelegate, CLLocationManagerDelegate
     func session(_: ARSession, didRemove anchors: [ARAnchor]) {
         guard let onMeshChunk else { return }
         for case let mesh as ARMeshAnchor in anchors {
-            onMeshChunk(mesh.identifier.uuidString, [], [], Data())
+            onMeshChunk(mesh.identifier.uuidString, [], [], Data(), Data())
         }
     }
 
-    /// Extract vertices (in ARKit world `A`), triangle indices, and per-face
-    /// classifications from each `ARMeshAnchor` and forward to `onMeshChunk`.
+    /// Extract vertices (in ARKit world `A`), triangle indices, per-face
+    /// classifications, and per-vertex sRGB colors sampled from `capturedImage`.
     private func emitMeshChunks(from anchors: [ARAnchor]) {
         guard let onMeshChunk else { return }
-        for case let mesh as ARMeshAnchor in anchors {
+        let meshAnchors = anchors.compactMap { $0 as? ARMeshAnchor }
+        guard !meshAnchors.isEmpty else { return }
+
+        // Lock the latest ARKit RGB frame (and optional LiDAR depth map for occlusion
+        // rejection) once for the whole batch of mesh anchor updates.
+        let sampler = session.currentFrame.flatMap(FrameColorSampler.init)
+        defer { sampler?.unlock() }
+
+        for mesh in meshAnchors {
             let geom = mesh.geometry
             let transform = mesh.transform
 
@@ -175,13 +256,41 @@ final class PhoneSensors: NSObject, ARSessionDelegate, CLLocationManagerDelegate
             let vBase = vSource.buffer.contents()
             var vertices: [Vec3] = []
             vertices.reserveCapacity(vSource.count)
+            var colors = Data()
+            if sampler != nil {
+                colors.reserveCapacity(vSource.count * 3)
+            }
             for i in 0 ..< vSource.count {
                 let ptr = vBase
                     .advanced(by: vSource.offset + i * vSource.stride)
                     .assumingMemoryBound(to: Float.self)
                 let local = SIMD3<Float>(ptr[0], ptr[1], ptr[2])
-                let world = transform * SIMD4<Float>(local, 1.0)
-                vertices.append(Vec3(SIMD3(world.x, world.y, world.z)))
+                let world4 = transform * SIMD4<Float>(local, 1.0)
+                let world = SIMD3<Float>(world4.x, world4.y, world4.z)
+                vertices.append(Vec3(world))
+
+                if let sampler {
+                    let key = Self.colorVoxelKey(world)
+                    let rgb: (UInt8, UInt8, UInt8)
+                    if let sampled = sampler.sampleRGB(worldPoint: world) {
+                        rgb = sampled
+                        let packed = (UInt32(sampled.0) << 16) | (UInt32(sampled.1) << 8) | UInt32(sampled.2)
+                        if vertexColorCache.count < 200_000 || vertexColorCache[key] != nil {
+                            vertexColorCache[key] = packed
+                        }
+                    } else if let cached = vertexColorCache[key] {
+                        rgb = (
+                            UInt8((cached >> 16) & 0xFF),
+                            UInt8((cached >> 8) & 0xFF),
+                            UInt8(cached & 0xFF)
+                        )
+                    } else {
+                        rgb = (128, 128, 128)
+                    }
+                    colors.append(rgb.0)
+                    colors.append(rgb.1)
+                    colors.append(rgb.2)
+                }
             }
 
             // 2. Faces: 3 vertex indices per triangle (`UInt32` or `UInt16`).
@@ -215,8 +324,18 @@ final class PhoneSensors: NSObject, ARSessionDelegate, CLLocationManagerDelegate
                 }
             }
 
-            onMeshChunk(mesh.identifier.uuidString, vertices, indices, classes)
+            onMeshChunk(mesh.identifier.uuidString, vertices, indices, classes, colors)
         }
+    }
+
+    /// Quantize an ARKit world point into a 5 cm voxel key packed into 63 bits.
+    private static func colorVoxelKey(_ p: SIMD3<Float>) -> Int64 {
+        let scale: Float = 20.0
+        let mask: Int64 = (1 << 21) - 1
+        let x = Int64(max(-1_048_575, min(1_048_575, Int(floor(p.x * scale))))) & mask
+        let y = Int64(max(-1_048_575, min(1_048_575, Int(floor(p.y * scale))))) & mask
+        let z = Int64(max(-1_048_575, min(1_048_575, Int(floor(p.z * scale))))) & mask
+        return (x << 42) | (y << 21) | z
     }
 
     func session(_: ARSession, didFailWithError _: Error) {
@@ -300,5 +419,121 @@ final class PhoneSensors: NSObject, ARSessionDelegate, CLLocationManagerDelegate
     /// Helper to mutate cached sensor fields under `lock`.
     private func store(_ update: (PhoneSensors) -> Void) {
         lock.lock(); update(self); lock.unlock()
+    }
+}
+
+/// Locks one `ARFrame`'s bi-planar NV12 `capturedImage` (and optional LiDAR
+/// `sceneDepth`) to project ARKit world vertices into sRGB colors.
+private struct FrameColorSampler {
+    private let pixelBuffer: CVPixelBuffer
+    private let yBase: UnsafePointer<UInt8>
+    private let yWidth: Int
+    private let yHeight: Int
+    private let yRowBytes: Int
+    private let cbcrBase: UnsafePointer<UInt8>
+    private let cbcrWidth: Int
+    private let cbcrHeight: Int
+    private let cbcrRowBytes: Int
+
+    private let depthBuffer: CVPixelBuffer?
+    private let depthBase: UnsafeRawPointer?
+    private let depthWidth: Int
+    private let depthHeight: Int
+    private let depthRowBytes: Int
+
+    private let worldToCamera: simd_float4x4
+    private let fx: Float
+    private let fy: Float
+    private let cx: Float
+    private let cy: Float
+
+    init?(_ frame: ARFrame) {
+        let pb = frame.capturedImage
+        guard CVPixelBufferIsPlanar(pb), CVPixelBufferGetPlaneCount(pb) >= 2 else { return nil }
+        CVPixelBufferLockBaseAddress(pb, .readOnly)
+        guard let yPtr = CVPixelBufferGetBaseAddressOfPlane(pb, 0),
+              let cbcrPtr = CVPixelBufferGetBaseAddressOfPlane(pb, 1)
+        else {
+            CVPixelBufferUnlockBaseAddress(pb, .readOnly)
+            return nil
+        }
+
+        pixelBuffer = pb
+        yBase = UnsafePointer(yPtr.assumingMemoryBound(to: UInt8.self))
+        yWidth = CVPixelBufferGetWidthOfPlane(pb, 0)
+        yHeight = CVPixelBufferGetHeightOfPlane(pb, 0)
+        yRowBytes = CVPixelBufferGetBytesPerRowOfPlane(pb, 0)
+        cbcrBase = UnsafePointer(cbcrPtr.assumingMemoryBound(to: UInt8.self))
+        cbcrWidth = CVPixelBufferGetWidthOfPlane(pb, 1)
+        cbcrHeight = CVPixelBufferGetHeightOfPlane(pb, 1)
+        cbcrRowBytes = CVPixelBufferGetBytesPerRowOfPlane(pb, 1)
+
+        if let depthMap = frame.sceneDepth?.depthMap {
+            CVPixelBufferLockBaseAddress(depthMap, .readOnly)
+            depthBuffer = depthMap
+            depthBase = UnsafeRawPointer(CVPixelBufferGetBaseAddress(depthMap))
+            depthWidth = CVPixelBufferGetWidth(depthMap)
+            depthHeight = CVPixelBufferGetHeight(depthMap)
+            depthRowBytes = CVPixelBufferGetBytesPerRow(depthMap)
+        } else {
+            depthBuffer = nil
+            depthBase = nil
+            depthWidth = 0
+            depthHeight = 0
+            depthRowBytes = 0
+        }
+
+        worldToCamera = frame.camera.transform.inverse
+        let imageSize = frame.camera.imageResolution
+        let sx = Float(yWidth) / Float(imageSize.width)
+        let sy = Float(yHeight) / Float(imageSize.height)
+        let k = frame.camera.intrinsics
+        fx = k[0][0] * sx
+        fy = k[1][1] * sy
+        cx = k[2][0] * sx
+        cy = k[2][1] * sy
+    }
+
+    func unlock() {
+        if let depthBuffer {
+            CVPixelBufferUnlockBaseAddress(depthBuffer, .readOnly)
+        }
+        CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly)
+    }
+
+    /// Project a world-space point (ARKit world `A`) into `capturedImage` and return
+    /// its sRGB color, or `nil` if behind the camera, outside the frame, or occluded.
+    func sampleRGB(worldPoint: SIMD3<Float>) -> (UInt8, UInt8, UInt8)? {
+        let cam = worldToCamera * SIMD4<Float>(worldPoint, 1.0)
+        let depth = -cam.z
+        guard depth > 0.05 else { return nil }
+
+        let u = Int((fx * (cam.x / depth) + cx).rounded())
+        let v = Int((fy * (-cam.y / depth) + cy).rounded())
+        guard u >= 0, u < yWidth, v >= 0, v < yHeight else { return nil }
+
+        // Reject vertices occluded behind a closer foreground surface in LiDAR depth.
+        if let depthBase, depthWidth > 0, depthHeight > 0 {
+            let du = min(depthWidth - 1, u * depthWidth / yWidth)
+            let dv = min(depthHeight - 1, v * depthHeight / yHeight)
+            let zMeasured = depthBase
+                .advanced(by: dv * depthRowBytes)
+                .assumingMemoryBound(to: Float32.self)[du]
+            if zMeasured.isFinite, zMeasured > 0.05, abs(depth - zMeasured) > 0.35 {
+                return nil
+            }
+        }
+
+        let yVal = Float(yBase[v * yRowBytes + u])
+        let cu = min(cbcrWidth - 1, u >> 1)
+        let cv = min(cbcrHeight - 1, v >> 1)
+        let cbcrOffset = cv * cbcrRowBytes + cu * 2
+        let cb = Float(cbcrBase[cbcrOffset]) - 128.0
+        let cr = Float(cbcrBase[cbcrOffset + 1]) - 128.0
+
+        let r = UInt8(clamping: Int((yVal + 1.402 * cr).rounded()))
+        let g = UInt8(clamping: Int((yVal - 0.344136 * cb - 0.714136 * cr).rounded()))
+        let b = UInt8(clamping: Int((yVal + 1.772 * cb).rounded()))
+        return (r, g, b)
     }
 }

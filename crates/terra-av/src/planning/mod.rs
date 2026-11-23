@@ -8,10 +8,12 @@
 //! [`Navigator`] runs the two layers together for one pose goal. The
 //! planners and controllers that can be picked by name (from the config, or
 //! from the base station) are listed in [`registry`].
+pub mod exploration;
 pub mod global;
 pub mod local;
 mod navigator;
 pub mod registry;
+pub use exploration::{ExploreStep, Explorer};
 pub use navigator::{Navigator, NoRoute};
 
 use crate::geometry::{Pose2, Vec2, wrap_angle};

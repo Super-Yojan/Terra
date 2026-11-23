@@ -19,11 +19,13 @@ use crate::estimation::State;
 use crate::geometry::{Vec2, Vec3};
 use crate::sense::SensorFrame;
 
-/// What the planner sees: occupied points in the world frame.
+/// What the planner sees: occupied and observed-free points in the world frame.
 #[derive(Default)]
 pub struct Map {
     /// The centre of every occupied grid cell.
     pub obstacles: Vec<Vec2>,
+    /// The centre of every observed-free grid cell (used by frontier exploration).
+    pub free: Vec<Vec2>,
     /// Side of one grid cell (m). Zero for a mapper without a grid.
     pub resolution: f64,
     /// Goes up by one every time `obstacles` changes, so a planner can tell

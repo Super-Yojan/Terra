@@ -26,7 +26,7 @@
 //! multiplier (`reverse_penalty`) and a direction-change penalty so the
 //! planner prefers driving forward and backs out only when needed.
 use std::cmp::Ordering;
-use std::collections::{BinaryHeap, HashMap, HashSet};
+use std::collections::{BinaryHeap, HashMap};
 
 use super::PathPlanner;
 use crate::geometry::{Pose2, Vec2, wrap_angle};
@@ -162,21 +162,39 @@ impl HybridAStar {
     }
 
     /// The cells the rover's centre must stay out of: every cell whose
-    /// centre is within `keep_out` metres of an obstacle.
-    fn blocked_cells(&self, obstacles: &[Vec2], keep_out: f64) -> HashSet<Cell> {
-        let reach = (keep_out / self.resolution).ceil() as i32;
-        let mut blocked = HashSet::new();
+    /// Spatial index mapping each grid cell within `reach_m` of any obstacle
+    /// to the list of obstacles within that radius. Cells absent from the map
+    /// are guaranteed collision-free in O(1) without trig; cells present get an
+    /// exact oriented-rectangle clearance check.
+    fn nearby_obstacles(&self, obstacles: &[Vec2], reach_m: f64) -> HashMap<Cell, Vec<Vec2>> {
+        let reach = (reach_m / self.resolution).ceil() as i32;
+        let mut map: HashMap<Cell, Vec<Vec2>> = HashMap::new();
         for &obstacle in obstacles {
             let (ox, oy) = self.cell(obstacle);
             for ix in ox - reach..=ox + reach {
                 for iy in oy - reach..=oy + reach {
-                    if self.cell_centre((ix, iy)).distance(obstacle) <= keep_out {
-                        blocked.insert((ix, iy));
+                    if self.cell_centre((ix, iy)).distance(obstacle) <= reach_m {
+                        map.entry((ix, iy)).or_default().push(obstacle);
                     }
                 }
             }
         }
-        blocked
+        map
+    }
+
+    /// True if the rover's oriented rectangle at `pose` comes within `margin`
+    /// metres of any obstacle.
+    fn pose_blocked(
+        &self,
+        pose: Pose2,
+        footprint: crate::vehicle::Footprint,
+        margin: f64,
+        nearby: &HashMap<Cell, Vec<Vec2>>,
+    ) -> bool {
+        let Some(obstacles) = nearby.get(&self.cell(pose.position())) else {
+            return false;
+        };
+        obstacles.iter().any(|&o| footprint.clearance(pose, o) <= margin)
     }
 }
 
@@ -192,14 +210,29 @@ impl PathPlanner for HybridAStar {
             return Some(Path::default());
         };
         let goal_position = goal.position();
+        let footprint = vehicle.footprint();
+        // Scale route margin down proportionally for small rovers (e.g. 5.6 cm
+        // for a 0.16 m wide rover, capped at ROUTE_MARGIN_M = 0.15 m for larger ones).
+        let margin = ROUTE_MARGIN_M.min(0.35 * footprint.length.min(footprint.width));
 
-        // The rover's centre can be anywhere in a cell, up to half a cell
-        // diagonal from the cell's centre, so keep that much further out.
+        // Coarse bounding-circle spatial index: any cell outside `coarse_reach`
+        // is guaranteed clear regardless of heading.
         let half_cell_diagonal = self.resolution * std::f64::consts::FRAC_1_SQRT_2;
-        let keep_out = vehicle.radius() + ROUTE_MARGIN_M + half_cell_diagonal;
-        let blocked = self.blocked_cells(&map.obstacles, keep_out);
-        if blocked.contains(&self.cell(goal_position)) {
-            return None;
+        let coarse_reach = footprint.radius() + margin + half_cell_diagonal;
+        let nearby = self.nearby_obstacles(&map.obstacles, coarse_reach);
+
+        // Quick goal rejection: if goal yaw is fixed, check exact footprint;
+        // otherwise reject only if even the inscribed circle cannot fit.
+        if let Some(yaw) = goal.yaw {
+            let goal_pose = Pose2 { x: goal.x, y: goal.y, yaw };
+            if self.pose_blocked(goal_pose, footprint, margin, &nearby) {
+                return None;
+            }
+        } else if let Some(obs) = nearby.get(&self.cell(goal_position)) {
+            let min_half = footprint.length.min(footprint.width) * 0.5 + margin;
+            if obs.iter().any(|&o| goal_position.distance(o) <= min_half) {
+                return None;
+            }
         }
 
         // One arc per curvature: w = v · curvature, held for 1 s at
@@ -263,8 +296,11 @@ impl PathPlanner for HybridAStar {
                 };
                 for &curvature in &curvatures {
                     let arc = Twist { v, w: v * curvature };
+                    let mid = vehicle.step(pose, arc, 0.5);
                     let next = vehicle.step(pose, arc, 1.0);
-                    if blocked.contains(&self.cell(next.position())) {
+                    if self.pose_blocked(mid, footprint, margin, &nearby)
+                        || self.pose_blocked(next, footprint, margin, &nearby)
+                    {
                         continue;
                     }
                     let next_cost = cost + step_cost + switch_cost;
@@ -290,12 +326,12 @@ impl PathPlanner for HybridAStar {
 mod tests {
     use super::*;
     use crate::planning::PoseGoal;
-    use crate::vehicle::{DiffDrive, Limits};
+    use crate::vehicle::{DiffDrive, Footprint, Limits};
 
     fn test_vehicle() -> DiffDrive {
         DiffDrive {
             track: 0.30,
-            radius: 0.25,
+            footprint: Footprint::from_radius(0.25),
             limits: Limits { max_wheel_speed: 1.0, max_accel: 1.0, max_yaw_accel: 2.0 },
         }
     }
@@ -312,7 +348,7 @@ mod tests {
             obstacles.push(Vec2 { x, y: 0.65 });
             obstacles.push(Vec2 { x, y: -0.65 });
         }
-        Map { obstacles, resolution: 0.1, revision: 1 }
+        Map { obstacles, free: Vec::new(), resolution: 0.1, revision: 1 }
     }
 
     #[test]
@@ -365,5 +401,42 @@ mod tests {
         };
         let path = planner.plan(&state, &map, &goal, &vehicle).expect("open-space path");
         assert!(path.poses.windows(2).all(|p| p[1].x >= p[0].x));
+    }
+
+    #[test]
+    fn plans_through_narrow_corridor_with_rectangular_footprint() {
+        // 0.60 m long × 0.30 m wide rover:
+        // - bounding circle diameter + 2×ROUTE_MARGIN_M = 0.67 + 0.30 = 0.97 m (blocked!)
+        // - rectangular width + 2×ROUTE_MARGIN_M = 0.30 + 0.30 = 0.60 m (fits a 0.70 m corridor!)
+        let vehicle = DiffDrive {
+            track: 0.28,
+            footprint: Footprint { length: 0.60, width: 0.30 },
+            limits: Limits { max_wheel_speed: 1.0, max_accel: 1.0, max_yaw_accel: 2.0 },
+        };
+        let mut obstacles = Vec::new();
+        for i in 0..=20 {
+            let x = i as f64 * 0.1;
+            obstacles.push(Vec2 { x, y: 0.35 });
+            obstacles.push(Vec2 { x, y: -0.35 });
+        }
+        let map = Map { obstacles, free: Vec::new(), resolution: 0.1, revision: 1 };
+        let state = State {
+            t: 0.0,
+            pose: Pose2 { x: 0.0, y: 0.0, yaw: 0.0 },
+            twist: Twist::STOP,
+        };
+        let goal = Goal::Pose(PoseGoal { x: 2.0, y: 0.0, yaw: None, tolerance: 0.2 });
+        let mut planner = HybridAStar {
+            resolution: 0.1,
+            yaw_bins: 72,
+            step: 0.3,
+            heuristic_weight: 1.5,
+            allow_reverse: true,
+            reverse_penalty: 2.0,
+        };
+        let path = planner
+            .plan(&state, &map, &goal, &vehicle)
+            .expect("rectangular footprint should fit through 0.70 m corridor");
+        assert!(path.poses.len() >= 2);
     }
 }

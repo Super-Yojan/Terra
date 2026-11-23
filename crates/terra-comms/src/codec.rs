@@ -107,11 +107,14 @@ json_message! {
     Status => Status, Uplink;
     PlannedPath => PlannedPath, Uplink;
     RemoteState => RemoteState, Uplink;
+    WorldMapRequest => WorldMapRequest, Uplink;
     Task => Task, Downlink;
     TaskCommand => TaskCommand, Downlink;
     Teleop => Teleop, Downlink;
     RemoteCmd => RemoteCmd, Downlink;
     Estop => Estop, Downlink;
+    GateCommand => Gate, Downlink;
+    CaptureWorldMap => CaptureWorldMap, Downlink;
 }
 
 #[derive(Serialize, serde::Deserialize)]
@@ -224,6 +227,36 @@ impl Message for WorldMap {
 impl Uplink for WorldMap {}
 
 #[derive(Serialize, serde::Deserialize)]
+struct LoadWorldMapHeader {
+    t: f64,
+    sequence: u64,
+}
+
+impl Message for LoadWorldMap {
+    const TOPIC: Topic = Topic::LoadWorldMap;
+
+    fn encode(&self) -> Vec<u8> {
+        let header = LoadWorldMapHeader { t: self.t, sequence: self.sequence };
+        let mut out = encode_json(&header);
+        out.reserve(1 + self.data.len());
+        out.push(b'\n');
+        out.extend_from_slice(&self.data);
+        out
+    }
+
+    fn decode(bytes: &[u8]) -> Result<Self, DecodeError> {
+        let newline = bytes
+            .iter()
+            .position(|&b| b == b'\n')
+            .ok_or_else(|| malformed("no load_world_map header line"))?;
+        let header: LoadWorldMapHeader = decode_json(&bytes[..newline])?;
+        let data = bytes[newline + 1..].to_vec();
+        Ok(Self { t: header.t, sequence: header.sequence, data })
+    }
+}
+impl Downlink for LoadWorldMap {}
+
+#[derive(Serialize, serde::Deserialize)]
 struct MeshChunkHeader {
     t: f64,
     id: String,
@@ -231,6 +264,8 @@ struct MeshChunkHeader {
     faces: usize,
     #[serde(default)]
     classes: usize,
+    #[serde(default)]
+    colors: usize,
 }
 
 impl Message for MeshChunk {
@@ -243,9 +278,15 @@ impl Message for MeshChunk {
             vertices: self.vertices.len(),
             faces: self.indices.len(),
             classes: self.classes.len(),
+            colors: self.colors.len(),
         };
         let mut out = encode_json(&header);
-        out.reserve(1 + self.vertices.len() * 12 + self.indices.len() * 12 + self.classes.len());
+        out.reserve(
+            1 + self.vertices.len() * 12
+                + self.indices.len() * 12
+                + self.classes.len()
+                + self.colors.len() * 3,
+        );
         out.push(b'\n');
         for v in &self.vertices {
             for c in v {
@@ -258,6 +299,9 @@ impl Message for MeshChunk {
             }
         }
         out.extend_from_slice(&self.classes);
+        for rgb in &self.colors {
+            out.extend_from_slice(rgb);
+        }
         out
     }
 
@@ -276,17 +320,23 @@ impl Message for MeshChunk {
             .faces
             .checked_mul(12)
             .ok_or_else(|| malformed("mesh faces overflow"))?;
+        let c_bytes = header
+            .colors
+            .checked_mul(3)
+            .ok_or_else(|| malformed("mesh colors overflow"))?;
         let expected = v_bytes
             .checked_add(f_bytes)
             .and_then(|n| n.checked_add(header.classes))
+            .and_then(|n| n.checked_add(c_bytes))
             .ok_or_else(|| malformed("mesh size overflow"))?;
         if body.len() != expected {
             return Err(malformed(format!(
-                "mesh: {} bytes for {} verts + {} faces + {} classes",
+                "mesh: {} bytes for {} verts + {} faces + {} classes + {} colors",
                 body.len(),
                 header.vertices,
                 header.faces,
-                header.classes
+                header.classes,
+                header.colors
             )));
         }
         let vertices = body[..v_bytes]
@@ -307,28 +357,80 @@ impl Message for MeshChunk {
                 [u(0), u(4), u(8)]
             })
             .collect();
-        let classes = body[v_bytes + f_bytes..].to_vec();
-        Ok(Self { t: header.t, id: header.id, vertices, indices, classes })
+        let cls_start = v_bytes + f_bytes;
+        let cls_end = cls_start + header.classes;
+        let classes = body[cls_start..cls_end].to_vec();
+        let colors = body[cls_end..]
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .copied()
+            .collect();
+        Ok(Self { t: header.t, id: header.id, vertices, indices, classes, colors })
     }
 }
 impl Uplink for MeshChunk {}
+
+/// Maximum WebRTC signaling payload size in bytes (matches `fpv_signaling::MAX_BYTES`).
+const WEBRTC_MAX_BYTES: usize = 65_536;
+
+fn decode_webrtc_json(bytes: &[u8]) -> Result<String, DecodeError> {
+    if bytes.len() > WEBRTC_MAX_BYTES {
+        return Err(malformed(format!(
+            "webrtc payload too large: {} > {WEBRTC_MAX_BYTES}",
+            bytes.len()
+        )));
+    }
+    std::str::from_utf8(bytes)
+        .map(str::to_owned)
+        .map_err(|e| malformed(format!("webrtc payload not utf-8: {e}")))
+}
+
+macro_rules! webrtc_message {
+    ($ty:ty, $topic:expr, $dir:ident) => {
+        impl Message for $ty {
+            const TOPIC: Topic = $topic;
+            fn encode(&self) -> Vec<u8> {
+                self.0.as_bytes().to_vec()
+            }
+            fn decode(bytes: &[u8]) -> Result<Self, DecodeError> {
+                decode_webrtc_json(bytes).map(Self)
+            }
+        }
+        impl $dir for $ty {}
+    };
+}
+
+webrtc_message!(WebrtcOffer, Topic::WebrtcOffer, Uplink);
+webrtc_message!(WebrtcIcePhone, Topic::WebrtcIcePhone, Uplink);
+webrtc_message!(WebrtcState, Topic::WebrtcState, Uplink);
+webrtc_message!(WebrtcRequest, Topic::WebrtcRequest, Downlink);
+webrtc_message!(WebrtcAnswer, Topic::WebrtcAnswer, Downlink);
+webrtc_message!(WebrtcIceDashboard, Topic::WebrtcIceDashboard, Downlink);
 
 #[derive(Serialize, serde::Deserialize)]
 struct OccupancyHeader {
     t: f64,
     resolution: f64,
     count: usize,
+    #[serde(default)]
+    free_count: usize,
 }
 
 impl Message for Occupancy {
     const TOPIC: Topic = Topic::Occupancy;
 
     fn encode(&self) -> Vec<u8> {
-        let header = OccupancyHeader { t: self.t, resolution: self.resolution, count: self.cells.len() };
+        let header = OccupancyHeader {
+            t: self.t,
+            resolution: self.resolution,
+            count: self.cells.len(),
+            free_count: self.free.len(),
+        };
         let mut out = encode_json(&header);
-        out.reserve(1 + self.cells.len() * 8);
+        out.reserve(1 + (self.cells.len() + self.free.len()) * 8);
         out.push(b'\n');
-        for cell in &self.cells {
+        for cell in self.cells.iter().chain(&self.free) {
             for c in cell {
                 out.extend_from_slice(&c.to_le_bytes());
             }
@@ -340,19 +442,30 @@ impl Message for Occupancy {
         let newline = bytes.iter().position(|&b| b == b'\n').ok_or_else(|| malformed("no occupancy header line"))?;
         let header: OccupancyHeader = decode_json(&bytes[..newline])?;
         let body = &bytes[newline + 1..];
-        if Some(body.len()) != header.count.checked_mul(8) {
-            return Err(malformed(format!("occupancy: {} bytes for {} cells", body.len(), header.count)));
+        let total = header.count.checked_add(header.free_count).and_then(|n| n.checked_mul(8));
+        if Some(body.len()) != total {
+            return Err(malformed(format!(
+                "occupancy: {} bytes for {} occupied + {} free cells",
+                body.len(),
+                header.count,
+                header.free_count
+            )));
         }
-        let cells = body
-            .as_chunks::<8>()
-            .0
-            .iter()
-            .map(|p| {
-                let f = |i: usize| f32::from_le_bytes([p[i], p[i + 1], p[i + 2], p[i + 3]]);
-                [f(0), f(4)]
-            })
-            .collect();
-        Ok(Self { t: header.t, resolution: header.resolution, cells })
+        let decode_pairs = |slice: &[u8]| -> Vec<[f32; 2]> {
+            slice
+                .as_chunks::<8>()
+                .0
+                .iter()
+                .map(|p| {
+                    let f = |i: usize| f32::from_le_bytes([p[i], p[i + 1], p[i + 2], p[i + 3]]);
+                    [f(0), f(4)]
+                })
+                .collect()
+        };
+        let split = header.count * 8;
+        let cells = decode_pairs(&body[..split]);
+        let free = decode_pairs(&body[split..]);
+        Ok(Self { t: header.t, resolution: header.resolution, cells, free })
     }
 }
 impl Uplink for Occupancy {}
@@ -409,11 +522,26 @@ mod tests {
 
     #[test]
     fn occupancy_round_trip() {
-        round_trip(Occupancy { t: 4.5, resolution: 0.1, cells: vec![[0.05, -0.15], [1.25, 2.35]] });
-        round_trip(Occupancy { t: 5.0, resolution: 0.1, cells: vec![] });
+        round_trip(Occupancy {
+            t: 4.5,
+            resolution: 0.1,
+            cells: vec![[0.05, -0.15], [1.25, 2.35]],
+            free: vec![[0.05, 0.05], [0.15, 0.05]],
+        });
+        round_trip(Occupancy { t: 5.0, resolution: 0.1, cells: vec![], free: vec![] });
+
+        // Legacy header without `free_count` still decodes cleanly.
+        let mut legacy = br#"{"version":1,"t":2.0,"resolution":0.1,"count":1}"#.to_vec();
+        legacy.push(b'\n');
+        for c in [0.25f32, -0.35] {
+            legacy.extend_from_slice(&c.to_le_bytes());
+        }
+        let decoded = Occupancy::decode(&legacy).unwrap();
+        assert_eq!(decoded.cells, vec![[0.25, -0.35]]);
+        assert!(decoded.free.is_empty());
 
         // A body that doesn't match the header's count is rejected.
-        let mut bytes = Occupancy { t: 1.0, resolution: 0.1, cells: vec![[0.0, 0.0]] }.encode();
+        let mut bytes = Occupancy { t: 1.0, resolution: 0.1, cells: vec![[0.0, 0.0]], free: vec![] }.encode();
         bytes.pop();
         assert!(Occupancy::decode(&bytes).is_err());
     }
@@ -426,6 +554,7 @@ mod tests {
             vertices: vec![[1.0, 2.0, 0.0], [3.0, 4.0, 0.0], [1.0, 4.0, 0.0]],
             indices: vec![[0, 1, 2]],
             classes: vec![2],
+            colors: vec![[255, 0, 0], [0, 255, 0], [0, 0, 255]],
         });
         round_trip(MeshChunk {
             t: 13.0,
@@ -433,7 +562,17 @@ mod tests {
             vertices: vec![],
             indices: vec![],
             classes: vec![],
+            colors: vec![],
         });
+        // Legacy header without `colors` field still decodes cleanly.
+        let mut legacy = br#"{"version":1,"t":1.0,"id":"old","vertices":1,"faces":0,"classes":0}"#.to_vec();
+        legacy.push(b'\n');
+        for c in [1.0f32, 2.0, 3.0] {
+            legacy.extend_from_slice(&c.to_le_bytes());
+        }
+        let decoded = MeshChunk::decode(&legacy).unwrap();
+        assert_eq!(decoded.vertices, vec![[1.0, 2.0, 3.0]]);
+        assert!(decoded.colors.is_empty());
     }
 
     #[test]
@@ -458,6 +597,7 @@ mod tests {
             planners: vec![],
             default_controller: "dwa".into(),
             software: "v0.1-3-gabc".into(),
+            footprint: Some([0.25, 0.16]),
         });
         for state in [
             TaskState::Idle,
@@ -479,6 +619,9 @@ mod tests {
                 last_rejected: Some(Rejection { task_id: 5, reason: "no GPS anchor".into(), t: 8.0 }),
             });
         }
+        round_trip(WorldMapRequest { t: 3.25, auto: true });
+        round_trip(CaptureWorldMap { t: 3.3 });
+        round_trip(LoadWorldMap { t: 3.5, sequence: 7, data: vec![0xDE, 0xAD, 0xBE, 0xEF] });
         round_trip(Pose { t: 0.1, x: 1.0, y: 2.0, yaw: 0.5, tracked: true });
         round_trip(Status {
             t: 0.0,
@@ -486,6 +629,7 @@ mod tests {
             link_ok: true,
             detail: "ok".into(),
             gps_anchor: Some(GpsAnchor { latitude: 51.5, longitude: -0.1, heading: 1.0, accuracy: 2.5 }),
+            gate_open: true,
         });
         round_trip(PlannedPath {
             t: 1.5,
@@ -505,6 +649,8 @@ mod tests {
             Goal::Stop,
             Goal::Pose { x: 1.0, y: 2.0, yaw: Some(0.3), tolerance: 0.2 },
             Goal::Gps { latitude: 1.0, longitude: 2.0, heading: None, tolerance: 3.0 },
+            Goal::Explore { budget_s: Some(120.0) },
+            Goal::Explore { budget_s: None },
         ] {
             round_trip(Task {
                 id: 7,
@@ -519,6 +665,7 @@ mod tests {
         round_trip(Teleop { t: 1.0, v: 0.5, w: -0.2 });
         round_trip(RemoteCmd(Teleop { t: 1.0, v: 0.5, w: -0.2 }));
         round_trip(Estop { t: 3.0, engaged: true });
+        round_trip(GateCommand { t: 4.0, open: true });
     }
 
     #[test]

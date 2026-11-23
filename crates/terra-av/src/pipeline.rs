@@ -40,6 +40,8 @@ pub struct Pipeline {
     pub link: Link,
     /// The last target sent out and its frame time, for the acceleration limit.
     pub last_target: Option<(f64, Twist)>,
+    /// Whether the dump gate is currently commanded open.
+    pub gate_open: bool,
     /// What the last tick saw, for the phone's screen.
     pub summary: Summary,
 }
@@ -49,6 +51,8 @@ pub struct Pipeline {
 pub struct DriveCommand {
     pub target: Twist,
     pub measured: Option<Twist>,
+    /// True when the dump gate servo should be held at its open position.
+    pub gate_open: bool,
 }
 
 /// The last tick in a few words, for a status line on the phone.
@@ -60,6 +64,8 @@ pub struct Summary {
     pub estopped: bool,
     /// The base station's router is connected.
     pub base_connected: bool,
+    /// True when the dump gate is currently commanded open.
+    pub gate_open: bool,
     /// E.g. `task 7 · dwa · running, 3.2 m to go`, or `no task`.
     pub task: String,
 }
@@ -72,6 +78,12 @@ impl Pipeline {
         // The base station's inputs. The remote e-stop joins the phone's.
         let remote = self.link.commands();
         frame.estop |= remote.estop;
+        if let Some(open) = remote.gate {
+            self.gate_open = open;
+        }
+        if frame.estop {
+            self.gate_open = false;
+        }
 
         // 1 · Where am I. `None`: no trustworthy pose right now.
         let state = self.estimator.update(&frame, vehicle);
@@ -138,7 +150,6 @@ impl Pipeline {
 
         // 6 · E-stop. The last word on the target.
         let target = self.safety.check(smooth, &frame);
-        println!("target: {:?}", target);
         self.last_target = Some((t, target));
 
         // 7 · Tell the base station.
@@ -146,6 +157,7 @@ impl Pipeline {
             tracked: state.is_some(),
             estopped: frame.estop,
             base_connected: self.link.connected(),
+            gate_open: self.gate_open,
             task: self.tasks.summary(),
         };
         let planned_path = if matches!(phone_goal, Goal::Pose(_)) {
@@ -160,6 +172,7 @@ impl Pipeline {
             map: tracked.map(|(_state, map)| map),
             planned_path,
             estopped: frame.estop,
+            gate_open: self.gate_open,
             gps_anchor,
             task: self.tasks.status(t),
             remote_state: task.remote_state,
@@ -170,7 +183,30 @@ impl Pipeline {
             // Feedback for the velocity loop: the estimator's body twist,
             // `None` while untracked.
             measured: state.as_ref().map(|s| s.twist),
+            gate_open: self.gate_open,
         }
+    }
+
+    /// Command the dump gate open or closed locally (from the phone UI).
+    pub fn set_gate_open(&mut self, open: bool) {
+        self.gate_open = open;
+    }
+
+    /// Ask the base station to send back its saved shared `ARWorldMap`.
+    pub fn request_world_map(&mut self, t: f64, auto: bool) {
+        self.link.request_world_map(t, auto);
+    }
+
+    /// Take the latest shared `ARWorldMap` (`NSKeyedArchiver` bytes) pushed by
+    /// the base station for ARKit relocalization, if any.
+    pub fn take_load_world_map(&self) -> Option<Vec<u8>> {
+        self.link.take_load_world_map().map(|m| m.data)
+    }
+
+    /// Returns `true` if the base station asked this rover to capture and
+    /// upload its current `ARWorldMap`.
+    pub fn take_capture_world_map(&self) -> bool {
+        self.link.take_capture_world_map()
     }
 
     /// Publish a serialized ARKit `ARWorldMap` and its ARKit-world feature points
@@ -194,17 +230,31 @@ impl Pipeline {
         vertices_arkit: &[crate::geometry::Vec3],
         indices: &[u32],
         classes: Vec<u8>,
+        colors: Vec<u8>,
     ) {
         if !id.is_empty() {
-            let vertices_world: Vec<crate::geometry::Vec3> = vertices_arkit
-                .iter()
-                .map(|&v| arkit_to_world(v))
-                .collect();
+            let vertices_world: Vec<crate::geometry::Vec3> =
+                vertices_arkit.iter().map(|&v| arkit_to_world(v)).collect();
             self.mapper
                 .update_mesh(&id, &vertices_world, indices, &classes);
         }
         self.link
-            .publish_mesh_chunk(t, id, vertices_arkit, indices, classes);
+            .publish_mesh_chunk(t, id, vertices_arkit, indices, classes, colors);
+    }
+
+    /// Drain queued inbound WebRTC FPV signaling messages from the base station.
+    pub fn take_fpv_signals(&self) -> Vec<(String, String)> {
+        self.link.take_fpv()
+    }
+
+    /// Publish one outbound WebRTC FPV signaling message to the base station.
+    pub fn publish_fpv_signal(&self, topic: &str, payload: String) {
+        self.link.publish_fpv(topic, payload);
+    }
+
+    /// Whether the base-station router is currently connected.
+    pub fn base_connected(&self) -> bool {
+        self.link.connected()
     }
 }
 

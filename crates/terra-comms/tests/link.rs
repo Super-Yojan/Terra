@@ -69,7 +69,7 @@ fn handshake(rover: &RoverLink, base: &BaseLink) {
 }
 
 fn status(t: f64) -> Status {
-    Status { t, estopped: false, link_ok: true, detail: String::new(), gps_anchor: None }
+    Status { t, estopped: false, link_ok: true, detail: String::new(), gps_anchor: None, gate_open: false }
 }
 
 #[test]

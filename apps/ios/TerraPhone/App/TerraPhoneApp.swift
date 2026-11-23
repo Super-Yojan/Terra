@@ -74,6 +74,14 @@ struct MountedView: View {
                     VStack(alignment: .leading, spacing: 4) {
                         // What terra-av is doing: pose, base station, task.
                         Text(loop.status?.line ?? "No pipeline: check terra-av.toml (see the console)")
+                        if loop.fpvActive || loop.fpvStatus != "Idle" {
+                            HStack(spacing: 6) {
+                                Circle()
+                                    .fill(loop.fpvLive ? Color.red : Color.orange)
+                                    .frame(width: 7, height: 7)
+                                Text("FPV: \(loop.fpvStatus)")
+                            }
+                        }
                         if let status = loop.worldMapStatus {
                             Text(status)
                         }
@@ -81,6 +89,41 @@ struct MountedView: View {
                     .font(.caption)
                     .foregroundStyle(.white.opacity(0.6))
                     Spacer()
+                    if loop.fpvActive {
+                        Button { loop.stopFpv() } label: {
+                            Label("Stop FPV", systemImage: "video.slash")
+                                .font(.caption.weight(.medium))
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 8)
+                                .background(.red.opacity(0.28), in: Capsule())
+                        }
+                    }
+                    if loop.hasDumpGate {
+                        Button { loop.setGateOpen(!loop.gateOpen) } label: {
+                            Label(loop.gateOpen ? "Close Gate" : "Open Gate",
+                                  systemImage: loop.gateOpen ? "tray.and.arrow.down" : "tray.and.arrow.up")
+                                .font(.caption.weight(.medium))
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 8)
+                                .background((loop.gateOpen ? Color.orange : Color.white).opacity(0.22), in: Capsule())
+                        }
+                    }
+                    if loop.relocalizing {
+                        Button { loop.cancelRelocalization() } label: {
+                            Label("Cancel Sync", systemImage: "xmark.circle")
+                                .font(.caption.weight(.medium))
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 8)
+                                .background(.orange.opacity(0.25), in: Capsule())
+                        }
+                    }
+                    Button { loop.requestWorldMap() } label: {
+                        Label("Load Map", systemImage: "arrow.down.circle")
+                            .font(.caption.weight(.medium))
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .background(.white.opacity(0.14), in: Capsule())
+                    }
                     Button { loop.sendWorldMap() } label: {
                         Label("Send Map", systemImage: "map")
                             .font(.caption.weight(.medium))

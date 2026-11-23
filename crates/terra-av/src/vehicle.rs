@@ -4,7 +4,41 @@
 //! The model works in twists only. Turning a twist into wheel efforts is the
 //! platform's velocity loop (`Motors/VelocityController.swift` on
 //! TerraPhone), so wheel speeds never leave this module.
-use crate::geometry::Pose2;
+use crate::geometry::{Pose2, Vec2};
+
+/// Rectangular footprint of the rover centred on the body origin (`+X` forward,
+/// `+Y` left), in metres.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Footprint {
+    /// Front-to-back body length (m).
+    pub length: f64,
+    /// Left-to-right body width (m).
+    pub width: f64,
+}
+
+impl Footprint {
+    /// Square footprint whose circumscribed circle has radius `r` (m).
+    pub fn from_radius(r: f64) -> Self {
+        let side = r * std::f64::consts::SQRT_2;
+        Self { length: side, width: side }
+    }
+
+    /// Radius (m) of the bounding circle around the body origin that holds the
+    /// whole rectangle (`hypot(length/2, width/2)`). Used as a fast coarse bound.
+    pub fn radius(&self) -> f64 {
+        (self.length * 0.5).hypot(self.width * 0.5)
+    }
+
+    /// Shortest distance (m) from the rover's oriented rectangle at `pose` to
+    /// a world-frame `obstacle` point. Returns `0.0` when `obstacle` is on or
+    /// inside the footprint.
+    pub fn clearance(&self, pose: Pose2, obstacle: Vec2) -> f64 {
+        let local = pose.to_body(obstacle);
+        let dx = (local.x.abs() - self.length * 0.5).max(0.0);
+        let dy = (local.y.abs() - self.width * 0.5).max(0.0);
+        dx.hypot(dy)
+    }
+}
 
 /// Body velocity: forward `v` (m/s), yaw rate `w` (rad/s, + = left).
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -39,9 +73,14 @@ pub trait VehicleModel: Send {
     /// accelerations to bound which twists are reachable in one tick. The
     /// Swift velocity loop has its own settings and does not read these.
     fn limits(&self) -> Limits;
-    /// Radius (m) of the circle around the body origin that contains the
-    /// whole rover. The planners keep this far from every obstacle.
-    fn radius(&self) -> f64;
+    /// Exact rectangular body dimensions (`length × width`, m) used for
+    /// oriented collision and clearance checks.
+    fn footprint(&self) -> Footprint;
+    /// Radius (m) of the bounding circle around the body origin that contains
+    /// the whole rover. Useful as a fast coarse bound before exact footprint checks.
+    fn radius(&self) -> f64 {
+        self.footprint().radius()
+    }
 
     /// Fastest straight-line speed (m/s), i.e. the largest `v` that
     /// [`clamp`](Self::clamp) leaves unchanged when `w == 0`.
@@ -71,8 +110,8 @@ pub struct Limits {
 /// from this model are optimistic until a skid correction is added.
 pub struct DiffDrive {
     pub track: f64,
-    /// See [`VehicleModel::radius`].
-    pub radius: f64,
+    /// Rectangular body dimensions (`length × width`, m).
+    pub footprint: Footprint,
     pub limits: Limits,
 }
 
@@ -118,8 +157,8 @@ impl VehicleModel for DiffDrive {
     fn limits(&self) -> Limits {
         self.limits
     }
-    fn radius(&self) -> f64 {
-        self.radius
+    fn footprint(&self) -> Footprint {
+        self.footprint
     }
     fn max_speed(&self) -> f64 {
         // Straight ahead both sides run at v.
@@ -138,7 +177,7 @@ mod tests {
     fn terra() -> DiffDrive {
         DiffDrive {
             track: 0.5,
-            radius: 0.4,
+            footprint: Footprint { length: 0.6, width: 0.45 },
             limits: Limits { max_wheel_speed: 0.8, max_accel: 1.0, max_yaw_accel: 2.0 },
         }
     }

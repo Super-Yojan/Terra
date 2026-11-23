@@ -56,7 +56,7 @@ impl DrivePose {
             id: "drive_pose",
             version: "1",
             description: "Steer onto the next path pose (no obstacle avoidance)",
-            goals: vec![GoalKind::Local],
+            goals: vec![GoalKind::Local, GoalKind::Explore],
             params: vec![
                 float_param("k_rho", 1.0, 0.05, 10.0, "1/s", "Speed per metre of distance to the goal"),
                 float_param("k_alpha", 3.0, 0.1, 20.0, "1/s", "Turn rate per radian off the line to the target; keep above k_rho"),
